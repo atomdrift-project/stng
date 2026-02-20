@@ -1,6 +1,6 @@
 [package]
 name = "stng"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["DISSECT Team"]
 description = "Language-aware string extraction for Go and Rust binaries"
