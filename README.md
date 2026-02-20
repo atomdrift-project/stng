@@ -1,6 +1,6 @@
 ![stng](media/logo-small.png)
 
-**stng** — modern string extraction for binary malware analysis. Extract indicators, hardcoded credentials, C2 addresses, and obfuscated strings from any binary.
+**stng** — modern string extraction for binary analysis. All of the good stuff, none of the garbage.
 
 ## Screenshot
 
