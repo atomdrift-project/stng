@@ -1,0 +1,119 @@
+[package]
+name = "stng"
+version = "0.1.0"
+edition = "2021"
+authors = ["DISSECT Team"]
+description = "Language-aware string extraction for Go and Rust binaries"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://codeberg.org/HEXXDECIMAL/stng"
+keywords = ["binary", "strings", "go", "rust", "reverse-engineering"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# Binary parsing
+goblin = "0.10"
+
+# Pattern matching
+regex = "1.11"
+
+# Parallelism
+rayon = "1.10"
+
+# Fast byte scanning
+memchr = "2.7"
+
+# Multi-pattern matching
+aho-corasick = "1.1"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Serialization (for JSON output)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Base64 decoding
+base64 = "0.22"
+
+# Hex decoding
+hex = "0.4"
+
+# URL decoding
+urlencoding = "2.1"
+
+# Base32/Base85 encoding
+data-encoding = "2.6"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Hashing
+sha2 = "0.10"
+
+# OS-appropriate paths (cache directories)
+dirs = "6.0"
+
+# Logging (modern structured logging with tracing)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Terminal utilities
+terminal_size = "0.4"
+
+[lib]
+name = "stng"
+path = "src/lib.rs"
+
+[[bin]]
+name = "stng"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+debug = true
+
+[lints.rust]
+# Forbid unsafe code entirely
+unsafe_code = "forbid"
+
+# Deny these - they catch real bugs
+unused_must_use = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+# Correctness - these catch real bugs (deny by default in clippy, but explicit is good)
+correctness = { level = "deny", priority = -1 }
+
+# Suspicious patterns - likely bugs
+suspicious = { level = "warn", priority = -1 }
+
+# Performance - real performance issues
+perf = { level = "warn", priority = -1 }
+
+# Specific strict lints for common mistakes
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+# Memory/Resource issues
+large_stack_arrays = "warn"
+large_types_passed_by_value = "warn"
+
+# Logic errors
+debug_assert_with_mut_call = "deny"
+exit = "warn"
+
+# API design (for library code)
+missing_errors_doc = "allow"  # Too noisy for internal APIs
+missing_panics_doc = "allow"  # Too noisy for internal APIs
+
+# Style - pragmatic picks from pedantic, not the whole group
+use_self = "warn"                        # use Self in impl blocks instead of repeating the type name
+redundant_closure_for_method_calls = "warn"  # |x| x.foo() → Type::foo
+manual_let_else = "warn"                 # match/if-let that returns/continues/breaks → let-else
+match_same_arms = "warn"                 # merge identical match arms

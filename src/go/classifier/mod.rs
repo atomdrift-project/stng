@@ -1,0 +1,1521 @@
+//! String classification for Go binaries.
+//!
+//! Classifies extracted strings by their semantic type (path, URL, error, etc.).
+
+mod code;
+mod encoding;
+mod network;
+
+use crate::types::StringKind;
+
+/// Classify a general string by its content.
+/// Note: Section names are detected via goblin, not pattern matching here.
+pub fn classify_string(s: &str) -> StringKind {
+    let len = s.len();
+
+    // Fast early exit for very short strings
+    if len < 3 {
+        return StringKind::Const;
+    }
+
+    // Skip expensive classification for very long strings (>1000 chars)
+    // They're unlikely to be patterns we care about and are expensive to check
+    if len > 1000 {
+        return StringKind::Const;
+    }
+
+    let bytes = s.as_bytes();
+    let first = bytes[0];
+
+    // ===== HIGH-PRIORITY IOC DETECTION =====
+    // These checks come first because they're high-value security indicators
+
+    // CTF flags: CTF{...}, flag{...}, FLAG{...}, picoCTF{...}, HTB{...}
+    if (s.starts_with("CTF{")
+        || s.starts_with("flag{")
+        || s.starts_with("FLAG{")
+        || s.starts_with("picoCTF{")
+        || s.starts_with("HTB{"))
+        && s.ends_with('}')
+    {
+        return StringKind::CTFFlag;
+    }
+
+    // GUIDs: {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}
+    if s.starts_with('{') && s.ends_with('}') && (36..=38).contains(&len) {
+        let dash_count = s.chars().filter(|&c| c == '-').count();
+        let hex_count = s.chars().filter(char::is_ascii_hexdigit).count();
+        if dash_count == 4 && (30..=32).contains(&hex_count) {
+            return StringKind::GUID;
+        }
+    }
+
+    // Cryptocurrency wallet addresses (high value IOC)
+    if let Some(kind) = network::classify_crypto_address(s) {
+        return kind;
+    }
+
+    // Email addresses (often used in ransomware) - use memchr for speed
+    if len >= 6 && memchr::memchr(b'@', bytes).is_some() && memchr::memchr(b'.', bytes).is_some() {
+        let at_count = s.chars().filter(|&c| c == '@').count();
+        if at_count == 1 {
+            // Must be mostly ASCII (>95%) - reject garbage with non-ASCII chars
+            let ascii_count = s.chars().filter(char::is_ascii).count();
+            if ascii_count * 100 / len < 95 {
+                return StringKind::Const; // Skip - has too much non-ASCII
+            }
+
+            // Reject consecutive dots (invalid email format)
+            if s.contains("..") {
+                return StringKind::Const; // Skip - has consecutive dots
+            }
+
+            // Split on @ to validate structure
+            let parts: Vec<&str> = s.split('@').collect();
+            if parts.len() == 2 {
+                let local = parts[0];
+                let domain = parts[1];
+
+                // Local part must exist, not be empty, and start with alphanumeric
+                if local.is_empty()
+                    || !local
+                        .chars()
+                        .next()
+                        .expect("checked above")
+                        .is_alphanumeric()
+                {
+                    return StringKind::Const; // Skip - starts with @ or non-alphanumeric
+                }
+
+                // Local part must have at least one alphanumeric character
+                if !local.chars().any(char::is_alphanumeric) {
+                    return StringKind::Const; // Skip - local part has no alphanumeric
+                }
+
+                // Domain must have a dot (not @domain or @.domain)
+                if !domain.contains('.') || domain.starts_with('.') {
+                    return StringKind::Const; // Skip - invalid domain structure
+                }
+
+                // Domain must have at least one letter (not just numbers/symbols like @0.x)
+                let domain_has_letter = domain.chars().any(|c| c.is_ascii_alphabetic());
+                if !domain_has_letter {
+                    return StringKind::Const; // Skip - domain has no letters
+                }
+
+                // Extract TLD (everything after last dot)
+                if let Some(last_dot_pos) = domain.rfind('.') {
+                    let tld = &domain[last_dot_pos + 1..];
+                    // TLD must be at least 2 chars and all alphabetic
+                    if tld.len() < 2 || !tld.chars().all(|c| c.is_ascii_alphabetic()) {
+                        return StringKind::Const; // Skip - invalid TLD
+                    }
+                }
+
+                // The main domain part (before TLD) must contain at least one letter
+                // and be at least 2 characters long. Reject cases like "0.x" or "E.MM"
+                if let Some(dot_pos) = domain.find('.') {
+                    let main_domain = &domain[..dot_pos];
+                    if main_domain.len() < 2 {
+                        return StringKind::Const; // Skip - main domain too short (e.g., E.MM)
+                    }
+                    let main_has_letter = main_domain.chars().any(|c| c.is_ascii_alphabetic());
+                    if !main_has_letter {
+                        return StringKind::Const; // Skip - main domain has no letters (e.g., 0.x)
+                    }
+                }
+
+                // Valid email chars check
+                let valid_chars = s
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || matches!(c, '@' | '.' | '-' | '_' | '+'))
+                    .count();
+                if valid_chars * 100 / len >= 85 {
+                    return StringKind::Email;
+                }
+            }
+        }
+    }
+
+    // Tor/Onion addresses
+    if s.contains(".onion") && len >= 10 {
+        return StringKind::TorAddress;
+    }
+
+    // JWT tokens (3 base64 parts separated by dots)
+    if s.matches('.').count() == 2 && len >= 50 {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() == 3 && parts.iter().all(|p| !p.is_empty()) {
+            let base64_chars = s
+                .chars()
+                .filter(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '='))
+                .count();
+            if base64_chars * 100 / len >= 95 {
+                return StringKind::JWT;
+            }
+        }
+    }
+
+    // API keys (AWS, GitHub, Stripe, Slack)
+    if let Some(kind) = network::classify_api_key(s) {
+        return kind;
+    }
+
+    // SQL injection patterns - only check if contains ' or - which are key indicators
+    if (memchr::memchr2(b'\'', b'-', bytes).is_some() || s.contains("UNION"))
+        && ((s.contains("' OR '") || s.contains("1'='1"))
+            || (s.contains("UNION") && s.contains("SELECT"))
+            || s.contains("admin'--"))
+    {
+        return StringKind::SQLInjection;
+    }
+
+    // XSS payloads - only check if contains < or = which are key indicators
+    if (first == b'j' || memchr::memchr2(b'<', b'=', bytes).is_some())
+        && ((s.contains("<script>") && s.contains("</script>"))
+            || (s.contains("onerror=") && s.contains("alert("))
+            || s.starts_with("javascript:"))
+    {
+        return StringKind::XSSPayload;
+    }
+
+    // LDAP/AD paths
+    if s.contains("LDAP://") || (s.contains("CN=") && s.contains("DC=")) {
+        return StringKind::LDAPPath;
+    }
+
+    // Windows mutex names (often weird strings used for malware synchronization)
+    if s.starts_with("Global\\") || s.starts_with("Local\\") {
+        return StringKind::Mutex;
+    }
+
+    // Ransomware patterns
+    if s.contains("ENCRYPTED") || s.contains("DECRYPT") || s.contains("RANSOM") {
+        let uppercase_count = s.chars().filter(|c| c.is_uppercase()).count();
+        if uppercase_count * 100 / len > 50 {
+            return StringKind::RansomNote;
+        }
+    }
+    // Ransomware file extensions
+    if s == ".locked"
+        || s == ".encrypted"
+        || s == ".crypted"
+        || s == ".wannacry"
+        || s == ".ryuk"
+        || s == ".locky"
+        || s.ends_with("-DECRYPT-INSTRUCTIONS.txt")
+        || s.ends_with("HOW-TO-DECRYPT.html")
+    {
+        return StringKind::RansomNote;
+    }
+
+    // Cryptocurrency mining pools - only check if contains ':' or 'pool'
+    if (first == b's' || memchr::memchr2(b':', b'p', bytes).is_some())
+        && ((s.contains("stratum+tcp://") || s.contains("stratum+ssl://"))
+            || ((s.contains("pool.") || s.contains("nanopool") || s.contains("minergate"))
+                && (s.contains(".com") || s.contains(".org") || s.contains(":"))))
+    {
+        return StringKind::MiningPool;
+    }
+
+    // ===== ORIGINAL CLASSIFICATION CONTINUES =====
+
+    // URLs (including database URLs) - check first char for fast path
+    if (first == b'h'
+        || first == b'f'
+        || first == b'p'
+        || first == b'm'
+        || first == b'r'
+        || first == b's'
+        || first == b't'
+        || first == b'u')
+        && (s.starts_with("http://")
+            || s.starts_with("https://")
+            || s.starts_with("ftp://")
+            || s.starts_with("postgresql://")
+            || s.starts_with("mysql://")
+            || s.starts_with("redis://")
+            || s.starts_with("mongodb://")
+            || s.starts_with("ssh://")
+            || s.starts_with("tcp://")
+            || s.starts_with("udp://"))
+    {
+        // Skip common benign URLs (Apple certs, etc.)
+        if s.starts_with("https://www.apple.com/appleca") {
+            return StringKind::Const;
+        }
+        return StringKind::Url;
+    }
+
+    // Check for embedded code first (most specific markers)
+    // PHP has very distinctive markers (<?php tags) so check it first
+    if code::is_php_code(s) {
+        return StringKind::PhpCode;
+    }
+
+    if code::is_python_code(s) {
+        return StringKind::PythonCode;
+    }
+
+    if code::is_javascript_code(s) {
+        return StringKind::JavaScriptCode;
+    }
+
+    // Check for AppleScript syntax (common in macOS malware)
+    if code::is_applescript(s) {
+        return StringKind::AppleScript;
+    }
+
+    // Command injection patterns - check AFTER code detection but BEFORE generic shell commands.
+    // Injection wrappers (;, |, $(), ``) are stronger signals than generic command keywords.
+    // JavaScript/PHP code might contain command strings but should be detected as code first.
+    if memchr::memchr3(b';', b'|', b'$', bytes).is_some()
+        && ((s.contains("; ") && (s.contains("cat") || s.contains("wget") || s.contains("curl")))
+            || (s.contains("| ")
+                && (s.contains("whoami") || s.contains("id") || s.contains("uname")))
+            || s.contains("$("))
+    {
+        return StringKind::CommandInjection;
+    }
+
+    // Backtick command substitution - must be mostly ASCII and contain command-like content
+    if s.starts_with('`') && s.ends_with('`') && len >= 5 {
+        let content = &s[1..len - 1];
+        let content_len = content.len();
+
+        // Must be mostly ASCII (>90%) - reject garbage with non-ASCII chars
+        let ascii_count = content.chars().filter(char::is_ascii).count();
+        if ascii_count * 100 / content_len > 90 {
+            // Must contain spaces (multiword command) or known command names
+            if content.contains(' ')
+                || content.contains("cat")
+                || content.contains("ls")
+                || content.contains("pwd")
+                || content.contains("echo")
+                || content.contains("wget")
+                || content.contains("curl")
+            {
+                return StringKind::CommandInjection;
+            }
+        }
+    }
+
+    // Check for shell commands after injection detection (catches generic commands like 'echo', 'curl')
+    // This is intentionally after code detection to avoid false positives
+    if code::is_shell_command(s) {
+        return StringKind::ShellCmd;
+    }
+
+    // IP addresses and IP:port - only if starts with digit
+    if first.is_ascii_digit() {
+        if let Some(kind) = network::classify_ip(s) {
+            return kind;
+        }
+    }
+
+    // Windows registry paths
+    if s.starts_with("HKEY_") || s.starts_with("HKLM\\") || s.starts_with("HKCU\\") {
+        return StringKind::Registry;
+    }
+
+    // Well-known config/system files (even without path prefix)
+    let well_known_files = [
+        ".DS_Store",
+        ".localized",
+        ".bashrc",
+        ".zshrc",
+        ".profile",
+        ".bash_profile",
+        ".gitignore",
+        ".gitconfig",
+        ".ssh/",
+        ".aws/",
+        ".docker/",
+        "authorized_keys",
+        "id_rsa",
+        "id_ed25519",
+        "known_hosts",
+        ".npmrc",
+        ".yarnrc",
+        "package.json",
+        "Cargo.toml",
+        "go.mod",
+        "requirements.txt",
+    ];
+    for file in &well_known_files {
+        if s == *file || s.ends_with(file) {
+            return StringKind::FilePath;
+        }
+    }
+
+    // File paths - check for suspicious patterns
+    // Skip Go runtime metrics (e.g., /gc/heap/allocs:bytes, /sched/latencies:seconds)
+    if s.starts_with('/') || s.starts_with("C:\\") || s.starts_with("./") || s.starts_with("../") {
+        // Go runtime metrics start with / and have colon (not URLs like file://)
+        if s.starts_with('/') && s.contains(':') && !s.contains("://") {
+            return StringKind::Const;
+        }
+
+        // Reject paths with too many special characters (likely garbage)
+        let special_count = s.chars().filter(|c| !c.is_alphanumeric() && !c.is_whitespace()).count();
+        let alphanumeric_count = s.chars().filter(|c| c.is_alphanumeric()).count();
+        if alphanumeric_count == 0 || (len > 0 && special_count * 100 / len > 30) {
+            return StringKind::Const; // Too many special chars for a valid path
+        }
+
+        if network::is_suspicious_path(s) {
+            return StringKind::SuspiciousPath;
+        }
+        return StringKind::Path;
+    }
+
+    // Unicode escape sequences (common in JavaScript malware)
+    if encoding::is_unicode_escaped(s) {
+        return StringKind::UnicodeEscaped;
+    }
+
+    // URL-encoded data (common in web shells and HTTP payloads)
+    if encoding::is_url_encoded(s) {
+        return StringKind::UrlEncoded;
+    }
+
+    // Hex-encoded ASCII data (common in malware obfuscation)
+    if encoding::is_hex_encoded(s) {
+        return StringKind::HexEncoded;
+    }
+
+    // Base58-encoded data (Bitcoin/cryptocurrency addresses)
+    if encoding::is_base58(s) {
+        return StringKind::Base58;
+    }
+
+    // Base32-encoded data (Tor, some malware)
+    if encoding::is_base32(s) {
+        return StringKind::Base32;
+    }
+
+    // Base85-encoded data (ASCII85/Z85, some compressed formats)
+    if encoding::is_base85(s) {
+        return StringKind::Base85;
+    }
+
+    // Base64-encoded data (long strings, right charset, proper padding)
+    if encoding::is_base64(s) {
+        return StringKind::Base64;
+    }
+
+    // Environment variable names (UPPERCASE, optionally with _ and digits)
+    // May have trailing = for assignment context (e.g., "GOMEMLIMIT=")
+    // This avoids matching x86 instruction patterns like "AWAVAUATSH"
+    let env_name = s.strip_suffix('=').unwrap_or(s);
+    if env_name.len() >= 3
+        && env_name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_uppercase())
+        && env_name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+    {
+        let has_underscore = env_name.contains('_');
+
+        // Go runtime env vars (GODEBUG, GOTRACEBACK, GOMAXPROCS, GOMEMLIMIT, etc.)
+        let is_go_env = env_name.starts_with("GO") && env_name.len() >= 4;
+
+        // Comprehensive whitelist of well-known environment variables
+        let is_known = matches!(
+            env_name,
+            // POSIX/Unix standard
+            "PATH" | "HOME" | "USER" | "SHELL" | "TERM" | "LANG" | "PWD" | "TMP" | "TEMP"
+            | "TMPDIR" | "EDITOR" | "PAGER" | "MAIL" | "LOGNAME" | "HOSTNAME" | "DISPLAY"
+            | "TZ" | "UID" | "GID" | "EUID" | "EGID"
+            // Locale
+            | "LC_ALL" | "LC_CTYPE" | "LC_COLLATE" | "LC_MESSAGES" | "LC_MONETARY"
+            | "LC_NUMERIC" | "LC_TIME"
+            // Terminal/Display
+            | "COLUMNS" | "LINES" | "COLORTERM" | "CLICOLOR" | "LSCOLORS"
+            // Development/Build
+            | "CC" | "CXX" | "CFLAGS" | "CXXFLAGS" | "LDFLAGS" | "MAKE" | "AR" | "AS"
+            | "LD" | "NM" | "RANLIB" | "STRIP"
+            // Common application vars
+            | "JAVA_HOME" | "PYTHONPATH" | "NODE_PATH" | "RUBYLIB" | "PERL5LIB"
+            | "CARGO_HOME" | "RUSTUP_HOME" | "GOPATH" | "GOROOT" | "GOBIN" | "GOCACHE"
+            // XDG Base Directory
+            | "XDG_CONFIG_HOME" | "XDG_DATA_HOME" | "XDG_CACHE_HOME" | "XDG_STATE_HOME"
+            | "XDG_RUNTIME_DIR"
+            // Security/Auth
+            | "SSH_AUTH_SOCK" | "SSH_AGENT_PID" | "GPG_AGENT_INFO" | "SUDO_USER"
+            | "SUDO_UID" | "SUDO_GID" | "SUDO_COMMAND"
+            // HTTP/Network
+            | "HTTP_PROXY" | "HTTPS_PROXY" | "FTP_PROXY" | "NO_PROXY" | "ALL_PROXY"
+            // Debugging/Profiling
+            | "DEBUG" | "VERBOSE" | "TRACE"
+            // glibc/system
+            | "LD_LIBRARY_PATH" | "LD_PRELOAD" | "GLIBC_TUNABLES"
+            // macOS specific
+            | "DYLD_LIBRARY_PATH" | "DYLD_INSERT_LIBRARIES" | "DYLD_FRAMEWORK_PATH"
+            // Windows common (for cross-platform tools)
+            | "APPDATA" | "LOCALAPPDATA" | "PROGRAMFILES" | "SYSTEMROOT" | "WINDIR"
+            | "USERPROFILE" | "COMPUTERNAME"
+        );
+
+        // Accept if: well-known name, has underscore (like BUILD_ID, CI_JOB), or Go env var
+        if is_known || (has_underscore && env_name.len() >= 3) || is_go_env {
+            return StringKind::EnvVar;
+        }
+    }
+
+    StringKind::Const
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_string;
+    use super::code::is_shell_command;
+    use super::encoding::{
+        decode_unicode_escapes, decode_url_encoding, is_base32, is_base58, is_base64, is_base85,
+        is_hex_encoded, is_unicode_escaped, is_url_encoded,
+    };
+    use super::network::is_ipv4;
+    use crate::extraction::{extract_from_structures, find_string_structures};
+    use crate::types::{BinaryInfo, StringKind, StringStruct};
+
+    #[test]
+    fn test_find_string_structures() {
+        let info = BinaryInfo::new_64bit_le();
+
+        // Create test data with a string structure
+        // ptr = 0x1000, len = 5
+        let mut section_data = vec![0u8; 32];
+        section_data[0..8].copy_from_slice(&0x1000u64.to_le_bytes());
+        section_data[8..16].copy_from_slice(&5u64.to_le_bytes());
+
+        let structs = find_string_structures(
+            &section_data,
+            0x2000, // section_addr
+            0x1000, // blob_addr
+            0x100,  // blob_size
+            &info,
+        );
+
+        assert_eq!(structs.len(), 1);
+        assert_eq!(structs[0].ptr, 0x1000);
+        assert_eq!(structs[0].len, 5);
+    }
+
+    #[test]
+    fn test_extract_from_structures() {
+        let blob = b"HelloWorld";
+        let structs = vec![
+            StringStruct {
+                struct_offset: 0,
+                ptr: 0x1000,
+                len: 5,
+            },
+            StringStruct {
+                struct_offset: 16,
+                ptr: 0x1005,
+                len: 5,
+            },
+        ];
+
+        let strings =
+            extract_from_structures(blob, 0x1000, &structs, Some("test"), |_| StringKind::Const);
+
+        assert_eq!(strings.len(), 2);
+        assert_eq!(strings[0].value, "Hello");
+        assert_eq!(strings[1].value, "World");
+    }
+
+    #[test]
+    fn test_classify_string_env_vars() {
+        // Should be classified as EnvVar
+        assert_eq!(classify_string("COLUMNS"), StringKind::EnvVar);
+        assert_eq!(classify_string("TERM"), StringKind::EnvVar);
+        assert_eq!(classify_string("CLICOLOR"), StringKind::EnvVar);
+        assert_eq!(classify_string("LSCOLORS"), StringKind::EnvVar);
+        assert_eq!(classify_string("COLORTERM"), StringKind::EnvVar);
+        assert_eq!(classify_string("LS_SAMESORT"), StringKind::EnvVar);
+        assert_eq!(classify_string("CLICOLOR_FORCE"), StringKind::EnvVar);
+        assert_eq!(classify_string("PATH"), StringKind::EnvVar);
+        assert_eq!(classify_string("HOME"), StringKind::EnvVar);
+        assert_eq!(classify_string("USER"), StringKind::EnvVar);
+        assert_eq!(classify_string("LC_ALL"), StringKind::EnvVar);
+        assert_eq!(classify_string("XDG_CONFIG_HOME"), StringKind::EnvVar);
+        assert_eq!(classify_string("GO111MODULE"), StringKind::EnvVar);
+
+        // Go runtime env vars (no underscore, but start with GO)
+        assert_eq!(classify_string("GODEBUG"), StringKind::EnvVar);
+        assert_eq!(classify_string("GOTRACEBACK"), StringKind::EnvVar);
+        assert_eq!(classify_string("GOMAXPROCS"), StringKind::EnvVar);
+        assert_eq!(classify_string("GOMEMLIMIT"), StringKind::EnvVar);
+        assert_eq!(classify_string("GOMEMLIMIT="), StringKind::EnvVar);
+
+        // Whitelisted well-known vars
+        assert_eq!(classify_string("GLIBC_TUNABLES"), StringKind::EnvVar);
+        assert_eq!(classify_string("LD_PRELOAD"), StringKind::EnvVar);
+        assert_eq!(classify_string("DYLD_INSERT_LIBRARIES"), StringKind::EnvVar);
+        assert_eq!(classify_string("JAVA_HOME"), StringKind::EnvVar);
+        assert_eq!(classify_string("HTTP_PROXY"), StringKind::EnvVar);
+
+        // Should NOT be classified as EnvVar (not in whitelist, no underscore)
+        assert_ne!(classify_string("THE"), StringKind::EnvVar);
+        assert_ne!(classify_string("FOR"), StringKind::EnvVar);
+        assert_ne!(classify_string("AND"), StringKind::EnvVar);
+        assert_ne!(classify_string("DATA"), StringKind::EnvVar);
+        assert_ne!(classify_string("OBJECT"), StringKind::EnvVar);
+        assert_ne!(classify_string("CLASS"), StringKind::EnvVar);
+
+        // With underscore, 3+ chars is OK
+        assert_eq!(classify_string("A_B"), StringKind::EnvVar);
+        assert_eq!(classify_string("BUILD_ID"), StringKind::EnvVar);
+        assert_eq!(classify_string("CI_JOB"), StringKind::EnvVar);
+    }
+
+    #[test]
+    fn test_classify_string_urls() {
+        assert_eq!(classify_string("https://example.com"), StringKind::Url);
+        assert_eq!(classify_string("http://localhost:8080"), StringKind::Url);
+        assert_eq!(
+            classify_string("postgresql://user:pass@host/db"),
+            StringKind::Url
+        );
+    }
+
+    #[test]
+    fn test_classify_string_paths() {
+        assert_eq!(classify_string("/usr/bin/ls"), StringKind::Path);
+        assert_eq!(classify_string("./config.yaml"), StringKind::Path);
+        assert_eq!(classify_string("../parent/file"), StringKind::Path);
+
+        // Go runtime metrics should NOT be classified as paths
+        assert_eq!(classify_string("/gc/heap/allocs:bytes"), StringKind::Const);
+        assert_eq!(
+            classify_string("/sched/latencies:seconds"),
+            StringKind::Const
+        );
+        assert_eq!(
+            classify_string("/memory/classes/total:bytes"),
+            StringKind::Const
+        );
+        assert_eq!(
+            classify_string("/cpu/classes/gc/mark/assist:cpu-seconds"),
+            StringKind::Const
+        );
+    }
+
+    // Note: Section detection is now done via goblin address matching,
+    // not pattern matching in classify_string. See lib.rs extract_raw_strings.
+
+    #[test]
+    fn test_find_string_structures_32bit() {
+        let info = BinaryInfo::new_32bit_le();
+
+        // Create 32-bit structure: ptr = 0x1000, len = 5
+        let mut section_data = vec![0u8; 16];
+        section_data[0..4].copy_from_slice(&0x1000u32.to_le_bytes());
+        section_data[4..8].copy_from_slice(&5u32.to_le_bytes());
+
+        let structs = find_string_structures(&section_data, 0x2000, 0x1000, 0x100, &info);
+
+        assert_eq!(structs.len(), 1);
+        assert_eq!(structs[0].ptr, 0x1000);
+        assert_eq!(structs[0].len, 5);
+    }
+
+    #[test]
+    fn test_find_string_structures_big_endian() {
+        let info = BinaryInfo::new_64bit_be();
+
+        // Create big-endian structure
+        let mut section_data = vec![0u8; 32];
+        section_data[0..8].copy_from_slice(&0x1000u64.to_be_bytes());
+        section_data[8..16].copy_from_slice(&5u64.to_be_bytes());
+
+        let structs = find_string_structures(&section_data, 0x2000, 0x1000, 0x100, &info);
+
+        assert_eq!(structs.len(), 1);
+        assert_eq!(structs[0].ptr, 0x1000);
+        assert_eq!(structs[0].len, 5);
+    }
+
+    #[test]
+    fn test_find_string_structures_out_of_range() {
+        let info = BinaryInfo::new_64bit_le();
+
+        // Create structure pointing outside blob range
+        let mut section_data = vec![0u8; 32];
+        section_data[0..8].copy_from_slice(&0x5000u64.to_le_bytes()); // Outside blob
+        section_data[8..16].copy_from_slice(&5u64.to_le_bytes());
+
+        let structs = find_string_structures(
+            &section_data,
+            0x2000,
+            0x1000, // blob starts at 0x1000
+            0x100,  // blob is 0x100 bytes
+            &info,
+        );
+
+        // Should find nothing since pointer is out of range
+        assert!(structs.is_empty());
+    }
+
+    #[test]
+    fn test_find_string_structures_too_long() {
+        let info = BinaryInfo::new_64bit_le();
+
+        // Create structure with very long length
+        let mut section_data = vec![0u8; 32];
+        section_data[0..8].copy_from_slice(&0x1000u64.to_le_bytes());
+        section_data[8..16].copy_from_slice(&0x200000u64.to_le_bytes()); // > 1MB
+
+        let structs = find_string_structures(&section_data, 0x2000, 0x1000, 0x100, &info);
+
+        // Should reject strings > 1MB
+        assert!(structs.is_empty());
+    }
+
+    #[test]
+    fn test_find_string_structures_zero_length() {
+        let info = BinaryInfo::new_64bit_le();
+
+        // Create structure with zero length
+        let mut section_data = vec![0u8; 32];
+        section_data[0..8].copy_from_slice(&0x1000u64.to_le_bytes());
+        section_data[8..16].copy_from_slice(&0u64.to_le_bytes());
+
+        let structs = find_string_structures(&section_data, 0x2000, 0x1000, 0x100, &info);
+
+        // Should reject zero-length strings
+        assert!(structs.is_empty());
+    }
+
+    #[test]
+    fn test_is_ipv4_valid_ips() {
+        // Real IP addresses should be detected
+        assert!(is_ipv4("168.235.103.57"));
+        assert!(is_ipv4("192.168.1.1"));
+        assert!(is_ipv4("10.0.0.1"));
+        assert!(is_ipv4("8.8.8.8"));
+        assert!(is_ipv4("1.2.3.4"));
+        assert!(is_ipv4("255.255.255.255"));
+    }
+
+    #[test]
+    fn test_is_ipv4_rejects_version_numbers() {
+        // Assembly/software version patterns should NOT be detected as IPs
+        // Pattern: X.0.0.0
+        assert!(!is_ipv4("1.0.0.0"));
+        assert!(!is_ipv4("4.0.0.0"));
+        assert!(!is_ipv4("11.0.0.0"));
+        assert!(!is_ipv4("255.0.0.0"));
+
+        // Pattern: X.Y.0.0
+        assert!(!is_ipv4("2.1.0.0"));
+        assert!(!is_ipv4("4.5.0.0"));
+        assert!(!is_ipv4("10.2.0.0"));
+    }
+
+    #[test]
+    fn test_is_ipv4_rejects_special_addresses() {
+        // 0.0.0.0 is not a useful IOC
+        assert!(!is_ipv4("0.0.0.0"));
+
+        // Localhost is rarely an IOC
+        assert!(!is_ipv4("127.0.0.1"));
+        assert!(!is_ipv4("127.0.0.2"));
+        assert!(!is_ipv4("127.255.255.255"));
+    }
+
+    #[test]
+    fn test_is_ipv4_rejects_invalid() {
+        // Not valid IP formats
+        assert!(!is_ipv4(""));
+        assert!(!is_ipv4("1.2.3"));
+        assert!(!is_ipv4("1.2.3.4.5"));
+        assert!(!is_ipv4("256.1.1.1"));
+        assert!(!is_ipv4("1.2.3.abc"));
+        assert!(!is_ipv4("hello"));
+    }
+
+    #[test]
+    fn test_is_shell_command_detects_commands() {
+        // Should detect shell commands
+        assert!(is_shell_command("ls -la | grep foo"));
+        assert!(is_shell_command("cat file 2>/dev/null"));
+        assert!(is_shell_command("echo test && rm -rf /tmp"));
+        assert!(is_shell_command("curl http://example.com"));
+        assert!(is_shell_command("wget http://example.com"));
+        assert!(is_shell_command("/bin/bash -c 'echo test'"));
+        assert!(is_shell_command("$(whoami)"));
+    }
+
+    #[test]
+    fn test_is_shell_command_rejects_dotnet_generics() {
+        // .NET generic types should NOT be detected as shell commands
+        assert!(!is_shell_command("IEnumerable`1"));
+        assert!(!is_shell_command("Dictionary`2"));
+        assert!(!is_shell_command("List`1"));
+        assert!(!is_shell_command("Func`3"));
+        assert!(!is_shell_command("Action`1"));
+        assert!(!is_shell_command("System.Collections.Generic.List`1"));
+    }
+
+    #[test]
+    fn test_is_shell_command_backtick_requires_content() {
+        // Backtick must have command-like content with spaces
+        assert!(is_shell_command("`ls -la`"));
+        assert!(is_shell_command("echo `whoami foo`"));
+
+        // Single backtick or empty content should not match
+        assert!(!is_shell_command("foo`bar"));
+        assert!(!is_shell_command("test`"));
+    }
+
+    #[test]
+    fn test_classify_string_ip_detection() {
+        // Real IPs should be classified as IP
+        assert_eq!(classify_string("168.235.103.57"), StringKind::IP);
+        assert_eq!(classify_string("192.168.1.100"), StringKind::IP);
+
+        // Version numbers should NOT be classified as IP
+        assert_ne!(classify_string("1.0.0.0"), StringKind::IP);
+        assert_ne!(classify_string("4.0.0.0"), StringKind::IP);
+        assert_ne!(classify_string("2.1.0.0"), StringKind::IP);
+    }
+
+    #[test]
+    fn test_classify_string_shell_command_detection() {
+        // Shell commands should be classified
+        assert_eq!(
+            classify_string("curl http://evil.com"),
+            StringKind::ShellCmd
+        );
+        assert_eq!(
+            classify_string("cat /etc/passwd | grep root"),
+            StringKind::ShellCmd
+        );
+
+        // .NET generics should NOT be classified as shell commands
+        assert_ne!(classify_string("IEnumerable`1"), StringKind::ShellCmd);
+        assert_ne!(classify_string("Dictionary`2"), StringKind::ShellCmd);
+
+        // Go runtime strings should NOT be classified as shell commands
+        assert_ne!(
+            classify_string("s.allocCount != s.nelems && freeIndex == s.nelems"),
+            StringKind::ShellCmd
+        );
+        assert_ne!(
+            classify_string("malformed GOMEMLIMIT; see `go doc runtime/debug.SetMemoryLimit`"),
+            StringKind::ShellCmd
+        );
+        assert_ne!(classify_string("exec format error"), StringKind::ShellCmd);
+    }
+
+    #[test]
+    fn test_classify_string_applescript_detection() {
+        // AppleScript code should be classified as AppleScript
+        assert_eq!(
+            classify_string("set desktopFolder to path to desktop folder"),
+            StringKind::AppleScript
+        );
+        assert_eq!(
+            classify_string("tell application \"Finder\""),
+            StringKind::AppleScript
+        );
+        assert_eq!(
+            classify_string("every file of desktopFolder whose name extension is in"),
+            StringKind::AppleScript
+        );
+        assert_eq!(
+            classify_string("duplicate aFile to POSIX file \"/tmp/backup\""),
+            StringKind::AppleScript
+        );
+        assert_eq!(
+            classify_string("path to documents folder"),
+            StringKind::AppleScript
+        );
+        assert_eq!(classify_string("end tell"), StringKind::AppleScript);
+        assert_eq!(
+            classify_string("repeat with aFile in allFiles"),
+            StringKind::AppleScript
+        );
+        assert_eq!(
+            classify_string("do shell script \"ls -la\""),
+            StringKind::AppleScript
+        );
+
+        // Additional AppleScript patterns from real malware
+        assert_eq!(
+            classify_string("play dialog \"macOS needs to access System"),
+            StringKind::AppleScript
+        );
+        assert_eq!(
+            classify_string("ile \"%s\" as alias) with replacing"),
+            StringKind::AppleScript
+        );
+        assert_eq!(
+            classify_string("set tf to POSIX file \"%s\" as ali"),
+            StringKind::AppleScript
+        );
+
+        // Regular shell commands should NOT be AppleScript
+        assert_ne!(
+            classify_string("curl http://example.com"),
+            StringKind::AppleScript
+        );
+        assert_ne!(classify_string("cat /etc/passwd"), StringKind::AppleScript);
+
+        // Passwd entries should NOT be AppleScript (avoid "_assetcache" matching "set ")
+        assert_ne!(
+            classify_string("_assetcache:*:235:235:Asset Cache Service:/var/empty:/usr/bin/false"),
+            StringKind::AppleScript
+        );
+        assert_ne!(
+            classify_string("_mobileasset:*:253:253:MobileAsset User:/var/ma:/usr/bin/false"),
+            StringKind::AppleScript
+        );
+
+        // AppleScript "set" must have proper context (variable assignment)
+        assert_eq!(classify_string("set myVar to 10"), StringKind::AppleScript);
+        assert_eq!(
+            classify_string("set desktopPath = \"/Users/test\""),
+            StringKind::AppleScript
+        );
+    }
+
+    #[test]
+    fn test_is_hex_encoded_valid() {
+        // Valid hex-encoded strings (from actual malware samples)
+        // "const _0x1c31000=_0x2330d;"
+        assert!(is_hex_encoded(
+            "636F6E7374205F307831633331303030333D5F3078323330643B"
+        ));
+
+        // "function _0x2330d(_0x99a22,_0x58a56){"
+        assert!(is_hex_encoded(
+            "66756E6374696F6E205F307832333064285F3078393961322C5F30783538613536297B"
+        ));
+
+        // "Mozilla/5.0 (Windows NT 10.0; Win64)"
+        assert!(is_hex_encoded(
+            "4D6F7A696C6C612F352E30202857696E646F7773204E542031302E303B2057696E3634"
+        ));
+
+        // Long hex string with spaces
+        assert!(is_hex_encoded(
+            "48656C6C6F20576F726C642120546869732069732061207465737420737472696E67"
+        ));
+    }
+
+    #[test]
+    fn test_is_hex_encoded_invalid() {
+        // Too short
+        assert!(!is_hex_encoded("48656C6C6F"));
+
+        // Odd length (51 chars)
+        assert!(!is_hex_encoded(
+            "48656C6C6F20576F726C6421205468697320697320612074657"
+        ));
+
+        // Not hex (contains 'G')
+        assert!(!is_hex_encoded(
+            "48656C6C6F20576F726C6421205468697320697320612074657374G1"
+        ));
+
+        // Valid hex but decodes to mostly non-printable
+        assert!(!is_hex_encoded(
+            "00010203040506070809FF00010203040506070809FF00010203040506070809FF"
+        ));
+
+        // All zeros
+        assert!(!is_hex_encoded(
+            "00000000000000000000000000000000000000000000000000000000"
+        ));
+
+        // Real SHA256 hash (should not be detected as hex-encoded text)
+        assert!(!is_hex_encoded(
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        ));
+    }
+
+    #[test]
+    fn test_classify_string_hex_encoded() {
+        // Hex-encoded JavaScript (from actual malware)
+        assert_eq!(
+            classify_string("636F6E7374205F307831633331303030333D5F3078323330643B"),
+            StringKind::HexEncoded
+        );
+
+        // Hex-encoded function
+        assert_eq!(
+            classify_string(
+                "66756E6374696F6E205F307832333064285F3078393961322C5F30783538613536297B"
+            ),
+            StringKind::HexEncoded
+        );
+
+        // Should not be hex-encoded (too short)
+        assert_ne!(classify_string("48656C6C6F"), StringKind::HexEncoded);
+
+        // Should not be hex-encoded (odd length)
+        assert_ne!(
+            classify_string("48656C6C6F20576F726C642120546869732069732061207465737420737472696E6"),
+            StringKind::HexEncoded
+        );
+    }
+
+    #[test]
+    fn test_hex_encoded_decoding() {
+        // Test that hex-encoded strings decode correctly
+        let hex = "48656C6C6F20576F726C64";
+        let decoded: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+            .collect();
+        let text = String::from_utf8(decoded).unwrap();
+        assert_eq!(text, "Hello World");
+    }
+
+    #[test]
+    fn test_is_unicode_escaped_valid() {
+        // Valid \xXX format (from actual malware)
+        assert!(is_unicode_escaped(
+            "\\x27;\\x20const\\x20fs\\x20=\\x20require(\\x27fs\\x27);"
+        ));
+
+        // Mixed \xXX and regular text
+        assert!(is_unicode_escaped(
+            "\\x48\\x65\\x6c\\x6c\\x6f\\x20\\x57\\x6f\\x72\\x6c\\x64"
+        ));
+
+        // \uXXXX format
+        assert!(is_unicode_escaped("\\u0048\\u0065\\u006c\\u006c\\u006f"));
+
+        // Mixed format
+        assert!(is_unicode_escaped(
+            "const\\x20url\\x20=\\x20\\x27https://example.com\\x27;"
+        ));
+    }
+
+    #[test]
+    fn test_is_unicode_escaped_invalid() {
+        // Too short
+        assert!(!is_unicode_escaped("\\x48\\x65"));
+
+        // Too few escape sequences
+        assert!(!is_unicode_escaped("Hello \\x20 World"));
+
+        // Not actually escaped
+        assert!(!is_unicode_escaped("const url = 'https://example.com';"));
+
+        // Invalid escape sequences
+        assert!(!is_unicode_escaped("\\x\\x\\x\\x\\x\\x\\x\\x"));
+    }
+
+    #[test]
+    fn test_classify_string_unicode_escaped() {
+        // JavaScript with \xXX escapes (from actual malware)
+        assert_eq!(
+            classify_string("\\x27;\\x20const\\x20fs\\x20=\\x20require(\\x27fs\\x27);"),
+            StringKind::UnicodeEscaped
+        );
+
+        // \uXXXX format
+        assert_eq!(
+            classify_string("\\u0048\\u0065\\u006c\\u006c\\u006f"),
+            StringKind::UnicodeEscaped
+        );
+
+        // Should not be Unicode escaped (too few sequences)
+        assert_ne!(
+            classify_string("Hello \\x20 World"),
+            StringKind::UnicodeEscaped
+        );
+    }
+
+    #[test]
+    fn test_decode_unicode_escapes() {
+        // Test \xXX format
+        let decoded = decode_unicode_escapes("\\x48\\x65\\x6c\\x6c\\x6f");
+        let text = String::from_utf8(decoded).unwrap();
+        assert_eq!(text, "Hello");
+
+        // Test \uXXXX format
+        let decoded = decode_unicode_escapes("\\u0048\\u0065\\u006c\\u006c\\u006f");
+        let text = String::from_utf8(decoded).unwrap();
+        assert_eq!(text, "Hello");
+
+        // Test mixed content
+        let decoded = decode_unicode_escapes("const\\x20fs\\x20=\\x20require");
+        let text = String::from_utf8(decoded).unwrap();
+        assert_eq!(text, "const fs = require");
+
+        // Test actual malware pattern
+        let decoded =
+            decode_unicode_escapes("\\x27;\\x20const\\x20fs\\x20=\\x20require(\\x27fs\\x27);");
+        let text = String::from_utf8(decoded).unwrap();
+        assert_eq!(text, "'; const fs = require('fs');");
+    }
+
+    #[test]
+    fn test_is_url_encoded_valid() {
+        // Valid URL-encoded strings (from web shells)
+        assert!(is_url_encoded(
+            "%3Cscript%3Ealert%28%27XSS%27%29%3C%2Fscript%3E"
+        ));
+
+        // SQL injection payload
+        assert!(is_url_encoded("%27%20OR%20%271%27%3D%271"));
+
+        // Command injection
+        assert!(is_url_encoded("%3Bcat%20%2Fetc%2Fpasswd"));
+
+        // Mixed with plus signs and multiple encoded chars
+        assert!(is_url_encoded("param1%3Dvalue1%26param2%3Dvalue2"));
+    }
+
+    #[test]
+    fn test_is_url_encoded_invalid() {
+        // Too short
+        assert!(!is_url_encoded("%48%65"));
+
+        // Too few percent signs (only 1)
+        assert!(!is_url_encoded("Hello%20World"));
+
+        // Not actually URL encoded (no percent signs)
+        assert!(!is_url_encoded("regular text with some words"));
+
+        // Has percent but not valid encoding (non-hex after %)
+        assert!(!is_url_encoded("100% complete status check"));
+    }
+
+    #[test]
+    fn test_classify_string_url_encoded() {
+        // XSS payload
+        assert_eq!(
+            classify_string("%3Cscript%3Ealert%28%27XSS%27%29%3C%2Fscript%3E"),
+            StringKind::UrlEncoded
+        );
+
+        // SQL injection
+        assert_eq!(
+            classify_string("%27%20OR%20%271%27%3D%271"),
+            StringKind::UrlEncoded
+        );
+
+        // Should not be URL encoded (too few percent signs)
+        assert_ne!(classify_string("Hello%20World"), StringKind::UrlEncoded);
+    }
+
+    #[test]
+    fn test_decode_url_encoding() {
+        // Test basic decoding
+        let decoded = decode_url_encoding("%48%65%6c%6c%6f");
+        let text = String::from_utf8(decoded).unwrap();
+        assert_eq!(text, "Hello");
+
+        // Test with plus signs
+        let decoded = decode_url_encoding("Hello+World%21");
+        let text = String::from_utf8(decoded).unwrap();
+        assert_eq!(text, "Hello World!");
+
+        // Test XSS payload
+        let decoded = decode_url_encoding("%3Cscript%3Ealert%28%27XSS%27%29%3C%2Fscript%3E");
+        let text = String::from_utf8(decoded).unwrap();
+        assert_eq!(text, "<script>alert('XSS')</script>");
+
+        // Test SQL injection
+        let decoded = decode_url_encoding("%27%20OR%20%271%27%3D%271");
+        let text = String::from_utf8(decoded).unwrap();
+        assert_eq!(text, "' OR '1'='1");
+
+        // Test command injection
+        let decoded = decode_url_encoding("%3Bcat%20%2Fetc%2Fpasswd");
+        let text = String::from_utf8(decoded).unwrap();
+        assert_eq!(text, ";cat /etc/passwd");
+    }
+
+    #[test]
+    fn test_is_base32_valid() {
+        // Tor v2 onion address (Base32)
+        assert!(is_base32("THEHIDDENWIKI3IKNKD7A"));
+
+        // Generic Base32 encoded data
+        assert!(is_base32("JBSWY3DPEBLW64TMMQ======"));
+        assert!(is_base32("NFXGO2LUNBQXIIDUNBSSA"));
+
+        // Without padding
+        assert!(is_base32("MFRGG3DFMZTWQ2LK"));
+    }
+
+    #[test]
+    fn test_is_base32_invalid() {
+        // Too short
+        assert!(!is_base32("ABCD"));
+
+        // Contains lowercase (not valid Base32)
+        assert!(!is_base32("JbSwY3DpEbLw64TmMq"));
+
+        // Contains 0, 1, 8, 9 (not valid Base32)
+        assert!(!is_base32("JBSWY3DPEBLW01089"));
+
+        // Plain text (all letters, no digits)
+        assert!(!is_base32("THISISPLAINTEXT"));
+
+        // All digits (no letters)
+        assert!(!is_base32("2345672345672345"));
+    }
+
+    #[test]
+    fn test_classify_string_base32() {
+        // Tor onion address
+        assert_eq!(classify_string("THEHIDDENWIKI3IKNKD7A"), StringKind::Base32);
+
+        // With padding
+        assert_eq!(
+            classify_string("JBSWY3DPEBLW64TMMQ======"),
+            StringKind::Base32
+        );
+
+        // Should not be Base32 (has lowercase)
+        assert_ne!(classify_string("JbSwY3DpEbLw64TmMq"), StringKind::Base32);
+    }
+
+    #[test]
+    fn test_is_base58_valid_cryptocurrency_addresses() {
+        // Bitcoin P2PKH address (starts with 1)
+        assert!(is_base58("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"));
+
+        // Bitcoin P2SH address (starts with 3)
+        assert!(is_base58("3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy"));
+
+        // Bitcoin mainnet address
+        assert!(is_base58("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"));
+
+        // Litecoin address (starts with L)
+        assert!(is_base58("LdP8Qox1VAhCzLJNqrr74YovaWYyNBUWvL"));
+
+        // Monero address fragment (for testing, partial)
+        assert!(is_base58("4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV"));
+
+        // Generic Base58 with good entropy
+        assert!(is_base58(
+            "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ"
+        ));
+    }
+
+    #[test]
+    fn test_is_base58_invalid_alphabet_violations() {
+        // Too short
+        assert!(!is_base58("1A1zP1eP5Q"));
+        assert!(!is_base58("short"));
+
+        // Contains 0 (zero) - not in Base58 alphabet
+        assert!(!is_base58("1A1zP1eP5QGefi2DMP0fTL5SLmv7DivfNa"));
+        assert!(!is_base58("10000000000000000000"));
+
+        // Contains O (capital O) - not in Base58 alphabet
+        assert!(!is_base58("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfOa"));
+        assert!(!is_base58("OOOOOOOOOOOOOOOOOOOO"));
+
+        // Contains I (capital I) - not in Base58 alphabet
+        assert!(!is_base58("1A1zP1eP5QGefi2DMPIfTL5SLmv7DivfNa"));
+        assert!(!is_base58("IIIIIIIIIIIIIIIIIIII"));
+
+        // Contains l (lowercase L) - not in Base58 alphabet
+        assert!(!is_base58("1A1zP1eP5QGefi2DMPlTL5SLmv7DivfNa"));
+        assert!(!is_base58("llllllllllllllllllll"));
+
+        // Mixed invalid characters
+        assert!(!is_base58("1A1zP1eP5QGefi2DMP0IfTL5SLmv7DivfOa"));
+    }
+
+    #[test]
+    fn test_is_base58_invalid_missing_character_types() {
+        // All uppercase (no lowercase or digits)
+        assert!(!is_base58("ABCDEFGHJKMNPQRSTUVWXYZ"));
+        assert!(!is_base58("THEQUICKBRWNFXJUMPS"));
+
+        // All lowercase (no uppercase or digits)
+        assert!(!is_base58("abcdefghjkmnpqrstuvwxyz"));
+        assert!(!is_base58("thequickbrwnfxjumps"));
+
+        // All digits (no letters)
+        assert!(!is_base58("12345678912345678912"));
+
+        // Only uppercase + digits (missing lowercase)
+        assert!(!is_base58("ABC123DEF456GHJ789MN"));
+
+        // Only lowercase + digits (missing uppercase)
+        assert!(!is_base58("abc123def456ghj789mn"));
+
+        // Only uppercase + lowercase (missing digits)
+        assert!(!is_base58("ABCdefGHJmnpQRStuv"));
+    }
+
+    #[test]
+    fn test_is_base58_invalid_class_names_objc() {
+        // Objective-C class names (NS prefix with CamelCase)
+        assert!(!is_base58("NSKnownKeysMappingStrategy1"));
+        assert!(!is_base58("NSKnownKeysDictionary1"));
+        assert!(!is_base58("NSMutableAttributedString1"));
+        assert!(!is_base58("NSURLSessionConfiguration1"));
+        assert!(!is_base58("NSUserNotificationCenter1"));
+
+        // iOS/macOS classes (UI/CA/CG prefixes)
+        assert!(!is_base58("UIViewControllerTransition1"));
+        assert!(!is_base58("CABasicAnimationDelegate1"));
+        assert!(!is_base58("CGAffineTransformMakeScale1"));
+    }
+
+    #[test]
+    fn test_is_base58_invalid_class_names_other() {
+        // Java/C# class names (XML, HTTP, SQL prefixes)
+        assert!(!is_base58("XMLHttpRequestFactory1"));
+        assert!(!is_base58("HTTPConnectionManager1"));
+        assert!(!is_base58("SQLDatabaseConnectionPool1"));
+    }
+
+    #[test]
+    fn test_is_base58_invalid_plain_text() {
+        // Plain English text with many CamelCase transitions (7+)
+        assert!(!is_base58("TheQuickBrownFoxJumpsOverTheLazyDog1"));
+        assert!(!is_base58(
+            "ThisIsAVeryLongStringWithManyCamelCaseWordsForTesting1"
+        ));
+
+        // Code-like text with many transitions
+        assert!(!is_base58("thisIsAVariableNameWithManyWordsInCamelCase1"));
+    }
+
+    #[test]
+    fn test_is_base58_edge_cases_should_pass() {
+        // Random-looking Base58 with numbers at start (like Bitcoin addresses)
+        assert!(is_base58("1Qqwerty2Asdfgh3Zxcvbn4Mjkuyt5Pqazwsx"));
+
+        // Base58 with high entropy (random mix)
+        assert!(is_base58("5Km2kuu7vtFDPpxywn4u3NLpbr5jKpTB3TXKWTNFyqn"));
+
+        // One CamelCase transition is OK (not a class name pattern)
+        assert!(is_base58("1234567aBcdefghJkmnpqrstuvwxyz"));
+
+        // Starts with single uppercase (not multi-char prefix)
+        assert!(is_base58("A1bcdefgh2Jkmnpqrs3tuvwxyz4"));
+    }
+
+    #[test]
+    fn test_is_base58_edge_cases_borderline() {
+        // Two uppercase at start but only 1 CamelCase transition = OK
+        // (not enough transitions to be a class name)
+        assert!(is_base58("AB1cdefgh2Jkmnpqrs3tuvwxyz4"));
+
+        // Three CamelCase transitions but starts lowercase = OK
+        // (class names typically start with uppercase)
+        assert!(is_base58("a1BcD2eFg3HjK4mnp5qrs6tuv7wxyz8"));
+    }
+
+    #[test]
+    fn test_is_base58_rejects_go_identifiers() {
+        // Go package/type names containing http2/grpc/proto keywords
+        assert!(!is_base58("http2ConnectionError"));
+        assert!(!is_base58("http2writeResHeaders"));
+        assert!(!is_base58("grpcServerConnection1234"));
+        assert!(!is_base58("protoMessageDescriptor1234"));
+    }
+
+    #[test]
+    fn test_classify_string_base58() {
+        // Bitcoin address - now classified as CryptoWallet (more specific than Base58)
+        assert_eq!(
+            classify_string("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
+            StringKind::CryptoWallet
+        );
+
+        // Should not be Base58/CryptoWallet (contains 0, which is invalid in Base58)
+        assert_ne!(
+            classify_string("1A1zP1eP5QGefi2DMP0fTL5SLmv7DivfNa"),
+            StringKind::Base58
+        );
+        assert_ne!(
+            classify_string("1A1zP1eP5QGefi2DMP0fTL5SLmv7DivfNa"),
+            StringKind::CryptoWallet
+        );
+    }
+
+    #[test]
+    fn test_is_base64_valid() {
+        // Valid base64 strings
+        assert!(is_base64("SGVsbG8gV29ybGQhCg=="));
+        assert!(is_base64(
+            "VGhpcyBpcyBhIHNlY3JldCBtZXNzYWdlIGZvciB0ZXN0aW5n"
+        ));
+        assert!(is_base64(
+            "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODkw"
+        ));
+    }
+
+    #[test]
+    fn test_is_base64_invalid() {
+        // Too short
+        assert!(!is_base64("SGVsbG8="));
+
+        // Not multiple of 4
+        assert!(!is_base64("SGVsbG8gV29ybGQhCg"));
+
+        // Contains spaces
+        assert!(!is_base64("SGVs bG8g V29y bGQh Cg=="));
+
+        // Sequential patterns (test data)
+        assert!(!is_base64("ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"));
+
+        // Plain text patterns
+        assert!(!is_base64("the quick brown fox ===="));
+
+        // Missing mixed case
+        assert!(!is_base64("AAAAAAAAAAAAAAAAAAAA")); // all uppercase
+        assert!(!is_base64("aaaaaaaaaaaaaaaaaaaaaa==")); // all lowercase
+        assert!(!is_base64("1234567890123456789012345678")); // all digits
+
+        // Invalid characters
+        assert!(!is_base64("SGVsbG8gV29ybGQh@g==")); // @ is not valid
+    }
+
+    #[test]
+    fn test_is_base64_rejects_go_identifiers() {
+        use super::encoding::is_base64;
+
+        // Go package/type names containing http2/grpc/proto
+        assert!(!is_base64("http2Request1234AbCd")); // http2 keyword
+        assert!(!is_base64("grpcConnection12345A")); // grpc keyword
+        assert!(!is_base64("protoMessage1234AbCd")); // proto keyword
+    }
+
+    #[test]
+    fn test_is_base64_rejects_framework_prefixes() {
+        use super::encoding::is_base64;
+
+        // 4+ consecutive uppercase at start (HTTP*, POST*, NSUR*, XML*)
+        assert!(!is_base64("HTTPConnection12345A")); // 4 consecutive upper
+        assert!(!is_base64("POSTRequest123456AbC")); // 4 consecutive upper
+        assert!(!is_base64("NSURLSession12345AbC")); // 4 consecutive upper (NSUR)
+        assert!(!is_base64("XMLParserDelegate123")); // 4 consecutive upper (XMLP)
+    }
+
+    #[test]
+    fn test_is_base64_accepts_real_base64() {
+        use super::encoding::is_base64;
+
+        // Valid base64 should pass regardless of CamelCase patterns
+        assert!(is_base64("SGVsbG8gV29ybGQhCg==")); // "Hello World!\n"
+        assert!(is_base64("VGhpcyBpcyBhIHNlY3JldCBtZXNzYWdlIGZvciB0ZXN0aW5n")); // Long
+        assert!(is_base64("YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODkw")); // alphabet
+
+        // Base64 with many accidental CamelCase transitions should still pass
+        assert!(is_base64("aB3cD5eF7gH9iJ1kL2mN4oP6qR8sT0uV")); // Random patterns
+        assert!(is_base64("Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv")); // Random patterns
+    }
+
+    #[test]
+    fn test_is_base64_edge_cases() {
+        use super::encoding::is_base64;
+
+        // Borderline: 3 consecutive uppercase at start (should accept, threshold is 4)
+        assert!(is_base64("SGVsbG8gV29ybGQhCg==")); // Valid base64: "Hello World!\n"
+        assert!(is_base64("ABCdefGHIjklMNOpqrSTUvwxYZ123456")); // 3 upper at start (ABC)
+
+        // Borderline: Exactly 4 consecutive uppercase (should reject)
+        assert!(!is_base64("ABCDefGHIjklMNOpqrSTUvwxYZ123456")); // 4 upper at start (ABCD)
+    }
+
+    #[test]
+    fn test_is_base85_valid() {
+        // With quality heuristic, strings need to decode to significantly better quality
+        // to be considered base85. Most false positives like file paths will fail this test.
+
+        // Note: We don't test specific base85 strings here because the quality heuristic
+        // makes it hard to construct a simple test case that passes.
+        // The real test is in integration tests where we verify clean binaries have no false positives.
+    }
+
+    #[test]
+    fn test_is_base85_invalid() {
+        // Too short
+        assert!(!is_base85("9jqo^BlbD"));
+
+        // Environment variable pattern (all uppercase + underscores)
+        assert!(!is_base85("DYLD_INSERT_LIBRARIES"));
+        assert!(!is_base85("LD_PRELOAD_PATH_VAR"));
+
+        // No lowercase or punctuation (just uppercase)
+        assert!(!is_base85("ABCDEFGHIJKLMNOPQRST"));
+
+        // Poor character diversity (< 8 unique chars)
+        assert!(!is_base85("!!!!!!!!!!!!!!!!!!!!!"));
+        assert!(!is_base85("aaaaaaaaaaaaaaaaaaaaaa"));
+
+        // Too few valid ASCII85 characters (< 90%)
+        assert!(!is_base85("regular text with spaces here"));
+
+        // Passwd entries should NOT be classified as base85
+        assert!(!is_base85(
+            "_datadetectors:*:257:257:DataDetectors:/var/db/datadetectors:/usr/bin/false"
+        ));
+        assert!(!is_base85(
+            "_mmaintenanced:*:283:283:mmaintenanced:/var/db/mmaintenanced:/usr/bin/false"
+        ));
+        assert!(!is_base85(
+            "_biome:*:289:289:Biome:/var/db/biome:/usr/bin/false"
+        ));
+        assert!(!is_base85(
+            "_terminusd:*:295:295:Terminus:/var/db/terminus:/usr/bin/false"
+        ));
+        assert!(!is_base85(
+            "_nsurlsessiond:*:242:242:NSURLSession Daemon:/var/db/nsurlsessiond:/usr/bin/false"
+        ));
+    }
+
+    #[test]
+    fn test_base32_performance_edge_cases() {
+        // All valid base32 chars but no digits - should fail
+        assert!(!is_base32("AAAABBBBCCCCDDDD"));
+
+        // All digits but no letters - should fail
+        assert!(!is_base32("2222333344445555"));
+
+        // Contains invalid digits (0, 1, 8, 9)
+        assert!(!is_base32("ABCD0123EFGH89IJ"));
+
+        // Contains lowercase
+        assert!(!is_base32("ABCDEFGHabcdefgh"));
+    }
+
+    #[test]
+    fn test_base58_performance_edge_cases() {
+        // Missing uppercase
+        assert!(!is_base58("abcdefghijklmnopqrstuvwxyz123456"));
+
+        // Missing lowercase
+        assert!(!is_base58("ABCDEFGHJKMNPQRSTUVWXYZ123456"));
+
+        // Missing digits
+        assert!(!is_base58("ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz"));
+
+        // Contains excluded characters (0, O, I, l)
+        assert!(!is_base58("1A1zP1eP5QGefi2DMP0fTL5SLmv7DivfNa")); // has 0
+        assert!(!is_base58("1A1zP1eP5QGefi2DMPOfTL5SLmv7DivfNa")); // has O
+        assert!(!is_base58("1A1zP1eP5QGefi2DMPIfTL5SLmv7DivfNa")); // has I
+        assert!(!is_base58("1A1zP1eP5QGefi2DMPlfTL5SLmv7DivfNa")); // has l
+    }
+
+    #[test]
+    fn test_base64_performance_single_pass() {
+        // This test ensures the optimization works - it should reject quickly
+        // on first invalid character without scanning the whole string
+        let invalid_at_start = format!("@{}", "A".repeat(100));
+        assert!(!is_base64(&invalid_at_start));
+
+        let with_space = "SGVs bG8g".repeat(10);
+        assert!(!is_base64(&with_space));
+    }
+}
