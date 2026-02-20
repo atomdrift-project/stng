@@ -4,7 +4,7 @@
 
 ## Screenshot
 
-Demonstrating the automatic XOR-decoding capabilities on an AMOS malware sample (macOS):
+Demonstrating the automatic XOR-decoding capabilities on an malware sample (macOS/machO):
 ![screenshot](media/screenshot.png)
 
 ## Quick Start
