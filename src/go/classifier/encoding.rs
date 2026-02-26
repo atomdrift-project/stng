@@ -251,8 +251,10 @@ pub(super) fn is_url_encoded(s: &str) -> bool {
     }
 
     // Count VALID percent-encoded sequences (%XX where XX are hex digits)
+    // Also track if any decode to control characters (sign of C format strings)
     let mut valid_percent_count = 0;
     let mut total_percent_count = 0;
+    let mut control_char_count = 0;
     let chars: Vec<char> = s.chars().collect();
 
     let mut i = 0;
@@ -265,6 +267,23 @@ pub(super) fn is_url_encoded(s: &str) -> bool {
                 && chars[i + 2].is_ascii_hexdigit()
             {
                 valid_percent_count += 1;
+
+                // Check what this decodes to
+                let hex: String = [chars[i + 1], chars[i + 2]].iter().collect();
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    // Control characters (0x00-0x1F except tab/newline/carriage return, and 0x7F)
+                    // are unusual in real URL encoding and common in C format strings
+                    // (e.g., %02d where %02 decodes to STX)
+                    if byte < 0x09
+                        || (byte > 0x0D && byte < 0x20)
+                        || byte == 0x7F
+                        || byte == 0x0B
+                        || byte == 0x0C
+                    {
+                        control_char_count += 1;
+                    }
+                }
+
                 i += 3;
                 continue;
             }
@@ -274,6 +293,12 @@ pub(super) fn is_url_encoded(s: &str) -> bool {
 
     // Need at least 2 VALID %XX sequences (not just % signs)
     if valid_percent_count < 2 {
+        return false;
+    }
+
+    // If most decoded bytes are control characters, it's likely a C format string
+    // not URL encoding (e.g., "%02d" decodes %02 to STX control char)
+    if control_char_count > 0 && control_char_count * 2 >= valid_percent_count {
         return false;
     }
 

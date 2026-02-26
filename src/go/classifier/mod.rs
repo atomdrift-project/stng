@@ -1088,6 +1088,16 @@ mod tests {
 
         // Has percent but not valid encoding (non-hex after %)
         assert!(!is_url_encoded("100% complete status check"));
+
+        // C format strings should NOT be detected as URL encoded
+        // %02d has hex digits (0, 2) but it's a printf specifier, not URL encoding
+        assert!(!is_url_encoded("%d%02d%02d %02d:%02d:%02d"));
+        assert!(!is_url_encoded("%d%02d%02dd%02d:%02d:%02d"));
+        assert!(!is_url_encoded("Time: %02d:%02d:%02d Date: %04d-%02d-%02d"));
+        assert!(!is_url_encoded("%s %d %f %x %o %p %c"));
+        assert!(!is_url_encoded("Error code: %d, message: %s"));
+        assert!(!is_url_encoded("%ld %lld %zu %zd"));
+        assert!(!is_url_encoded("%-10s %+5d %#08x"));
     }
 
     #[test]
