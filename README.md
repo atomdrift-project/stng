@@ -12,7 +12,7 @@ Demonstrating the automatic XOR-decoding capabilities on a malware sample (macOS
 Requires a modern version of rust & cargo:
 
 ```bash
-cargo install --git https://codeberg.org/HEXXDECIMAL/stng
+cargo install --git https://codeberg.org/isotope13/stng
 ```
 
 ## Quick Start
