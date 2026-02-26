@@ -24,7 +24,7 @@ pub fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec<Extrac
                     section,
                     method: StringMethod::Structure,
                     kind: StringKind::Import,
-                    library: Some(lib.to_string()),
+                    source: Some(lib.to_string()),
                     ..Default::default()
                 });
             }
@@ -71,9 +71,9 @@ pub fn extract_elf_imports(elf: &goblin::elf::Elf<'_>, min_length: usize) -> Vec
 
         // UNDEF symbols with non-zero st_value or GLOBAL binding are imports
         // GLOBAL/WEAK symbols with defined section are exports
-        let (kind, library) = if sym.st_shndx == 0 {
+        let (kind, source) = if sym.st_shndx == 0 {
             // Undefined - this is an import
-            // Try to find the library from verneed
+            // Try to find the source library from verneed
             let lib = elf
                 .verneed
                 .iter()
@@ -108,7 +108,7 @@ pub fn extract_elf_imports(elf: &goblin::elf::Elf<'_>, min_length: usize) -> Vec
             section,
             method: StringMethod::Structure,
             kind,
-            library,
+            source,
             ..Default::default()
         });
     }

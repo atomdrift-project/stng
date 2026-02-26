@@ -18,7 +18,7 @@ fn test_extracted_string_default() {
     assert_eq!(s.section, None);
     assert_eq!(s.method, StringMethod::RawScan);
     assert_eq!(s.kind, StringKind::Const);
-    assert_eq!(s.library, None);
+    assert_eq!(s.source, None);
     assert_eq!(s.fragments, None);
     assert_eq!(s.section_size, None);
     assert_eq!(s.section_executable, None);
@@ -445,13 +445,9 @@ fn test_extracted_string_serialization() {
         section: Some(".text".to_string()),
         method: StringMethod::Structure,
         kind: StringKind::FuncName,
-        library: Some("libc.so".to_string()),
-        fragments: None,
-        section_size: None,
-        section_executable: None,
-        section_writable: None,
+        source: Some("libc.so".to_string()),
         architecture: Some("x86_64".to_string()),
-        function_meta: None,
+        ..Default::default()
     };
 
     let json = serde_json::to_string(&s).unwrap();
@@ -467,16 +463,7 @@ fn test_extracted_string_serialization_skip_none() {
     let s = ExtractedString {
         value: "test".to_string(),
         data_offset: 100,
-        section: None,
-        method: StringMethod::RawScan,
-        kind: StringKind::Const,
-        library: None,
-        fragments: None,
-        section_size: None,
-        section_executable: None,
-        section_writable: None,
-        architecture: None,
-        function_meta: None,
+        ..Default::default()
     };
 
     let json = serde_json::to_string(&s).unwrap();
@@ -594,8 +581,7 @@ fn test_extracted_string_with_all_fields() {
         section: Some(".data".to_string()),
         method: StringMethod::StackString,
         kind: StringKind::StackString,
-        library: Some("lib.so".to_string()),
-        fragments: None, // Cannot construct StringFragment directly (not exported)
+        source: Some("lib.so".to_string()),
         section_size: Some(4096),
         section_executable: Some(false),
         section_writable: Some(true),
@@ -608,12 +594,13 @@ fn test_extracted_string_with_all_fields() {
             signature: Some("void func()".to_string()),
             noreturn: Some(false),
         }),
+        ..Default::default()
     };
 
     assert_eq!(s.value, "complex_string");
     assert_eq!(s.data_offset, 0x5000);
     assert!(s.section.is_some());
-    assert!(s.library.is_some());
+    assert!(s.source.is_some());
     assert!(s.section_size.is_some());
     assert!(s.architecture.is_some());
     assert!(s.function_meta.is_some());

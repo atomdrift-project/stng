@@ -116,16 +116,16 @@ fn passes_garbage_filter(s: &ExtractedString) -> bool {
 }
 
 /// Merge a set of imports into the strings list.
-/// Updates kind/library for strings already present, then appends new ones.
+/// Updates kind/source for strings already present, then appends new ones.
 fn merge_imports(strings: &mut Vec<ExtractedString>, imports: Vec<ExtractedString>) {
     let import_map: HashMap<&str, (StringKind, Option<&str>)> = imports
         .iter()
-        .map(|s| (s.value.as_str(), (s.kind, s.library.as_deref())))
+        .map(|s| (s.value.as_str(), (s.kind, s.source.as_deref())))
         .collect();
     for s in strings.iter_mut() {
-        if let Some(&(kind, lib)) = import_map.get(s.value.as_str()) {
+        if let Some(&(kind, src)) = import_map.get(s.value.as_str()) {
             s.kind = kind;
-            s.library = lib.map(ToString::to_string);
+            s.source = src.map(ToString::to_string);
         }
     }
     // Collect new imports first so that `seen` (which borrows `strings`) is
@@ -620,6 +620,7 @@ fn method_priority(m: StringMethod) -> u8 {
         StringMethod::R2String
         | StringMethod::R2Symbol
         | StringMethod::WideString
+        | StringMethod::SpacedAscii
         | StringMethod::XorDecode
         | StringMethod::Base64Decode
         | StringMethod::Base32Decode
@@ -637,6 +638,47 @@ fn method_priority(m: StringMethod) -> u8 {
         // Lowest priority: raw scanning
         StringMethod::RawScan => 0,
     }
+}
+
+/// Decode spaced ASCII strings in place.
+///
+/// This handles strings like "V a r F i l e I n f o" -> "VarFileInfo"
+/// which are common in PE resource sections and .NET metadata.
+/// Strings that weren't already decoded during extraction are decoded here.
+fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_length: usize) {
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut new_strings = Vec::new();
+
+    for s in strings.iter_mut() {
+        // Skip strings already marked as SpacedAscii
+        if s.method == StringMethod::SpacedAscii {
+            seen.insert(s.value.clone());
+            continue;
+        }
+
+        // Try to decode as spaced ASCII
+        if let Some(decoded) = r2::decode_spaced_ascii(&s.value) {
+            if decoded.len() >= min_length && !seen.contains(&decoded) {
+                seen.insert(decoded.clone());
+
+                // Create a new decoded string entry
+                let kind = go::classify_string(&decoded);
+                new_strings.push(ExtractedString {
+                    value: decoded,
+                    data_offset: s.data_offset,
+                    section: s.section.clone(),
+                    method: StringMethod::SpacedAscii,
+                    kind,
+                    raw: Some(s.value.clone()),
+                    architecture: s.architecture.clone(),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    strings.extend(new_strings);
 }
 
 /// Deduplicate strings by keeping only the best string at each offset.
@@ -832,6 +874,9 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         decoded.extend(decoders::decode_url_strings(&strings));
         decoded.extend(decoders::decode_unicode_escape_strings(&strings));
         strings.extend(decoded);
+
+        // Decode spaced ASCII strings (common in PE .rsrc, .NET metadata)
+        decode_spaced_strings(&mut strings, opts.min_length);
 
         if opts.filter_garbage {
             strings.retain(passes_garbage_filter);
@@ -1263,6 +1308,10 @@ fn extract_from_object(
 
     // Add decoded strings to the main list
     strings.extend(decoded);
+
+    // Decode spaced ASCII strings (common in PE .rsrc, .NET metadata)
+    // This handles strings like "V a r F i l e I n f o" -> "VarFileInfo"
+    decode_spaced_strings(&mut strings, min_length);
 
     if opts.filter_garbage {
         strings.retain(passes_garbage_filter);

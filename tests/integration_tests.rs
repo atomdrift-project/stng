@@ -286,8 +286,6 @@ fn test_extracted_string_serialization() {
         section: Some("__rodata".to_string()),
         method: StringMethod::Structure,
         kind: StringKind::Const,
-        library: None,
-        fragments: None,
         ..Default::default()
     };
 
@@ -297,38 +295,35 @@ fn test_extracted_string_serialization() {
 }
 
 #[test]
-fn test_extracted_string_with_library() {
+fn test_extracted_string_with_source() {
     let s = ExtractedString {
         value: "_printf".to_string(),
         data_offset: 0x2000,
         section: None,
         method: StringMethod::Structure,
         kind: StringKind::Import,
-        library: Some("libSystem.B.dylib".to_string()),
-        fragments: None,
+        source: Some("libSystem.B.dylib".to_string()),
         ..Default::default()
     };
 
     let json = serde_json::to_string(&s).unwrap();
-    assert!(json.contains("\"library\":\"libSystem.B.dylib\""));
+    assert!(json.contains("\"source\":\"libSystem.B.dylib\""));
 }
 
 #[test]
-fn test_extracted_string_without_library_skips_field() {
+fn test_extracted_string_without_source_skips_field() {
     let s = ExtractedString {
         value: "test".to_string(),
         data_offset: 0x1000,
         section: None,
         method: StringMethod::Structure,
         kind: StringKind::Const,
-        library: None,
-        fragments: None,
         ..Default::default()
     };
 
     let json = serde_json::to_string(&s).unwrap();
-    // library field should be skipped when None
-    assert!(!json.contains("\"library\""));
+    // source field should be skipped when None
+    assert!(!json.contains("\"source\""));
 }
 
 // Tests using real system binaries for higher coverage
@@ -1256,8 +1251,6 @@ mod api_tests {
             section: None,
             method: StringMethod::R2String,
             kind: StringKind::Const,
-            library: None,
-            fragments: None,
             ..Default::default()
         }];
 
@@ -1283,8 +1276,6 @@ mod api_tests {
             section: None,
             method: StringMethod::R2String,
             kind: StringKind::Const,
-            library: None,
-            fragments: None,
             ..Default::default()
         }];
 
@@ -1457,8 +1448,6 @@ mod edge_case_tests {
             section: Some("test".to_string()),
             method: StringMethod::Structure,
             kind: StringKind::Const,
-            library: None,
-            fragments: None,
             ..Default::default()
         };
         let s2 = ExtractedString {
@@ -1467,8 +1456,6 @@ mod edge_case_tests {
             section: Some("test".to_string()),
             method: StringMethod::Structure,
             kind: StringKind::Const,
-            library: None,
-            fragments: None,
             ..Default::default()
         };
         // Clone check
@@ -3240,14 +3227,14 @@ mod xor_detection_tests {
 
         assert!(
             xor_strings.iter().any(|s| s
-                .library
+                .source
                 .as_ref()
                 .map(|l| l.contains("0x42"))
                 .unwrap_or(false)),
-            "Should include XOR key (0x42) in library field. Found: {:?}",
+            "Should include XOR key (0x42) in source field. Found: {:?}",
             xor_strings
                 .iter()
-                .map(|s| (s.value.clone(), s.library.clone()))
+                .map(|s| (s.value.clone(), s.source.clone()))
                 .collect::<Vec<_>>()
         );
     }
@@ -3294,7 +3281,7 @@ mod sockaddr_extraction_tests {
             .expect("Should find the target IP");
 
         assert_eq!(
-            connect_ip.library.as_deref(),
+            connect_ip.source.as_deref(),
             Some("connect()"),
             "IP should be attributed to connect() syscall"
         );

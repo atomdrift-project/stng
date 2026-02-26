@@ -251,7 +251,7 @@ fn scan_sockaddr_in(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
             section: None,
             method: StringMethod::RawScan,
             kind: StringKind::IPPort,
-            library: Some("sockaddr_in".to_string()),
+            source: Some("sockaddr_in".to_string()),
             ..Default::default()
         });
     }
@@ -282,7 +282,7 @@ mod tests {
         );
         assert_eq!(found.unwrap().data_offset, 270);
         assert_eq!(found.unwrap().kind, StringKind::IPPort);
-        assert_eq!(found.unwrap().library, Some("sockaddr_in".to_string()));
+        assert_eq!(found.unwrap().source, Some("sockaddr_in".to_string()));
     }
 
     #[test]

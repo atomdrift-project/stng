@@ -415,7 +415,7 @@ impl<'a> StackStringExtractor<'a> {
                 section: None,
                 method: StringMethod::StackString,
                 kind: StringKind::StackString,
-                library: None,
+
                 fragments: Some(Vec::new()),
                 ..Default::default()
             };
@@ -493,7 +493,7 @@ impl<'a> StackStringExtractor<'a> {
                         section: None,
                         method: StringMethod::StackString,
                         kind: StringKind::StackString,
-                        library: None,
+        
                         fragments: Some(vec![StringFragment {
                             offset: w.instr_off,
                             length: w.string.len(),
@@ -604,7 +604,6 @@ impl<'a> StackStringExtractor<'a> {
             section: group[0].section.clone(),
             method: StringMethod::StackString,
             kind: StringKind::StackString,
-            library: None,
             fragments: if merged_fragments.is_empty() {
                 None
             } else {
@@ -839,7 +838,7 @@ impl<'a> StackStringExtractor<'a> {
                     section: None,
                     method: StringMethod::StackString,
                     kind: StringKind::StackString,
-                    library: None,
+    
                     fragments: Some(vec![StringFragment {
                         offset: start_pos as u64,
                         length: chunk_len,

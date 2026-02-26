@@ -486,7 +486,7 @@ pub(crate) fn extract_xor_strings(
                             section: None,
                             method: StringMethod::XorDecode,
                             kind,
-                            library: Some(format!("0x{:02X}:16LE", info.key)),
+                            source: Some(format!("xor:0x{:02X}:16LE", info.key)),
                             fragments: None,
                             ..Default::default()
                         });
@@ -505,7 +505,7 @@ pub(crate) fn extract_xor_strings(
                         section: None,
                         method: StringMethod::XorDecode,
                         kind,
-                        library: Some(format!("0x{:02X}", info.key)),
+                        source: Some(format!("xor:0x{:02X}", info.key)),
                         fragments: None,
                         ..Default::default()
                     });
@@ -576,7 +576,7 @@ pub(crate) fn extract_multikey_xor_strings(
                                 section: None,
                                 method: StringMethod::XorDecode,
                                 kind,
-                                library: Some(format!("key:{key_preview}")),
+                                source: Some(format!("xor:key:{key_preview}")),
                                 fragments: None,
                                 ..Default::default()
                             });
@@ -646,7 +646,7 @@ pub(crate) fn scan_dotted_patterns(
                                 section: None,
                                 method: StringMethod::XorDecode,
                                 kind: StringKind::IP,
-                                library: Some(format!("0x{key:02X}")),
+                                source: Some(format!("xor:0x{key:02X}")),
                                 fragments: None,
                                 ..Default::default()
                             });
@@ -664,7 +664,7 @@ pub(crate) fn scan_dotted_patterns(
                                 section: None,
                                 method: StringMethod::XorDecode,
                                 kind: StringKind::IPPort,
-                                library: Some(format!("0x{key:02X}")),
+                                source: Some(format!("xor:0x{key:02X}")),
                                 fragments: None,
                                 ..Default::default()
                             });
@@ -685,7 +685,7 @@ pub(crate) fn scan_dotted_patterns(
                             section: None,
                             method: StringMethod::XorDecode,
                             kind: StringKind::Hostname,
-                            library: Some(format!("0x{key:02X}")),
+                            source: Some(format!("xor:0x{key:02X}")),
                             fragments: None,
                             ..Default::default()
                         });

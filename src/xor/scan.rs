@@ -370,7 +370,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                                 section: None,
                                 method: StringMethod::XorDecode,
                                 kind,
-                                library: Some(format!("key:{key_preview}")),
+                                source: Some(format!("xor:key:{key_preview}")),
                                 fragments: None,
                                 ..Default::default()
                             });
@@ -468,7 +468,7 @@ fn extract_xor_strings_from_hints(
                             section: None,
                             method: StringMethod::XorDecode,
                             kind,
-                            library: Some(format!("key:{key_preview}@hint")),
+                            source: Some(format!("xor:key:{key_preview}@hint")),
                             fragments: None,
                             ..Default::default()
                         });
@@ -864,7 +864,7 @@ fn extract_custom_xor_strings_pattern_based_simple(
                 section: None,
                 method: StringMethod::XorDecode,
                 kind,
-                library: Some(format!("key:{}", key_preview)),
+                source: Some(format!("xor:key:{}", key_preview)),
                 fragments: None,
                 ..Default::default()
             })

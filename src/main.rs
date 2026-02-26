@@ -401,7 +401,7 @@ fn main() -> Result<()> {
                                         section: None,
                                         method: stng::StringMethod::Base64Decode,
                                         kind: stng::classify_string(trimmed),
-                                        library: Some(format!("b64:{}", b64_str)),
+                                        raw: Some(b64_str.to_string()),
                                         ..Default::default()
                                     });
                                 }
@@ -732,11 +732,12 @@ fn main() -> Result<()> {
                     println!();
                 }
 
-                // Skip empty section names
+                // Skip section header for empty section names, but still print the strings
                 if let Some("") = section {
                     current_section = Some(section);
-                    continue;
-                }
+                    current_arch = Some(arch);
+                    // Fall through to print_string_line instead of skipping
+                } else {
 
                 // Record offset for this section (first string's offset)
                 let section_key = section.map(std::string::ToString::to_string);
@@ -779,6 +780,7 @@ fn main() -> Result<()> {
                 }
                 current_section = Some(section);
                 current_arch = Some(arch);
+                }
             }
 
             print_string_line(s, use_color);
@@ -1008,6 +1010,8 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
     } else if s.method == stng::StringMethod::WideString && s.kind != stng::StringKind::OverlayWide
     {
         ("wide", s.kind.short_name())
+    } else if s.method == stng::StringMethod::SpacedAscii {
+        ("spaced", s.kind.short_name())
     } else {
         ("", s.kind.short_name())
     };
@@ -1162,38 +1166,46 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         }
     }
 
-    // Add library info for imports (but not for custom XOR keys - those are shown in header)
-    let display_value = if let Some(ref lib) = s.library {
+    // Add source info (imports, XOR keys) and handle raw form for decoded strings
+    let display_value = if let Some(ref src) = s.source {
         if s.method == stng::StringMethod::XorDecode {
             // For XOR-decoded strings:
-            // - Custom keys (library starts with "key:"): don't show (displayed in header)
-            // - Auto-detected keys (library starts with "0x"): show the key
-            if lib.starts_with("key:") {
+            // - Custom keys (xor:key:...): don't show (displayed in header)
+            // - Auto-detected keys (xor:0x...): show the key
+            if src.starts_with("xor:key:") {
                 // Custom XOR key - already shown in header, don't repeat
                 value
-            } else {
+            } else if src.starts_with("xor:") {
                 // Auto-detected XOR key - show it
+                let key = &src[4..]; // Strip "xor:" prefix
                 if use_color {
-                    format!("{value} {DIM}[{lib}]{RESET}")
+                    format!("{value} {DIM}[{key}]{RESET}")
                 } else {
-                    format!("{value} [{lib}]")
+                    format!("{value} [{key}]")
                 }
-            }
-        } else if s.method == stng::StringMethod::Base64Decode && lib.starts_with("b64:") {
-            // For embedded base64, show the original encoded string
-            let encoded = &lib[4..]; // Strip "b64:" prefix
-            if use_color {
-                format!("  ↳ {value} {DIM}(from {encoded}){RESET}")
             } else {
-                format!("  ↳ {value} (from {encoded})")
+                value
             }
         } else {
             // For imports, show with arrow
             if use_color {
-                format!("{value} {DIM}<- {lib}{RESET}")
+                format!("{value} {DIM}<- {src}{RESET}")
             } else {
-                format!("{value} <- {lib}")
+                format!("{value} <- {src}")
             }
+        }
+    } else if let Some(ref raw) = s.raw {
+        // For decoded strings with raw form (base64, spaced, wide)
+        if s.method == stng::StringMethod::Base64Decode {
+            // For embedded base64, show the original encoded string
+            if use_color {
+                format!("  ↳ {value} {DIM}(from {raw}){RESET}")
+            } else {
+                format!("  ↳ {value} (from {raw})")
+            }
+        } else {
+            // For spaced/wide strings, the method tag is sufficient - don't show verbose raw form
+            value
         }
     } else {
         value

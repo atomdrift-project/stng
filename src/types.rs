@@ -41,9 +41,12 @@ pub struct ExtractedString {
     pub method: StringMethod,
     /// Semantic kind of the string
     pub kind: StringKind,
-    /// Source library for imports (e.g., "libSystem.B.dylib")
+    /// Original pre-decoded form (for spaced, base64, wide, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub library: Option<String>,
+    pub raw: Option<String>,
+    /// Context/source: library name, XOR key, or extraction source
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     /// For multi-part strings (`StackString`), tracks all source fragments
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
@@ -97,7 +100,8 @@ impl Default for ExtractedString {
             section: None,
             method: StringMethod::RawScan,
             kind: StringKind::Const,
-            library: None,
+            raw: None,
+            source: None,
             fragments: None,
             section_size: None,
             section_executable: None,
@@ -160,6 +164,8 @@ pub enum StringMethod {
     R2Symbol,
     /// Found via UTF-16LE wide string scan (Windows)
     WideString,
+    /// Found via space-padded ASCII decoding (.NET metadata format)
+    SpacedAscii,
     /// Found via XOR decoding (single-byte key)
     XorDecode,
     /// Found via base64 decoding
@@ -610,7 +616,7 @@ mod tests {
             section: Some("section".to_string()),
             method: StringMethod::Structure,
             kind: StringKind::Const,
-            library: Some("lib".to_string()),
+            source: Some("lib".to_string()),
             ..Default::default()
         };
 
@@ -618,7 +624,7 @@ mod tests {
         assert_eq!(s.value, cloned.value);
         assert_eq!(s.data_offset, cloned.data_offset);
         assert_eq!(s.section, cloned.section);
-        assert_eq!(s.library, cloned.library);
+        assert_eq!(s.source, cloned.source);
     }
 
     #[test]

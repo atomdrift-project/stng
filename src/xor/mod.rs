@@ -107,7 +107,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value == "http://evil.com"
-                && r.library
+                && r.source
                     .as_ref()
                     .map(|l| l.contains("0x42"))
                     .unwrap_or(false)),
@@ -124,7 +124,7 @@ mod tests {
         let results = extract_xor_strings(&data, 8, false);
         assert!(
             results.iter().any(|r| r.value == "192.168.1.100"
-                && r.library
+                && r.source
                     .as_ref()
                     .map(|l| l.contains("0x5A"))
                     .unwrap_or(false)),
@@ -141,7 +141,7 @@ mod tests {
         let results = extract_xor_strings(&data, 8, false);
         assert!(
             results.iter().any(|r| r.value == "10.0.0.1:8080"
-                && r.library
+                && r.source
                     .as_ref()
                     .map(|l| l.contains("0x3C"))
                     .unwrap_or(false)),
@@ -158,7 +158,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value == "/etc/passwd"
-                && r.library
+                && r.source
                     .as_ref()
                     .map(|l| l.contains("0xAB"))
                     .unwrap_or(false)),
@@ -175,7 +175,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value == "password=secret123"
-                && r.library
+                && r.source
                     .as_ref()
                     .map(|l| l.contains("0x77"))
                     .unwrap_or(false)),
@@ -204,7 +204,7 @@ mod tests {
         // Should not find this as it's a false positive
         assert!(
             !results.iter().any(|r| r
-                .library
+                .source
                 .as_ref()
                 .map(|l| l.contains("0x20"))
                 .unwrap_or(false)),
@@ -221,7 +221,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value == "evil.malware.com"
-                && r.library
+                && r.source
                     .as_ref()
                     .map(|l| l.contains("0x55"))
                     .unwrap_or(false)),
@@ -251,7 +251,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value.contains("Mozilla")
-                && r.library
+                && r.source
                     .as_ref()
                     .map(|l| l.contains("0x42"))
                     .unwrap_or(false)),
@@ -272,7 +272,7 @@ mod tests {
             results
                 .iter()
                 .any(|r| r.value == "http://malware.example.com"
-                    && r.library
+                    && r.source
                         .as_ref()
                         .map(|l| l.contains("key:B"))
                         .unwrap_or(false)),
@@ -297,7 +297,7 @@ mod tests {
             results
                 .iter()
                 .any(|r| r.value == "secret password: admin123"
-                    && r.library
+                    && r.source
                         .as_ref()
                         .map(|l| l.contains("key:KEY"))
                         .unwrap_or(false)),
@@ -323,7 +323,7 @@ mod tests {
             results
                 .iter()
                 .any(|r| r.value == "https://c2server.evil.com/api/"
-                    && r.library
+                    && r.source
                         .as_ref()
                         .map(|l| l.contains("key:KEYDATA"))
                         .unwrap_or(false)),
@@ -365,7 +365,7 @@ mod tests {
         let results = extract_custom_xor_strings(&xored, key, 8, false);
         assert!(
             results.iter().any(|r| r.value.contains("192.168.1.100")
-                && r.library
+                && r.source
                     .as_ref()
                     .map(|l| l.contains("key:SECRET"))
                     .unwrap_or(false)),
@@ -388,7 +388,7 @@ mod tests {
         let results = extract_custom_xor_strings(&xored, key, 4, false);
         assert!(
             results.iter().any(|r| r.value == "/bin/bash"
-                && r.library
+                && r.source
                     .as_ref()
                     .map(|l| l.contains("key:XOR"))
                     .unwrap_or(false)),
@@ -948,7 +948,7 @@ mod tests {
                     eprintln!(
                         "  0x{:05x} {:20} {:?}",
                         r.data_offset,
-                        r.library.as_ref().map(|s| s.as_str()).unwrap_or(""),
+                        r.source.as_ref().map(|s| s.as_str()).unwrap_or(""),
                         &r.value[..r.value.len().min(60)]
                     );
                 }

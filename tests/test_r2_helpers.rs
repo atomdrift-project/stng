@@ -241,32 +241,12 @@ fn test_verify_xor_keys_invalid_lengths() {
         // Too short (< 8 chars)
         ExtractedString {
             value: "short".to_string(),
-            data_offset: 0,
-            section: None,
-            method: StringMethod::RawScan,
-            kind: StringKind::Const,
-            library: None,
-            fragments: None,
-            section_size: None,
-            section_executable: None,
-            section_writable: None,
-            architecture: None,
-            function_meta: None,
+            ..Default::default()
         },
         // Too long (> 64 chars)
         ExtractedString {
             value: "a".repeat(100),
-            data_offset: 0,
-            section: None,
-            method: StringMethod::RawScan,
-            kind: StringKind::Const,
-            library: None,
-            fragments: None,
-            section_size: None,
-            section_executable: None,
-            section_writable: None,
-            architecture: None,
-            function_meta: None,
+            ..Default::default()
         },
     ];
 

@@ -174,15 +174,31 @@ pub fn extract_strings(
                 }
 
                 if s.string.len() >= min_length && seen.insert(s.string.clone()) {
-                    let kind = classify_string(&s.string);
-                    strings.push(ExtractedString {
-                        value: s.string,
-                        data_offset: s.paddr,
-                        section: Some(s.section),
-                        method: StringMethod::R2String,
-                        kind,
-                        ..Default::default()
-                    });
+                    // Check if this is a wide string (UTF-16LE rendered as ASCII)
+                    if let Some(decoded) = decode_spaced_ascii(&s.string) {
+                        if decoded.len() >= min_length && seen.insert(decoded.clone()) {
+                            let kind = classify_string(&decoded);
+                            strings.push(ExtractedString {
+                                value: decoded,
+                                data_offset: s.paddr,
+                                section: Some(s.section.clone()),
+                                method: StringMethod::SpacedAscii,
+                                kind,
+                                raw: Some(s.string.clone()),
+                                ..Default::default()
+                            });
+                        }
+                    } else {
+                        let kind = classify_string(&s.string);
+                        strings.push(ExtractedString {
+                            value: s.string,
+                            data_offset: s.paddr,
+                            section: Some(s.section),
+                            method: StringMethod::R2String,
+                            kind,
+                            ..Default::default()
+                        });
+                    }
                 } else if s.string.contains("fYzt") {
                     tracing::debug!("r2::extract_strings: XOR KEY FILTERED: len={} < min_length={}, or already seen",
                         s.string.len(), min_length);
@@ -237,7 +253,8 @@ pub fn extract_strings(
                         section: s.section,
                         method: StringMethod::R2Symbol,
                         kind,
-                        library: None,
+                        raw: None,
+                        source: None,
                         fragments: None,
                         section_size: None,
                         section_executable: None,
@@ -402,6 +419,96 @@ struct R2Symbol {
     r#type: String,
     #[serde(default)]
     bind: String,
+}
+
+/// Detect and decode a "spaced" string (space-padded ASCII).
+///
+/// This handles the pattern common in .NET PE files where ASCII text has 0x20 (space)
+/// bytes between each character, appearing as "H e l l o" instead of "Hello".
+/// This is NOT standard UTF-16LE (which uses 0x00), but a .NET metadata format.
+///
+/// Returns Some(decoded) if the string follows the space-padded pattern.
+/// Returns None if not a spaced string pattern.
+pub fn decode_spaced_ascii(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+
+    // Need at least 6 bytes for a meaningful wide string (3 chars)
+    if bytes.len() < 6 {
+        return None;
+    }
+
+    // Count how many byte pairs follow the wide string pattern
+    // Pattern: [printable][0x00 or 0x20]
+    let mut wide_pairs = 0;
+    let mut total_pairs = 0;
+    let mut i = 0;
+
+    while i + 1 < bytes.len() {
+        let b = bytes[i];
+        let next = bytes[i + 1];
+        total_pairs += 1;
+
+        // Check if this looks like a wide char: printable followed by null/space
+        let is_printable = b.is_ascii_graphic() || b == b' ' || b == b'\t';
+        let is_separator = next == 0 || next == b' ';
+
+        if is_printable && is_separator {
+            wide_pairs += 1;
+        }
+        i += 2;
+    }
+
+    // Require at least 70% of pairs to follow wide pattern, and at least 4 pairs
+    if total_pairs < 4 || wide_pairs * 100 / total_pairs < 70 {
+        return None;
+    }
+
+    // Now decode the string, being more lenient about occasional noise
+    let mut decoded = Vec::with_capacity(bytes.len() / 2);
+    i = 0;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        // Printable character - add to output
+        if b.is_ascii_graphic() || b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
+            decoded.push(b);
+
+            // Skip separator if present
+            if i + 1 < bytes.len() {
+                let next = bytes[i + 1];
+                if next == 0 || next == b' ' {
+                    i += 2;
+                    continue;
+                }
+            }
+            i += 1;
+        } else if b == 0 {
+            // Skip null bytes
+            i += 1;
+        } else if b < 0x20 {
+            // Control character - might be a length prefix, skip it
+            // But add a space to mark the boundary
+            if !decoded.is_empty() && decoded.last() != Some(&b' ') {
+                decoded.push(b' ');
+            }
+            i += 1;
+        } else {
+            // Other non-printable - skip
+            i += 1;
+        }
+    }
+
+    // Trim and validate result
+    let result = String::from_utf8(decoded).ok()?;
+    let trimmed = result.trim();
+
+    // Must have decoded at least 4 characters
+    if trimmed.len() >= 4 {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
 }
 
 fn classify_r2_symbol(type_str: &str, bind: &str) -> StringKind {
@@ -982,6 +1089,79 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_decode_spaced_ascii_basic() {
+        // "Source" as UTF-16LE rendered as ASCII (trailing space is the null separator)
+        let wide = "S o u r c e ";
+        let decoded = decode_spaced_ascii(wide);
+        assert_eq!(decoded, Some("Source".to_string()));
+    }
+
+    #[test]
+    fn test_decode_spaced_ascii_longer() {
+        // "Hello World" as wide string
+        let wide = "H e l l o   W o r l d ";
+        let decoded = decode_spaced_ascii(wide);
+        assert_eq!(decoded, Some("Hello World".to_string()));
+    }
+
+    #[test]
+    fn test_decode_spaced_ascii_not_wide() {
+        // Normal ASCII string should return None
+        let normal = "Hello World";
+        let decoded = decode_spaced_ascii(normal);
+        assert!(decoded.is_none());
+    }
+
+    #[test]
+    fn test_decode_spaced_ascii_too_short() {
+        // Too short to be meaningful
+        let short = "H i ";
+        let decoded = decode_spaced_ascii(short);
+        // Decoded would be "Hi" which is 2 chars - below threshold
+        assert!(decoded.is_none());
+    }
+
+    #[test]
+    fn test_decode_spaced_ascii_with_punctuation() {
+        // "Test.dll" as wide
+        let wide = "T e s t . d l l ";
+        let decoded = decode_spaced_ascii(wide);
+        assert_eq!(decoded, Some("Test.dll".to_string()));
+    }
+
+    #[test]
+    fn test_decode_spaced_ascii_with_control_chars() {
+        // .NET strings often have length prefixes (control chars) between concatenated strings
+        // Short strings with control chars may not be detected due to threshold
+        // This longer example should still be detected as mostly wide
+        let wide = "W i n d o w s . F o u n d a t i o n . P o i n t \x0Bf 4 ";
+        let decoded = decode_spaced_ascii(wide);
+        // Long enough string should still decode despite one control char
+        assert!(decoded.is_some());
+        let result = decoded.unwrap();
+        assert!(result.contains("Windows.Foundation.Point"));
+    }
+
+    #[test]
+    fn test_decode_spaced_ascii_dotnet_style() {
+        // Real-world .NET pattern: struct(Windows.Foundation.Point;f4;f4)
+        let wide = "s t r u c t ( W i n d o w s . F o u n d a t i o n . P o i n t ; f 4 ; f 4 ) ";
+        let decoded = decode_spaced_ascii(wide);
+        assert_eq!(
+            decoded,
+            Some("struct(Windows.Foundation.Point;f4;f4)".to_string())
+        );
+    }
+
+    #[test]
+    fn test_decode_spaced_ascii_with_embedded_space() {
+        // Content with spaces: "Hello World" becomes "H e l l o   W o r l d " (double space for space char)
+        let wide = "H e l l o   W o r l d ";
+        let decoded = decode_spaced_ascii(wide);
+        assert_eq!(decoded, Some("Hello World".to_string()));
+    }
 }
 
 /// Extract IP addresses and ports from `connect()` syscall arguments.
@@ -1052,7 +1232,7 @@ pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
                 } else {
                     StringKind::IP
                 },
-                library: Some("connect()".to_string()),
+                source: Some("connect()".to_string()),
                 fragments: None,
                 ..Default::default()
             });
@@ -1083,7 +1263,7 @@ pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
                     } else {
                         StringKind::IP
                     },
-                    library: Some("connect()".to_string()),
+                    source: Some("connect()".to_string()),
                     fragments: None,
                     ..Default::default()
                 });
@@ -1126,7 +1306,7 @@ fn scan_binary_for_connect_addrs(data: &[u8]) -> Vec<ExtractedString> {
                 } else {
                     StringKind::IP
                 },
-                library: Some("connect()".to_string()),
+                source: Some("connect()".to_string()),
                 fragments: None,
                 ..Default::default()
             });
