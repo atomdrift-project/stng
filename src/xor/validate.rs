@@ -166,6 +166,12 @@ pub(crate) fn is_valid_xor_string(s: &str) -> bool {
         return false;
     }
 
+    // Reject partial XOR decodes that start like known patterns but diverge
+    // (e.g., "%UsERP4NFINE%\" instead of "%USERPROFILE%\")
+    if is_partial_xor_decode(s) {
+        return false;
+    }
+
     true
 }
 
@@ -683,6 +689,143 @@ pub(crate) fn has_known_path_prefix(path: &str) -> bool {
 
     if path.starts_with("../") {
         return path.matches('/').count() >= 2; // At least 2 levels
+    }
+
+    false
+}
+
+/// Known plaintext patterns that malware commonly XOR-encodes.
+/// Used to detect partial/incorrect XOR decodes.
+///
+/// These should be COMPLETE patterns (not prefixes) that, when partially decoded,
+/// indicate a wrong XOR key. Protocol prefixes like "http://" are intentionally
+/// excluded since they naturally have content after them.
+const KNOWN_XOR_PLAINTEXTS: &[&str] = &[
+    "%USERPROFILE%",
+    "%APPDATA%",
+    "%LOCALAPPDATA%",
+    "%TEMP%",
+    "%PROGRAMDATA%",
+    "%SYSTEMROOT%",
+    "HKEY_LOCAL_MACHINE",
+    "HKEY_CURRENT_USER",
+];
+
+/// Check if a string is a "near-miss" XOR decode - starts like a known pattern
+/// but diverges into garbage. These are usually wrong-key decodes and should be rejected.
+///
+/// Returns true if the string looks like a failed/partial XOR decode.
+pub(crate) fn is_partial_xor_decode(s: &str) -> bool {
+    // Only check ASCII strings - non-ASCII can't be these patterns
+    if !s.is_ascii() {
+        return false;
+    }
+
+    // Only check strings that could be partial matches
+    if s.len() < 6 {
+        return false;
+    }
+
+    for pattern in KNOWN_XOR_PLAINTEXTS {
+        // Check if string starts similarly to a known pattern
+        let prefix_len = pattern.len().min(5).min(s.len());
+        let pattern_chars: Vec<char> = pattern.chars().take(prefix_len).collect();
+        let string_chars: Vec<char> = s.chars().take(prefix_len).collect();
+
+        // Count matching characters at the start (case-insensitive)
+        let matching_chars = pattern_chars
+            .iter()
+            .zip(string_chars.iter())
+            .filter(|(a, b)| a.eq_ignore_ascii_case(b))
+            .count();
+
+        // If at least 60% of prefix matches but the full pattern doesn't match
+        if matching_chars >= (prefix_len * 3 / 5) {
+            // Check if the full pattern matches
+            if s.len() >= pattern.len() {
+                let pattern_lower = pattern.to_ascii_lowercase();
+                let s_lower = s.to_ascii_lowercase();
+                if s_lower.starts_with(&pattern_lower) {
+                    // Full match - not a partial decode
+                    continue;
+                }
+            }
+
+            // Partial match - count how many characters diverge
+            let mut divergence_start = 0;
+            let mut divergence_count = 0;
+
+            for (i, (pc, sc)) in pattern.chars().zip(s.chars()).enumerate() {
+                if !pc.eq_ignore_ascii_case(&sc) {
+                    if divergence_start == 0 {
+                        divergence_start = i;
+                    }
+                    divergence_count += 1;
+                }
+            }
+
+            // If we have matches at the start but significant divergence after
+            if divergence_start > 0 && divergence_start <= 8 && divergence_count >= 2 {
+                // Count character type mismatches: digits where letters expected, etc.
+                let mut type_mismatches = 0;
+                let mut wrong_letter_count = 0;
+
+                for (i, (pc, sc)) in pattern.chars().zip(s.chars()).enumerate() {
+                    if i >= divergence_start {
+                        // If pattern has letter but string has non-letter (or vice versa)
+                        if pc.is_ascii_alphabetic() && !sc.is_ascii_alphabetic() {
+                            type_mismatches += 1;
+                        }
+                        // Count letters that are wrong (different letter, not just case)
+                        if pc.is_ascii_alphabetic()
+                            && sc.is_ascii_alphabetic()
+                            && !pc.eq_ignore_ascii_case(&sc)
+                        {
+                            wrong_letter_count += 1;
+                        }
+                    }
+                }
+
+                // If we have type mismatches (digit where letter expected), it's bad
+                if type_mismatches >= 1 {
+                    return true;
+                }
+
+                // If multiple wrong letters in a row, likely bad decode
+                if wrong_letter_count >= 3 {
+                    return true;
+                }
+
+                // Get the divergent part for additional checks
+                let divergent_part: String = s.chars().skip(divergence_start).collect();
+
+                // Check if the divergent part contains garbage characters
+                let garbage_chars = divergent_part
+                    .chars()
+                    .filter(|c| !c.is_ascii_alphanumeric() && !matches!(*c, '\\' | '/' | ':' | '.' | '_' | '-' | '%'))
+                    .count();
+
+                let div_char_count = divergent_part.chars().count();
+
+                // If any garbage in what should be clean path-like content
+                if div_char_count > 2 && garbage_chars >= 1 {
+                    return true;
+                }
+
+                // Check for case inconsistency (mixed case in what should be consistent)
+                let upper_in_div = divergent_part.chars().filter(char::is_ascii_uppercase).count();
+                let lower_in_div = divergent_part.chars().filter(char::is_ascii_lowercase).count();
+                let alpha_in_div = upper_in_div + lower_in_div;
+
+                // Wild case mixing is suspicious (e.g., "ROViLE" instead of "ROFILE")
+                if alpha_in_div >= 4 && upper_in_div > 0 && lower_in_div > 0 {
+                    let upper_ratio = upper_in_div * 100 / alpha_in_div;
+                    if (20..=80).contains(&upper_ratio) {
+                        return true;
+                    }
+                }
+            }
+        }
     }
 
     false

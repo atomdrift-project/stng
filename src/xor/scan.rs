@@ -1,6 +1,7 @@
 //! XOR scanning infrastructure for extracting obfuscated strings.
 //!
 //! Contains the Aho-Corasick–based XOR pattern automata, multi-byte key extraction,
+//! rolling/index-based XOR detection for Windows environment variables,
 //! and all `extract_custom_xor_strings` variants.
 
 use super::classify::{
@@ -891,6 +892,193 @@ fn extract_custom_xor_strings_pattern_based_simple(
             "XOR scan: {} strings in {:.2}s",
             results.len(),
             start_time.elapsed().as_secs_f64()
+        );
+    }
+
+    results
+}
+
+/// Known plaintext patterns for rolling/index-based XOR detection.
+/// These are common Windows environment variables and registry paths
+/// found in .NET malware like Redline Stealer.
+const ROLLING_XOR_PATTERNS: &[&[u8]] = &[
+    b"%USERPROFILE%",
+    b"%APPDATA%",
+    b"%LOCALAPPDATA%",
+    b"%TEMP%",
+    b"%PROGRAMDATA%",
+    b"%SYSTEMROOT%",
+    b"%HOMEDRIVE%",
+    b"%HOMEPATH%",
+    b"HKEY_LOCAL_MACHINE",
+    b"HKEY_CURRENT_USER",
+    b"HKEY_CLASSES_ROOT",
+    b"SOFTWARE\\",
+    b"\\Microsoft\\",
+];
+
+/// Extract strings using rolling/index-based XOR with known plaintext patterns.
+///
+/// This function detects XOR obfuscation where the key is short (1-4 bytes) and cycles.
+/// It uses known plaintext patterns (Windows environment variables, registry paths)
+/// to derive candidate keys, then validates by checking if multiple patterns decode
+/// correctly with the same key.
+///
+/// This is common in .NET malware like Redline Stealer which XORs configuration
+/// strings with short cycling keys.
+pub fn extract_rolling_xor_with_known_plaintext(
+    data: &[u8],
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let mut results = Vec::new();
+    let mut seen: HashSet<(u64, String)> = HashSet::new();
+
+    // Try key lengths from 1 to 4 bytes
+    for key_len in 1..=4 {
+        // For each pattern, scan data for positions where XORing produces the pattern
+        for pattern in ROLLING_XOR_PATTERNS {
+            if pattern.len() < key_len {
+                continue;
+            }
+
+            // Scan data looking for the pattern
+            let max_offset = data.len().saturating_sub(pattern.len());
+            for offset in 0..max_offset {
+                // Derive candidate key from this position assuming pattern starts here
+                let candidate_key: Vec<u8> = (0..key_len)
+                    .map(|i| data[offset + i] ^ pattern[i])
+                    .collect();
+
+                // Skip keys that are all zeros or all same byte (likely false positives)
+                if candidate_key.iter().all(|&b| b == 0) {
+                    continue;
+                }
+                if key_len > 1 && candidate_key.iter().all(|&b| b == candidate_key[0]) {
+                    continue;
+                }
+
+                // Validate: check if entire pattern decodes correctly with this key
+                let full_decode: Vec<u8> = (0..pattern.len())
+                    .map(|i| data[offset + i] ^ candidate_key[i % key_len])
+                    .collect();
+
+                if full_decode.as_slice() != *pattern {
+                    continue;
+                }
+
+                // Count how many OTHER patterns also decode correctly nearby
+                let mut pattern_matches = 1;
+                for other_pattern in ROLLING_XOR_PATTERNS {
+                    // Skip if this is the same pattern (compare data pointers)
+                    if (*pattern).as_ptr() == (*other_pattern).as_ptr() {
+                        continue;
+                    }
+
+                    // Search within 4KB of this offset for other patterns
+                    let search_start = offset.saturating_sub(2048);
+                    let search_end = (offset + 2048).min(data.len().saturating_sub(other_pattern.len()));
+
+                    for check_offset in search_start..search_end {
+                        let decoded: Vec<u8> = (0..other_pattern.len())
+                            .map(|i| data[check_offset + i] ^ candidate_key[i % key_len])
+                            .collect();
+
+                        if decoded.as_slice() == *other_pattern {
+                            pattern_matches += 1;
+                            break;
+                        }
+                    }
+                }
+
+                // Require at least 2 pattern matches for confidence
+                // (one pattern could be coincidence, two confirms the key is real)
+                if pattern_matches < 2 {
+                    continue;
+                }
+
+                // Valid key found - extract all strings with this key in the region
+                tracing::debug!(
+                    "Rolling XOR: found key {:02x?} at offset 0x{:x} ({} pattern matches)",
+                    candidate_key,
+                    offset,
+                    pattern_matches
+                );
+
+                // Extract strings from a wider region around the match
+                let region_start = offset.saturating_sub(4096);
+                let region_end = (offset + 4096).min(data.len());
+                let region = &data[region_start..region_end];
+
+                // Scan for printable strings using this key
+                let mut pos = 0;
+                while pos < region.len() {
+                    // Find start of printable run
+                    while pos < region.len() {
+                        let decoded = region[pos] ^ candidate_key[pos % key_len];
+                        if is_printable_byte_for_file_xor(decoded) {
+                            break;
+                        }
+                        pos += 1;
+                    }
+
+                    if pos >= region.len() {
+                        break;
+                    }
+
+                    // Collect printable run
+                    let mut decoded_bytes = Vec::new();
+                    let start_pos = pos;
+                    while pos < region.len() {
+                        let decoded = region[pos] ^ candidate_key[pos % key_len];
+                        if is_printable_byte_for_file_xor(decoded) {
+                            decoded_bytes.push(decoded);
+                            pos += 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Check minimum length
+                    if decoded_bytes.len() >= min_length {
+                        if let Ok(s) = String::from_utf8(decoded_bytes) {
+                            // Must have at least one letter
+                            if s.chars().any(char::is_alphabetic) {
+                                let file_offset = (region_start + start_pos) as u64;
+                                if seen.insert((file_offset, s.clone())) {
+                                    let key_hex: String = candidate_key
+                                        .iter()
+                                        .map(|b| format!("{:02x}", b))
+                                        .collect();
+
+                                    let kind = classify_xor_string(&s).unwrap_or(StringKind::Const);
+
+                                    results.push(ExtractedString {
+                                        value: s,
+                                        data_offset: file_offset,
+                                        section: None,
+                                        method: StringMethod::XorDecode,
+                                        kind,
+                                        source: Some(format!("xor:rolling:{}", key_hex)),
+                                        fragments: None,
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by offset and deduplicate
+    results.sort_by_key(|s| s.data_offset);
+    results.dedup_by(|a, b| a.data_offset == b.data_offset && a.value == b.value);
+
+    if !results.is_empty() {
+        tracing::info!(
+            "Rolling XOR: extracted {} strings using known plaintext patterns",
+            results.len()
         );
     }
 

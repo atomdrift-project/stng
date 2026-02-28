@@ -43,6 +43,7 @@ mod validation_thresholds;
 pub mod binary;
 mod binary_net;
 mod detect;
+mod dotnet;
 mod entitlements;
 mod imports;
 mod overlay;
@@ -171,6 +172,14 @@ fn apply_xor_scan(
     if data.is_empty() {
         return;
     }
+
+    // For PE binaries, also try rolling XOR with known plaintext patterns
+    // This catches .NET malware like Redline that uses short cycling keys
+    if is_pe && data.len() <= xor::MAX_XOR_SCAN_SIZE {
+        let rolling_results = xor::extract_rolling_xor_with_known_plaintext(data, opts.xor_min_length);
+        strings.extend(rolling_results);
+    }
+
     let r2_boundaries = if opts.use_r2 {
         opts.path.as_deref().and_then(r2::extract_string_boundaries)
     } else {
@@ -1128,6 +1137,9 @@ fn extract_from_object(
                 let extractor = GoStringExtractor::new(min_length);
                 strings.extend(extractor.extract_pe(pe, data));
             }
+
+            // Extract .NET User Strings (#US heap) if this is a .NET assembly
+            strings.extend(dotnet::extract_us_heap_strings(pe, data, min_length));
 
             // Use r2 if available
             if let Some(r2_strings) = get_r2_strings(opts) {

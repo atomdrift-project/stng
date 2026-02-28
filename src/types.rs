@@ -293,6 +293,8 @@ pub enum StringKind {
     Mutex,
     /// GUID (Globally Unique Identifier)
     GUID,
+    /// Cryptographic hash (MD5, SHA1, SHA256, SHA512)
+    Hash,
     /// Ransomware-related string (ransom note, file extension, etc.)
     RansomNote,
     /// LDAP/Active Directory distinguished name
@@ -361,6 +363,7 @@ impl StringKind {
             | Self::APIKey
             | Self::Mutex
             | Self::GUID
+            | Self::Hash
             | Self::RansomNote
             | Self::LDAPPath => Severity::High,
 
@@ -403,7 +406,7 @@ impl StringKind {
             Self::SuspiciousPath => "sus",
             Self::Registry => "registry",
             Self::Base64 => "base64",
-            Self::CodeSignatureHash => "hash",
+            Self::CodeSignatureHash | Self::Hash => "hash",
             Self::HexEncoded => "hex",
             Self::UnicodeEscaped => "unicode",
             Self::UrlEncoded => "urlenc",

@@ -1,6 +1,39 @@
 //! Encoding detection for string classification.
 //!
-//! Detects Base64, Base32, Base58, Base85, hex, Unicode escape, and URL encoding.
+//! Detects Base64, Base32, Base58, Base85, hex, Unicode escape, URL encoding, and cryptographic hashes.
+
+/// Check if a string looks like a cryptographic hash (MD5, SHA1, SHA256, SHA512).
+///
+/// Returns true for hex strings of length 32/40/64/128 that decode to mostly non-printable bytes.
+/// This distinguishes hashes from hex-encoded ASCII text.
+pub(super) fn is_cryptographic_hash(s: &str) -> bool {
+    // Must be a valid hash length: MD5=32, SHA1=40, SHA256=64, SHA512=128
+    if !matches!(s.len(), 32 | 40 | 64 | 128) {
+        return false;
+    }
+
+    // Must be all hex digits
+    if !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
+
+    // Decode and check printability - hashes decode to random bytes (<30% printable)
+    let decoded: Vec<u8> = (0..s.len())
+        .step_by(2)
+        .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect();
+
+    if decoded.is_empty() {
+        return false;
+    }
+
+    let printable = decoded.iter().filter(|b| b.is_ascii_graphic()).count();
+
+    // Hashes typically have <50% printable bytes (random distribution)
+    // Hex-encoded text has >70% printable (mostly ASCII text)
+    // Use 50% threshold for safety margin
+    printable * 2 < decoded.len()
+}
 
 /// Check if a string looks like base64-encoded data
 pub(super) fn is_base64(s: &str) -> bool {

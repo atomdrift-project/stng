@@ -50,6 +50,11 @@ pub fn classify_string(s: &str) -> StringKind {
         }
     }
 
+    // Cryptographic hashes (MD5=32, SHA1=40, SHA256=64, SHA512=128)
+    if encoding::is_cryptographic_hash(s) {
+        return StringKind::Hash;
+    }
+
     // Cryptocurrency wallet addresses (high value IOC)
     if let Some(kind) = network::classify_crypto_address(s) {
         return kind;
@@ -498,7 +503,7 @@ mod tests {
     use super::code::is_shell_command;
     use super::encoding::{
         decode_unicode_escapes, decode_url_encoding, is_base32, is_base58, is_base64, is_base85,
-        is_hex_encoded, is_unicode_escaped, is_url_encoded,
+        is_cryptographic_hash, is_hex_encoded, is_unicode_escaped, is_url_encoded,
     };
     use super::network::is_ipv4;
     use crate::extraction::{extract_from_structures, find_string_structures};
@@ -1551,5 +1556,77 @@ mod tests {
 
         let with_space = "SGVs bG8g".repeat(10);
         assert!(!is_base64(&with_space));
+    }
+
+    #[test]
+    fn test_is_cryptographic_hash_valid() {
+        // MD5 hash (32 chars)
+        assert!(is_cryptographic_hash(
+            "d41d8cd98f00b204e9800998ecf8427e"
+        ));
+
+        // SHA1 hash (40 chars)
+        assert!(is_cryptographic_hash(
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        ));
+
+        // SHA256 hash (64 chars) - empty string hash
+        assert!(is_cryptographic_hash(
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        ));
+
+        // SHA512 hash (128 chars)
+        assert!(is_cryptographic_hash(
+            "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+        ));
+    }
+
+    #[test]
+    fn test_is_cryptographic_hash_invalid() {
+        // Too short
+        assert!(!is_cryptographic_hash("d41d8cd98f00b204"));
+
+        // Wrong length (not 32/40/64/128)
+        assert!(!is_cryptographic_hash(
+            "d41d8cd98f00b204e9800998ecf8427e00"
+        ));
+
+        // Hex-encoded ASCII text ("Hello World" repeated) - should NOT be hash
+        // "Hello World" = 48656c6c6f20576f726c64
+        assert!(!is_cryptographic_hash(
+            "48656c6c6f20576f726c6448656c6c6f"
+        ));
+
+        // Not hex digits
+        assert!(!is_cryptographic_hash(
+            "ghijklmnopqrstuvwxyz123456789012"
+        ));
+    }
+
+    #[test]
+    fn test_classify_string_hash() {
+        // SHA256 hash should be classified as Hash
+        assert_eq!(
+            classify_string("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            StringKind::Hash
+        );
+
+        // SHA1 hash should be classified as Hash
+        assert_eq!(
+            classify_string("da39a3ee5e6b4b0d3255bfef95601890afd80709"),
+            StringKind::Hash
+        );
+
+        // MD5 hash should be classified as Hash
+        assert_eq!(
+            classify_string("d41d8cd98f00b204e9800998ecf8427e"),
+            StringKind::Hash
+        );
+
+        // Hex-encoded text should NOT be classified as Hash
+        assert_ne!(
+            classify_string("48656c6c6f20576f726c6448656c6c6f"),
+            StringKind::Hash
+        );
     }
 }

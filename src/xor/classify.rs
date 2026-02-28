@@ -1367,6 +1367,14 @@ pub(crate) fn has_multiple_locales(s: &str) -> bool {
 
 /// Classify an XOR-decoded string. Returns None if it doesn't look interesting.
 pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
+    // EARLY REJECTION: Check for partial/failed XOR decodes before any classification.
+    // These are strings that start like known patterns (e.g., "%USERPROFILE%") but
+    // diverge into garbage (e.g., "%UsERP4NFINE%\"). Must check this BEFORE
+    // is_meaningful_string() which might pass these due to acceptable vowel ratios.
+    if super::validate::is_partial_xor_decode(s) {
+        return None;
+    }
+
     // FIRST: Check for high-value IOCs that should bypass strict filtering
     // These are important enough that we want them even if they have unusual chars.
     // Run case-sensitive checks before allocating a lowercase copy.
