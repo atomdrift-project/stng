@@ -48,6 +48,7 @@ pub(super) struct PatternInfo {
 }
 
 /// Cached ASCII-only Aho-Corasick automaton (XOR'd patterns for keys 1..=255).
+#[allow(clippy::expect_used)]
 pub(super) static AUTOMATON_ASCII: LazyLock<(AhoCorasick, Vec<PatternInfo>)> =
     LazyLock::new(|| {
         let mut patterns: Vec<Vec<u8>> = Vec::new();
@@ -70,6 +71,7 @@ pub(super) static AUTOMATON_ASCII: LazyLock<(AhoCorasick, Vec<PatternInfo>)> =
 
 /// Cached automaton with both ASCII and wide (UTF-16LE) patterns.
 /// Used for PE binaries where wide strings are common.
+#[allow(clippy::expect_used)]
 pub(super) static AUTOMATON_WITH_WIDE: LazyLock<(AhoCorasick, Vec<PatternInfo>)> =
     LazyLock::new(|| {
         let mut patterns: Vec<Vec<u8>> = Vec::new();

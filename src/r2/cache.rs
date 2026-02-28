@@ -161,7 +161,7 @@ impl R2Cache {
         let metadata = fs::metadata(file_path)?;
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+            .map_err(std::io::Error::other)?
             .as_secs();
         let meta = CacheMeta {
             file_size: metadata.len(),

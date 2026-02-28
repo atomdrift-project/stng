@@ -23,20 +23,24 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+// Static regex patterns are infallible - the patterns are compile-time constants
+#[allow(clippy::expect_used)]
 static RE_URL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(https?|ftp|postgresql|mysql|redis|mongodb)://[a-zA-Z0-9._:/@\-?=&%]+")
-        .expect("static regex pattern is valid")
+        .expect("static regex")
 });
+#[allow(clippy::expect_used)]
 static RE_PATH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/[a-zA-Z0-9_./\-]+").expect("static regex pattern is valid"));
+    LazyLock::new(|| Regex::new(r"/[a-zA-Z0-9_./\-]+").expect("static regex"));
+#[allow(clippy::expect_used)]
 static RE_ENV_VAR: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[A-Z][A-Z0-9_]{3,}").expect("static regex pattern is valid"));
-static RE_SNAKE_CASE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+").expect("static regex pattern is valid")
-});
-static RE_DOMAIN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[a-z][a-z0-9]*\.[a-z][a-z0-9.]+").expect("static regex pattern is valid")
-});
+    LazyLock::new(|| Regex::new(r"[A-Z][A-Z0-9_]{3,}").expect("static regex"));
+#[allow(clippy::expect_used)]
+static RE_SNAKE_CASE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+").expect("static regex"));
+#[allow(clippy::expect_used)]
+static RE_DOMAIN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[a-z][a-z0-9]*\.[a-z][a-z0-9.]+").expect("static regex"));
 
 /// Extracts strings from Rust binaries using structure analysis.
 pub struct RustStringExtractor {

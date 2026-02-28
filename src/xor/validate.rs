@@ -291,6 +291,7 @@ const COMMON_WORDS: &[&str] = &[
 ];
 
 /// Cached AhoCorasick automaton for COMMON_WORDS (all patterns stored lowercase).
+#[allow(clippy::expect_used)]
 pub(crate) fn get_common_words_automaton() -> &'static AhoCorasick {
     static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
     CACHE.get_or_init(|| {
@@ -298,7 +299,7 @@ pub(crate) fn get_common_words_automaton() -> &'static AhoCorasick {
             .iter()
             .map(|w| w.to_ascii_lowercase())
             .collect();
-        AhoCorasick::new(&patterns).expect("valid static patterns for common words")
+        AhoCorasick::new(&patterns).expect("static patterns")
     })
 }
 
@@ -564,6 +565,16 @@ pub(crate) fn is_valid_ip(s: &str) -> bool {
 
     // Reject if .0 appears in first or last octet (only allow in middle two)
     if octets[0] == 0 || octets[3] == 0 {
+        return false;
+    }
+
+    // Reject version-like patterns where last three octets are all small (< 10)
+    // e.g., 30.2.2.4, 33.4.2.2 - these look like version numbers, not real IPs
+    // But exclude private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+    let is_private = octets[0] == 10
+        || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+        || (octets[0] == 192 && octets[1] == 168);
+    if !is_private && octets[1] < 10 && octets[2] < 10 && octets[3] < 10 {
         return false;
     }
 

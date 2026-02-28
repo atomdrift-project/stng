@@ -219,14 +219,16 @@ fn test_short_string_patterns() {
 
 #[test]
 fn test_short_garbage_patterns() {
-    // Mixed case with digits (garbage)
-    assert!(is_garbage("9N2A"), "Digits interspersed");
-    assert!(is_garbage("0YI0"), "Digits at start/end");
-    assert!(is_garbage("8oz1"), "Leading digit + lowercase");
+    // Consistent case alphanumeric is now accepted (could be identifiers)
+    assert!(!is_garbage("9N2A"), "Consistent uppercase with digits is valid");
+    // Digits at BOTH ends is garbage
+    assert!(is_garbage("0YI0"), "Digits at start AND end");
+    // Mixed case (upper and lower) with digits is garbage
+    assert!(is_garbage("8oz1"), "Mixed case with digits");
 
     // Short mixed case (garbage)
     assert!(is_garbage("gnzUrs"), "Short irregular mixed");
-    assert!(is_garbage("phbS"), "Uppercase at end");
+    assert!(is_garbage("phbS"), "Mixed case");
 
     // Internal whitespace (garbage)
     assert!(is_garbage("5c 9"), "Digits with space");
@@ -535,24 +537,32 @@ fn test_medium_version_like() {
 
 #[test]
 fn test_short_upper_digits() {
-    // Short strings (5 chars) with leading digits + uppercase may be garbage
-    assert!(is_garbage("55LYE"), "Leading digits are garbage");
+    // Consistent-case alphanumeric patterns (digits + uppercase, no lowercase) are valid
+    // Multi-digit leading numbers are OK (could be product codes, etc.)
+    assert!(!is_garbage("55LYE"), "Multi-digit leading number is valid");
 
-    // But 4-char strings like "0GZF" are not automatically garbage
-    assert!(!is_garbage("0GZF"), "4-char with digit is OK");
+    // Single leading 0 or 1 is suspicious (real identifiers use meaningful numbers)
+    assert!(is_garbage("0GZF"), "Single leading 0 is garbage");
+    assert!(is_garbage("1ABC"), "Single leading 1 is garbage");
+
+    // But multi-digit numbers starting with 0 or 1 are OK
+    assert!(!is_garbage("10NET"), "Leading 10 is valid");
+
+    // Digits at BOTH ends is garbage (like random hex)
+    assert!(is_garbage("0YI0"), "Digits at both ends is garbage");
 }
 
 #[test]
 fn test_valid_upper_digits() {
-    // Note: Short identifiers (6-7 chars) with mixed patterns are often garbage
-    // "BASE64" is 6 chars, "UTF16LE" is 7 chars - both flagged
-    // These are legitimate identifiers but the heuristics flag them
-    assert!(is_garbage("BASE64"), "6 chars flagged");
-    assert!(is_garbage("UTF16LE"), "7 chars flagged");
-    assert!(is_garbage("SHA256"), "6 chars flagged");
-
-    // Very short ones (4 chars) with digits are also garbage
-    assert!(is_garbage("UTF8"), "Too short with digits");
+    // Alphanumeric identifiers with consistent case (4-8 chars) are valid
+    // File signatures, algorithms, encodings, architectures
+    assert!(!is_garbage("UTF8"), "encoding");
+    assert!(!is_garbage("SHA1"), "algorithm");
+    assert!(!is_garbage("SHA256"), "algorithm");
+    assert!(!is_garbage("BASE64"), "encoding");
+    assert!(!is_garbage("UTF16LE"), "encoding");
+    assert!(!is_garbage("amd64"), "architecture");
+    assert!(!is_garbage("arm64"), "architecture");
 
     // Longer identifiers with clear patterns work better
     assert!(!is_garbage("CONSTANT_VALUE"), "Longer constant name");

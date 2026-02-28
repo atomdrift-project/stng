@@ -11,11 +11,13 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+#[allow(clippy::expect_used)]
 static CONCAT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"['"]\s*\+\s*['"]([A-Za-z0-9])['"]\s*\+\s*['"]"#).expect("valid static regex")
+    Regex::new(r#"['"]\s*\+\s*['"]([A-Za-z0-9])['"]\s*\+\s*['"]"#).expect("static regex")
 });
+#[allow(clippy::expect_used)]
 static ASSIGNMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"=\s*["']([^"']+)["']"#).expect("valid static regex"));
+    LazyLock::new(|| Regex::new(r#"=\s*["']([^"']+)["']"#).expect("static regex"));
 
 /// Minimum length for a base64 segment to be considered valid
 const MIN_BASE64_SEGMENT: usize = 32;

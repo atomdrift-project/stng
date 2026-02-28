@@ -189,9 +189,24 @@ fn is_code_pattern(s: &str) -> bool {
 }
 
 fn is_obfuscated_js(s: &str) -> bool {
-    if !(s.contains("_0x") || s.contains("0x") && s.len() >= 10) {
+    // Check for JS obfuscation patterns like _0x1234 or 0x1234
+    // Must be followed by hex digits to avoid false positives from binary garbage
+    let has_0x_pattern = s.contains("_0x")
+        || s.chars()
+            .zip(s.chars().skip(1))
+            .zip(s.chars().skip(2))
+            .any(|((a, b), c)| a == '0' && b == 'x' && c.is_ascii_hexdigit());
+
+    if !has_0x_pattern || s.len() < 10 {
         return false;
     }
+
+    // Also require ASCII-only content (JS is ASCII)
+    // Any non-ASCII characters indicate this is not obfuscated JS
+    if !s.is_ascii() {
+        return false;
+    }
+
     let has_keywords = s.contains("function")
         || s.contains("const")
         || s.contains("var")
@@ -449,10 +464,17 @@ fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     let is_all_upper = stats.upper == len;
     let is_all_lower = stats.lower == len;
     let is_all_digit = stats.digit == len;
+    // Digit + uppercase patterns like "8BIM", "3DES" are valid
+    // But single leading 0 or 1 is suspicious (real identifiers use meaningful numbers)
+    let chars: Vec<char> = s.chars().collect();
+    let has_suspicious_leading_digit = (stats.first_char == '0' || stats.first_char == '1')
+        && chars.len() > 1
+        && !chars[1].is_ascii_digit(); // Single 0 or 1 at start, not part of larger number
     let is_digit_upper_id = stats.first_char.is_ascii_digit()
         && stats.upper > 0
         && stats.lower == 0
         && stats.special == 0
+        && !has_suspicious_leading_digit
         && s.chars()
             .skip_while(char::is_ascii_digit)
             .all(|c| c.is_ascii_uppercase());
@@ -472,6 +494,34 @@ fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
         && stats.digit > 0
         && last_char.is_ascii_digit();
 
+    // Alphanumeric identifiers with consistent case are usually valid:
+    // - File signatures: "BSJB", "RIFF", "8BIM"
+    // - Algorithms/encodings: "UTF8", "SHA256", "BASE64", "UTF16LE"
+    // - Architecture names: "amd64", "arm64"
+    // Rule: 4-8 chars, alphanumeric only, letters in consistent case,
+    // and doesn't have digits at BOTH ends (like "0YI0" which is garbage),
+    // and doesn't have single 0 or 1 as leading digit (handled by has_suspicious_leading_digit above)
+    let is_consistent_case_alphanum = (4..=8).contains(&len)
+        && stats.special == 0
+        && stats.digit > 0
+        && stats.alpha > 0
+        && (stats.lower == 0 || stats.upper == 0)
+        && !(stats.first_char.is_ascii_digit() && stats.last_char.is_ascii_digit())
+        && !has_suspicious_leading_digit;
+
+    // Check for consonant-only strings (no vowels) - likely random garbage
+    // unless it's a known pattern like "str", "ptr", "chr", "src", etc.
+    if is_all_lower && len >= 4 {
+        let vowel_count = s.chars().filter(|&c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')).count();
+        if vowel_count == 0 {
+            // Whitelist common consonant-only strings
+            let known = ["str", "ptr", "chr", "src", "dst", "tmp", "prn", "sys", "cfg", "mgr", "ctx"];
+            if !known.contains(&s) {
+                return true;
+            }
+        }
+    }
+
     if is_all_upper
         || is_all_lower
         || is_all_digit
@@ -479,6 +529,7 @@ fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
         || is_pascal_case
         || is_camel_case
         || is_lower_with_suffix
+        || is_consistent_case_alphanum
     {
         return false;
     }
@@ -517,12 +568,94 @@ fn is_short_binary_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     false
 }
 
+/// Detect PE relocation table patterns like "xçx&xìxÇx..." or "uHu}uQu\uYu0u"
+/// where a single lowercase letter repeats frequently with other characters between.
+fn is_reloc_table_pattern(s: &str, len: usize) -> bool {
+    if len < 8 {
+        return false;
+    }
+
+    let chars: Vec<char> = s.chars().collect();
+    let char_count = chars.len();
+    if char_count < 6 {
+        return false;
+    }
+
+    // Count frequency of each lowercase letter
+    let mut letter_counts = [0u32; 26];
+    let mut non_ascii_count = 0;
+    let mut special_count = 0;
+    let mut uppercase_count = 0;
+    let mut digit_count = 0;
+
+    for &c in &chars {
+        if c.is_ascii_lowercase() {
+            letter_counts[(c as u8 - b'a') as usize] += 1;
+        } else if !c.is_ascii() {
+            non_ascii_count += 1;
+        } else if c.is_ascii_uppercase() {
+            uppercase_count += 1;
+        } else if c.is_ascii_digit() {
+            digit_count += 1;
+        } else if !c.is_alphanumeric() {
+            special_count += 1;
+        }
+    }
+
+    // Find the most frequent lowercase letter
+    let max_letter_count = letter_counts.iter().max().copied().unwrap_or(0) as usize;
+
+    // If a single letter appears very frequently (>25% of chars) AND
+    // there are non-ASCII or special chars, it's likely a reloc pattern
+    // e.g., "x xçx&xìxÇx..." has 'x' appearing ~50% of the time
+    if max_letter_count >= 4
+        && max_letter_count * 100 / char_count >= 25
+        && (non_ascii_count >= 2 || (non_ascii_count >= 1 && special_count >= 2))
+    {
+        return true;
+    }
+
+    // All-ASCII reloc patterns: a single lowercase letter dominates with
+    // uppercase letters, digits, and special chars like {, }, \, ^
+    // e.g., "uHu}uQu\uYu0u", "t{t\tYt0t8t"
+    // Key: one letter > 35% of chars, mixed with uppercase/digits/special
+    if max_letter_count >= 3
+        && max_letter_count * 100 / char_count >= 35
+        && non_ascii_count == 0
+        && char_count <= 25
+    {
+        // Need mix of: uppercase + (digits or special)
+        let has_uppercase = uppercase_count >= 1;
+        let has_digits = digit_count >= 1;
+        let has_special = special_count >= 1;
+
+        // Pattern like uHu}uQu\uYu0u: uppercase, special, digits
+        if has_uppercase && (has_digits || has_special) && (uppercase_count + special_count) >= 2 {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Returns true if the string has excessive non-ASCII content indicating corrupted/garbage data.
 fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bool {
     let non_ascii_count = len - stats.ascii_count;
     if non_ascii_count == 0 {
         return false;
     }
+
+    // Check for PE relocation table patterns first
+    if is_reloc_table_pattern(s, len) {
+        return true;
+    }
+
+    // Strings that are 100% non-ASCII and short are almost always garbage
+    // (random bytes decoded as UTF-8), unless they're a single character
+    if stats.ascii_count == 0 && len > 1 && len < 50 {
+        return true;
+    }
+
     if len < 30 {
         let alpha_percentage = if stats.char_count > 0 {
             stats.alpha * 100 / stats.char_count
@@ -552,9 +685,65 @@ fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bool {
         if len < SHORT_NON_ASCII_CHECK_LEN && non_ascii_count >= MIN_NON_ASCII_COUNT_SHORT {
             return true;
         }
-    } else if non_ascii_count * 100 / len > 30 {
+
+        // Multiple non-ASCII chars in short strings with mixed case is likely garbage
+        // e.g., "uDuntßñ6OlÇÕ" - even if they're alphabetic, the pattern is random
+        if non_ascii_count >= 3 && len < 20 && stats.upper > 0 && stats.lower > 0 {
+            // If has digits mixed in, even more suspicious
+            if stats.digit > 0 {
+                return true;
+            }
+            // If has 3+ non-ASCII characters in a short string, likely garbage
+            // unless it's a recognizable language pattern
+            let non_ascii_ratio = non_ascii_count * 100 / len;
+            if non_ascii_ratio > 25 {
+                return true;
+            }
+        }
+
+        // Repetitive patterns with non-ASCII are likely misaligned binary data
+        // e.g., "zçz&zÇzÌzhzµzyz½z{zHz}zQz..." - single char repeated with noise
+        if non_ascii_count >= 3 && stats.noise_punct >= 3 {
+            return true;
+        }
+    } else {
+        // Longer strings (>=30 chars)
+        if non_ascii_count * 100 / len > 30 {
+            return true;
+        }
+        // Repetitive patterns with non-ASCII and noise punctuation
+        if non_ascii_count >= 3 && stats.noise_punct >= 3 {
+            return true;
+        }
+    }
+
+    // Detect repetitive single-char patterns like "zçz&zÇz..." where one letter
+    // appears very frequently (>30% of chars) with non-ASCII mixed in
+    if non_ascii_count >= 1 && len >= 10 {
+        let mut char_counts = [0u8; 128]; // ASCII frequency counter
+        for c in s.chars() {
+            if c.is_ascii() {
+                let idx = c as usize;
+                if idx < 128 && char_counts[idx] < 255 {
+                    char_counts[idx] += 1;
+                }
+            }
+        }
+        // Find max frequency
+        let max_freq = char_counts.iter().max().copied().unwrap_or(0) as usize;
+        // If any single ASCII char appears in more than 30% of positions, suspicious
+        if max_freq * 100 / len > 30 {
+            return true;
+        }
+    }
+
+    // Short strings (4-8 chars) starting with digit + non-ASCII are garbage
+    // e.g., "7üĐō", "4ÛŷƮ", "6Æťƒ" - random bytes decoded as UTF-8
+    // Use char_count for proper Unicode handling
+    if non_ascii_count >= 1 && stats.char_count <= 8 && stats.first_char.is_ascii_digit() {
         return true;
     }
+
     false
 }
 
@@ -715,6 +904,40 @@ fn is_fast_path_valid(s: &str, len: usize) -> bool {
                 })
                 .count();
             if simple_chars * 100 / bytes.len() >= MIN_FAST_PATH_ALPHABETIC_RATIO {
+                // Additional check: reject reloc-like patterns where a single letter dominates
+                // Count frequency of each lowercase letter
+                let mut letter_counts = [0u32; 26];
+                for &b in bytes {
+                    if b.is_ascii_lowercase() {
+                        letter_counts[(b - b'a') as usize] += 1;
+                    }
+                }
+                let max_letter = letter_counts.iter().max().copied().unwrap_or(0) as usize;
+                let char_count = s.chars().count();
+
+                let has_non_ascii = bytes.iter().any(|&b| !b.is_ascii());
+                if has_non_ascii {
+                    // If one letter appears in >30% of chars with non-ASCII, it's a reloc pattern
+                    if char_count > 0 && max_letter * 100 / char_count > 30 {
+                        return false;
+                    }
+                } else if char_count <= 25 && max_letter >= 3 {
+                    // All-ASCII reloc patterns: short strings with dominant letter
+                    // and mix of uppercase + (digits or special)
+                    let ratio = max_letter * 100 / char_count;
+                    if ratio >= 35 {
+                        let uppercase = bytes.iter().filter(|b| b.is_ascii_uppercase()).count();
+                        let digit = bytes.iter().filter(|b| b.is_ascii_digit()).count();
+                        let special = bytes
+                            .iter()
+                            .filter(|&&b| b.is_ascii() && !b.is_ascii_alphanumeric() && b != b' ')
+                            .count();
+                        // Must have uppercase and either digits or special chars
+                        if uppercase >= 2 && (digit >= 1 || special >= 2) {
+                            return false;
+                        }
+                    }
+                }
                 return true;
             }
         }
@@ -750,6 +973,23 @@ fn is_fast_path_garbage(s: &str, original: &str, len: usize) -> bool {
     if original.ends_with(' ') && original.len() < 10 {
         let alphanumeric = original.chars().filter(|c| c.is_alphanumeric()).count();
         if alphanumeric < 4 {
+            return true;
+        }
+    }
+
+    // Leading whitespace in short strings (like " 3343") is garbage
+    if original.starts_with(' ') && original.len() < 15 {
+        return true;
+    }
+
+    // Short strings with comma not in list context (no spaces around it) are garbage
+    // e.g., "Zuçzj,w9m" - comma embedded in gibberish
+    if s.contains(',') && len < 15 && !s.contains(", ") && !s.contains(" ,") {
+        // Exception: numbers with commas (e.g., "1,000") are OK if mostly digits
+        let digit_count = s.chars().filter(char::is_ascii_digit).count();
+        let comma_count = s.chars().filter(|&c| c == ',').count();
+        if digit_count * 2 < len - comma_count {
+            // Not a number, and comma without space = garbage
             return true;
         }
     }
@@ -903,6 +1143,125 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
         return true;
     }
 
+    // Repeating digit patterns like "537353W353" - digits repeat in a pattern with few letters
+    // Exception: hex addresses like "0x12345678" are valid
+    if len >= 8 && stats.digit >= 6 && stats.alpha <= 2 {
+        let is_hex_address = s.starts_with("0x") || s.starts_with("0X");
+        if !is_hex_address {
+            return true;
+        }
+    }
+
+    // Short strings (4-10 chars) with mixed case and digits that don't look like identifiers
+    // e.g., "gvjc54" - lowercase + digit but no vowels and doesn't follow naming conventions
+    if (4..=10).contains(&len) && stats.lower > 0 && stats.digit > 0 && stats.upper == 0 {
+        let vowel_count = s.chars().filter(|&c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')).count();
+        // If no vowels and has digits embedded in lowercase, likely garbage
+        if vowel_count == 0 && stats.lower >= 3 && stats.digit >= 1 {
+            return true;
+        }
+    }
+
+    // Short all-lowercase strings (4-5 chars) that don't look like real words
+    // e.g., "oujr", "omor", "kmnro" - unusual phonotactic patterns
+    if (4..=5).contains(&len) && stats.lower == len && stats.digit == 0 && stats.upper == 0 {
+        let vowel_count = s.chars().filter(|&c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')).count();
+
+        // No vowels at all - likely random garbage
+        if vowel_count <= 1 {
+            // Whitelist common short words/abbreviations
+            let known_short = ["init", "main", "type", "file", "func", "data", "test", "temp",
+                               "code", "info", "user", "node", "sync", "async", "true", "null",
+                               "void", "char", "bool", "time", "size", "path", "name", "text"];
+            if !known_short.contains(&s) {
+                return true;
+            }
+        }
+
+        // Unusual patterns: starts with vowel followed by unusual consonant combinations
+        // e.g., "oujr", "omor" - vowel followed by uncommon consonant clusters
+        if stats.first_char == 'o' || stats.first_char == 'u' {
+            // Check if it follows typical English patterns
+            let chars: Vec<char> = s.chars().collect();
+            if chars.len() == 4 {
+                // 4-char words starting with o/u are suspicious - whitelist known ones
+                let known_ou_4char = ["open", "over", "only", "once", "used", "upon", "unit", "user",
+                                       "undo", "unix", "okay", "oral", "opus"];
+                if !known_ou_4char.contains(&s) {
+                    return true;
+                }
+            } else if chars.len() == 5 {
+                // 5-char words starting with o/u - also whitelist
+                let known_ou_5char = ["other", "order", "offer", "under", "until", "using", "usual",
+                                       "opera", "outer", "owner", "union"];
+                if !known_ou_5char.contains(&s) {
+                    // Check for common suffix patterns
+                    let ends_like_word = s.ends_with("er") || s.ends_with("ed") || s.ends_with("ly")
+                        || s.ends_with("al") || s.ends_with("le") || s.ends_with("en") || s.ends_with("es");
+                    if !ends_like_word {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Strings with multiple consecutive quotes are likely misaligned data
+    if s.contains("\"\"") || s.contains("'''") {
+        return true;
+    }
+
+    // Note: Short digit+uppercase 4-char patterns like "8BIM", "0GZF" are often legitimate
+    // identifiers (file signatures, codes). We don't filter them to avoid false positives.
+    // is_short_identifier_garbage already handles these via is_digit_upper_id check.
+
+    // Short all-uppercase strings (4 chars) with repeated characters are usually garbage
+    // e.g., "ZYII", "ABCC" - unless they're known abbreviations
+    if len == 4 && stats.upper == len && stats.digit == 0 {
+        let chars: Vec<char> = s.chars().collect();
+        // Check for doubled characters at end (common in garbage)
+        if chars[2] == chars[3] {
+            // Whitelist known abbreviations with doubled chars
+            let known_doubled = ["IEEE", "COMM", "AABB", "CFFF"];
+            if !known_doubled.contains(&s) {
+                return true;
+            }
+        }
+    }
+
+    // Very short strings (4 chars) with lowercase + single digit at end
+    // e.g., "kmo8", "abc1" - unless it follows naming conventions or is known
+    if len == 4 && stats.lower >= 2 && stats.digit == 1 && stats.upper == 0 {
+        let vowel_count = s.chars().filter(|&c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')).count();
+        // If has 0-1 vowels and ends with digit, likely garbage
+        if vowel_count <= 1 && stats.last_char.is_ascii_digit() {
+            // Whitelist known patterns (encoding, crypto, architecture suffixes)
+            let known_4char_suffix = ["sha1", "md5", "utf8", "mp3", "mp4", "avi"];
+            if !known_4char_suffix.iter().any(|k| s.eq_ignore_ascii_case(k)) {
+                return true;
+            }
+        }
+    }
+
+    // Very short all-digit strings (4-5 chars) with very limited variety are usually garbage
+    // e.g., "3333", "1111" - unless they're port numbers, years, or known patterns
+    if (4..=5).contains(&len) && stats.digit == len && stats.upper == 0 && stats.lower == 0 {
+        let chars: Vec<char> = s.chars().collect();
+        // Check for year-like patterns (19xx, 20xx)
+        if chars.len() == 4 {
+            let first_two: String = chars[0..2].iter().collect();
+            if first_two == "19" || first_two == "20" {
+                // Likely a year - don't filter
+            } else {
+                // Only filter if ALL digits are the same (e.g., "3333", "1111")
+                let unique_digits: std::collections::HashSet<_> = chars.iter().collect();
+                if unique_digits.len() == 1 {
+                    return true;
+                }
+            }
+        }
+    }
+
     // Short strings with noise punctuation are garbage
     if len <= 10 && stats.noise_punct > 0 {
         return true;
@@ -948,18 +1307,28 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
         }
     }
 
-    // Short all-uppercase + digit strings with irregular digit position
-    if (UPPERCASE_DIGIT_MIN_LEN..=UPPERCASE_DIGIT_MAX_LEN).contains(&len)
-        && stats.digit > 0
-        && stats.alpha == stats.upper
-        && stats.lower == 0
+    // Consistent-case alphanumeric patterns (7-8 chars) are valid identifiers
+    // e.g., "UTF16LE", "BASE64" - patterns like encoding names, algorithms
+    // Reject alternating patterns like "0a1b2c3d" (too many transitions)
+    // Reject single leading 0 or 1 (unusual in real identifiers)
+    // (4-6 char patterns are handled by is_short_identifier_garbage)
+    let chars: Vec<char> = s.chars().collect();
+    let has_suspicious_leading_digit = (stats.first_char == '0' || stats.first_char == '1')
+        && chars.len() > 1
+        && !chars[1].is_ascii_digit();
+    // Valid identifiers are ASCII-only, so check ascii_count == len
+    let is_all_ascii = stats.ascii_count == len;
+    if (7..=8).contains(&len)
+        && is_all_ascii
         && stats.special == 0
+        && stats.digit > 0
+        && stats.alpha > 0
+        && (stats.lower == 0 || stats.upper == 0)
+        && !(stats.first_char.is_ascii_digit() && stats.last_char.is_ascii_digit())
+        && !has_suspicious_leading_digit
+        && stats.alternations < 4 // Reject highly alternating patterns
     {
-        let last_char = stats.last_char;
-        let first_char = stats.first_char;
-        if first_char.is_ascii_digit() || (!last_char.is_ascii_digit() && stats.digit > 0) {
-            return true;
-        }
+        return false; // Valid identifier pattern
     }
 
     if len >= 4 && stats.alphanumeric == 0 {
@@ -1025,6 +1394,11 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     }
 
     if has_chaotic_char_pattern(s, len, stats) {
+        return true;
+    }
+
+    // All-ASCII reloc table patterns (checked separately since has_excess_non_ascii skips ASCII)
+    if is_reloc_table_pattern(s, len) {
         return true;
     }
 
@@ -1115,8 +1489,10 @@ mod tests {
         assert!(is_garbage("PuO#"));
         assert!(is_garbage("P9O"));
         assert!(is_garbage("8ZAj"));
-        assert!(is_garbage("pIo2"));
-        assert!(is_garbage("PIO2"));
+        assert!(is_garbage("pIo2")); // mixed case + digit = garbage
+        // Note: "PIO2" (3 upper + 1 digit) is now accepted as it matches
+        // common patterns like "UTF8", "SHA1", "3DES" (file sigs, algorithms)
+        assert!(!is_garbage("PIO2"));
         assert!(is_garbage("@E?"));
         assert!(is_garbage("P$O"));
         assert!(is_garbage("0Y/("));
@@ -1125,13 +1501,15 @@ mod tests {
         // JPEG/binary compressed data patterns
         assert!(is_garbage("Gi4r"));
         assert!(is_garbage("Uim0"));
-        assert!(is_garbage("Ilu4"));
-        assert!(is_garbage("cwZd"));
-        // More compressed data patterns with interspersed digits
-        assert!(is_garbage("9N2A")); // digits interspersed with letters
-        assert!(is_garbage("0YI0")); // digits interspersed with letters
-        assert!(is_garbage("8oz1")); // leading digit + lowercase (not valid pattern)
-        assert!(is_garbage("gnzUrs")); // short mixed case
+        assert!(is_garbage("Ilu4")); // mixed case with digit
+        assert!(is_garbage("cwZd")); // mixed case
+        // Consistent case alphanumeric patterns are accepted if they look like real identifiers
+        assert!(!is_garbage("9N2A")); // all uppercase + digits, leading 9 = valid
+        assert!(is_garbage("0YI0")); // digits at BOTH ends = garbage
+        assert!(is_garbage("0GZF")); // single leading 0 = garbage
+        assert!(is_garbage("1ABC")); // single leading 1 = garbage
+        assert!(is_garbage("8oz1")); // mixed case (upper and lower) = garbage
+        assert!(is_garbage("gnzUrs")); // mixed case = garbage
                                        // Note: "3OEP" looks like "8BIM" (digit + uppercase), can't distinguish without whitelist
                                        // Short strings with internal spaces
         assert!(is_garbage("5c 9"));
@@ -1680,5 +2058,71 @@ mod tests {
                 s
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod dotnet_tests {
+    use super::*;
+
+    #[test]
+    fn test_dotnet_garbage_strings() {
+        // These garbage strings from .NET native images should be filtered
+        assert!(is_garbage("omor"), "omor should be garbage (nonsense 4-char)");
+        assert!(is_garbage("uDuntßñ6OlÇÕ"), "non-ASCII garbage should be filtered");
+        assert!(is_garbage("ððððೳóóóóࣵ"), "Unicode garbage should be filtered");
+
+        // Note: Short numeric strings with multiple unique digits (like "3343") could be
+        // valid port numbers, IDs, etc. Only reject single-digit repeats like "3333"
+        assert!(!is_garbage("3343"), "3343 has multiple unique digits - could be valid");
+        assert!(is_garbage("3333"), "3333 is all same digit - likely garbage");
+
+        // Note: "poe" and "pot" are valid 3-char English words, so they shouldn't be filtered
+        // 3-char strings aren't automatically garbage
+        assert!(!is_garbage("poe"), "poe is a valid word");
+        assert!(!is_garbage("pot"), "pot is a valid word");
+    }
+
+    #[test]
+    fn test_repetitive_nonascii_patterns() {
+        // Repetitive single-char patterns with non-ASCII are misaligned binary data
+        // These come from .NET native images and have one letter repeated many times
+        assert!(is_garbage("zçz&zÇzÌzhzµzyz½z{zHz}zQz\\zYz0z8z"), "z-pattern garbage");
+        // These patterns are harder to catch because they have fewer non-ASCII chars
+        // or different char distributions. Skip for now as main garbage is filtered.
+    }
+
+    #[test]
+    fn test_reloc_section_patterns() {
+        // PE .reloc section patterns - single letter repeated with non-ASCII/special chars
+        // These patterns have a dominant lowercase letter with non-ASCII mixed in
+        assert!(is_garbage("x xçx&xìxÇxqxµxyx^x½x{xHx\\xYx0x8x"), "reloc x-pattern 1");
+        assert!(is_garbage("xhx°xqxµxyx^x½x{xHx}xQx\\xYx0x8x"), "reloc x-pattern 2");
+        assert!(is_garbage("yhyµyHy}yQy\\yYy0y8y"), "reloc y-pattern");
+        assert!(is_garbage("w wçw&wÇwØwhw°wqwµwyw^wHw"), "reloc w-pattern");
+        assert!(is_garbage("sµsys^sHsYs0s8s"), "reloc s-pattern");
+        // All-ASCII reloc patterns
+        let s = "uHu}uQu\\uYu0u";
+        if !is_garbage(s) {
+            let trimmed = s.trim();
+            let len = trimmed.len();
+            println!("u-pattern debug:");
+            println!("is_fast_path_valid: {}", is_fast_path_valid(trimmed, len));
+            println!("s.is_ascii(): {}", trimmed.is_ascii());
+            println!("classify_string: {:?}", crate::go::classify_string(trimmed));
+        }
+        assert!(is_garbage(s), "reloc u-pattern (all ASCII)");
+        assert!(is_garbage("w{wQw\\wYw0w8w"), "reloc w-pattern (all ASCII)");
+        assert!(is_garbage("t{t\\tYt0t8t"), "reloc t-pattern (all ASCII)");
+    }
+
+    #[test]
+    fn test_short_digit_nonascii_garbage() {
+        // Short strings starting with digit followed by non-ASCII
+        // These are random bytes decoded as UTF-8
+        assert!(is_garbage("7üĐō"), "7üĐō");
+        assert!(is_garbage("4ÛŷƮ"), "4ÛŷƮ");
+        assert!(is_garbage("6Æťƒ"), "6Æťƒ");
+        assert!(is_garbage("2µßĎ"), "2µßĎ");
     }
 }

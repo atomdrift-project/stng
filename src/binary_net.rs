@@ -65,6 +65,43 @@ fn is_go_binary_from_sections(
     false
 }
 
+/// Check if this is a .NET binary by examining the CLR header directory.
+/// .NET binaries have a COM descriptor (CLR header) and don't use C-style sockaddr_in.
+fn is_dotnet_binary(
+    pe_opt: Option<&crate::goblin::pe::PE<'_>>,
+    data: &[u8],
+) -> bool {
+    if let Some(pe) = pe_opt {
+        // Check if PE has CLR runtime header (index 14 = COM_DESCRIPTOR / CLR header)
+        if let Some(optional_header) = pe.header.optional_header {
+            let data_directories = &optional_header.data_directories.data_directories;
+            // Index 14 is IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR (CLR header)
+            if data_directories.len() > 14 {
+                if let Some((_, clr_dir)) = &data_directories[14] {
+                    if clr_dir.virtual_address != 0 && clr_dir.size != 0 {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Also check for BSJB signature in data (indicates CLI metadata header)
+        // This is a backup check for native images (.ni.dll) which may not have CLR header
+        if data.len() > 4 {
+            // Search in first 1MB for "BSJB" (CLI metadata signature)
+            let search_len = data.len().min(1024 * 1024);
+            if data[..search_len]
+                .windows(4)
+                .any(|w| w == b"BSJB")
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Scans binary data for hardcoded IP addresses in socket structures.
 ///
 /// Only detects IPs in contextual patterns:
@@ -91,6 +128,13 @@ pub fn scan_binary_ips(
     // Go has its own network abstractions and stores addresses differently
     // Scanning for sockaddr_in in Go binaries produces false positives from runtime metadata
     if is_go_binary_from_sections(elf_opt, pe_opt) {
+        return Vec::new();
+    }
+
+    // Skip .NET binaries - they don't use C-style sockaddr_in structures
+    // .NET has managed networking APIs and doesn't embed raw socket addresses
+    // Native images (.ni.dll) contain compiled IL/JIT code that produces many false positives
+    if is_dotnet_binary(pe_opt, data) {
         return Vec::new();
     }
 

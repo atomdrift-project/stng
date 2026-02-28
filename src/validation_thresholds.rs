@@ -25,9 +25,6 @@ pub(crate) const MAX_SHORT_ESCAPE_LENGTH: usize = 30;
 pub(crate) const MIXED_CASE_DIGIT_MIN_LEN: usize = 5;
 pub(crate) const MIXED_CASE_DIGIT_MAX_LEN: usize = 10;
 
-pub(crate) const UPPERCASE_DIGIT_MIN_LEN: usize = 5;
-pub(crate) const UPPERCASE_DIGIT_MAX_LEN: usize = 8;
-
 /// Short string with non-ASCII check
 pub(crate) const SHORT_NON_ASCII_CHECK_LEN: usize = 10;
 

@@ -83,7 +83,7 @@ pub(super) fn is_base64(s: &str) -> bool {
     // Real base64 has random case distribution, unlikely to start with 4+ consecutive lowercase
     let mut consecutive_lower_at_start = 0;
     for &b in bytes {
-        if matches!(b, b'a'..=b'z') {
+        if b.is_ascii_lowercase() {
             consecutive_lower_at_start += 1;
         } else {
             break;
@@ -96,7 +96,71 @@ pub(super) fn is_base64(s: &str) -> bool {
     }
 
     // Exclude sequential patterns (alphabet lookups, test data)
-    !s.contains("ABCDE") && !s.contains("012345") && !s.contains("the ") && !s.contains("and ")
+    if s.contains("ABCDE") || s.contains("012345") || s.contains("the ") || s.contains("and ") {
+        return false;
+    }
+
+    // Final check: if input looks like readable text and output is garbage, reject
+    // e.g., "IWorkItemQueriesExt2" (readable identifier) decodes to binary garbage
+    // Only apply when input has high vowel ratio (indicates real words, not random chars)
+    if let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s) {
+        let (input_quality, input_vowel_ratio) = text_quality_score(s.as_bytes());
+
+        // Skip check if input has many repeated characters (encoded binary, not readable text)
+        // e.g., "TVqQAAMAAAAEAAAA" has many 'A's from null bytes
+        let max_char_count = bytes.iter().fold([0u8; 256], |mut acc, &b| {
+            acc[b as usize] = acc[b as usize].saturating_add(1);
+            acc
+        }).into_iter().max().unwrap_or(0);
+        let max_char_ratio = (max_char_count as usize * 100) / bytes.len();
+        if max_char_ratio > 30 {
+            return true; // Likely encoded binary, not a readable identifier
+        }
+
+        // Only check quality comparison if input looks like natural language
+        // Real identifiers have ~30%+ vowels; random base64-ish strings have ~20%
+        if input_vowel_ratio >= 28 {
+            let (output_quality, _) = text_quality_score(&decoded);
+
+            // If input is more readable than output, it's likely an identifier, not base64
+            if input_quality > output_quality {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+/// Calculate text quality score (0-100) and vowel ratio.
+/// Higher quality = more text-like. Returns (quality, vowel_ratio).
+fn text_quality_score(bytes: &[u8]) -> (u32, u32) {
+    if bytes.is_empty() {
+        return (0, 0);
+    }
+
+    let mut alpha = 0usize;
+    let mut vowel = 0usize;
+    let mut printable = 0usize;
+
+    for &b in bytes {
+        if b.is_ascii_alphabetic() {
+            alpha += 1;
+            if matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u') {
+                vowel += 1;
+            }
+        }
+        if b.is_ascii_graphic() || b == b' ' {
+            printable += 1;
+        }
+    }
+
+    let printable_ratio = (printable * 100) / bytes.len();
+    let vowel_ratio = if alpha > 0 { (vowel * 100) / alpha } else { 0 };
+
+    // Weighted combination: printability matters most, vowel ratio indicates natural language
+    let quality = ((printable_ratio * 7 + vowel_ratio * 3) / 10) as u32;
+    (quality, vowel_ratio as u32)
 }
 
 /// Check if a string looks like hex-encoded ASCII data
@@ -474,6 +538,14 @@ pub(super) fn is_base58(s: &str) -> bool {
         }
     }
 
+    // 5. Reject readable identifiers: if input is more text-like than it would be as base58
+    //    Real base58 is random; readable PascalCase identifiers have high vowel ratios
+    let (_, input_vowel_ratio) = text_quality_score(s.as_bytes());
+    if input_vowel_ratio >= 28 {
+        // High vowel ratio indicates readable text, not random encoding
+        return false;
+    }
+
     true
 }
 
@@ -613,7 +685,10 @@ pub(super) fn is_base85(s: &str) -> bool {
     // For longer strings (>= 50), be very strict to reduce false positives
     if s.len() >= 50 {
         // Require 98% valid chars AND good character distribution
-        return valid_count * 100 >= s.len() * 98 && unique_char_count >= 15;
+        if valid_count * 100 < s.len() * 98 || unique_char_count < 15 {
+            return false;
+        }
+        // Still need to validate by decoding - fall through
     }
 
     // For shorter strings, use moderate threshold
@@ -623,6 +698,12 @@ pub(super) fn is_base85(s: &str) -> bool {
 
     // Must have good character distribution (at least 8 unique chars)
     if unique_char_count < 8 {
+        return false;
+    }
+
+    // Reject readable identifiers: high vowel ratio indicates text, not encoding
+    let (_, input_vowel_ratio) = text_quality_score(s.as_bytes());
+    if input_vowel_ratio >= 28 {
         return false;
     }
 

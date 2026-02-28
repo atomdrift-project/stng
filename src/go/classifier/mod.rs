@@ -77,13 +77,8 @@ pub fn classify_string(s: &str) -> StringKind {
                 let domain = parts[1];
 
                 // Local part must exist, not be empty, and start with alphanumeric
-                if local.is_empty()
-                    || !local
-                        .chars()
-                        .next()
-                        .expect("checked above")
-                        .is_alphanumeric()
-                {
+                let starts_with_alnum = local.chars().next().is_some_and(char::is_alphanumeric);
+                if !starts_with_alnum {
                     return StringKind::Const; // Skip - starts with @ or non-alphanumeric
                 }
 
@@ -267,15 +262,44 @@ pub fn classify_string(s: &str) -> StringKind {
     }
 
     // Command injection patterns - check AFTER code detection but BEFORE generic shell commands.
-    // Injection wrappers (;, |, $(), ``) are stronger signals than generic command keywords.
+    // Injection wrappers (;, |, $()) are stronger signals than generic command keywords.
     // JavaScript/PHP code might contain command strings but should be detected as code first.
-    if memchr::memchr3(b';', b'|', b'$', bytes).is_some()
-        && ((s.contains("; ") && (s.contains("cat") || s.contains("wget") || s.contains("curl")))
+    if memchr::memchr3(b';', b'|', b'$', bytes).is_some() {
+        // Classic injection: ; cat, | whoami, etc.
+        if (s.contains("; ") && (s.contains("cat") || s.contains("wget") || s.contains("curl")))
             || (s.contains("| ")
                 && (s.contains("whoami") || s.contains("id") || s.contains("uname")))
-            || s.contains("$("))
-    {
-        return StringKind::CommandInjection;
+        {
+            return StringKind::CommandInjection;
+        }
+
+        // Command substitution: $(...) - require actual command content inside
+        // Must have command-like content, not just random binary data
+        if let Some(start) = s.find("$(") {
+            if let Some(end_rel) = s[start + 2..].find(')') {
+                let content = &s[start + 2..start + 2 + end_rel];
+                // Must be non-empty and contain a space (actual command with args)
+                // or be a known command name
+                let is_command = !content.is_empty()
+                    && (content.contains(' ')
+                        || content.starts_with("whoami")
+                        || content.starts_with("id")
+                        || content.starts_with("pwd")
+                        || content.starts_with("hostname")
+                        || content.starts_with("uname"));
+                // Must be mostly ASCII and have reasonable alphanumeric ratio
+                let ascii_count = content.chars().filter(char::is_ascii).count();
+                let alpha_count = content.chars().filter(char::is_ascii_alphanumeric).count();
+                let content_len = content.len();
+                let is_valid = content_len >= 2
+                    && ascii_count * 100 / content_len > 90
+                    && alpha_count * 100 / content_len > 40;
+
+                if is_command && is_valid {
+                    return StringKind::CommandInjection;
+                }
+            }
+        }
     }
 
     // Backtick command substitution - must be mostly ASCII and contain command-like content

@@ -1546,10 +1546,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
             let is_windows_path = s.len() > 3
                 && s.chars().nth(1) == Some(':')
                 && s.chars().nth(2) == Some('\\')
-                && s.chars()
-                    .next()
-                    .expect("s is not empty")
-                    .is_ascii_alphabetic();
+                && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
 
             // Check for relative paths with proper structure
             let is_relative_path = (s.starts_with("./") || s.starts_with("../"))

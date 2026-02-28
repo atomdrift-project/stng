@@ -830,7 +830,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
     if let Ok(object) = Object::parse(data) {
         deduplicate_by_offset(extract_from_object(&object, data, opts))
     } else {
-        // Unknown format - use r2 if available, otherwise raw scan
+        // Unknown format - use r2 if available, plus raw scan
         let mut strings = Vec::new();
         if let Some(r2_strings) = get_r2_strings(opts) {
             strings.extend(r2_strings);
@@ -850,7 +850,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
             ));
         }
 
-        // Raw scan for all unknown formats
+        // Raw scan for all unknown formats (r2 strings complement, not replace)
         if !data.is_empty() {
             strings.extend(extract_raw_strings(
                 data,
@@ -1170,11 +1170,12 @@ fn extract_from_object(
             strings.extend(extract_overlay_strings(data, min_length));
         }
         _ => {
-            // Unknown format - use r2 if available, otherwise raw scan
+            // Unknown format - use r2 if available, plus raw scan
             if let Some(r2_strings) = get_r2_strings(opts) {
                 strings.extend(r2_strings);
             }
-            if strings.is_empty() && !data.is_empty() {
+            // Always do raw scan for unknown formats (r2 strings complement, not replace)
+            if !data.is_empty() {
                 strings.extend(extract_raw_strings(
                     data,
                     min_length,

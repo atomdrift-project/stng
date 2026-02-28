@@ -357,10 +357,12 @@ impl<'a> StackStringExtractor<'a> {
             if offset + len + 4 > self.data.len() {
                 return (0, None, 0);
             }
+            // bounds checked: offset + len + 4 <= self.data.len()
+            #[allow(clippy::expect_used)]
             let disp32 = u32::from_le_bytes(
                 self.data[offset + len..offset + len + 4]
                     .try_into()
-                    .expect("bounds checked above"),
+                    .expect("4-byte slice"),
             );
             disp = disp32 as i32 as i64;
             len += 4;
@@ -531,7 +533,9 @@ impl<'a> StackStringExtractor<'a> {
         let mut current_group = vec![strings.remove(0)];
 
         for next_str in strings {
-            let last = current_group.last().expect("current_group is never empty");
+            // current_group always has at least one element (initialized above, never emptied)
+            #[allow(clippy::expect_used)]
+            let last = current_group.last().expect("non-empty");
 
             // Check if this string is adjacent to the last one (within a small gap)
             // and both are short (suggesting character-by-character assembly)

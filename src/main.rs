@@ -16,8 +16,9 @@ use std::sync::LazyLock;
 use stng::{Severity, StringKind, StringMethod};
 
 /// Matches base64-like substrings within larger strings (e.g., embedded in shell commands).
+#[allow(clippy::expect_used)]
 static EMBEDDED_B64_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"([A-Za-z0-9+/]{12,}={0,2})").expect("valid static regex"));
+    LazyLock::new(|| Regex::new(r"([A-Za-z0-9+/]{12,}={0,2})").expect("static regex"));
 
 #[derive(Parser, Debug)]
 #[command(name = "stng")]
@@ -500,6 +501,8 @@ fn main() -> Result<()> {
             keep_indices.insert(indices[0]);
         } else {
             // Multiple strings at same offset - prefer decoded strings, then longest
+            // indices.len() > 1 here, so max_by always returns Some
+            #[allow(clippy::unwrap_used)]
             let best_idx = indices
                 .iter()
                 .max_by(|&&a, &&b| {
@@ -1175,9 +1178,8 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
             if src.starts_with("xor:key:") {
                 // Custom XOR key - already shown in header, don't repeat
                 value
-            } else if src.starts_with("xor:") {
+            } else if let Some(key) = src.strip_prefix("xor:") {
                 // Auto-detected XOR key - show it
-                let key = &src[4..]; // Strip "xor:" prefix
                 if use_color {
                     format!("{value} {DIM}[{key}]{RESET}")
                 } else {

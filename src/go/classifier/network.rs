@@ -96,6 +96,24 @@ pub(super) fn is_ipv4(s: &str) -> bool {
         }
     }
 
+    // Whitelist well-known public DNS and infrastructure IPs
+    // These are legitimate IOCs even if they match version-like patterns
+    let is_known_dns = matches!(
+        octets,
+        [8, 8, 8, 8]      // Google DNS
+        | [8, 8, 4, 4]    // Google DNS secondary
+        | [1, 1, 1, 1]    // Cloudflare DNS
+        | [1, 0, 0, 1]    // Cloudflare DNS secondary
+        | [9, 9, 9, 9]    // Quad9 DNS
+        | [4, 2, 2, 1]    // Level3 DNS
+        | [4, 2, 2, 2]    // Level3 DNS
+        | [208, 67, 222, 222] // OpenDNS
+        | [208, 67, 220, 220] // OpenDNS
+    );
+    if is_known_dns {
+        return true;
+    }
+
     // Filter out common version number patterns (false positives)
     // Pattern: X.0.0.0 (e.g., 1.0.0.0, 4.0.0.0, 11.0.0.0) - assembly versions
     if octets[1] == 0 && octets[2] == 0 && octets[3] == 0 {
@@ -104,6 +122,16 @@ pub(super) fn is_ipv4(s: &str) -> bool {
 
     // Pattern: X.Y.0.0 (e.g., 2.1.0.0, 4.5.0.0) - also common versions
     if octets[2] == 0 && octets[3] == 0 {
+        return false;
+    }
+
+    // Pattern: X.0.Y.Z where second octet is 0 and Y,Z are small (version-like)
+    // e.g., 49.0.2.1, 8.0.14.0 - .NET assembly versions
+    // But exclude private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+    let is_private_range = octets[0] == 10
+        || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+        || (octets[0] == 192 && octets[1] == 168);
+    if !is_private_range && octets[1] == 0 && octets[2] < 20 && octets[3] < 20 {
         return false;
     }
 

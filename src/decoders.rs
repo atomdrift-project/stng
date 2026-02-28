@@ -8,8 +8,9 @@ use data_encoding::{BASE32, BASE32_NOPAD};
 use regex::Regex;
 use std::sync::LazyLock;
 
+#[allow(clippy::expect_used)]
 static QUOTED_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]"#).expect("valid static regex"));
+    LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]"#).expect("static regex"));
 
 /// Minimum length for base64 strings to attempt decoding
 pub const MIN_BASE64_LENGTH: usize = 16;
@@ -133,6 +134,14 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
     // Reject if decoded string is too short or just whitespace
     let trimmed = decoded_str.trim();
     if trimmed.len() < 4 {
+        return None;
+    }
+
+    // Reject if input is more text-like than output (false positive detection)
+    // e.g., "IWorkItemQueriesExt2" decoding to binary garbage
+    let input_quality = string_quality_score(&s.value);
+    let output_quality = string_quality_score(&decoded_str);
+    if input_quality > output_quality {
         return None;
     }
 
@@ -1211,6 +1220,32 @@ mod tests {
         if !results.is_empty() {
             assert_eq!(results[0].value, "192.168.1.1");
             assert_eq!(results[0].kind, StringKind::IP);
+        }
+    }
+
+    #[test]
+    fn test_base64_reject_identifier_false_positives() {
+        // These are .NET interface/class names that look like base64 but decode to garbage
+        // The input (readable identifier) should be considered higher quality than
+        // the decoded output (binary garbage)
+        let false_positives = [
+            "IWorkItemQueriesExt2",
+            "IWorkItemMyFavoritesExt2",
+            "IVsImageService2",
+            "IVsPersistHierarchyItem2",
+            "QueryDefinition2",
+            "IVsRunningDocumentTable3",
+            "QueryItem2Collection",
+            "QueryFolder2ContentsChangedEventArgs",
+        ];
+
+        for input in false_positives {
+            let result = decode_base64_strings(&[make_string(input, StringKind::Const)]);
+            assert!(
+                result.is_empty(),
+                "Should reject '{}' as false positive base64",
+                input
+            );
         }
     }
 }

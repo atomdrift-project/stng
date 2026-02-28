@@ -232,7 +232,7 @@ fn test_verify_xor_keys_empty_candidates() {
 /// Test verify_xor_keys with candidates outside valid length range
 #[test]
 fn test_verify_xor_keys_invalid_lengths() {
-    use stng::{ExtractedString, StringKind, StringMethod};
+    use stng::ExtractedString;
 
     let temp_path = create_temp_file("r2_xor_lengths", b"test content");
     let file_path = temp_path.to_str().unwrap();

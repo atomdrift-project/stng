@@ -151,11 +151,37 @@ pub(super) fn is_php_code(s: &str) -> bool {
 
 /// Check if a string looks like AppleScript code
 pub(super) fn is_applescript(s: &str) -> bool {
+    // Quick rejection: AppleScript needs spaces and reasonable length
+    if s.len() < 8 || !s.contains(' ') {
+        return false;
+    }
+
+    // Quick rejection: must contain at least one common AppleScript keyword fragment
+    // This avoids lowercase conversion for most strings
+    let bytes = s.as_bytes();
+    let has_indicator = bytes.windows(4).any(|w| {
+        // Check for "tell", "path", "file", "end ", "set ", "with", "shel", "dial", "alia" (case insensitive)
+        matches!(
+            w,
+            b"tell" | b"Tell" | b"TELL" |
+            b"path" | b"Path" | b"PATH" |
+            b"file" | b"File" | b"FILE" |
+            b"end " | b"End " | b"END " |
+            b"set " | b"Set " | b"SET " |
+            b"with" | b"With" | b"WITH" |
+            b"shel" | b"Shel" | b"SHEL" |
+            b"dial" | b"Dial" | b"DIAL" |
+            b"alia" | b"Alia" | b"ALIA"
+        )
+    });
+    if !has_indicator {
+        return false;
+    }
+
     let lower = s.to_ascii_lowercase();
 
-    // AppleScript indicators - using word boundaries to avoid false positives
-    // "set " must be followed by a variable assignment context, not just appear in a word
-    let applescript_patterns = [
+    // AppleScript indicators
+    let patterns = [
         "tell application",
         "path to desktop",
         "path to documents",
@@ -176,19 +202,18 @@ pub(super) fn is_applescript(s: &str) -> bool {
         "set volume",
     ];
 
-    for pattern in &applescript_patterns {
+    for pattern in &patterns {
         if lower.contains(pattern) {
             return true;
         }
     }
 
-    // "set " only if it appears at word boundaries (start of line, after space/tab)
-    // and is followed by a variable name
+    // "set " only if it appears at word boundaries and is followed by assignment
     if (lower.starts_with("set ")
         || lower.contains("\nset ")
         || lower.contains("\tset ")
         || lower.contains(" set "))
-        && (lower.contains(" to ") || lower.contains("="))
+        && (lower.contains(" to ") || lower.contains('='))
     {
         return true;
     }
@@ -221,6 +246,53 @@ pub(super) fn is_shell_command(s: &str) -> bool {
         return false;
     }
 
+    // Reject common error message patterns (not shell commands)
+    // Format string placeholders, error codes, UI text markers
+    if s.contains("{0}") || s.contains("{1}") || s.contains("%s") || s.contains("%d") {
+        // Check if it looks like an error message or UI string
+        let is_error_message = s.contains("Error")
+            || s.contains("error")
+            || s.contains("Failed")
+            || s.contains("Could not")
+            || s.contains("Unable to")
+            || s.contains("Cannot")
+            || s.contains("Invalid")
+            || s.contains("Unsupported")
+            || s.contains("not supported")
+            || s.contains("not found")
+            || s.contains("access")
+            || s.contains("service")
+            || s.contains("[Click")
+            || s.contains("prompt");
+        if is_error_message {
+            return false;
+        }
+    }
+
+    // Skip strings with error code patterns like "ABC12345:" or "TTF24041:"
+    // (uppercase letters followed by digits and colon at start)
+    if len >= 6 {
+        let chars: Vec<char> = s.chars().take(10).collect();
+        let mut has_letters = false;
+        let mut has_digits = false;
+        let mut found_colon = false;
+        for &c in &chars {
+            if c == ':' {
+                found_colon = true;
+                break;
+            }
+            if c.is_ascii_uppercase() {
+                has_letters = true;
+            }
+            if c.is_ascii_digit() {
+                has_digits = true;
+            }
+        }
+        if has_letters && has_digits && found_colon {
+            return false;
+        }
+    }
+
     // Fast path: shell commands almost always contain a space
     // Exceptions: paths like /bin/sh, command substitution $(...)
     if memchr::memchr(b' ', bytes).is_none() && !s.starts_with("/bin/") && !s.starts_with("$(") {
@@ -247,14 +319,68 @@ pub(super) fn is_shell_command(s: &str) -> bool {
     }
 
     // Shell operators and redirects
-    if s.contains(" | ")
-        || s.contains(">/dev/null")
-        || s.contains("2>/dev/null")
-        || s.contains("2>&1")
-        || s.contains(" && ")
-        || s.contains("$(")
-    {
+    // Note: " | " alone is not enough - UI strings often use | as a separator
+    // e.g., "Click here | Don't show again" - must have actual shell context
+    if s.contains(">/dev/null") || s.contains("2>/dev/null") || s.contains("2>&1") {
         return true;
+    }
+
+    // Pipe requires additional shell context (command-like words around it)
+    if s.contains(" | ") {
+        // Check if it looks like a shell pipeline (has command-like patterns)
+        let has_shell_context = s.contains("grep")
+            || s.contains("awk")
+            || s.contains("sed")
+            || s.contains("sort")
+            || s.contains("uniq")
+            || s.contains("head")
+            || s.contains("tail")
+            || s.contains("cat ")
+            || s.contains("xargs")
+            || s.contains("wc ")
+            || s.contains("cut ")
+            || s.contains("tr ")
+            || s.starts_with("ls ")
+            || s.starts_with("find ")
+            || s.starts_with("ps ");
+        if has_shell_context {
+            return true;
+        }
+    }
+
+    // && requires shell context too - common in error messages
+    if s.contains(" && ") {
+        // Check for actual command patterns
+        let has_shell_context = s.contains("cd ") || s.contains("mkdir ") || s.contains("rm ");
+        if has_shell_context {
+            return true;
+        }
+    }
+
+    // Command substitution: $(...) - require actual command content inside
+    if let Some(start) = s.find("$(") {
+        if let Some(end_rel) = s[start + 2..].find(')') {
+            let content = &s[start + 2..start + 2 + end_rel];
+            // Must contain a space (actual command with args) or be a known command name
+            let is_command = !content.is_empty()
+                && (content.contains(' ')
+                    || content.starts_with("whoami")
+                    || content.starts_with("id")
+                    || content.starts_with("pwd")
+                    || content.starts_with("hostname")
+                    || content.starts_with("uname"));
+            // Must be mostly ASCII with reasonable alphanumeric ratio
+            let ascii_count = content.chars().filter(char::is_ascii).count();
+            let alpha_count = content.chars().filter(char::is_ascii_alphanumeric).count();
+            let content_len = content.len();
+            if content_len >= 2
+                && ascii_count * 100 / content_len > 90
+                && alpha_count * 100 / content_len > 40
+                && is_command
+            {
+                return true;
+            }
+        }
     }
 
     // Backtick command substitution - must start with backtick and look like actual command
@@ -332,11 +458,38 @@ pub(super) fn is_shell_command(s: &str) -> bool {
 
     for prefix in cmd_prefixes {
         if s.starts_with(prefix) {
+            // Special case: "service " at start should be followed by command words
+            if prefix == "service " {
+                if let Some(after) = s.strip_prefix(prefix) {
+                    let is_command = after.starts_with("start")
+                        || after.starts_with("stop")
+                        || after.starts_with("restart")
+                        || after.starts_with("status")
+                        || after.starts_with("enable")
+                        || after.starts_with("disable");
+                    if !is_command {
+                        continue;
+                    }
+                }
+            }
             return true;
         }
         // Check for " prefix" pattern without allocation
         if let Some(pos) = s.find(prefix) {
             if pos > 0 && s.as_bytes()[pos - 1] == b' ' {
+                // Special case: "service " should be followed by command words, not "provider" etc.
+                if prefix == "service " {
+                    let after = &s[pos + prefix.len()..];
+                    let is_command = after.starts_with("start")
+                        || after.starts_with("stop")
+                        || after.starts_with("restart")
+                        || after.starts_with("status")
+                        || after.starts_with("enable")
+                        || after.starts_with("disable");
+                    if !is_command {
+                        continue;
+                    }
+                }
                 return true;
             }
         }

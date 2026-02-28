@@ -1367,9 +1367,8 @@ fn parse_sockaddr_from_disasm(disasm: &str, _data: &[u8]) -> Option<SockaddrIn> 
         }
 
         // ARM32: strb r*, [stack_offset] (stores the byte)
-        if (line.contains("strb") || line.contains("str ")) && pending_byte.is_some() {
-            if let Some(sp_offset) = extract_stack_offset(line) {
-                let byte_val = pending_byte.expect("checked above");
+        if line.contains("strb") || line.contains("str ") {
+            if let (Some(byte_val), Some(sp_offset)) = (pending_byte, extract_stack_offset(line)) {
                 tracing::debug!(
                     "parse_sockaddr: found byte 0x{:02x} at sp+{} from line: {}",
                     byte_val,
