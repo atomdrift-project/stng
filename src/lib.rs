@@ -774,6 +774,7 @@ fn extract_from_utf16_file(
     // This allows us to find base64-encoded PowerShell, hex-encoded URLs, etc.
     let mut decoded_strings = Vec::new();
     decoded_strings.extend(decoders::decode_base64_strings(&raw_strings));
+    decoded_strings.extend(decoders::extract_embedded_base64(&raw_strings));
     decoded_strings.extend(fuzzy_base64::extract_fuzzy_base64(&raw_strings));
     decoded_strings.extend(decoders::decode_base32_strings(&raw_strings));
     decoded_strings.extend(decoders::decode_base85_strings(&raw_strings));
@@ -876,6 +877,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         // Decode encoded strings (base64, hex, URL-encoding, unicode escapes)
         let mut decoded = Vec::new();
         decoded.extend(decoders::decode_base64_strings(&strings));
+        decoded.extend(decoders::extract_embedded_base64(&strings));
         decoded.extend(fuzzy_base64::extract_fuzzy_base64(&strings));
         decoded.extend(decoders::decode_base32_strings(&strings));
         decoded.extend(decoders::decode_base85_strings(&strings));
@@ -1312,6 +1314,7 @@ fn extract_from_object(
     // This happens BEFORE garbage filtering so we can decode potentially-garbage-looking encodings
     let mut decoded = Vec::new();
     decoded.extend(decoders::decode_base64_strings(&strings));
+    decoded.extend(decoders::extract_embedded_base64(&strings));
     decoded.extend(fuzzy_base64::extract_fuzzy_base64(&strings));
     decoded.extend(decoders::decode_base32_strings(&strings));
     decoded.extend(decoders::decode_base85_strings(&strings));

@@ -12,6 +12,12 @@ use std::sync::LazyLock;
 static QUOTED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]"#).expect("static regex"));
 
+/// Matches base64-like substrings within larger strings (e.g., embedded in shell commands).
+/// Requires at least 12 characters to avoid false positives on short sequences.
+#[allow(clippy::expect_used)]
+static EMBEDDED_B64_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"([A-Za-z0-9+/]{12,}={0,2})").expect("static regex"));
+
 /// Minimum length for base64 strings to attempt decoding
 pub const MIN_BASE64_LENGTH: usize = 16;
 
@@ -60,6 +66,67 @@ pub fn deobfuscate_concatenation(s: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Extract and decode base64 embedded within larger strings.
+///
+/// This handles cases where base64 is embedded in code or commands:
+/// - Python: `exec(base64.b64decode('YWJjZGVm'))`
+/// - Shell: `echo YWJjZGVm | base64 -d`
+/// - JavaScript: `atob('YWJjZGVm')`
+///
+/// Unlike `decode_base64_strings` which decodes entire strings that are base64,
+/// this function extracts base64 substrings from within larger strings.
+pub fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+    let mut results = Vec::new();
+
+    for s in strings {
+        for cap in EMBEDDED_B64_RE.captures_iter(&s.value) {
+            if let Some(b64_match) = cap.get(1) {
+                let b64_str = b64_match.as_str();
+
+                // Skip if it's the entire string (handled by decode_base64_strings)
+                if b64_str == s.value {
+                    continue;
+                }
+
+                // Must be valid base64 length (multiple of 4)
+                if b64_str.len() % 4 != 0 {
+                    continue;
+                }
+
+                // Try to decode it
+                if let Ok(decoded) =
+                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64_str)
+                {
+                    // Check size limit
+                    if decoded.len() > MAX_DECODED_SIZE {
+                        continue;
+                    }
+
+                    // Validate it's printable text
+                    if let Ok(decoded_str) = String::from_utf8(decoded) {
+                        let trimmed = decoded_str.trim();
+
+                        // Must be meaningful (at least 4 chars after trim)
+                        if trimmed.len() >= 4 {
+                            results.push(ExtractedString {
+                                value: trimmed.to_string(),
+                                data_offset: s.data_offset,
+                                section: s.section.clone(),
+                                method: StringMethod::Base64Decode,
+                                kind: crate::classify_string(trimmed),
+                                raw: Some(b64_str.to_string()),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    results
 }
 
 /// Decode base64-encoded strings from a list of extracted strings.
@@ -1247,5 +1314,106 @@ mod tests {
                 input
             );
         }
+    }
+
+    // Tests for extract_embedded_base64
+
+    #[test]
+    fn test_extract_embedded_base64_python_style() {
+        // Python: exec(base64.b64decode('SGVsbG8gV29ybGQh'))
+        let input = make_string(
+            "exec(base64.b64decode('SGVsbG8gV29ybGQh'))",
+            StringKind::Const,
+        );
+        let results = extract_embedded_base64(&[input]);
+        assert_eq!(results.len(), 1, "Should extract one embedded base64");
+        assert_eq!(results[0].value, "Hello World!");
+        assert_eq!(results[0].method, StringMethod::Base64Decode);
+        assert_eq!(results[0].raw, Some("SGVsbG8gV29ybGQh".to_string()));
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_shell_style() {
+        // Shell: echo SGVsbG8gV29ybGQh | base64 -d
+        let input = make_string("echo SGVsbG8gV29ybGQh | base64 -d", StringKind::ShellCmd);
+        let results = extract_embedded_base64(&[input]);
+        assert_eq!(results.len(), 1, "Should extract one embedded base64");
+        assert_eq!(results[0].value, "Hello World!");
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_javascript_atob() {
+        // JavaScript: eval(atob('SGVsbG8gV29ybGQh'))
+        let input = make_string("eval(atob('SGVsbG8gV29ybGQh'))", StringKind::Const);
+        let results = extract_embedded_base64(&[input]);
+        assert_eq!(results.len(), 1, "Should extract one embedded base64");
+        assert_eq!(results[0].value, "Hello World!");
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_skips_whole_string() {
+        // If the entire string is base64, it should be skipped (handled by decode_base64_strings)
+        let input = make_string("SGVsbG8gV29ybGQh", StringKind::Base64);
+        let results = extract_embedded_base64(&[input]);
+        assert!(results.is_empty(), "Should skip strings that are entirely base64");
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_requires_valid_length() {
+        // Base64 must be multiple of 4
+        let input = make_string("decode('SGVsbG9Xb3JsZA')", StringKind::Const); // 14 chars, not multiple of 4
+        let results = extract_embedded_base64(&[input]);
+        assert!(results.is_empty(), "Should reject base64 with invalid length");
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_multiple_in_one_string() {
+        // Multiple base64 strings in one line (must be >= 12 chars each to match regex)
+        // "Hello World!" = SGVsbG8gV29ybGQh (16 chars)
+        // "Test String!" = VGVzdCBTdHJpbmch (16 chars)
+        let input = make_string(
+            "a = 'SGVsbG8gV29ybGQh'; b = 'VGVzdCBTdHJpbmch'",
+            StringKind::Const,
+        );
+        let results = extract_embedded_base64(&[input]);
+        assert_eq!(results.len(), 2, "Should extract both embedded base64 strings");
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_nested_code() {
+        // Nested Python code - common in malware
+        // Inner: "import os; os.system('whoami')"
+        let inner_b64 = "aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ3dob2FtaScp";
+        let input = make_string(
+            &format!("exec(base64.b64decode('{}'))", inner_b64),
+            StringKind::Const,
+        );
+        let results = extract_embedded_base64(&[input]);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].value.contains("import os"));
+        assert!(results[0].value.contains("whoami"));
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_rejects_short_decoded() {
+        // Even if base64 is valid, decoded result must be >= 4 chars
+        let input = make_string("decode('YWI=')", StringKind::Const); // decodes to "ab" (2 chars)
+        let results = extract_embedded_base64(&[input]);
+        assert!(results.is_empty(), "Should reject base64 that decodes to < 4 chars");
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_preserves_offset() {
+        let input = ExtractedString {
+            value: "exec(base64.b64decode('SGVsbG8gV29ybGQh'))".to_string(),
+            data_offset: 12345,
+            section: Some("__TEXT".to_string()),
+            method: StringMethod::RawScan,
+            kind: StringKind::Const,
+            ..Default::default()
+        };
+        let results = extract_embedded_base64(&[input]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].data_offset, 12345, "Should preserve original offset");
     }
 }

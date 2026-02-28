@@ -6,19 +6,13 @@ use anyhow::Result;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use clap::Parser;
-use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::Path;
-use std::sync::LazyLock;
 use stng::{Severity, StringKind, StringMethod};
 
-/// Matches base64-like substrings within larger strings (e.g., embedded in shell commands).
-#[allow(clippy::expect_used)]
-static EMBEDDED_B64_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"([A-Za-z0-9+/]{12,}={0,2})").expect("static regex"));
 
 #[derive(Parser, Debug)]
 #[command(name = "stng")]
@@ -382,37 +376,8 @@ fn main() -> Result<()> {
             byte_offset += line.len() as u64 + 1;
         }
 
-        // Extract embedded base64 from within commands and strings
-        let mut embedded_decoded = Vec::new();
-        for s in &strings {
-            for cap in EMBEDDED_B64_RE.captures_iter(&s.value) {
-                if let Some(b64_match) = cap.get(1) {
-                    let b64_str = b64_match.as_str();
-                    // Check if it's likely base64 and not the whole string
-                    if b64_str != s.value && b64_str.len() % 4 == 0 {
-                        // Try to decode it
-                        if let Ok(decoded) = BASE64.decode(b64_str.trim()) {
-                            // Validate it's printable
-                            if let Ok(decoded_str) = String::from_utf8(decoded) {
-                                let trimmed = decoded_str.trim();
-                                if trimmed.len() >= 4 {
-                                    embedded_decoded.push(stng::ExtractedString {
-                                        value: trimmed.to_string(),
-                                        data_offset: s.data_offset,
-                                        section: None,
-                                        method: stng::StringMethod::Base64Decode,
-                                        kind: stng::classify_string(trimmed),
-                                        raw: Some(b64_str.to_string()),
-                                        ..Default::default()
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        strings.extend(embedded_decoded);
+        // NOTE: Embedded base64 extraction is now handled by the library
+        // via decoders::extract_embedded_base64() called from extract_strings_with_options()
 
         // Jump to output section
         if strings.is_empty() {
