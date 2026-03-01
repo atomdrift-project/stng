@@ -227,6 +227,13 @@ pub(super) fn is_shell_command(s: &str) -> bool {
 
     // Must have some length
     if len < 4 {
+    // Shell commands are predominantly ASCII. Long strings with many non-ASCII chars
+    // (like localized UI text) are almost never shell commands.
+    let ascii_count = s.chars().filter(|c| c.is_ascii()).count();
+    if len > 100 && ascii_count * 100 / len < 95 {
+        return false;
+    }
+
         return false;
     }
 
