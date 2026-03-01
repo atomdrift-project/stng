@@ -11,6 +11,34 @@
 use crate::types::{ExtractedString, StringFragment, StringKind, StringMethod};
 use std::collections::{HashMap, HashSet};
 
+/// Operators used by garble's simple transformation.
+///
+/// Garble encrypts strings using one of three reversible byte-wise operations:
+/// - XOR: self-inverse, decrypt with XOR
+/// - ADD: decrypt with SUB (wrapping)
+/// - SUB: decrypt with ADD (wrapping)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum GarbleOp {
+    /// XOR operation (self-inverse)
+    Xor = 0,
+    /// Subtraction to reverse ADD encryption: plaintext = ciphertext - key
+    Sub = 1,
+    /// Addition to reverse SUB encryption: plaintext = ciphertext + key
+    Add = 2,
+}
+
+impl GarbleOp {
+    /// Apply this operator to decode a byte pair.
+    #[inline]
+    fn apply(self, ciphertext: u8, key: u8) -> u8 {
+        match self {
+            GarbleOp::Xor => ciphertext ^ key,
+            GarbleOp::Sub => ciphertext.wrapping_sub(key),
+            GarbleOp::Add => ciphertext.wrapping_add(key),
+        }
+    }
+}
+
 /// Extract strings constructed on the stack.
 pub fn extract_stack_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     let extractor = StackStringExtractor::new(data, min_length);
@@ -515,7 +543,7 @@ impl<'a> StackStringExtractor<'a> {
         results = self.merge_adjacent_fragments(results);
 
         // Append any strings recovered by XOR-pairing of non-printable stack blobs.
-        results.extend(self.finalize_xor_pairs());
+        results.extend(self.finalize_garble_pairs());
 
         // Final sanity check: filter out very short merged strings
         results.retain(|s| s.value.len() >= self.min_length);
@@ -617,27 +645,27 @@ impl<'a> StackStringExtractor<'a> {
         }
     }
 
-    /// XOR all pairs of same-length non-printable blobs within each base-register group.
+    /// Decode strings from pairs of same-length non-printable blobs using garble operators.
     ///
-    /// This recovers strings obfuscated with the BrickStorm / garble pattern:
-    /// two raw immediate constants are placed on the stack and XOR'd byte-by-byte
-    /// in a counted loop before being passed to `runtime.slicebytetostring`.
-    /// Neither half is printable on its own; XOR of the pair yields the plaintext.
-    /// Detect XOR-encoded strings from pairs of non-printable stack blobs.
+    /// This recovers strings obfuscated with the BrickStorm / garble "simple" pattern:
+    /// two raw immediate constants (ciphertext and key) are placed on the stack and
+    /// combined byte-by-byte using XOR, ADD, or SUB in a counted loop before being
+    /// passed to `runtime.slicebytetostring`. Neither half is printable on its own;
+    /// combining the pair with the correct operator yields the plaintext.
     ///
-    /// BrickStorm and garble-obfuscated binaries encode strings as two parallel
-    /// sequences of immediates ("ciphertext" and "key") written to different areas
-    /// of the same stack frame.  Each ciphertext[i] XOR key[i] yields one chunk
-    /// of the plaintext; consecutive chunks reconstruct the full string.
+    /// Garble's simple transformation uses one of three operators:
+    /// - XOR: `plaintext[i] = ciphertext[i] ^ key[i]` (self-inverse)
+    /// - ADD: `ciphertext[i] = plaintext[i] + key[i]` → decrypt with SUB
+    /// - SUB: `ciphertext[i] = plaintext[i] - key[i]` → decrypt with ADD
     ///
     /// Algorithm:
-    /// 1. Try every unique pair of same-size blobs; record any that XOR to printable
-    ///    bytes, along with each blob's stack displacement.
-    /// 2. Group pairs by `key_offset = |disp_a − disp_b|`.  Within a group, pairs
+    /// 1. Try every unique pair of same-size blobs with all three operators (XOR, ADD, SUB).
+    /// 2. Record any pair+operator combo that produces printable bytes.
+    /// 3. Group pairs by `key_offset = |disp_a − disp_b|`. Within a group, pairs
     ///    whose lower displacement advances by exactly `chunk_size` per step form a
     ///    consecutive sequence that decodes one multi-chunk string.
-    /// 3. Merge each sequence and emit the concatenated result.
-    fn finalize_xor_pairs(&mut self) -> Vec<ExtractedString> {
+    /// 4. Merge each sequence and emit the concatenated result.
+    fn finalize_garble_pairs(&mut self) -> Vec<ExtractedString> {
         let raw_blobs = std::mem::take(&mut self.raw_blobs);
         let mut results = Vec::new();
 
@@ -657,38 +685,58 @@ impl<'a> StackStringExtractor<'a> {
                     continue;
                 }
 
-                // Phase 1 – enumerate all valid XOR pairs, keyed by canonical
-                // (disp_lo, disp_hi) so we don't add the same pair twice.
+                // Phase 1 – enumerate all valid pairs with all operators, keyed by canonical
+                // (disp_lo, disp_hi, op) so we don't add the same pair twice.
                 struct Pair {
                     decoded: String,
                     disp_lo: i64,
                     disp_hi: i64,
                     instr_off: u64,
+                    #[allow(dead_code)]
+                    operator: GarbleOp,
                 }
-                let mut pair_seen: HashSet<(i64, i64)> = HashSet::new();
+                let mut pair_seen: HashSet<(i64, i64, u8)> = HashSet::new();
                 let mut pairs: Vec<Pair> = Vec::new();
 
                 for i in 0..indices.len() {
                     for j in (i + 1)..indices.len() {
                         let a = &blobs[indices[i]];
                         let b = &blobs[indices[j]];
-                        let xored: Vec<u8> = a
-                            .bytes
-                            .iter()
-                            .zip(b.bytes.iter())
-                            .map(|(x, y)| x ^ y)
-                            .collect();
-                        // Accept any pair that XOR-decodes to at least one printable byte;
-                        // the full-sequence length gate comes in phase 2.
-                        if let Some(decoded) = check_printable(&xored, 1) {
-                            let disp_lo = a.disp.min(b.disp);
-                            let disp_hi = a.disp.max(b.disp);
-                            if pair_seen.insert((disp_lo, disp_hi)) {
+                        let disp_lo = a.disp.min(b.disp);
+                        let disp_hi = a.disp.max(b.disp);
+
+                        // Try all three garble operators and keep only the best result
+                        // (highest score = most letter-like characters)
+                        let mut best_result: Option<(String, GarbleOp, i32)> = None;
+
+                        for op in [GarbleOp::Xor, GarbleOp::Sub, GarbleOp::Add] {
+                            let decoded_bytes: Vec<u8> = a
+                                .bytes
+                                .iter()
+                                .zip(b.bytes.iter())
+                                .map(|(&x, &y)| op.apply(x, y))
+                                .collect();
+
+                            if let Some(decoded) = check_printable(&decoded_bytes, 1) {
+                                let score = score_decoded_string(&decoded);
+                                if best_result.is_none()
+                                    || score > best_result.as_ref().map(|(_, _, s)| *s).unwrap_or(0)
+                                {
+                                    best_result = Some((decoded, op, score));
+                                }
+                            }
+                        }
+
+                        // Only add the best result for this position pair
+                        if let Some((decoded, op, _score)) = best_result {
+                            if pair_seen.insert((disp_lo, disp_hi, 0)) {
+                                // Use 0 as the op marker since we only keep the best
                                 pairs.push(Pair {
                                     decoded,
                                     disp_lo,
                                     disp_hi,
                                     instr_off: a.instr_off.min(b.instr_off),
+                                    operator: op,
                                 });
                             }
                         }
@@ -911,6 +959,28 @@ impl<'a> StackStringExtractor<'a> {
 
         alphanumeric_runs >= 2
     }
+}
+
+/// Score a decoded string for likelihood of being valid text.
+///
+/// Higher scores indicate more "real" looking strings (letters, common punctuation).
+/// Used to pick the best operator when multiple produce printable output.
+fn score_decoded_string(s: &str) -> i32 {
+    let mut score = 0i32;
+    for c in s.chars() {
+        if c.is_ascii_alphabetic() {
+            score += 3; // Letters are strong signal
+        } else if c.is_ascii_digit() {
+            score += 1; // Digits are OK
+        } else if matches!(c, '_' | '-' | '.' | '/' | ':' | ' ') {
+            score += 2; // Common string characters
+        } else if c.is_ascii_punctuation() {
+            score += 0; // Other punctuation is neutral
+        } else {
+            score -= 1; // Control chars or unusual chars are bad
+        }
+    }
+    score
 }
 
 fn check_printable(bytes: &[u8], min_length: usize) -> Option<String> {
@@ -1284,6 +1354,157 @@ mod tests {
         assert!(
             !decoded.contains(&"EFGH".to_string()),
             "'EFGH' should be merged: {decoded:?}"
+        );
+    }
+
+    // ==================== Garble ADD/SUB operator tests ====================
+    // Note: Both ciphertext AND key must be non-printable for them to be
+    // collected as raw_blobs and paired. If either is printable, it goes
+    // into the regular string tracking instead.
+
+    /// Test ADD operator decryption (garble used SUB to encrypt).
+    /// plaintext[i] = ciphertext[i] + key[i]
+    #[test]
+    fn test_garble_add_operator_path() {
+        // "PATH" = [0x50, 0x41, 0x54, 0x48]
+        // Both blobs must be non-printable (outside 0x20-0x7E range)
+        //
+        // ct = [0x90, 0x91, 0x94, 0x98] (high bytes, non-printable)
+        // key = [0xC0, 0xB0, 0xC0, 0xB0] (high bytes, non-printable)
+        //
+        // ADD (wrapping): 0x90+0xC0=0x50='P', 0x91+0xB0=0x41='A',
+        //                 0x94+0xC0=0x54='T', 0x98+0xB0=0x48='H' -> "PATH"
+        // XOR: 0x90^0xC0=0x50='P', 0x91^0xB0=0x21='!',
+        //      0x94^0xC0=0x54='T', 0x98^0xB0=0x28='(' -> "P!T("
+        // SUB: 0x90-0xC0=0xD0 (non-printable), etc.
+        //
+        // ADD scores 12 (4 letters × 3), XOR scores 6 (2 letters × 3). ADD wins.
+        let ciphertext: u32 = u32::from_le_bytes([0x90, 0x91, 0x94, 0x98]);
+        let key: u32 = u32::from_le_bytes([0xC0, 0xB0, 0xC0, 0xB0]);
+        let mut code = Vec::new();
+        code.extend(c7_rsp(0x10, ciphertext));
+        code.extend(c7_rsp(0x20, key));
+        code.push(0xC3);
+        let decoded = xor_pairs(&code, 4);
+        assert!(
+            decoded.contains(&"PATH".to_string()),
+            "expected ADD-decoded 'PATH' in {decoded:?}"
+        );
+    }
+
+    /// Test SUB operator decryption (garble used ADD to encrypt).
+    /// plaintext[i] = ciphertext[i] - key[i]
+    #[test]
+    fn test_garble_sub_operator_home() {
+        // "HOME" = [0x48, 0x4F, 0x4D, 0x45]
+        // Both blobs must be non-printable
+        // ciphertext = [0xC8, 0xCF, 0xCD, 0xC5] (high bytes, non-printable)
+        // key = [0x80, 0x80, 0x80, 0x80] (non-printable)
+        // 0xC8 - 0x80 = 0x48 = 'H'
+        // 0xCF - 0x80 = 0x4F = 'O'
+        // 0xCD - 0x80 = 0x4D = 'M'
+        // 0xC5 - 0x80 = 0x45 = 'E'
+        let ciphertext: u32 = u32::from_le_bytes([0xC8, 0xCF, 0xCD, 0xC5]);
+        let key: u32 = u32::from_le_bytes([0x80, 0x80, 0x80, 0x80]);
+        let mut code = Vec::new();
+        code.extend(c7_rsp(0x10, ciphertext));
+        code.extend(c7_rsp(0x20, key));
+        code.push(0xC3);
+        let decoded = xor_pairs(&code, 4);
+        assert!(
+            decoded.contains(&"HOME".to_string()),
+            "expected SUB-decoded 'HOME' in {decoded:?}"
+        );
+    }
+
+    /// Test ADD operator with multi-chunk merging (8 bytes)
+    #[test]
+    fn test_garble_add_operator_multi_chunk() {
+        // "ABCDEFGH" using ADD decryption with non-printable blobs
+        // A=0x41, B=0x42, C=0x43, D=0x44, E=0x45, F=0x46, G=0x47, H=0x48
+        // ct + key = plaintext (wrapping)
+        // ct0 = [0x91, 0x92, 0x93, 0x94], key0 = [0xB0, 0xB0, 0xB0, 0xB0]
+        // 0x91 + 0xB0 = 0x41 = 'A', etc.
+        let ct0: u32 = u32::from_le_bytes([0x91, 0x92, 0x93, 0x94]);
+        let ct1: u32 = u32::from_le_bytes([0x95, 0x96, 0x97, 0x98]);
+        let k0: u32 = u32::from_le_bytes([0xB0, 0xB0, 0xB0, 0xB0]);
+        let k1: u32 = u32::from_le_bytes([0xB0, 0xB0, 0xB0, 0xB0]);
+        let mut code = Vec::new();
+        code.extend(c7_rsp(0, ct0));
+        code.extend(c7_rsp(4, ct1));
+        code.extend(c7_rsp(32, k0));
+        code.extend(c7_rsp(36, k1));
+        code.push(0xC3);
+        let decoded = xor_pairs(&code, 4);
+        assert!(
+            decoded.contains(&"ABCDEFGH".to_string()),
+            "expected ADD-decoded 'ABCDEFGH': {decoded:?}"
+        );
+    }
+
+    /// Test SUB operator with high-byte values
+    #[test]
+    fn test_garble_sub_operator_test() {
+        // "test" = [0x74, 0x65, 0x73, 0x74]
+        // Using non-printable blobs:
+        // ciphertext = [0xF4, 0xE5, 0xF3, 0xF4], key = [0x80, 0x80, 0x80, 0x80]
+        // 0xF4 - 0x80 = 0x74 = 't', etc.
+        let ciphertext: u32 = u32::from_le_bytes([0xF4, 0xE5, 0xF3, 0xF4]);
+        let key: u32 = u32::from_le_bytes([0x80, 0x80, 0x80, 0x80]);
+        let mut code = Vec::new();
+        code.extend(c7_rsp(0x10, ciphertext));
+        code.extend(c7_rsp(0x20, key));
+        code.push(0xC3);
+        let decoded = xor_pairs(&code, 4);
+        assert!(
+            decoded.contains(&"test".to_string()),
+            "expected SUB-decoded 'test' in {decoded:?}"
+        );
+    }
+
+    /// Test that XOR is still preferred when it produces valid output
+    #[test]
+    fn test_xor_preferred_over_add_sub() {
+        // Use the original XOR test case - should still work
+        let mut code = Vec::new();
+        code.extend(c7_rsp(0x10, 0xe0ce_fe50)); // XOR pair for "PATH"
+        code.extend(c7_rsp(0x14, 0xa89a_bf00));
+        code.push(0xC3);
+        let decoded = xor_pairs(&code, 4);
+        assert!(
+            decoded.contains(&"PATH".to_string()),
+            "XOR decoding should still work: {decoded:?}"
+        );
+        // Should only have one result, not multiple from different operators
+        assert_eq!(
+            decoded.len(),
+            1,
+            "should have exactly one result, got {decoded:?}"
+        );
+    }
+
+    /// Test ADD operator with 8-byte movabs pattern using non-printable blobs
+    #[test]
+    fn test_garble_add_movabs_8bytes() {
+        // "Content-" = [0x43, 0x6F, 0x6E, 0x74, 0x65, 0x6E, 0x74, 0x2D]
+        // Using non-printable blobs:
+        // ct + key = plaintext (wrapping)
+        // ct  = [0x93, 0xBF, 0xBE, 0xC4, 0xB5, 0xBE, 0xC4, 0x7D] (all non-printable)
+        // key = [0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0]
+        // 0x93 + 0xB0 = 0x43 = 'C', 0xBF + 0xB0 = 0x6F = 'o', etc.
+        let ciphertext: u64 =
+            u64::from_le_bytes([0x93, 0xBF, 0xBE, 0xC4, 0xB5, 0xBE, 0xC4, 0x7D]);
+        let key: u64 = u64::from_le_bytes([0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0]);
+        let mut code = Vec::new();
+        code.extend(movabs_rax(ciphertext));
+        code.extend(mov_rsp_rax(0x10));
+        code.extend(movabs_rax(key));
+        code.extend(mov_rsp_rax(0x18));
+        code.push(0xC3);
+        let decoded = xor_pairs(&code, 4);
+        assert!(
+            decoded.contains(&"Content-".to_string()),
+            "expected ADD-decoded 'Content-' in {decoded:?}"
         );
     }
 }
