@@ -286,6 +286,22 @@ fn is_mac_address_or_ipv6(s: &str, len: usize) -> bool {
         let colon_count = s.chars().filter(|&c| c == ':').count();
         let hex_count = s.chars().filter(char::is_ascii_hexdigit).count();
         if colon_count >= 2 && hex_count >= 1 {
+            // Reject trailing colons (invalid IPv6, unless ::)
+            if s.ends_with(':') && !s.ends_with("::") {
+                return false;
+            }
+            // Reject leading colons (invalid unless ::)
+            if s.starts_with(':') && !s.starts_with("::") {
+                return false;
+            }
+            // Reject 3+ consecutive colons (only :: is valid)
+            if s.contains(":::") {
+                return false;
+            }
+            // Reject multiple :: occurrences
+            if s.matches("::").count() > 1 {
+                return false;
+            }
             let hex_and_colon = s
                 .chars()
                 .filter(|c| c.is_ascii_hexdigit() || *c == ':' || *c == '.')

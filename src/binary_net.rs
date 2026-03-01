@@ -35,31 +35,47 @@ fn is_data_section_pe(section: &str) -> bool {
     )
 }
 
-/// Check if this is a Go binary by examining section names.
+/// Check if this is a Go binary by examining section names or embedded strings.
 /// Go binaries have .gopclntab/.go.buildinfo (ELF) or gopclntab/go.buildinfo (PE).
+/// Also checks for "Go build ID:" string which is present even in stripped binaries.
 fn is_go_binary_from_sections(
     elf_opt: Option<&crate::goblin::elf::Elf<'_>>,
     pe_opt: Option<&crate::goblin::pe::PE<'_>>,
+    data: &[u8],
 ) -> bool {
     // Check ELF for Go sections
     if let Some(elf) = elf_opt {
-        return elf.section_headers.iter().any(|sh| {
+        if elf.section_headers.iter().any(|sh| {
             if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
                 name == ".gopclntab" || name == ".go.buildinfo"
             } else {
                 false
             }
-        });
+        }) {
+            return true;
+        }
     }
 
     // Check PE for Go sections
     if let Some(pe) = pe_opt {
-        return pe.sections.iter().any(|section| {
+        if pe.sections.iter().any(|section| {
             let name = String::from_utf8_lossy(&section.name)
                 .trim_end_matches('\0')
                 .to_lowercase();
             name.contains("gopclntab") || name.contains("go.buildinfo")
-        });
+        }) {
+            return true;
+        }
+    }
+
+    // Fallback: check for "Go build ID:" string in first 4KB of binary
+    // This catches Go binaries that lack standard section names
+    let search_len = data.len().min(4096);
+    if data[..search_len]
+        .windows(12)
+        .any(|w| w == b"Go build ID:")
+    {
+        return true;
     }
 
     false
@@ -127,7 +143,7 @@ pub fn scan_binary_ips(
     // Skip Go binaries - they don't use C-style sockaddr_in structures
     // Go has its own network abstractions and stores addresses differently
     // Scanning for sockaddr_in in Go binaries produces false positives from runtime metadata
-    if is_go_binary_from_sections(elf_opt, pe_opt) {
+    if is_go_binary_from_sections(elf_opt, pe_opt, data) {
         return Vec::new();
     }
 
@@ -186,6 +202,12 @@ pub fn scan_binary_ips(
     // Deduplicate by offset to avoid reporting same location multiple times
     let mut seen = HashSet::new();
     results.retain(|s| seen.insert((s.data_offset, s.value.clone())));
+
+    // Cap results: if more than 4 unique IPs detected, it's likely noise
+    // Real malware rarely has more than a handful of hardcoded C2 addresses
+    if results.len() > 4 {
+        return Vec::new();
+    }
 
     results
 }

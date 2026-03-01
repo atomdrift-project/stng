@@ -70,6 +70,22 @@ pub(super) fn classify_ip(s: &str) -> Option<StringKind> {
 
     // IPv6 (contains multiple colons, hex chars)
     if s.contains(':') && s.chars().filter(|&c| c == ':').count() >= 2 {
+        // Reject trailing colons (invalid IPv6)
+        if s.ends_with(':') && !s.ends_with("::") {
+            return None;
+        }
+        // Reject leading colons (invalid unless it's ::)
+        if s.starts_with(':') && !s.starts_with("::") {
+            return None;
+        }
+        // Reject 3+ consecutive colons (only :: is valid)
+        if s.contains(":::") {
+            return None;
+        }
+        // Reject multiple :: occurrences (only one allowed)
+        if s.matches("::").count() > 1 {
+            return None;
+        }
         let valid_ipv6 = s
             .chars()
             .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.');
@@ -142,6 +158,13 @@ pub(super) fn is_ipv4(s: &str) -> bool {
 
     // 127.x.x.x localhost is rarely an IOC
     if octets[0] == 127 {
+        return false;
+    }
+
+    // Filter X.509/ASN.1 OIDs that look like IPs
+    // 2.5.x.y = ISO X.500 arc (certificate attributes and extensions)
+    // Common OIDs: 2.5.4.3 (CN), 2.5.29.17 (subjectAltName), 2.5.29.37 (extKeyUsage)
+    if octets[0] == 2 && octets[1] == 5 {
         return false;
     }
 

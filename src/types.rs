@@ -192,6 +192,8 @@ pub enum StringMethod {
     Utf16BeDecode,
     /// Found via XOR of two stack-placed non-printable immediate constants (e.g. BrickStorm/garble style)
     XorStackPair,
+    /// Found via garble rodata byte array pairing (XOR/ADD/SUB of same-length blobs in .rodata)
+    GarbleRodata,
 }
 
 /// Semantic kind of the extracted string.

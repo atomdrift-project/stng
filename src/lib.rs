@@ -78,7 +78,9 @@ pub use xor::MAX_XOR_SCAN_SIZE;
 pub(crate) use go::GoStringExtractor;
 pub use overlay::extract_overlay_strings;
 pub(crate) use rust::RustStringExtractor;
-pub(crate) use stack_strings::extract_stack_strings;
+pub(crate) use stack_strings::{
+    extract_garble_rodata_strings, extract_stack_strings, extract_stack_strings_with_context,
+};
 pub use validation::is_garbage;
 
 // Re-export goblin so library clients can parse binaries themselves
@@ -622,6 +624,7 @@ fn method_priority(m: StringMethod) -> u8 {
         StringMethod::Structure
         | StringMethod::StackString
         | StringMethod::XorStackPair
+        | StringMethod::GarbleRodata
         | StringMethod::InstructionPattern
         | StringMethod::Base64ObfuscatedDecode => 3,
 
@@ -1079,6 +1082,15 @@ fn extract_from_object(
                 // runtime — the Go string extractor misses these entirely.
                 // We restrict to .text to avoid noise from data sections and only keep
                 // XorStackPair results (regular stack string detection is too noisy in Go).
+                //
+                // Compute image base from the first PT_LOAD segment for VA translation.
+                let image_base = elf
+                    .program_headers
+                    .iter()
+                    .find(|ph| ph.p_type == goblin::elf::program_header::PT_LOAD)
+                    .map(|ph| ph.p_vaddr.saturating_sub(ph.p_offset))
+                    .unwrap_or(0);
+
                 let text_data = elf
                     .section_headers
                     .iter()
@@ -1087,10 +1099,18 @@ fn extract_from_object(
                         let start = sh.sh_offset as usize;
                         let end = start.saturating_add(sh.sh_size as usize);
                         let text = scan_data.get(start..end)?;
-                        Some((start, text))
+                        Some((start, sh.sh_addr, text))
                     });
-                if let Some((text_start, text)) = text_data {
-                    let mut xor_results = extract_stack_strings(text, min_length);
+                if let Some((text_start, text_vma, text)) = text_data {
+                    // Use the context-aware version to resolve RIP-relative XMM loads
+                    // (garble loads obfuscated data from .rodata via [rip+disp])
+                    let mut xor_results = extract_stack_strings_with_context(
+                        text,
+                        min_length,
+                        scan_data,
+                        text_vma,
+                        image_base,
+                    );
                     // Adjust data_offset to file-relative position.
                     for r in &mut xor_results {
                         r.data_offset += text_start as u64;
@@ -1100,6 +1120,25 @@ fn extract_from_object(
                             .into_iter()
                             .filter(|s| s.method == StringMethod::XorStackPair),
                     );
+                }
+
+                // Scan data sections for garble-obfuscated strings (byte array pairs)
+                // Garble stores encrypted data and key as same-length byte arrays.
+                // Check .rodata, .noptrdata, and .data sections.
+                for section_name in [".rodata", ".noptrdata", ".data"] {
+                    if let Some((offset, data)) = elf
+                        .section_headers
+                        .iter()
+                        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("") == section_name)
+                        .and_then(|sh| {
+                            let start = sh.sh_offset as usize;
+                            let end = start.saturating_add(sh.sh_size as usize);
+                            let data = scan_data.get(start..end)?;
+                            Some((start as u64, data))
+                        })
+                    {
+                        strings.extend(extract_garble_rodata_strings(data, offset, min_length));
+                    }
                 }
             } else {
                 strings.extend(extract_stack_strings(scan_data, min_length));

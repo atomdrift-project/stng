@@ -41,17 +41,55 @@ impl GarbleOp {
 
 /// Extract strings constructed on the stack.
 pub fn extract_stack_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
-    let extractor = StackStringExtractor::new(data, min_length);
+    let extractor = StackStringExtractor::new(data, min_length, None, 0, 0);
+    extractor.extract()
+}
+
+/// Extract strings with full file context for resolving RIP-relative addresses.
+///
+/// When analyzing a section (e.g., `.text`), RIP-relative loads may reference data
+/// in other sections (e.g., `.rodata`). Pass the full file data and address mapping
+/// info to enable proper resolution of these references.
+///
+/// # Parameters
+/// - `section_data`: The section being analyzed (e.g., `.text` contents)
+/// - `min_length`: Minimum string length to extract
+/// - `full_data`: The complete file data for resolving cross-section references
+/// - `section_vma`: Virtual memory address where `section_data` is loaded
+/// - `image_base`: Base address for VA-to-file-offset translation (VA = file_offset + image_base)
+pub fn extract_stack_strings_with_context(
+    section_data: &[u8],
+    min_length: usize,
+    full_data: &[u8],
+    section_vma: u64,
+    image_base: u64,
+) -> Vec<ExtractedString> {
+    let extractor = StackStringExtractor::new(
+        section_data,
+        min_length,
+        Some(full_data),
+        section_vma,
+        image_base,
+    );
     extractor.extract()
 }
 
 struct StackStringExtractor<'a> {
     data: &'a [u8],
     min_length: usize,
+    // Full file data for resolving RIP-relative addresses (optional).
+    full_data: Option<&'a [u8]>,
+    // Virtual memory address where self.data starts.
+    section_vma: u64,
+    // Image base for VA-to-file-offset conversion: file_offset = VA - image_base.
+    image_base: u64,
     // Register state: (Value, Instruction Offset, Flavor)
     regs: [Option<(String, u64, String)>; 16],
     // Raw (non-printable) immediate bytes held in registers, kept for XOR pairing.
     raw_regs: [Option<Vec<u8>>; 16],
+    // XMM register state: raw bytes (up to 16 bytes each) for SSE operations.
+    // Used by garble's compiled code which uses movups/movaps to store key/data.
+    xmm_regs: [Option<Vec<u8>>; 16],
     // Captured stack writes: grouped by (Base Reg, Index Reg, Scale) -> Vec<StackWrite>
     // We simplify: group by "Base Register" and assume standard stack frames.
     // If base is RIP (0x05 in ModRM), we track it separately?
@@ -79,12 +117,22 @@ struct RawBlob {
 }
 
 impl<'a> StackStringExtractor<'a> {
-    fn new(data: &'a [u8], min_length: usize) -> Self {
+    fn new(
+        data: &'a [u8],
+        min_length: usize,
+        full_data: Option<&'a [u8]>,
+        section_vma: u64,
+        image_base: u64,
+    ) -> Self {
         Self {
             data,
             min_length,
+            full_data,
+            section_vma,
+            image_base,
             regs: Default::default(),
             raw_regs: Default::default(),
+            xmm_regs: Default::default(),
             writes: HashMap::new(),
             raw_blobs: HashMap::new(),
         }
@@ -320,6 +368,52 @@ impl<'a> StackStringExtractor<'a> {
                     handled = true;
                 }
             }
+            // --- SSE/XMM instructions for garble's vector-based obfuscation ---
+            // Two-byte opcodes starting with 0x0F
+            else if opcode == 0x0F && opcode_start + 2 < self.data.len() {
+                let opcode2 = self.data[opcode_start + 1];
+                match opcode2 {
+                    // MOVUPS xmm, m128 (0F 10 /r) - load 16 bytes from memory into XMM
+                    0x10 => {
+                        if let Some((instr_len, xmm_bytes)) =
+                            self.decode_xmm_load(opcode_start + 2, rex, i)
+                        {
+                            let modrm = self.data[opcode_start + 2];
+                            let xmm_reg = ((modrm >> 3) & 7) + if (rex & 4) != 0 { 8 } else { 0 };
+                            self.xmm_regs[xmm_reg as usize] = Some(xmm_bytes);
+                            len = (opcode_start - i) + 2 + instr_len;
+                            handled = true;
+                        }
+                    }
+                    // MOVAPS xmm, m128 (0F 28 /r) - load aligned 16 bytes into XMM
+                    0x28 => {
+                        if let Some((instr_len, xmm_bytes)) =
+                            self.decode_xmm_load(opcode_start + 2, rex, i)
+                        {
+                            let modrm = self.data[opcode_start + 2];
+                            let xmm_reg = ((modrm >> 3) & 7) + if (rex & 4) != 0 { 8 } else { 0 };
+                            self.xmm_regs[xmm_reg as usize] = Some(xmm_bytes);
+                            len = (opcode_start - i) + 2 + instr_len;
+                            handled = true;
+                        }
+                    }
+                    // MOVUPS m128, xmm (0F 11 /r) - store XMM to memory
+                    0x11 => {
+                        if let Some(instr_len) = self.handle_xmm_store(opcode_start + 2, rex, i) {
+                            len = (opcode_start - i) + 2 + instr_len;
+                            handled = true;
+                        }
+                    }
+                    // MOVAPS m128, xmm (0F 29 /r) - store aligned XMM to memory
+                    0x29 => {
+                        if let Some(instr_len) = self.handle_xmm_store(opcode_start + 2, rex, i) {
+                            len = (opcode_start - i) + 2 + instr_len;
+                            handled = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
 
             if !handled {
                 i += 1;
@@ -399,6 +493,83 @@ impl<'a> StackStringExtractor<'a> {
         (len, base, disp)
     }
 
+    /// Decode an XMM load from RIP-relative memory (e.g., movups xmm, [rip+disp]).
+    /// Returns (ModRM+SIB+Disp length, 16-byte data) if successful.
+    fn decode_xmm_load(
+        &self,
+        modrm_offset: usize,
+        _rex: u8,
+        _instr_start: usize,
+    ) -> Option<(usize, Vec<u8>)> {
+        if modrm_offset >= self.data.len() {
+            return None;
+        }
+        let modrm = self.data[modrm_offset];
+        let mod_bits = modrm >> 6;
+        let rm = modrm & 7;
+
+        // We only handle RIP-relative addressing (mod=00, rm=101 in 64-bit mode)
+        // This is the pattern garble uses: movups xmm, [rip+disp32]
+        if mod_bits == 0 && rm == 5 {
+            // RIP-relative: 4-byte displacement follows ModRM
+            if modrm_offset + 5 > self.data.len() {
+                return None;
+            }
+            let disp_bytes = &self.data[modrm_offset + 1..modrm_offset + 5];
+            #[allow(clippy::expect_used)]
+            let disp32 = i32::from_le_bytes(disp_bytes.try_into().expect("4-byte slice"));
+
+            // Calculate the target virtual address.
+            // next_rip_vma = section_vma + modrm_offset + 5 (instruction ends here)
+            // target_vma = next_rip_vma + disp32
+            // target_file_offset = target_vma - image_base
+            let next_rip_vma = self.section_vma.wrapping_add(modrm_offset as u64 + 5);
+            let target_vma = (next_rip_vma as i64).wrapping_add(disp32 as i64) as u64;
+            let target_file_offset = target_vma.saturating_sub(self.image_base) as usize;
+
+            // Try to read 16 bytes from full_data (if available) or self.data
+            let read_from = self.full_data.unwrap_or(self.data);
+            if target_file_offset + 16 <= read_from.len() {
+                let xmm_bytes = read_from[target_file_offset..target_file_offset + 16].to_vec();
+                return Some((5, xmm_bytes)); // 1 byte ModRM + 4 bytes disp
+            }
+        }
+        None
+    }
+
+    /// Handle XMM store to stack memory (e.g., movups [rsp+disp], xmm).
+    /// Records the XMM contents as a raw blob for XOR-pair detection.
+    /// Returns the instruction length if successful.
+    fn handle_xmm_store(&mut self, modrm_offset: usize, rex: u8, instr_off: usize) -> Option<usize> {
+        if modrm_offset >= self.data.len() {
+            return None;
+        }
+        let modrm = self.data[modrm_offset];
+        let mod_bits = modrm >> 6;
+        let xmm_reg = ((modrm >> 3) & 7) + if (rex & 4) != 0 { 8 } else { 0 };
+
+        // Must be a memory operand (not register-to-register)
+        if mod_bits == 3 {
+            return None;
+        }
+
+        // Get the XMM register contents
+        let xmm_bytes = self.xmm_regs[xmm_reg as usize].clone()?;
+
+        // Decode memory operand
+        let (op_len, base, disp) = self.decode_modrm(modrm_offset, rex);
+        if op_len == 0 {
+            return None;
+        }
+
+        // Add as raw blob for XOR pairing (base_reg required for grouping)
+        if let Some(base_reg) = base {
+            self.add_raw_blob(base_reg, disp, xmm_bytes, instr_off as u64);
+        }
+
+        Some(op_len)
+    }
+
     fn add_write(&mut self, base: u8, disp: i64, s: String, instr_off: u64, flavor: String) {
         self.writes.entry(base).or_default().push(StackWrite {
             string: s,
@@ -421,6 +592,9 @@ impl<'a> StackStringExtractor<'a> {
             *r = None;
         }
         for r in self.raw_regs.iter_mut() {
+            *r = None;
+        }
+        for r in self.xmm_regs.iter_mut() {
             *r = None;
         }
     }
@@ -959,6 +1133,139 @@ impl<'a> StackStringExtractor<'a> {
 
         alphanumeric_runs >= 2
     }
+}
+
+/// Extract garble-obfuscated strings from rodata by finding XOR/ADD/SUB byte array pairs.
+///
+/// Garble's "simple" transformation stores encrypted data and key as byte arrays in
+/// .rodata. This function finds same-length non-printable byte sequences and tries
+/// combining them with XOR/ADD/SUB to recover the original strings.
+///
+/// # Parameters
+/// - `rodata`: The .rodata section contents
+/// - `rodata_file_offset`: File offset where rodata starts (for reporting)
+/// - `min_length`: Minimum string length to extract
+pub fn extract_garble_rodata_strings(
+    rodata: &[u8],
+    rodata_file_offset: u64,
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    // Configuration
+    const MIN_BLOB_LEN: usize = 4; // Minimum blob length to consider
+    const MAX_BLOB_LEN: usize = 256; // Maximum blob length (garble strings are typically short)
+    const MAX_PAIR_DISTANCE: usize = 8192; // Max distance between key and data in bytes
+    const MIN_SCORE_THRESHOLD: i32 = 8; // Minimum score to accept a result
+
+    let mut results = Vec::new();
+    let mut seen_strings: HashSet<String> = HashSet::new();
+
+    // Find all non-printable byte blobs
+    let blobs = find_nonprintable_blobs(rodata, MIN_BLOB_LEN, MAX_BLOB_LEN);
+    if blobs.len() < 2 {
+        return results;
+    }
+
+    // Group blobs by length
+    let mut by_len: HashMap<usize, Vec<(usize, &[u8])>> = HashMap::new();
+    for (offset, blob) in &blobs {
+        by_len.entry(blob.len()).or_default().push((*offset, *blob));
+    }
+
+    // For each length group, try pairing blobs that are close together
+    for (_len, group) in by_len {
+        if group.len() < 2 {
+            continue;
+        }
+
+        // Sort by offset for efficient distance checking
+        let mut sorted = group;
+        sorted.sort_by_key(|(off, _)| *off);
+
+        // Try pairs within MAX_PAIR_DISTANCE
+        for i in 0..sorted.len() {
+            for j in (i + 1)..sorted.len() {
+                let (off_a, blob_a) = sorted[i];
+                let (off_b, blob_b) = sorted[j];
+
+                // Stop if too far apart
+                if off_b - off_a > MAX_PAIR_DISTANCE {
+                    break;
+                }
+
+                // Try all operators, keep the best result
+                let mut best: Option<(String, GarbleOp, i32)> = None;
+
+                for op in [GarbleOp::Xor, GarbleOp::Sub, GarbleOp::Add] {
+                    let decoded: Vec<u8> = blob_a
+                        .iter()
+                        .zip(blob_b.iter())
+                        .map(|(&a, &b)| op.apply(a, b))
+                        .collect();
+
+                    if let Some(s) = check_printable(&decoded, min_length) {
+                        let score = score_decoded_string(&s);
+                        if score >= MIN_SCORE_THRESHOLD {
+                            if best.is_none() || score > best.as_ref().map(|(_, _, s)| *s).unwrap_or(0)
+                            {
+                                best = Some((s, op, score));
+                            }
+                        }
+                    }
+                }
+
+                if let Some((decoded, _op, _score)) = best {
+                    // Deduplicate
+                    if seen_strings.insert(decoded.clone()) {
+                        results.push(ExtractedString {
+                            value: decoded,
+                            data_offset: rodata_file_offset + off_a as u64,
+                            section: Some(".rodata".to_string()),
+                            method: StringMethod::GarbleRodata,
+                            kind: StringKind::Const,
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    results
+}
+
+/// Find non-printable byte sequences in data.
+/// Returns (offset, slice) for each blob found.
+fn find_nonprintable_blobs(data: &[u8], min_len: usize, max_len: usize) -> Vec<(usize, &[u8])> {
+    let mut blobs = Vec::new();
+    let mut i = 0;
+
+    while i < data.len() {
+        // Skip printable bytes
+        if is_printable_byte(data[i]) {
+            i += 1;
+            continue;
+        }
+
+        // Found a non-printable byte, find the extent of this blob
+        let start = i;
+        while i < data.len() && !is_printable_byte(data[i]) {
+            i += 1;
+        }
+        let len = i - start;
+
+        // Check length constraints
+        if len >= min_len && len <= max_len {
+            blobs.push((start, &data[start..i]));
+        }
+    }
+
+    blobs
+}
+
+/// Check if a byte is printable ASCII (or common whitespace).
+#[inline]
+fn is_printable_byte(b: u8) -> bool {
+    b.is_ascii_graphic() || b == b' ' || b == b'\t' || b == b'\n' || b == b'\r'
 }
 
 /// Score a decoded string for likelihood of being valid text.
