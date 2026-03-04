@@ -52,6 +52,9 @@ thiserror = "2.0"
 # Hashing
 sha2 = "0.10"
 
+# x86-64 instruction decoding (for garble emulation)
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "intel"] }
+
 # OS-appropriate paths (cache directories)
 dirs = "6.0"
 

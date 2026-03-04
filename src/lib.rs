@@ -50,6 +50,9 @@ mod overlay;
 mod raw;
 mod stack_strings;
 
+// Garble deobfuscation
+pub mod garble;
+
 // Language-specific extractors
 mod go;
 pub(crate) mod instr;
@@ -78,9 +81,8 @@ pub use xor::MAX_XOR_SCAN_SIZE;
 pub(crate) use go::GoStringExtractor;
 pub use overlay::extract_overlay_strings;
 pub(crate) use rust::RustStringExtractor;
-pub(crate) use stack_strings::{
-    extract_garble_rodata_strings, extract_stack_strings, extract_stack_strings_with_context,
-};
+pub(crate) use garble::extract_garble_rodata_strings;
+pub(crate) use stack_strings::{extract_stack_strings, extract_stack_strings_with_context};
 pub use validation::is_garbage;
 
 // Re-export goblin so library clients can parse binaries themselves
@@ -625,6 +627,7 @@ fn method_priority(m: StringMethod) -> u8 {
         | StringMethod::StackString
         | StringMethod::XorStackPair
         | StringMethod::GarbleRodata
+        | StringMethod::GarbleEmulated
         | StringMethod::InstructionPattern
         | StringMethod::Base64ObfuscatedDecode => 3,
 
@@ -924,6 +927,24 @@ fn extract_from_object(
                 is_go_binary = true;
                 let extractor = GoStringExtractor::new(min_length);
                 strings.extend(extractor.extract_macho(macho, data));
+
+                // Scan rodata sections for garble-obfuscated strings (byte array pairs)
+                for seg in &macho.segments {
+                    for (sect, _) in seg.sections().unwrap_or_default() {
+                        let sectname = sect.name().unwrap_or("");
+                        if sectname.contains("rodata") || sectname == "__const" {
+                            let offset = sect.offset as usize;
+                            let size = sect.size as usize;
+                            if let Some(section_data) = data.get(offset..offset + size) {
+                                strings.extend(extract_garble_rodata_strings(
+                                    section_data,
+                                    offset as u64,
+                                    min_length,
+                                ));
+                            }
+                        }
+                    }
+                }
             } else if binary::macho_is_rust(macho) {
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_macho(macho, data));

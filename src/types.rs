@@ -194,6 +194,8 @@ pub enum StringMethod {
     XorStackPair,
     /// Found via garble rodata byte array pairing (XOR/ADD/SUB of same-length blobs in .rodata)
     GarbleRodata,
+    /// Found via x86-64 emulation of garble Decrypt functions
+    GarbleEmulated,
 }
 
 /// Semantic kind of the extracted string.
