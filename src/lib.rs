@@ -1059,24 +1059,21 @@ fn extract_from_object(
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_elf(elf, scan_data));
             } else {
-                // Unknown ELF - use r2 if available + raw scan
+                // Unknown ELF (C, C++, assembly, etc.) - use r2 if available + raw scan.
+                // Do NOT use RustStringExtractor here: it only scans .rodata and its
+                // fat-pointer heuristic is meaningless for C binaries, causing it to
+                // silently skip .strtab, .debug_str and other sections that hold key
+                // indicator strings (e.g. Mirai source-file names, build paths).
                 if let Some(r2_strings) = get_r2_strings(opts) {
                     strings.extend(r2_strings);
                 }
-                // Also do raw scan to catch anything r2 missed
-                let extractor = RustStringExtractor::new(min_length);
-                let rust_strings = extractor.extract_elf(elf, scan_data);
-                if rust_strings.is_empty() {
-                    strings.extend(extract_raw_strings(
-                        scan_data,
-                        min_length,
-                        None,
-                        &segments,
-                        &section_info,
-                    ));
-                } else {
-                    strings.extend(rust_strings);
-                }
+                strings.extend(extract_raw_strings(
+                    scan_data,
+                    min_length,
+                    None,
+                    &segments,
+                    &section_info,
+                ));
             }
             // Extract UTF-16LE wide strings (less common in ELF but can occur, especially in malware)
             strings.extend(extract_wide_strings(
