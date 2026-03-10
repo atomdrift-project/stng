@@ -45,6 +45,9 @@ pub fn extract_garble_rodata_strings(
         by_len.entry(blob.len()).or_default().push((*offset, *blob));
     }
 
+    // Reusable buffer to avoid per-pair allocation
+    let mut buf = Vec::with_capacity(MAX_BLOB_LEN);
+
     // For each length group, try pairing blobs that are close together
     for (_len, group) in by_len {
         if group.len() < 2 {
@@ -67,27 +70,19 @@ pub fn extract_garble_rodata_strings(
                 }
 
                 // Try all operators, keep the best result
-                let mut best: Option<(String, GarbleOp, i32)> = None;
+                let mut best: Option<(String, i32)> = None;
 
                 for op in GarbleOp::ALL {
-                    let decoded: Vec<u8> = blob_a
-                        .iter()
-                        .zip(blob_b.iter())
-                        .map(|(&a, &b)| op.apply(a, b))
-                        .collect();
-
-                    if let Some(s) = check_printable(&decoded, min_length) {
-                        let score = score_decoded_string(&s);
-                        if score >= MIN_SCORE_THRESHOLD {
-                            if best.is_none() || score > best.as_ref().map(|(_, _, s)| *s).unwrap_or(0)
-                            {
-                                best = Some((s, op, score));
-                            }
+                    if let Some((s, score)) =
+                        try_decode_pair(blob_a, blob_b, op, min_length, MIN_SCORE_THRESHOLD, &mut buf)
+                    {
+                        if best.as_ref().map_or(true, |(_, bs)| score > *bs) {
+                            best = Some((s, score));
                         }
                     }
                 }
 
-                if let Some((decoded, _op, _score)) = best {
+                if let Some((decoded, _score)) = best {
                     // Deduplicate
                     if seen_strings.insert(decoded.clone()) {
                         results.push(ExtractedString {
@@ -105,6 +100,75 @@ pub fn extract_garble_rodata_strings(
     }
 
     results
+}
+
+/// Decode a blob pair with the given operator, returning the decoded string and
+/// score only if every byte is printable and the score meets the threshold.
+///
+/// Uses a caller-provided buffer to avoid allocation on the hot path.
+/// Returns `None` as soon as a non-printable byte is encountered (early exit).
+fn try_decode_pair(
+    blob_a: &[u8],
+    blob_b: &[u8],
+    op: GarbleOp,
+    min_length: usize,
+    min_score: i32,
+    buf: &mut Vec<u8>,
+) -> Option<(String, i32)> {
+    buf.clear();
+    let mut score = 0i32;
+    // Maximum possible score remaining (3 points per byte for letters)
+    let len = blob_a.len();
+
+    for (i, (&a, &b)) in blob_a.iter().zip(blob_b.iter()).enumerate() {
+        let byte = op.apply(a, b);
+
+        // Early exit: non-printable byte (allow trailing nulls handled later)
+        if byte == 0 {
+            // Null byte — treat as end of string (trailing padding)
+            // Everything from here on must also be null for this to be valid
+            let rest_null = blob_a[i + 1..]
+                .iter()
+                .zip(blob_b[i + 1..].iter())
+                .all(|(&ra, &rb)| op.apply(ra, rb) == 0);
+            if !rest_null {
+                return None;
+            }
+            break;
+        }
+
+        if !byte.is_ascii_graphic() && byte != b' ' {
+            return None;
+        }
+
+        // Inline scoring — bail early if score can't possibly reach threshold
+        if byte.is_ascii_alphabetic() {
+            score += 3;
+        } else if byte.is_ascii_digit() {
+            score += 1;
+        } else if matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b' ') {
+            score += 2;
+        }
+        // Punctuation: +0, control chars already filtered above
+
+        // Max remaining score: 3 per remaining byte
+        let remaining = (len - i - 1) as i32 * 3;
+        if score + remaining < min_score {
+            return None;
+        }
+
+        buf.push(byte);
+    }
+
+    if buf.len() < min_length {
+        return None;
+    }
+    if score < min_score {
+        return None;
+    }
+
+    // buf is known-ASCII, so from_utf8 is infallible
+    Some((String::from_utf8(buf.clone()).ok()?, score))
 }
 
 /// Find non-printable byte sequences in data.
