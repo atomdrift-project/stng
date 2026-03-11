@@ -931,86 +931,107 @@ pub fn extract_rolling_xor_with_known_plaintext(
     min_length: usize,
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();
-    let mut seen: HashSet<(u64, String)> = HashSet::new();
+    // Track regions already extracted to skip redundant work
+    let mut covered_ranges: Vec<(usize, usize)> = Vec::new();
 
     // Try key lengths from 1 to 4 bytes
-    for key_len in 1..=4 {
-        // For each pattern, scan data for positions where XORing produces the pattern
+    for key_len in 1..=4usize {
         for pattern in ROLLING_XOR_PATTERNS {
             if pattern.len() < key_len {
                 continue;
             }
 
-            // Scan data looking for the pattern
             let max_offset = data.len().saturating_sub(pattern.len());
-            for offset in 0..max_offset {
-                // Derive candidate key from this position assuming pattern starts here
-                let candidate_key: Vec<u8> = (0..key_len)
-                    .map(|i| data[offset + i] ^ pattern[i])
-                    .collect();
-
-                // Skip keys that are all zeros or all same byte (likely false positives)
-                if candidate_key.iter().all(|&b| b == 0) {
-                    continue;
-                }
-                if key_len > 1 && candidate_key.iter().all(|&b| b == candidate_key[0]) {
+            let mut offset = 0;
+            while offset < max_offset {
+                // Skip offsets inside already-extracted regions
+                if let Some(&(_, end)) = covered_ranges
+                    .iter()
+                    .find(|&&(start, end)| offset >= start && offset < end)
+                {
+                    offset = end;
                     continue;
                 }
 
-                // Validate: check if entire pattern decodes correctly with this key
-                let full_decode: Vec<u8> = (0..pattern.len())
-                    .map(|i| data[offset + i] ^ candidate_key[i % key_len])
-                    .collect();
+                // Derive candidate key on the stack (max 4 bytes)
+                let mut candidate_key = [0u8; 4];
+                for i in 0..key_len {
+                    candidate_key[i] = data[offset + i] ^ pattern[i];
+                }
 
-                if full_decode.as_slice() != *pattern {
+                // Skip keys that are all zeros
+                if candidate_key[..key_len].iter().all(|&b| b == 0) {
+                    offset += 1;
+                    continue;
+                }
+                // Skip keys where all bytes are identical (likely false positive)
+                if key_len > 1 && candidate_key[..key_len].iter().all(|&b| b == candidate_key[0])
+                {
+                    offset += 1;
+                    continue;
+                }
+
+                // Validate: does entire pattern decode correctly with this key?
+                // Inline comparison — no allocation needed.
+                let valid = (0..pattern.len())
+                    .all(|i| (data[offset + i] ^ candidate_key[i % key_len]) == pattern[i]);
+                if !valid {
+                    offset += 1;
                     continue;
                 }
 
                 // Count how many OTHER patterns also decode correctly nearby
-                let mut pattern_matches = 1;
+                let mut pattern_matches = 1u32;
                 for other_pattern in ROLLING_XOR_PATTERNS {
-                    // Skip if this is the same pattern (compare data pointers)
-                    if (*pattern).as_ptr() == (*other_pattern).as_ptr() {
+                    if std::ptr::eq((*pattern).as_ptr(), (*other_pattern).as_ptr()) {
                         continue;
                     }
 
-                    // Search within 4KB of this offset for other patterns
                     let search_start = offset.saturating_sub(2048);
-                    let search_end = (offset + 2048).min(data.len().saturating_sub(other_pattern.len()));
+                    let search_end =
+                        (offset + 2048).min(data.len().saturating_sub(other_pattern.len()));
 
+                    // Inline byte-wise XOR comparison — no allocation
+                    let mut found = false;
                     for check_offset in search_start..search_end {
-                        let decoded: Vec<u8> = (0..other_pattern.len())
-                            .map(|i| data[check_offset + i] ^ candidate_key[i % key_len])
-                            .collect();
-
-                        if decoded.as_slice() == *other_pattern {
+                        let matches = (0..other_pattern.len()).all(|i| {
+                            (data[check_offset + i] ^ candidate_key[i % key_len])
+                                == other_pattern[i]
+                        });
+                        if matches {
                             pattern_matches += 1;
+                            found = true;
                             break;
                         }
                     }
+                    let _ = found;
                 }
 
-                // Require at least 2 pattern matches for confidence
-                // (one pattern could be coincidence, two confirms the key is real)
                 if pattern_matches < 2 {
+                    offset += 1;
                     continue;
                 }
 
-                // Valid key found - extract all strings with this key in the region
+                // Valid key found — extract strings from an 8KB region around the match
+                let region_start = offset.saturating_sub(4096);
+                let region_end = (offset + 4096).min(data.len());
+                let region = &data[region_start..region_end];
+                covered_ranges.push((region_start, region_end));
+
                 tracing::debug!(
                     "Rolling XOR: found key {:02x?} at offset 0x{:x} ({} pattern matches)",
-                    candidate_key,
+                    &candidate_key[..key_len],
                     offset,
                     pattern_matches
                 );
 
-                // Extract strings from a wider region around the match
-                let region_start = offset.saturating_sub(4096);
-                let region_end = (offset + 4096).min(data.len());
-                let region = &data[region_start..region_end];
+                let key_hex: String = candidate_key[..key_len]
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect();
 
-                // Scan for printable strings using this key
                 let mut pos = 0;
+                let mut decoded_bytes = Vec::with_capacity(128);
                 while pos < region.len() {
                     // Find start of printable run
                     while pos < region.len() {
@@ -1026,7 +1047,7 @@ pub fn extract_rolling_xor_with_known_plaintext(
                     }
 
                     // Collect printable run
-                    let mut decoded_bytes = Vec::new();
+                    decoded_bytes.clear();
                     let start_pos = pos;
                     while pos < region.len() {
                         let decoded = region[pos] ^ candidate_key[pos % key_len];
@@ -1038,40 +1059,33 @@ pub fn extract_rolling_xor_with_known_plaintext(
                         }
                     }
 
-                    // Check minimum length
                     if decoded_bytes.len() >= min_length {
-                        if let Ok(s) = String::from_utf8(decoded_bytes) {
-                            // Must have at least one letter
-                            if s.chars().any(char::is_alphabetic) {
+                        if let Ok(s) = String::from_utf8(decoded_bytes.clone()) {
+                            if s.bytes().any(|b| b.is_ascii_alphabetic()) {
                                 let file_offset = (region_start + start_pos) as u64;
-                                if seen.insert((file_offset, s.clone())) {
-                                    let key_hex: String = candidate_key
-                                        .iter()
-                                        .map(|b| format!("{:02x}", b))
-                                        .collect();
-
-                                    let kind = classify_xor_string(&s).unwrap_or(StringKind::Const);
-
-                                    results.push(ExtractedString {
-                                        value: s,
-                                        data_offset: file_offset,
-                                        section: None,
-                                        method: StringMethod::XorDecode,
-                                        kind,
-                                        source: Some(format!("xor:rolling:{}", key_hex)),
-                                        fragments: None,
-                                        ..Default::default()
-                                    });
-                                }
+                                let kind = classify_xor_string(&s).unwrap_or(StringKind::Const);
+                                results.push(ExtractedString {
+                                    value: s,
+                                    data_offset: file_offset,
+                                    section: None,
+                                    method: StringMethod::XorDecode,
+                                    kind,
+                                    source: Some(format!("xor:rolling:{}", key_hex)),
+                                    fragments: None,
+                                    ..Default::default()
+                                });
                             }
                         }
                     }
                 }
+
+                // Jump past the extracted region
+                offset = region_end;
             }
         }
     }
 
-    // Sort by offset and deduplicate
+    // Deduplicate by offset + value
     results.sort_by_key(|s| s.data_offset);
     results.dedup_by(|a, b| a.data_offset == b.data_offset && a.value == b.value);
 

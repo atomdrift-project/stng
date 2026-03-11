@@ -5,7 +5,6 @@
 //! paths). Shared by the classify and scan submodules.
 
 use aho_corasick::AhoCorasick;
-use std::collections::HashSet;
 use std::sync::OnceLock;
 
 pub(crate) fn is_printable_char(b: u8) -> bool {
@@ -19,8 +18,6 @@ pub(crate) fn is_printable_char(b: u8) -> bool {
     (0x80..=0xF7).contains(&b)
 }
 
-/// Check if a string looks meaningful (not random garbage).
-/// This is STRICT for XOR detection - we want high confidence, low false positives.
 /// Check if a decoded XOR string is valid (not garbage with unusual punctuation).
 /// Returns true if the string passes basic sanity checks.
 pub(crate) fn is_valid_xor_string(s: &str) -> bool {
@@ -512,7 +509,7 @@ pub(crate) fn is_meaningful_string(s: &str) -> bool {
     }
 
     // Check character diversity (reject repetitive strings like "aaaaaaa")
-    let unique: HashSet<char> = s.chars().collect();
+    let unique: std::collections::HashSet<char> = s.chars().collect();
     if unique.len() * 3 < len && len > 10 {
         return false;
     }
