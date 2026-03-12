@@ -308,7 +308,7 @@ impl GoStringExtractor {
     fn find_rodata_pe<'a>(&self, pe: &PE<'_>, data: &'a [u8]) -> Option<(u64, &'a [u8])> {
         // Try .rodata or .rdata
         for section in &pe.sections {
-            let name = String::from_utf8_lossy(&section.name);
+            let name = crate::binary::pe_section_name(&section.name);
             if name.contains("rodata") || name.contains(".rdata") {
                 let start = section.pointer_to_raw_data as usize;
                 let size = section.size_of_raw_data as usize;

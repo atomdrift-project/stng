@@ -59,9 +59,7 @@ fn is_go_binary_from_sections(
     // Check PE for Go sections
     if let Some(pe) = pe_opt {
         if pe.sections.iter().any(|section| {
-            let name = String::from_utf8_lossy(&section.name)
-                .trim_end_matches('\0')
-                .to_lowercase();
+            let name = crate::binary::pe_section_name(&section.name).to_lowercase();
             name.contains("gopclntab") || name.contains("go.buildinfo")
         }) {
             return true;
@@ -187,9 +185,7 @@ pub fn scan_binary_ips(
                 let section_start = u64::from(section.pointer_to_raw_data);
                 let section_end = section_start + u64::from(section.size_of_raw_data);
                 if s.data_offset >= section_start && s.data_offset < section_end {
-                    let name = String::from_utf8_lossy(&section.name)
-                        .trim_end_matches('\0')
-                        .to_string();
+                    let name = crate::binary::pe_section_name(&section.name);
                     // Accept if in a data section, reject if in code section
                     return is_data_section_pe(&name);
                 }

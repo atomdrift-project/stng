@@ -43,8 +43,8 @@ pub fn classify_string(s: &str) -> StringKind {
 
     // GUIDs: {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}
     if s.starts_with('{') && s.ends_with('}') && (36..=38).contains(&len) {
-        let dash_count = s.chars().filter(|&c| c == '-').count();
-        let hex_count = s.chars().filter(char::is_ascii_hexdigit).count();
+        let dash_count = memchr::memchr_iter(b'-', s.as_bytes()).count();
+        let hex_count = s.bytes().filter(u8::is_ascii_hexdigit).count();
         if dash_count == 4 && (30..=32).contains(&hex_count) {
             return StringKind::GUID;
         }
@@ -62,10 +62,10 @@ pub fn classify_string(s: &str) -> StringKind {
 
     // Email addresses (often used in ransomware) - use memchr for speed
     if len >= 6 && memchr::memchr(b'@', bytes).is_some() && memchr::memchr(b'.', bytes).is_some() {
-        let at_count = s.chars().filter(|&c| c == '@').count();
+        let at_count = memchr::memchr_iter(b'@', s.as_bytes()).count();
         if at_count == 1 {
             // Must be mostly ASCII (>95%) - reject garbage with non-ASCII chars
-            let ascii_count = s.chars().filter(char::is_ascii).count();
+            let ascii_count = s.bytes().filter(u8::is_ascii).count();
             if ascii_count * 100 / len < 95 {
                 return StringKind::Const; // Skip - has too much non-ASCII
             }
@@ -191,7 +191,7 @@ pub fn classify_string(s: &str) -> StringKind {
 
     // Ransomware patterns
     if s.contains("ENCRYPTED") || s.contains("DECRYPT") || s.contains("RANSOM") {
-        let uppercase_count = s.chars().filter(|c| c.is_uppercase()).count();
+        let uppercase_count = s.bytes().filter(u8::is_ascii_uppercase).count();
         if uppercase_count * 100 / len > 50 {
             return StringKind::RansomNote;
         }
@@ -293,8 +293,8 @@ pub fn classify_string(s: &str) -> StringKind {
                         || content.starts_with("hostname")
                         || content.starts_with("uname"));
                 // Must be mostly ASCII and have reasonable alphanumeric ratio
-                let ascii_count = content.chars().filter(char::is_ascii).count();
-                let alpha_count = content.chars().filter(char::is_ascii_alphanumeric).count();
+                let ascii_count = content.bytes().filter(u8::is_ascii).count();
+                let alpha_count = content.bytes().filter(u8::is_ascii_alphanumeric).count();
                 let content_len = content.len();
                 let is_valid = content_len >= 2
                     && ascii_count * 100 / content_len > 90
@@ -313,7 +313,7 @@ pub fn classify_string(s: &str) -> StringKind {
         let content_len = content.len();
 
         // Must be mostly ASCII (>90%) - reject garbage with non-ASCII chars
-        let ascii_count = content.chars().filter(char::is_ascii).count();
+        let ascii_count = content.bytes().filter(u8::is_ascii).count();
         if ascii_count * 100 / content_len > 90 {
             // Must contain spaces (multiword command) or known command names
             if content.contains(' ')
@@ -386,8 +386,8 @@ pub fn classify_string(s: &str) -> StringKind {
         }
 
         // Reject paths with too many special characters (likely garbage)
-        let special_count = s.chars().filter(|c| !c.is_alphanumeric() && !c.is_whitespace()).count();
-        let alphanumeric_count = s.chars().filter(|c| c.is_alphanumeric()).count();
+        let special_count = s.bytes().filter(|b| !b.is_ascii_alphanumeric() && !b.is_ascii_whitespace()).count();
+        let alphanumeric_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
         if alphanumeric_count == 0 || (len > 0 && special_count * 100 / len > 30) {
             return StringKind::Const; // Too many special chars for a valid path
         }

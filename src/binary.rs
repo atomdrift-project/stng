@@ -2,6 +2,18 @@
 
 use goblin::mach::MachO;
 
+/// Convert a PE section name ([u8; 8]) to a String, trimming NUL bytes.
+/// Avoids the allocation overhead of `String::from_utf8_lossy` for ASCII section names.
+#[inline]
+pub fn pe_section_name(name: &[u8; 8]) -> String {
+    let end = name.iter().position(|&b| b == 0).unwrap_or(8);
+    // PE section names are ASCII; use from_utf8 with lossy fallback for malformed binaries
+    match std::str::from_utf8(&name[..end]) {
+        Ok(s) => s.to_string(),
+        Err(_) => String::from_utf8_lossy(&name[..end]).into_owned(),
+    }
+}
+
 /// Section metadata including name, size, and type.
 #[derive(Debug, Clone)]
 pub struct SectionInfo {
@@ -105,9 +117,7 @@ pub fn collect_pe_section_info(
     let mut sections = std::collections::HashMap::new();
 
     for sec in &pe.sections {
-        let name = String::from_utf8_lossy(&sec.name)
-            .trim_end_matches('\0')
-            .to_string();
+        let name = pe_section_name(&sec.name);
 
         let is_executable = (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
         let is_writable = (sec.characteristics & IMAGE_SCN_MEM_WRITE) != 0;

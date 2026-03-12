@@ -18,7 +18,7 @@ fn is_crypto_wallet_address(s: &str, len: usize) -> bool {
     if !looks_like_crypto {
         return false;
     }
-    let alnum_count = s.chars().filter(|c| c.is_alphanumeric()).count();
+    let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
     alnum_count * 100 / len >= MIN_WALLET_ALPHANUMERIC_RATIO
 }
 
@@ -58,8 +58,8 @@ fn is_ctf_or_guid(s: &str, len: usize) -> bool {
         return true;
     }
     if (36..=38).contains(&len) {
-        let dash_count = s.chars().filter(|&c| c == '-').count();
-        let hex_count = s.chars().filter(char::is_ascii_hexdigit).count();
+        let dash_count = memchr::memchr_iter(b'-', s.as_bytes()).count();
+        let hex_count = s.bytes().filter(u8::is_ascii_hexdigit).count();
         if dash_count == 4 && (30..=32).contains(&hex_count) {
             return true;
         }
@@ -71,8 +71,8 @@ fn is_email_address(s: &str, len: usize) -> bool {
     if !s.contains('@') || !s.contains('.') || len < 6 {
         return false;
     }
-    let at_count = s.chars().filter(|&c| c == '@').count();
-    let dot_count = s.chars().filter(|&c| c == '.').count();
+    let at_count = memchr::memchr_iter(b'@', s.as_bytes()).count();
+    let dot_count = memchr::memchr_iter(b'.', s.as_bytes()).count();
     if at_count != 1 || dot_count < 1 {
         return false;
     }
@@ -180,7 +180,7 @@ fn is_code_pattern(s: &str) -> bool {
     }
     // Ransom note patterns
     if s.contains("ENCRYPTED") || s.contains("DECRYPT") || s.contains("Bitcoin") {
-        let uppercase_count = s.chars().filter(|c| c.is_uppercase()).count();
+        let uppercase_count = s.bytes().filter(u8::is_ascii_uppercase).count();
         if !s.is_empty() && uppercase_count * 100 / s.len() > 50 {
             return true;
         }
@@ -216,7 +216,7 @@ fn is_obfuscated_js(s: &str) -> bool {
     let has_code_syntax = s.contains('(') || s.contains('[') || s.contains('{');
     let hex_id_count = s.matches("_0x").count() + s.matches("0x").count();
     if has_keywords || has_code_syntax || hex_id_count >= 2 {
-        let alnum_count = s.chars().filter(|c| c.is_alphanumeric()).count();
+        let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
         if alnum_count >= 6 {
             return true;
         }
@@ -260,7 +260,7 @@ fn is_shell_command_string(s: &str) -> bool {
         .chars()
         .filter(|c| !c.is_alphanumeric() && !c.is_whitespace())
         .count();
-    let alnum_count = s.chars().filter(|c| c.is_alphanumeric()).count();
+    let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
     if s.is_empty() {
         return false;
     }
@@ -270,10 +270,10 @@ fn is_shell_command_string(s: &str) -> bool {
 fn is_mac_address_or_ipv6(s: &str, len: usize) -> bool {
     // MAC addresses
     if (12..=17).contains(&len) {
-        let colon_count = s.chars().filter(|&c| c == ':').count();
-        let dash_count = s.chars().filter(|&c| c == '-').count();
-        let dot_count = s.chars().filter(|&c| c == '.').count();
-        let hex_count = s.chars().filter(char::is_ascii_hexdigit).count();
+        let colon_count = memchr::memchr_iter(b':', s.as_bytes()).count();
+        let dash_count = memchr::memchr_iter(b'-', s.as_bytes()).count();
+        let dot_count = memchr::memchr_iter(b'.', s.as_bytes()).count();
+        let hex_count = s.bytes().filter(u8::is_ascii_hexdigit).count();
         if (colon_count == 5 || dash_count == 5) && hex_count == 12 {
             return true;
         }
@@ -283,8 +283,8 @@ fn is_mac_address_or_ipv6(s: &str, len: usize) -> bool {
     }
     // IPv6
     if len >= 3 && s.contains(':') {
-        let colon_count = s.chars().filter(|&c| c == ':').count();
-        let hex_count = s.chars().filter(char::is_ascii_hexdigit).count();
+        let colon_count = memchr::memchr_iter(b':', s.as_bytes()).count();
+        let hex_count = s.bytes().filter(u8::is_ascii_hexdigit).count();
         if colon_count >= 2 && hex_count >= 1 {
             // Reject trailing colons (invalid IPv6, unless ::)
             if s.ends_with(':') && !s.ends_with("::") {
@@ -528,7 +528,7 @@ fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     // Check for consonant-only strings (no vowels) - likely random garbage
     // unless it's a known pattern like "str", "ptr", "chr", "src", etc.
     if is_all_lower && len >= 4 {
-        let vowel_count = s.chars().filter(|&c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')).count();
+        let vowel_count = s.bytes().filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u')).count();
         if vowel_count == 0 {
             // Whitelist common consonant-only strings
             let known = ["str", "ptr", "chr", "src", "dst", "tmp", "prn", "sys", "cfg", "mgr", "ctx"];
@@ -570,7 +570,7 @@ fn is_short_binary_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
         return true;
     }
     if stats.special > 0 && len <= 5 {
-        let dot_count = s.chars().filter(|&c| c == '.').count();
+        let dot_count = memchr::memchr_iter(b'.', s.as_bytes()).count();
         if dot_count == stats.special {
             let is_filename_pattern =
                 (dot_count == 1 && !s.starts_with('.') && !s.ends_with('.')) || s.starts_with('.');
@@ -987,7 +987,7 @@ fn is_fast_path_garbage(s: &str, original: &str, len: usize) -> bool {
     // Trailing spaces after short content indicate misaligned reads
     // Check original string before trimming
     if original.ends_with(' ') && original.len() < 10 {
-        let alphanumeric = original.chars().filter(|c| c.is_alphanumeric()).count();
+        let alphanumeric = original.bytes().filter(u8::is_ascii_alphanumeric).count();
         if alphanumeric < 4 {
             return true;
         }
@@ -1002,8 +1002,8 @@ fn is_fast_path_garbage(s: &str, original: &str, len: usize) -> bool {
     // e.g., "Zuçzj,w9m" - comma embedded in gibberish
     if s.contains(',') && len < 15 && !s.contains(", ") && !s.contains(" ,") {
         // Exception: numbers with commas (e.g., "1,000") are OK if mostly digits
-        let digit_count = s.chars().filter(char::is_ascii_digit).count();
-        let comma_count = s.chars().filter(|&c| c == ',').count();
+        let digit_count = s.bytes().filter(u8::is_ascii_digit).count();
+        let comma_count = memchr::memchr_iter(b',', s.as_bytes()).count();
         if digit_count * 2 < len - comma_count {
             // Not a number, and comma without space = garbage
             return true;
@@ -1110,7 +1110,7 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
 
     // Long hex strings are crypto hashes or keys
     if (MIN_HASH_LENGTH..=MAX_HASH_LENGTH).contains(&len) {
-        let hex_count = s.chars().filter(char::is_ascii_hexdigit).count();
+        let hex_count = s.bytes().filter(u8::is_ascii_hexdigit).count();
         if hex_count * 100 / len > MIN_HEX_RATIO_FOR_HASH {
             return true;
         }
@@ -1136,8 +1136,8 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
         || s.contains("<<")
         || (s.contains(" > ") && s.split_whitespace().count() >= MIN_SEGMENT_COUNT)
     {
-        let alnum_count = s.chars().filter(|c| c.is_alphanumeric()).count();
-        let ascii_chars = s.chars().filter(char::is_ascii).count();
+        let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
+        let ascii_chars = s.bytes().filter(u8::is_ascii).count();
         let char_count = s.chars().count();
         if alnum_count >= 3
             && char_count > 0
@@ -1171,7 +1171,7 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     // Short strings (4-10 chars) with mixed case and digits that don't look like identifiers
     // e.g., "gvjc54" - lowercase + digit but no vowels and doesn't follow naming conventions
     if (4..=10).contains(&len) && stats.lower > 0 && stats.digit > 0 && stats.upper == 0 {
-        let vowel_count = s.chars().filter(|&c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')).count();
+        let vowel_count = s.bytes().filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u')).count();
         // If no vowels and has digits embedded in lowercase, likely garbage
         if vowel_count == 0 && stats.lower >= 3 && stats.digit >= 1 {
             return true;
@@ -1181,7 +1181,7 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     // Short all-lowercase strings (4-5 chars) that don't look like real words
     // e.g., "oujr", "omor", "kmnro" - unusual phonotactic patterns
     if (4..=5).contains(&len) && stats.lower == len && stats.digit == 0 && stats.upper == 0 {
-        let vowel_count = s.chars().filter(|&c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')).count();
+        let vowel_count = s.bytes().filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u')).count();
 
         // No vowels at all - likely random garbage
         if vowel_count <= 1 {
@@ -1248,7 +1248,7 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     // Very short strings (4 chars) with lowercase + single digit at end
     // e.g., "kmo8", "abc1" - unless it follows naming conventions or is known
     if len == 4 && stats.lower >= 2 && stats.digit == 1 && stats.upper == 0 {
-        let vowel_count = s.chars().filter(|&c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')).count();
+        let vowel_count = s.bytes().filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u')).count();
         // If has 0-1 vowels and ends with digit, likely garbage
         if vowel_count <= 1 && stats.last_char.is_ascii_digit() {
             // Whitelist known patterns (encoding, crypto, architecture suffixes)

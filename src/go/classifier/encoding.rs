@@ -699,7 +699,7 @@ pub(super) fn is_base85(s: &str) -> bool {
     }
 
     // Reject strings that look like character sets or pure punctuation
-    let punct_count = s.chars().filter(char::is_ascii_punctuation).count();
+    let punct_count = s.bytes().filter(u8::is_ascii_punctuation).count();
     if punct_count * 2 > s.len() {
         return false;
     }

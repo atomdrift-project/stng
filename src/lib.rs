@@ -467,9 +467,7 @@ fn enrich_pe_sections(strings: &mut [ExtractedString], pe: &goblin::pe::PE<'_>) 
                 let section_start = u64::from(section.pointer_to_raw_data);
                 let section_end = section_start + u64::from(section.size_of_raw_data);
                 if s.data_offset >= section_start && s.data_offset < section_end {
-                    let name = String::from_utf8_lossy(&section.name)
-                        .trim_end_matches('\0')
-                        .to_string();
+                    let name = binary::pe_section_name(&section.name);
                     if !name.is_empty() {
                         s.section = Some(name);
                         break;
@@ -1176,17 +1174,13 @@ fn extract_from_object(
             let segments: Vec<String> = pe
                 .sections
                 .iter()
-                .map(|sec| {
-                    String::from_utf8_lossy(&sec.name)
-                        .trim_end_matches('\0')
-                        .to_string()
-                })
+                .map(|sec| binary::pe_section_name(&sec.name))
                 .collect();
             let section_info = collect_pe_section_info(pe);
 
             // Check for Go by looking for go.buildinfo section specifically
             let has_go = pe.sections.iter().any(|sec| {
-                let name = String::from_utf8_lossy(&sec.name);
+                let name = binary::pe_section_name(&sec.name);
                 name.contains("go.buildinfo") || name.contains("gopclntab")
             });
 

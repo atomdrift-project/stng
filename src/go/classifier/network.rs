@@ -69,7 +69,7 @@ pub(super) fn classify_ip(s: &str) -> Option<StringKind> {
     }
 
     // IPv6 (contains multiple colons, hex chars)
-    if s.contains(':') && s.chars().filter(|&c| c == ':').count() >= 2 {
+    if s.contains(':') && memchr::memchr_iter(b':', s.as_bytes()).count() >= 2 {
         // Reject trailing colons (invalid IPv6)
         if s.ends_with(':') && !s.ends_with("::") {
             return None;
@@ -187,7 +187,7 @@ pub(super) fn classify_crypto_address(s: &str) -> Option<StringKind> {
 
     // Bitcoin (bech32): starts with bc1, 42+ chars
     if s.starts_with("bc1") && len >= 42 {
-        let alnum_count = s.chars().filter(|c| c.is_alphanumeric()).count();
+        let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
         if alnum_count * 100 / len >= 95 {
             return Some(StringKind::CryptoWallet);
         }
@@ -195,7 +195,7 @@ pub(super) fn classify_crypto_address(s: &str) -> Option<StringKind> {
 
     // Ethereum: starts with 0x, 42 chars hex
     if s.starts_with("0x") && len == 42 {
-        let hex_count = s[2..].chars().filter(char::is_ascii_hexdigit).count();
+        let hex_count = s[2..].bytes().filter(u8::is_ascii_hexdigit).count();
         if hex_count == 40 {
             return Some(StringKind::CryptoWallet);
         }
@@ -203,7 +203,7 @@ pub(super) fn classify_crypto_address(s: &str) -> Option<StringKind> {
 
     // Monero: starts with 4 or 8, 95-108 chars
     if (s.starts_with('4') || s.starts_with('8')) && (95..=108).contains(&len) {
-        let alnum_count = s.chars().filter(|c| c.is_alphanumeric()).count();
+        let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
         if alnum_count * 100 / len >= 95 {
             return Some(StringKind::CryptoWallet);
         }
@@ -261,7 +261,7 @@ pub(super) fn classify_api_key(s: &str) -> Option<StringKind> {
 
     // AWS access key: starts with AKIA, 20+ chars
     if s.starts_with("AKIA") && len >= 20 {
-        let alnum_count = s.chars().filter(|c| c.is_alphanumeric()).count();
+        let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
         if alnum_count * 100 / len >= 90 {
             return Some(StringKind::APIKey);
         }
@@ -270,8 +270,8 @@ pub(super) fn classify_api_key(s: &str) -> Option<StringKind> {
     // GitHub token: starts with ghp_, 36+ chars
     if s.starts_with("ghp_") && len >= 36 {
         let alnum_count = s
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '_')
+            .bytes()
+            .filter(|b| b.is_ascii_alphanumeric() || *b == b'_')
             .count();
         if alnum_count * 100 / len >= 90 {
             return Some(StringKind::APIKey);
@@ -281,8 +281,8 @@ pub(super) fn classify_api_key(s: &str) -> Option<StringKind> {
     // Stripe keys: starts with sk_live_ or pk_live_
     if (s.starts_with("sk_live_") || s.starts_with("pk_live_")) && len >= 20 {
         let alnum_count = s
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '_')
+            .bytes()
+            .filter(|b| b.is_ascii_alphanumeric() || *b == b'_')
             .count();
         if alnum_count * 100 / len >= 90 {
             return Some(StringKind::APIKey);
@@ -292,8 +292,8 @@ pub(super) fn classify_api_key(s: &str) -> Option<StringKind> {
     // Slack tokens: starts with xox, 30+ chars
     if s.starts_with("xox") && len >= 30 {
         let alnum_count = s
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-')
+            .bytes()
+            .filter(|b| b.is_ascii_alphanumeric() || *b == b'-')
             .count();
         if alnum_count * 100 / len >= 90 {
             return Some(StringKind::APIKey);

@@ -123,7 +123,7 @@ pub(super) fn is_php_code(s: &str) -> bool {
 
     // Fallback: look for PHP-specific patterns
     // PHP variables always start with $, so require multiple $ signs
-    let dollar_count = s.chars().filter(|&c| c == '$').count();
+    let dollar_count = memchr::memchr_iter(b'$', s.as_bytes()).count();
     if dollar_count < 2 {
         return false;
     }
@@ -229,7 +229,7 @@ pub(super) fn is_shell_command(s: &str) -> bool {
     if len < 4 {
     // Shell commands are predominantly ASCII. Long strings with many non-ASCII chars
     // (like localized UI text) are almost never shell commands.
-    let ascii_count = s.chars().filter(|c| c.is_ascii()).count();
+    let ascii_count = s.bytes().filter(u8::is_ascii).count();
     if len > 100 && ascii_count * 100 / len < 95 {
         return false;
     }
@@ -377,8 +377,8 @@ pub(super) fn is_shell_command(s: &str) -> bool {
                     || content.starts_with("hostname")
                     || content.starts_with("uname"));
             // Must be mostly ASCII with reasonable alphanumeric ratio
-            let ascii_count = content.chars().filter(char::is_ascii).count();
-            let alpha_count = content.chars().filter(char::is_ascii_alphanumeric).count();
+            let ascii_count = content.bytes().filter(u8::is_ascii).count();
+            let alpha_count = content.bytes().filter(u8::is_ascii_alphanumeric).count();
             let content_len = content.len();
             if content_len >= 2
                 && ascii_count * 100 / content_len > 90
@@ -404,8 +404,8 @@ pub(super) fn is_shell_command(s: &str) -> bool {
                     && !content.contains(" doc ")
                 {
                     // Must be mostly ASCII (>90%) - reject garbage with non-ASCII chars
-                    let ascii_count = content.chars().filter(char::is_ascii).count();
-                    let content_len = content.chars().count();
+                    let ascii_count = content.bytes().filter(u8::is_ascii).count();
+                    let content_len = content.len();
                     if content_len > 0 && ascii_count * 100 / content_len > 90 {
                         return true;
                     }
