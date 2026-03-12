@@ -188,8 +188,11 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
         .iter()
         .all(|&b| b.is_ascii() && (!b.is_ascii_control() || b == b'\n' || b == b'\r' || b == b'\t'))
     {
-        // All printable ASCII (+ newlines/tabs)
-        String::from_utf8_lossy(&decoded).to_string()
+        // All printable ASCII — ASCII is always valid UTF-8, skip re-validation
+        match String::from_utf8(decoded) {
+            Ok(s) => s,
+            Err(_) => return None,
+        }
     } else if let Ok(utf8_str) = std::str::from_utf8(&decoded) {
         // Valid UTF-8
         utf8_str.to_string()
@@ -273,8 +276,11 @@ fn decode_hex_string(s: &ExtractedString) -> Option<ExtractedString> {
         .iter()
         .all(|&b| b.is_ascii() && (!b.is_ascii_control() || b == b'\n' || b == b'\r' || b == b'\t'))
     {
-        // All printable ASCII (+ newlines/tabs)
-        String::from_utf8_lossy(&decoded).to_string()
+        // All printable ASCII — ASCII is always valid UTF-8, skip re-validation
+        match String::from_utf8(decoded) {
+            Ok(s) => s,
+            Err(_) => return None,
+        }
     } else if let Ok(utf8_str) = std::str::from_utf8(&decoded) {
         // Valid UTF-8
         utf8_str.to_string()
@@ -591,8 +597,11 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
         .iter()
         .all(|&b| b.is_ascii() && (!b.is_ascii_control() || b == b'\n' || b == b'\r' || b == b'\t'))
     {
-        // All printable ASCII (+ newlines/tabs)
-        String::from_utf8_lossy(&decoded).to_string()
+        // All printable ASCII — ASCII is always valid UTF-8, skip re-validation
+        match String::from_utf8(decoded) {
+            Ok(s) => s,
+            Err(_) => return None,
+        }
     } else if let Ok(utf8_str) = std::str::from_utf8(&decoded) {
         // Valid UTF-8
         utf8_str.to_string()
@@ -652,8 +661,11 @@ fn decode_base85_string(s: &ExtractedString) -> Option<ExtractedString> {
         .iter()
         .all(|&b| b.is_ascii() && (!b.is_ascii_control() || b == b'\n' || b == b'\r' || b == b'\t'))
     {
-        // All printable ASCII (+ newlines/tabs)
-        String::from_utf8_lossy(&decoded).to_string()
+        // All printable ASCII — ASCII is always valid UTF-8, skip re-validation
+        match String::from_utf8(decoded) {
+            Ok(s) => s,
+            Err(_) => return None,
+        }
     } else if let Ok(utf8_str) = std::str::from_utf8(&decoded) {
         // Valid UTF-8
         utf8_str.to_string()

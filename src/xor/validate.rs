@@ -21,46 +21,20 @@ pub(crate) fn is_printable_char(b: u8) -> bool {
 /// Check if a decoded XOR string is valid (not garbage with unusual punctuation).
 /// Returns true if the string passes basic sanity checks.
 pub(crate) fn is_valid_xor_string(s: &str) -> bool {
-    let lower = s.to_ascii_lowercase();
-
     // Check for specific malicious indicators (not just any system path)
-    let has_shell_command = s.contains("osascript")
-        || s.contains("screencapture")
-        || s.contains("bash ")
-        || s.contains("sh -")
-        || s.contains("curl ")
-        || s.contains("wget ")
-        || s.contains("chmod ")
-        || s.contains("python ")
-        || s.contains("perl ")
-        || s.contains("ruby ")
-        || s.contains("/bin/")
-        || s.contains("sleep ")
-        || s.contains(" rm ")
-        || s.contains("rm -")
-        || s.contains("echo ")
-        || s.contains("kill ")
-        || s.contains("ps ")
-        || lower.contains("powershell")
-        || lower.contains("cmd.exe")
-        || lower.contains("xattr");
+    // Uses cached case-insensitive Aho-Corasick automata — no allocation
+    let has_shell_command = shell_command_automaton().is_match(s);
 
-    let has_suspicious_path = s.contains("Ethereum/keystore")
-        || s.contains("/tmp/") && (s.contains(".sh") || s.contains("payload"))
-        || s.contains("/etc/passwd")
-        || s.contains("/etc/shadow")
-        || lower.contains("appdata")
-        || lower.contains("programdata")
-        || lower.contains("launchagents")
-        || lower.contains("launchdaemons");
+    let has_suspicious_path = suspicious_path_automaton().is_match(s)
+        || s.contains("/tmp/") && (s.contains(".sh") || s.contains("payload"));
 
     let has_suspicious_url = s.contains("://") && !s.contains("apple.com");
 
     // Check for IP addresses (likely C2 infrastructure) - pattern: N.N.N.N
-    let has_ip = s.chars().filter(|&c| c == '.').count() == 3
+    let has_ip = memchr::memchr_iter(b'.', s.as_bytes()).count() == 3
         && s.split('.')
             .filter(|seg| {
-                !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()) && seg.len() <= 3
+                !seg.is_empty() && seg.len() <= 3 && seg.bytes().all(|b| b.is_ascii_digit())
             })
             .count()
             == 4;
@@ -306,6 +280,72 @@ pub(crate) fn get_common_words_automaton() -> &'static AhoCorasick {
     })
 }
 
+/// Cached automaton for shell command indicators (case-insensitive).
+#[allow(clippy::expect_used)]
+fn shell_command_automaton() -> &'static AhoCorasick {
+    static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build([
+                "osascript",
+                "screencapture",
+                "bash ",
+                "sh -",
+                "curl ",
+                "wget ",
+                "chmod ",
+                "python ",
+                "perl ",
+                "ruby ",
+                "/bin/",
+                "sleep ",
+                " rm ",
+                "rm -",
+                "echo ",
+                "kill ",
+                "ps ",
+                "powershell",
+                "cmd.exe",
+                "xattr",
+            ])
+            .expect("static patterns")
+    })
+}
+
+/// Cached automaton for suspicious path indicators (case-insensitive).
+#[allow(clippy::expect_used)]
+fn suspicious_path_automaton() -> &'static AhoCorasick {
+    static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build([
+                "ethereum/keystore",
+                "/etc/passwd",
+                "/etc/shadow",
+                "appdata",
+                "programdata",
+                "launchagents",
+                "launchdaemons",
+            ])
+            .expect("static patterns")
+    })
+}
+
+/// Cached automaton for common file extensions.
+#[allow(clippy::expect_used)]
+fn file_extension_automaton() -> &'static AhoCorasick {
+    static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        AhoCorasick::new([
+            ".plist", ".json", ".conf", ".sqlite", ".jpg", ".png", ".txt", ".log", ".xml", ".db",
+            ".dat", ".wallet", ".keystore",
+        ])
+        .expect("static patterns")
+    })
+}
+
 /// Count how many distinct COMMON_WORDS appear in `lower_s` (already lowercased).
 /// Stops counting after reaching `limit` to allow early exits in callers.
 pub(crate) fn count_common_word_matches(lower_s: &str, limit: usize) -> usize {
@@ -332,9 +372,9 @@ pub(crate) fn is_meaningful_string(s: &str) -> bool {
         return false;
     }
 
-    // Keep byte length for some legacy checks, but use char_count for Unicode correctness
     let len = s.len();
-    let char_count = s.chars().count();
+    // For ASCII strings (the common case), len == char_count. Only count chars for Unicode.
+    let char_count = if s.is_ascii() { len } else { s.chars().count() };
     let mut alpha = 0usize;
     let mut digit = 0usize;
     let mut vowel = 0usize;
@@ -380,19 +420,7 @@ pub(crate) fn is_meaningful_string(s: &str) -> bool {
     }
 
     // Check for common file extensions (exfiltration targets)
-    let has_file_extension = s.contains(".plist")
-        || s.contains(".json")
-        || s.contains(".conf")
-        || s.contains(".sqlite")
-        || s.contains(".jpg")
-        || s.contains(".png")
-        || s.contains(".txt")
-        || s.contains(".log")
-        || s.contains(".xml")
-        || s.contains(".db")
-        || s.contains(".dat")
-        || s.contains(".wallet")
-        || s.contains(".keystore");
+    let has_file_extension = file_extension_automaton().is_match(s);
 
     if has_file_extension {
         // File paths are high value - just check basic quality

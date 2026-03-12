@@ -238,6 +238,12 @@ pub(crate) fn auto_detect_xor_key(
         "exodus",
     ];
 
+    // Build Aho-Corasick automaton for all killer patterns (byte-level, no UTF-8 needed)
+    let killer_ac = aho_corasick::AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build(&killer_patterns)
+        .ok();
+
     let mut promising_candidates = Vec::new();
     for (offset, candidate) in &candidates {
         let key = candidate.as_bytes().to_vec();
@@ -247,8 +253,11 @@ pub(crate) fn auto_detect_xor_key(
             .map(|(i, &byte)| byte ^ key[i % key.len()])
             .collect();
 
-        let decoded_str = String::from_utf8_lossy(&decoded);
-        if killer_patterns.iter().any(|p| decoded_str.contains(p)) {
+        // Search decoded bytes directly — no UTF-8 conversion needed
+        let found = killer_ac
+            .as_ref()
+            .is_some_and(|ac| ac.is_match(&decoded));
+        if found {
             promising_candidates.push((*offset, *candidate));
             tracing::debug!("Phase 1: Candidate '{}' found killer pattern", candidate);
         }

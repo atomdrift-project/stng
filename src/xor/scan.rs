@@ -657,23 +657,17 @@ fn extract_custom_xor_strings_pattern_based_simple(
                     let after_null = &decoded[null_pos..];
                     // Need at least 2 chars after null to detect garbage (e.g., "aTr")
                     if after_null.len() >= 2 {
-                        let s_after = String::from_utf8_lossy(after_null);
-
-                        // Count the longest run of *consecutive* ASCII consonants
-                        // in the first 4 chars. A vowel in the middle resets the
-                        // count, so "nder" (n-d-e-r) only scores 2 (n,d before the
-                        // 'e'), whereas "zXkm" scores 4. This avoids trimming valid
-                        // English suffixes like "-nder" in "Finder" while still
-                        // cutting genuine garbage consonant clusters.
+                        // Count the longest run of consecutive ASCII consonants
+                        // in the first 4 bytes. Operate directly on bytes — no
+                        // UTF-8 conversion needed since we only check ASCII letters.
                         let check_len = after_null.len().min(4);
-                        let max_consecutive = s_after
-                            .chars()
-                            .take(check_len)
-                            .fold((0u32, 0u32), |(max, cur), c| {
-                                if c.is_ascii_alphabetic() {
+                        let max_consecutive = after_null[..check_len]
+                            .iter()
+                            .fold((0u32, 0u32), |(max, cur), &b| {
+                                if b.is_ascii_alphabetic() {
                                     let is_vowel = matches!(
-                                        c.to_ascii_lowercase(),
-                                        'a' | 'e' | 'i' | 'o' | 'u'
+                                        b.to_ascii_lowercase(),
+                                        b'a' | b'e' | b'i' | b'o' | b'u'
                                     );
                                     if is_vowel {
                                         (max, 0)
@@ -1025,10 +1019,7 @@ pub fn extract_rolling_xor_with_known_plaintext(
                     pattern_matches
                 );
 
-                let key_hex: String = candidate_key[..key_len]
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect();
+                let key_hex = hex::encode(&candidate_key[..key_len]);
 
                 let mut pos = 0;
                 let mut decoded_bytes = Vec::with_capacity(128);

@@ -104,6 +104,7 @@ use binary_net::scan_binary_ips;
 use imports::{extract_elf_imports, extract_macho_imports};
 use raw::{extract_raw_strings, extract_wide_strings};
 
+
 /// Returns `true` if a string should be kept when garbage filtering is enabled.
 /// Encoded strings and special kinds are always kept regardless of content.
 fn passes_garbage_filter(s: &ExtractedString) -> bool {
@@ -968,7 +969,6 @@ fn extract_from_object(
                     strings.extend(rust_strings);
                 }
             }
-            // Skip stack string extraction for Go binaries
             if !is_go_binary {
                 strings.extend(extract_stack_strings(data, min_length));
             }
@@ -1014,7 +1014,6 @@ fn extract_from_object(
                     &section_info,
                 ));
             }
-            // Skip stack string extraction for Go binaries
             if !is_go_binary {
                 strings.extend(extract_stack_strings(data, min_length));
             }
