@@ -302,7 +302,8 @@ fn method_priority(m: StringMethod) -> u8 {
         | StringMethod::UnicodeEscapeDecode
         | StringMethod::CodeSignature
         | StringMethod::Utf16LeDecode
-        | StringMethod::Utf16BeDecode => 2,
+        | StringMethod::Utf16BeDecode
+        | StringMethod::ScriptDecode => 2,
 
         // Medium priority: heuristics
         StringMethod::Heuristic => 1,
@@ -376,8 +377,21 @@ fn main() -> Result<()> {
             byte_offset += line.len() as u64 + 1;
         }
 
-        // NOTE: Embedded base64 extraction is now handled by the library
-        // via decoders::extract_embedded_base64() called from extract_strings_with_options()
+        // Script deobfuscation: decode hidden payloads from obfuscated scripts
+        let deob_results = stng::script::deobfuscate_script(&data);
+        for result in deob_results {
+            let payload_opts = stng::ExtractOptions::new(cli.min_length);
+            let payload_strings =
+                stng::extract_strings_with_options(result.decoded.as_bytes(), &payload_opts);
+            let base_offset = data.len() as u64 + 1 + result.offset as u64;
+            for mut s in payload_strings {
+                s.method = stng::StringMethod::ScriptDecode;
+                s.source = Some(result.chain_description.clone());
+                s.kind = stng::classify_string(&s.value);
+                s.data_offset += base_offset;
+                strings.push(s);
+            }
+        }
 
         // Jump to output section
         if strings.is_empty() {
@@ -494,9 +508,13 @@ fn main() -> Result<()> {
         keep
     });
 
-    // Deduplicate by value
+    // Deduplicate by value (but always keep decoded/high-value strings)
     let mut seen_values: HashSet<String> = HashSet::new();
     strings.retain(|s| {
+        // Always keep ScriptDecode — these are decoded payloads, not duplicates
+        if s.method == stng::StringMethod::ScriptDecode {
+            return true;
+        }
         let normalized: String = s
             .value
             .trim()
@@ -980,6 +998,8 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         ("wide", s.kind.short_name())
     } else if s.method == stng::StringMethod::SpacedAscii {
         ("spaced", s.kind.short_name())
+    } else if s.method == stng::StringMethod::ScriptDecode {
+        ("script", s.kind.short_name())
     } else {
         ("", s.kind.short_name())
     };
@@ -989,6 +1009,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         // XOR-decoded and obfuscated base64 content uses bright yellow to stand out
         if s.method == stng::StringMethod::XorDecode
             || s.method == stng::StringMethod::Base64ObfuscatedDecode
+            || s.method == stng::StringMethod::ScriptDecode
         {
             (BRIGHT_YELLOW, BRIGHT_YELLOW)
         } else if s.kind == stng::StringKind::Section {

@@ -53,6 +53,9 @@ mod stack_strings;
 // Garble deobfuscation
 pub mod garble;
 
+// Script deobfuscation
+pub mod script;
+
 // Language-specific extractors
 mod go;
 pub(crate) mod instr;
@@ -644,7 +647,8 @@ fn method_priority(m: StringMethod) -> u8 {
         | StringMethod::UnicodeEscapeDecode
         | StringMethod::CodeSignature
         | StringMethod::Utf16LeDecode
-        | StringMethod::Utf16BeDecode => 2,
+        | StringMethod::Utf16BeDecode
+        | StringMethod::ScriptDecode => 2,
 
         // Medium priority: heuristics
         StringMethod::Heuristic => 1,
@@ -805,6 +809,58 @@ fn extract_from_utf16_file(
     deduplicate_by_offset(strings)
 }
 
+/// Run script deobfuscation and append decoded strings.
+///
+/// Detects Python/JS/PHP/PowerShell obfuscation patterns in text data,
+/// decodes hidden payloads, extracts strings from them, and appends
+/// them to the existing string list with `ScriptDecode` method.
+fn append_script_deobfuscation(
+    strings: &mut Vec<ExtractedString>,
+    data: &[u8],
+    opts: &ExtractOptions,
+) {
+    let deob_results = script::deobfuscate_script(data);
+    for result in &deob_results {
+        tracing::debug!(
+            "Script deobfuscation ({}) decoded {} bytes",
+            result.chain_description,
+            result.decoded.len()
+        );
+    }
+    for result in deob_results {
+        let payload_bytes = result.decoded.as_bytes();
+        let mut payload_strings = extract_raw_strings(
+            payload_bytes,
+            opts.min_length,
+            None,
+            &[],
+            &HashMap::new(),
+        );
+
+        // Run decoders on the extracted payload strings
+        let mut payload_decoded = Vec::new();
+        payload_decoded.extend(decoders::decode_base64_strings(&payload_strings));
+        payload_decoded.extend(decoders::extract_embedded_base64(&payload_strings));
+        payload_decoded.extend(decoders::decode_hex_strings(&payload_strings));
+        payload_decoded.extend(decoders::decode_url_strings(&payload_strings));
+        payload_decoded.extend(decoders::decode_unicode_escape_strings(&payload_strings));
+        payload_strings.extend(payload_decoded);
+
+        // Mark all strings as ScriptDecode with provenance.
+        // Use a high base offset to avoid collisions with raw-scan strings from
+        // the original file during deduplication.
+        let base_offset = data.len() as u64 + 1 + result.offset as u64;
+        for s in &mut payload_strings {
+            s.method = StringMethod::ScriptDecode;
+            s.source = Some(result.chain_description.clone());
+            s.kind = go::classify_string(&s.value);
+            s.data_offset += base_offset;
+        }
+
+        strings.extend(payload_strings);
+    }
+}
+
 /// Extract strings with additional options.
 ///
 /// Provides fine-grained control over the extraction process through the
@@ -843,7 +899,12 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
     }
 
     if let Ok(object) = Object::parse(data) {
-        deduplicate_by_offset(extract_from_object(&object, data, opts))
+        let mut strings = extract_from_object(&object, data, opts);
+        // For text files parsed by goblin (e.g. as Unknown), also run script deobfuscation
+        if is_text_file(data) {
+            append_script_deobfuscation(&mut strings, data, opts);
+        }
+        deduplicate_by_offset(strings)
     } else {
         // Unknown format - use r2 if available, plus raw scan
         let mut strings = Vec::new();
@@ -893,6 +954,11 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
 
         // Decode spaced ASCII strings (common in PE .rsrc, .NET metadata)
         decode_spaced_strings(&mut strings, opts.min_length);
+
+        // Script deobfuscation for text files that didn't parse as a known binary format
+        if is_text_file(data) {
+            append_script_deobfuscation(&mut strings, data, opts);
+        }
 
         if opts.filter_garbage {
             strings.retain(passes_garbage_filter);

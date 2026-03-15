@@ -42,6 +42,9 @@ hex = "0.4"
 # URL decoding
 urlencoding = "2.1"
 
+# Zlib/gzip decompression (for script deobfuscation)
+flate2 = "1.0"
+
 # Base32/Base85 encoding
 data-encoding = "2.6"
 

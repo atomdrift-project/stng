@@ -196,6 +196,8 @@ pub enum StringMethod {
     GarbleRodata,
     /// Found via x86-64 emulation of garble Decrypt functions
     GarbleEmulated,
+    /// Found via script deobfuscation (decoded payload from obfuscated Python/JS/PHP/PowerShell)
+    ScriptDecode,
 }
 
 /// Semantic kind of the extracted string.
@@ -250,6 +252,8 @@ pub enum StringKind {
     JavaScriptCode,
     /// PHP code (<?php tags, $ variables, `eval(base64_decode)`)
     PhpCode,
+    /// PowerShell code (-EncodedCommand, Invoke-Expression, iex, etc.)
+    PowerShellCode,
     /// Suspicious path (hidden dirs, rootkit locations, persistence)
     SuspiciousPath,
     /// Windows registry path
@@ -442,6 +446,7 @@ impl StringKind {
             Self::PythonCode => "python",
             Self::JavaScriptCode => "javascript",
             Self::PhpCode => "php",
+            Self::PowerShellCode => "powershell",
         }
     }
 }
