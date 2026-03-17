@@ -1,12 +1,12 @@
 [package]
 name = "stng"
-version = "1.0.0"
+version = "1.1.1"
 edition = "2021"
-authors = ["DISSECT Team"]
-description = "Language-aware string extraction for Go and Rust binaries"
+authors = ["The Atomdrift Project"]
+description = "Language-aware advanced string extraction binaries"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://codeberg.org/HEXXDECIMAL/stng"
+repository = "https://codeberg.org/atomdrift/stng"
 keywords = ["binary", "strings", "go", "rust", "reverse-engineering"]
 categories = ["command-line-utilities", "development-tools"]
 
@@ -15,19 +15,19 @@ categories = ["command-line-utilities", "development-tools"]
 goblin = "0.10"
 
 # Pattern matching
-regex = "1.11"
+regex = "1.12"
 
 # Parallelism
-rayon = "1.10"
+rayon = "1.11"
 
 # Fast byte scanning
-memchr = "2.7"
+memchr = "2.8"
 
 # Multi-pattern matching
 aho-corasick = "1.1"
 
 # CLI
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 
 # Serialization (for JSON output)
 serde = { version = "1.0", features = ["derive"] }
@@ -43,10 +43,10 @@ hex = "0.4"
 urlencoding = "2.1"
 
 # Zlib/gzip decompression (for script deobfuscation)
-flate2 = "1.0"
+flate2 = "1.1"
 
 # Base32/Base85 encoding
-data-encoding = "2.6"
+data-encoding = "2.10"
 
 # Error handling
 anyhow = "1.0"

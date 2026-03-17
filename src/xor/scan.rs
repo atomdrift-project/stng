@@ -282,6 +282,13 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
 
         // Extract and validate the string
         if end - start >= min_length {
+            // Skip strings decoded from null-heavy regions (key reflection artifact)
+            let raw_null_count = data[start..end].iter().filter(|&&b| b == 0).count();
+            if raw_null_count * 2 > (end - start) {
+                start = end + 1;
+                continue;
+            }
+
             // Check for double-null in original data (at same positions as decoded range)
             let mut double_null_pos = None;
             for offset in 0..(end - start).saturating_sub(1) {
@@ -441,6 +448,15 @@ fn extract_xor_strings_from_hints(
             }
 
             if decoded.len() < min_length {
+                continue;
+            }
+
+            // Skip strings decoded from null-heavy regions (key reflection artifact)
+            let raw_null_count = data[offset..end]
+                .iter()
+                .filter(|&&b| b == 0)
+                .count();
+            if raw_null_count * 2 > (end - offset) {
                 continue;
             }
 
@@ -695,6 +711,17 @@ fn extract_custom_xor_strings_pattern_based_simple(
 
             // Check minimum length after trimming
             if decoded.len() < min_length {
+                return None;
+            }
+
+            // Skip strings decoded from null-heavy regions. When raw bytes are
+            // mostly zero the XOR output is just the key text reflected back —
+            // not actual encrypted content.
+            let raw_null_count = data[pos..pos + decoded.len()]
+                .iter()
+                .filter(|&&b| b == 0)
+                .count();
+            if raw_null_count * 2 > decoded.len() {
                 return None;
             }
 

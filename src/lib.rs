@@ -121,6 +121,7 @@ fn passes_garbage_filter(s: &ExtractedString) -> bool {
             | StringKind::HexEncoded
             | StringKind::UrlEncoded
             | StringKind::UnicodeEscaped
+            | StringKind::XorKey
     ) || !validation::is_garbage(&s.value)
 }
 
@@ -216,8 +217,27 @@ fn apply_xor_scan(
         };
         if let Some((key, key_str, _)) = auto_key {
             tracing::info!("Auto-detected XOR key: '{}'", key_str);
-            if let Some(ks) = strings.iter_mut().find(|s| s.value == key_str) {
+            // Mark ALL occurrences of the key string as XorKey. Fat binaries
+            // contain the same string at multiple arch offsets; the value-dedup
+            // in main.rs keeps whichever copy comes first, so every copy must
+            // carry the XorKey kind to survive as the correct kind.
+            let mut marked = false;
+            for ks in strings.iter_mut().filter(|s| s.value == key_str) {
                 ks.kind = StringKind::XorKey;
+                marked = true;
+            }
+            if !marked {
+                tracing::warn!("XOR key '{}' not found in extracted strings — injecting", key_str);
+                strings.push(ExtractedString {
+                    value: key_str.clone(),
+                    data_offset: 0,
+                    section: None,
+                    method: StringMethod::XorDecode,
+                    kind: StringKind::XorKey,
+                    source: None,
+                    fragments: None,
+                    ..Default::default()
+                });
             }
             strings.extend(xor::extract_custom_xor_strings_with_hints(
                 data,
