@@ -303,7 +303,8 @@ fn method_priority(m: StringMethod) -> u8 {
         | StringMethod::CodeSignature
         | StringMethod::Utf16LeDecode
         | StringMethod::Utf16BeDecode
-        | StringMethod::ScriptDecode => 2,
+        | StringMethod::ScriptDecode
+        | StringMethod::PclntabSymbol => 2,
 
         // Medium priority: heuristics
         StringMethod::Heuristic => 1,

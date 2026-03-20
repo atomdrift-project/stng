@@ -28,7 +28,7 @@ pub fn extract_garble_rodata_strings(
     const MIN_BLOB_LEN: usize = 4; // Minimum blob length to consider
     const MAX_BLOB_LEN: usize = 256; // Maximum blob length (garble strings are typically short)
     const MAX_PAIR_DISTANCE: usize = 8192; // Max distance between key and data in bytes
-    const MIN_SCORE_THRESHOLD: i32 = 8; // Minimum score to accept a result
+    const MIN_SCORE_THRESHOLD: i32 = 12; // Minimum score to accept a result
 
     let mut results = Vec::new();
     let mut seen_strings: HashSet<String> = HashSet::new();
@@ -83,6 +83,10 @@ pub fn extract_garble_rodata_strings(
                 }
 
                 if let Some((decoded, _score)) = best {
+                    // Reject strings that look like random noise rather than real text
+                    if !is_meaningful_decoded_string(&decoded) {
+                        continue;
+                    }
                     // Deduplicate
                     if seen_strings.insert(decoded.clone()) {
                         results.push(ExtractedString {
@@ -250,6 +254,75 @@ pub fn check_printable(bytes: &[u8], min_length: usize) -> Option<String> {
     }
 
     None
+}
+
+/// Check if a decoded string looks like meaningful text rather than random noise.
+///
+/// Garble rodata pairing can produce false positives when non-printable byte
+/// sequences in large rodata sections (e.g., wasm bytecode, lookup tables) happen
+/// to XOR/ADD/SUB to printable ASCII. This function rejects common noise patterns:
+/// - Strings with no vowels, digits, or common separators (e.g., "HHGQ", "JQJQJ")
+/// - Strings dominated by a single repeated character (e.g., "MMMMM")
+/// - Strings with alternating repetitive patterns (e.g., "AQAQA", "OQOQO")
+fn is_meaningful_decoded_string(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+
+    // Short strings need higher quality evidence
+    if len < 6 {
+        // For short strings, require at least one lowercase letter or digit.
+        // Real garble strings almost always contain lowercase or digits
+        // (e.g., "malware.com", "config", "http://").
+        let has_lower_or_digit = bytes.iter().any(|&b| b.is_ascii_lowercase() || b.is_ascii_digit());
+        if !has_lower_or_digit {
+            return false;
+        }
+    }
+
+    // Reject strings dominated by a single character (>60% same byte)
+    let mut counts = [0u32; 128];
+    for &b in bytes {
+        if (b as usize) < 128 {
+            counts[b as usize] += 1;
+        }
+    }
+    let max_count = counts.iter().copied().max().unwrap_or(0);
+    if max_count as usize * 5 > len * 3 {
+        // >60% one character
+        return false;
+    }
+
+    // Reject alternating repetitive patterns (period <= 3)
+    // Detects "AQAQA", "JQJQJ", "OQOQO", etc.
+    if len >= 5 {
+        for period in 1..=3 {
+            if len % period != 0 && (len - 1) % period != 0 {
+                continue;
+            }
+            let repeats = bytes.windows(period).skip(1).all(|w| w == &bytes[..period]);
+            if repeats {
+                return false;
+            }
+        }
+    }
+
+    // Require at least one vowel or digit in strings of 5+ characters.
+    // Real text in any language using Latin script will have vowels.
+    if len >= 5 {
+        let has_vowel_or_digit = bytes.iter().any(|&b| {
+            matches!(
+                b,
+                b'a' | b'e' | b'i' | b'o' | b'u'
+                    | b'A' | b'E' | b'I' | b'O' | b'U'
+                    | b'0'..=b'9'
+            )
+        });
+        if !has_vowel_or_digit {
+            return false;
+        }
+    }
+
+    true
 }
 
 #[cfg(test)]

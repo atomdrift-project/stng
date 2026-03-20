@@ -426,6 +426,30 @@ pub fn extract_inline_strings_amd64(
                 &mut seen,
             );
 
+            // Go register ABI (Go 1.17+): RAX/RBX for 1st string, RCX/RDI for 2nd
+            extract_amd64_go_arg1_string(
+                i,
+                text_data,
+                text_addr,
+                rodata_data,
+                rodata_addr,
+                rodata_end,
+                min_length,
+                &mut strings,
+                &mut seen,
+            );
+            extract_amd64_go_arg2_string(
+                i,
+                text_data,
+                text_addr,
+                rodata_data,
+                rodata_addr,
+                rodata_end,
+                min_length,
+                &mut strings,
+                &mut seen,
+            );
+
             strings
         })
         .collect();
@@ -843,6 +867,232 @@ fn extract_amd64_value_string(
 
             return;
         }
+    }
+}
+
+/// Extract Go register ABI 1st string argument (LEAQ addr(RIP), RAX + MOVL $len, EBX).
+///
+/// Go 1.17+ uses a register-based calling convention where integer arguments are
+/// passed in RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11 (in that order). A Go
+/// string is a (ptr, len) pair, so the 1st string argument uses RAX for the
+/// pointer and RBX for the length.
+///
+/// This pattern is the dominant string-passing convention in Go 1.17+ binaries
+/// and accounts for the majority of inline string references.
+#[allow(clippy::too_many_arguments)]
+fn extract_amd64_go_arg1_string(
+    call_pos: usize,
+    text_data: &[u8],
+    text_addr: u64,
+    rodata_data: &[u8],
+    rodata_addr: u64,
+    rodata_end: u64,
+    min_length: usize,
+    strings: &mut Vec<ExtractedString>,
+    seen: &mut HashSet<String>,
+) {
+    let max_lookback = call_pos.min(50);
+
+    for lookback in 5..=max_lookback {
+        let pos = call_pos - lookback;
+        if pos + 7 > text_data.len() {
+            break;
+        }
+
+        // LEAQ xxx(RIP), RAX (48 8D 05 xx xx xx xx)
+        if text_data[pos] != 0x48 || text_data[pos + 1] != 0x8D || text_data[pos + 2] != 0x05 {
+            continue;
+        }
+
+        let offset = i32::from_le_bytes([
+            text_data[pos + 3],
+            text_data[pos + 4],
+            text_data[pos + 5],
+            text_data[pos + 6],
+        ]);
+        let rip_addr = text_addr + (pos + 7) as u64;
+        let str_addr = (rip_addr as i64 + i64::from(offset)) as u64;
+
+        // Look for MOVL $imm32, EBX (BB xx xx xx xx) within next 20 bytes
+        let mut str_len = 0u64;
+        let mut found_len = false;
+
+        for off in 7..=20 {
+            if pos + off + 5 > text_data.len() {
+                break;
+            }
+
+            // MOVL $imm32, EBX (BB xx xx xx xx)
+            if text_data[pos + off] == 0xBB {
+                str_len = u64::from(u32::from_le_bytes([
+                    text_data[pos + off + 1],
+                    text_data[pos + off + 2],
+                    text_data[pos + off + 3],
+                    text_data[pos + off + 4],
+                ]));
+                found_len = true;
+                break;
+            }
+
+            // MOVQ $imm32, RBX (48 C7 C3 xx xx xx xx)
+            if pos + off + 7 <= text_data.len()
+                && text_data[pos + off] == 0x48
+                && text_data[pos + off + 1] == 0xC7
+                && text_data[pos + off + 2] == 0xC3
+            {
+                str_len = u64::from(u32::from_le_bytes([
+                    text_data[pos + off + 3],
+                    text_data[pos + off + 4],
+                    text_data[pos + off + 5],
+                    text_data[pos + off + 6],
+                ]));
+                found_len = true;
+                break;
+            }
+        }
+
+        if !found_len || str_len == 0 || str_len > 1000 {
+            continue;
+        }
+
+        if str_addr < rodata_addr || str_addr >= rodata_end {
+            continue;
+        }
+
+        let rodata_offset = (str_addr - rodata_addr) as usize;
+        if rodata_offset + str_len as usize > rodata_data.len() {
+            continue;
+        }
+
+        if let Ok(s) =
+            std::str::from_utf8(&rodata_data[rodata_offset..rodata_offset + str_len as usize])
+        {
+            if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
+                seen.insert(s.to_string());
+                let final_kind = classify_string(s);
+                strings.push(ExtractedString {
+                    value: s.to_string(),
+                    data_offset: str_addr,
+                    section: Some(".rodata".to_string()),
+                    method: StringMethod::InstructionPattern,
+                    kind: final_kind,
+                    ..Default::default()
+                });
+            }
+        }
+
+        return;
+    }
+}
+
+/// Extract Go register ABI 2nd string argument (LEAQ addr(RIP), RCX + MOVL $len, EDI).
+///
+/// In Go's register ABI, the 2nd string argument occupies the 3rd and 4th integer
+/// registers: RCX for the pointer and RDI for the length. This pattern is common
+/// for format strings, secondary arguments, and logging messages.
+#[allow(clippy::too_many_arguments)]
+fn extract_amd64_go_arg2_string(
+    call_pos: usize,
+    text_data: &[u8],
+    text_addr: u64,
+    rodata_data: &[u8],
+    rodata_addr: u64,
+    rodata_end: u64,
+    min_length: usize,
+    strings: &mut Vec<ExtractedString>,
+    seen: &mut HashSet<String>,
+) {
+    let max_lookback = call_pos.min(50);
+
+    for lookback in 5..=max_lookback {
+        let pos = call_pos - lookback;
+        if pos + 7 > text_data.len() {
+            break;
+        }
+
+        // LEAQ xxx(RIP), RCX (48 8D 0D xx xx xx xx)
+        if text_data[pos] != 0x48 || text_data[pos + 1] != 0x8D || text_data[pos + 2] != 0x0D {
+            continue;
+        }
+
+        let offset = i32::from_le_bytes([
+            text_data[pos + 3],
+            text_data[pos + 4],
+            text_data[pos + 5],
+            text_data[pos + 6],
+        ]);
+        let rip_addr = text_addr + (pos + 7) as u64;
+        let str_addr = (rip_addr as i64 + i64::from(offset)) as u64;
+
+        // Look for MOVL $imm32, EDI (BF xx xx xx xx) within next 20 bytes
+        let mut str_len = 0u64;
+        let mut found_len = false;
+
+        for off in 7..=20 {
+            if pos + off + 5 > text_data.len() {
+                break;
+            }
+
+            // MOVL $imm32, EDI (BF xx xx xx xx)
+            if text_data[pos + off] == 0xBF {
+                str_len = u64::from(u32::from_le_bytes([
+                    text_data[pos + off + 1],
+                    text_data[pos + off + 2],
+                    text_data[pos + off + 3],
+                    text_data[pos + off + 4],
+                ]));
+                found_len = true;
+                break;
+            }
+
+            // MOVQ $imm32, RDI (48 C7 C7 xx xx xx xx)
+            if pos + off + 7 <= text_data.len()
+                && text_data[pos + off] == 0x48
+                && text_data[pos + off + 1] == 0xC7
+                && text_data[pos + off + 2] == 0xC7
+            {
+                str_len = u64::from(u32::from_le_bytes([
+                    text_data[pos + off + 3],
+                    text_data[pos + off + 4],
+                    text_data[pos + off + 5],
+                    text_data[pos + off + 6],
+                ]));
+                found_len = true;
+                break;
+            }
+        }
+
+        if !found_len || str_len == 0 || str_len > 1000 {
+            continue;
+        }
+
+        if str_addr < rodata_addr || str_addr >= rodata_end {
+            continue;
+        }
+
+        let rodata_offset = (str_addr - rodata_addr) as usize;
+        if rodata_offset + str_len as usize > rodata_data.len() {
+            continue;
+        }
+
+        if let Ok(s) =
+            std::str::from_utf8(&rodata_data[rodata_offset..rodata_offset + str_len as usize])
+        {
+            if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
+                seen.insert(s.to_string());
+                let final_kind = classify_string(s);
+                strings.push(ExtractedString {
+                    value: s.to_string(),
+                    data_offset: str_addr,
+                    section: Some(".rodata".to_string()),
+                    method: StringMethod::InstructionPattern,
+                    kind: final_kind,
+                    ..Default::default()
+                });
+            }
+        }
+
+        return;
     }
 }
 

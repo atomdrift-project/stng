@@ -171,6 +171,101 @@ fn apply_entitlements(
     strings.extend(entitlements);
 }
 
+/// Extract custom (non-stdlib) function names from Mach-O gopclntab.
+///
+/// Parses the Go program counter line table to find function names that don't
+/// belong to the Go standard library. Custom function names reveal the binary's
+/// internal module structure, which is critical for malware analysis.
+fn extract_pclntab_func_names_macho(
+    macho: &MachO<'_>,
+    data: &[u8],
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    // Find __gopclntab section
+    let Some((pclntab_offset, pclntab_data)) = find_macho_section(macho, "__gopclntab", data)
+    else {
+        return Vec::new();
+    };
+
+    let Some(pclntab) = garble::Pclntab::parse(pclntab_data, 0) else {
+        return Vec::new();
+    };
+
+    pclntab
+        .extract_custom_func_names(min_length)
+        .into_iter()
+        .enumerate()
+        .map(|(i, func)| ExtractedString {
+            value: func.name.clone(),
+            // Use pclntab_offset + index to ensure unique offsets for deduplication
+            data_offset: pclntab_offset + i as u64,
+            section: Some("__gopclntab".to_string()),
+            method: StringMethod::PclntabSymbol,
+            kind: StringKind::FuncName,
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Extract custom (non-stdlib) function names from ELF gopclntab.
+fn extract_pclntab_func_names_elf(
+    elf: &goblin::elf::Elf<'_>,
+    data: &[u8],
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    // Find .gopclntab section
+    let Some((pclntab_offset, pclntab_data)) = elf
+        .section_headers
+        .iter()
+        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("") == ".gopclntab")
+        .and_then(|sh| {
+            let start = sh.sh_offset as usize;
+            let end = start.saturating_add(sh.sh_size as usize);
+            let section_data = data.get(start..end)?;
+            Some((start as u64, section_data))
+        })
+    else {
+        return Vec::new();
+    };
+
+    let Some(pclntab) = garble::Pclntab::parse(pclntab_data, 0) else {
+        return Vec::new();
+    };
+
+    pclntab
+        .extract_custom_func_names(min_length)
+        .into_iter()
+        .enumerate()
+        .map(|(i, func)| ExtractedString {
+            value: func.name.clone(),
+            data_offset: pclntab_offset + i as u64,
+            section: Some(".gopclntab".to_string()),
+            method: StringMethod::PclntabSymbol,
+            kind: StringKind::FuncName,
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Find a named section in a Mach-O binary, returning (file_offset, data).
+fn find_macho_section<'a>(
+    macho: &MachO<'_>,
+    name: &str,
+    data: &'a [u8],
+) -> Option<(u64, &'a [u8])> {
+    for seg in &macho.segments {
+        for (sect, _) in seg.sections().unwrap_or_default() {
+            if sect.name().unwrap_or("") == name {
+                let offset = sect.offset as usize;
+                let size = sect.size as usize;
+                let section_data = data.get(offset..offset + size)?;
+                return Some((offset as u64, section_data));
+            }
+        }
+    }
+    None
+}
+
 /// Run XOR scanning and extend `strings` with any decoded results.
 fn apply_xor_scan(
     strings: &mut Vec<ExtractedString>,
@@ -668,7 +763,8 @@ fn method_priority(m: StringMethod) -> u8 {
         | StringMethod::CodeSignature
         | StringMethod::Utf16LeDecode
         | StringMethod::Utf16BeDecode
-        | StringMethod::ScriptDecode => 2,
+        | StringMethod::ScriptDecode
+        | StringMethod::PclntabSymbol => 2,
 
         // Medium priority: heuristics
         StringMethod::Heuristic => 1,
@@ -1030,6 +1126,9 @@ fn extract_from_object(
                         }
                     }
                 }
+
+                // Extract custom function names from gopclntab
+                strings.extend(extract_pclntab_func_names_macho(macho, data, min_length));
             } else if binary::macho_is_rust(macho) {
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_macho(macho, data));
@@ -1075,6 +1174,7 @@ fn extract_from_object(
                         is_go_binary = true;
                         let extractor = GoStringExtractor::new(min_length);
                         strings.extend(extractor.extract_macho(&macho, data));
+                        strings.extend(extract_pclntab_func_names_macho(&macho, data, min_length));
                     } else if binary::macho_is_rust(&macho) {
                         is_rust = true;
                         let extractor = RustStringExtractor::new(min_length);
@@ -1138,6 +1238,7 @@ fn extract_from_object(
                 is_go_binary = true;
                 let extractor = GoStringExtractor::new(min_length);
                 strings.extend(extractor.extract_elf(elf, scan_data));
+                strings.extend(extract_pclntab_func_names_elf(elf, scan_data, min_length));
             } else if has_rust {
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_elf(elf, scan_data));
@@ -1486,3 +1587,5 @@ fn get_r2_strings(opts: &ExtractOptions) -> Option<Vec<ExtractedString>> {
     }
     None
 }
+
+

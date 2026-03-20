@@ -198,6 +198,8 @@ pub enum StringMethod {
     GarbleEmulated,
     /// Found via script deobfuscation (decoded payload from obfuscated Python/JS/PHP/PowerShell)
     ScriptDecode,
+    /// Found via Go pclntab (program counter line table) symbol extraction
+    PclntabSymbol,
 }
 
 /// Semantic kind of the extracted string.

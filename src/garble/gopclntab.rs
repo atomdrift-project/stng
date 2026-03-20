@@ -235,40 +235,49 @@ impl Pclntab {
 
     /// Parse Go 1.18+ format.
     fn parse_go118(data: &[u8], _section_va: u64, ptr_size: u8, version: GoVersion) -> Option<Self> {
-        // Header layout for Go 1.18+:
-        // [0:4]   magic
-        // [4:6]   zeros
-        // [6]     quantum
-        // [7]     ptrsize
-        // [8:16]  nfunc (uint64 always, regardless of ptrsize)
-        // [16:24] nfiles
-        // [24:32] textStart (relative to pclntab start in 1.18, absolute in 1.20)
-        // [32:40] funcnameOffset
-        // [40:48] cuOffset
-        // [48:56] filetabOffset
-        // [56:64] pctabOffset
-        // [64:72] pclnOffset
-        // [72:80] functab offset
+        // Header layout for Go 1.18+ (pcHeader struct):
+        // [0:4]   magic (uint32)
+        // [4:5]   pad1 (uint8)
+        // [5:6]   pad2 (uint8)
+        // [6]     quantum/minLC (uint8)
+        // [7]     ptrSize (uint8)
+        // [8:8+P] nfunc (int, P bytes where P=ptrSize)
+        // [8+P:8+2P] nfiles (uint)
+        // [8+2P:8+3P] textStart (uintptr)
+        // [8+3P:8+4P] funcnameOffset (uintptr)
+        // [8+4P:8+5P] cuOffset (uintptr)
+        // [8+5P:8+6P] filetabOffset (uintptr)
+        // [8+6P:8+7P] pctabOffset (uintptr)
+        // [8+7P:8+8P] pclnOffset (uintptr)
+        //
+        // The functab immediately follows the header (no offset field for it).
+        // Header size = 8 + 8*ptrSize (72 for 64-bit, 40 for 32-bit).
 
-        if data.len() < 80 {
+        let header_size = 8 + 8 * ptr_size as usize;
+        if data.len() < header_size {
             return None;
         }
 
-        let nfunc = u64::from_le_bytes([
-            data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
-        ]);
+        // All header fields after the fixed 8-byte prefix use native pointer size.
+        // For simplicity and because Go 1.18+ always stores nfunc/nfiles as
+        // ptr-sized values, use read_uint for all of them.
+        let nfunc = read_uint(data, 8, ptr_size)?;
 
-        let text_start = u64::from_le_bytes([
-            data[24], data[25], data[26], data[27], data[28], data[29], data[30], data[31],
-        ]);
+        let text_start = read_uint(data, 8 + 2 * ptr_size as usize, ptr_size)?;
 
-        let funcname_off = u64::from_le_bytes([
-            data[32], data[33], data[34], data[35], data[36], data[37], data[38], data[39],
-        ]) as usize;
+        let funcname_off = read_uint(data, 8 + 3 * ptr_size as usize, ptr_size)? as usize;
 
-        let functab_off = u64::from_le_bytes([
-            data[72], data[73], data[74], data[75], data[76], data[77], data[78], data[79],
-        ]) as usize;
+        // In Go 1.18-1.19, the functab is right after the header.
+        // In Go 1.20+, the functab is at pclnOffset (the last header field).
+        // The pclnOffset points to where both the functab entries AND the
+        // _func data are stored. func_off values in functab entries are
+        // relative to pclnOffset.
+        let pcln_off = read_uint(data, 8 + 7 * ptr_size as usize, ptr_size)? as usize;
+
+        let functab_off = match version {
+            GoVersion::Go118 => header_size, // functab right after header
+            _ => pcln_off,                   // Go 1.20+: functab at pclnOffset
+        };
 
         let mut functions = Vec::new();
         let mut by_name = HashMap::new();
@@ -290,7 +299,7 @@ impl Pclntab {
                 data[entry_off + 3],
             ]);
 
-            let func_off = u32::from_le_bytes([
+            let func_off_raw = u32::from_le_bytes([
                 data[entry_off + 4],
                 data[entry_off + 5],
                 data[entry_off + 6],
@@ -299,10 +308,17 @@ impl Pclntab {
 
             let entry_pc = text_start.wrapping_add(pc_off as u64);
 
+            // In Go 1.20+, func_off is relative to pclnOffset (functab_off).
+            // In Go 1.18, func_off is an absolute offset within pclntab.
+            let func_off = match version {
+                GoVersion::Go118 => func_off_raw,
+                _ => functab_off + func_off_raw,
+            };
+
             // Read function data
             // Function data layout in 1.18+:
             // [0:4] entryoff (uint32, relative to textStart)
-            // [4:8] nameoff (uint32, offset into funcname table)
+            // [4:8] nameoff (int32, offset into funcname table)
 
             if func_off + 8 > data.len() {
                 continue;
@@ -358,6 +374,149 @@ impl Pclntab {
             .filter(|f| f.name.contains(pattern))
             .collect()
     }
+
+    /// Extract non-standard-library function names as strings.
+    ///
+    /// Returns function names that don't belong to the Go standard library,
+    /// common runtime packages, or well-known third-party libraries. These
+    /// custom function names are valuable for malware analysis as they reveal
+    /// the binary's internal module structure and capabilities.
+    pub fn extract_custom_func_names(&self, min_length: usize) -> Vec<&FuncEntry> {
+        self.functions
+            .iter()
+            .filter(|f| {
+                let name = &f.name;
+                if name.len() < min_length {
+                    return false;
+                }
+                // Skip Go standard library and runtime
+                if is_stdlib_func(name) {
+                    return false;
+                }
+                // Skip garble-obfuscated names (random hex-like strings)
+                if looks_garbled(name) {
+                    return false;
+                }
+                true
+            })
+            .collect()
+    }
+}
+
+/// Check if a function name belongs to the Go standard library or runtime.
+fn is_stdlib_func(name: &str) -> bool {
+    // Go runtime and internal packages
+    let stdlib_prefixes = [
+        "runtime.",
+        "runtime/",
+        "internal/",
+        "type:.",
+        "type:..func",
+        "go:",
+        "go.",
+        // Standard library packages
+        "bufio.",
+        "bytes.",
+        "compress/",
+        "container/",
+        "context.",
+        "crypto.",
+        "crypto/",
+        "database/",
+        "debug/",
+        "embed.",
+        "encoding.",
+        "encoding/",
+        "errors.",
+        "expvar.",
+        "flag.",
+        "fmt.",
+        "go/",
+        "hash.",
+        "hash/",
+        "html.",
+        "html/",
+        "image.",
+        "image/",
+        "index/",
+        "io.",
+        "io/",
+        "log.",
+        "log/",
+        "math.",
+        "math/",
+        "mime.",
+        "mime/",
+        "net.",
+        "net/",
+        "os.",
+        "os/",
+        "path.",
+        "path/",
+        "plugin.",
+        "reflect.",
+        "regexp.",
+        "regexp/",
+        "slices.",
+        "sort.",
+        "strconv.",
+        "strings.",
+        "sync.",
+        "sync/",
+        "syscall.",
+        "syscall/",
+        "testing.",
+        "testing/",
+        "text/",
+        "time.",
+        "time/",
+        "unicode.",
+        "unicode/",
+        "unsafe.",
+        "vendor/",
+        "maps.",
+        "iter.",
+        "cmp.",
+        "unique.",
+        // Linker-generated
+        "type:.eq.",
+        "type:.hash.",
+        // Well-known third-party (too common to be interesting)
+        "golang.org/x/",
+    ];
+    for prefix in &stdlib_prefixes {
+        if name.starts_with(prefix) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a function name looks like it was garble-obfuscated.
+///
+/// Garble replaces meaningful names with random-looking identifiers.
+fn looks_garbled(name: &str) -> bool {
+    // Get the last component after the last '.'
+    let last_part = name.rsplit('.').next().unwrap_or(name);
+    // Skip method receivers like "(*Foo).Bar"
+    let check = if let Some(stripped) = last_part.strip_prefix("(*") {
+        stripped.split(')').next().unwrap_or(last_part)
+    } else {
+        last_part
+    };
+
+    if check.is_empty() || check.len() < 4 {
+        return false;
+    }
+
+    // Garble names are typically single-case alphanumeric with no meaningful patterns.
+    // Real function names have mixed case, underscores, or recognizable words.
+    let all_lower = check.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    let all_upper = check.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+    let has_vowel = check.chars().any(|c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'A' | 'E' | 'I' | 'O' | 'U'));
+
+    // Single-case with no vowels is very likely garbled
+    (all_lower || all_upper) && !has_vowel
 }
 
 /// Read a variable-size unsigned integer (4 or 8 bytes).
