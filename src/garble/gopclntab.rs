@@ -38,10 +38,13 @@ pub struct Pclntab {
     pub ptr_size: u8,
     /// Text section start address
     pub text_start: u64,
-    /// All functions found
+    /// All functions found via functab entries
     pub functions: Vec<FuncEntry>,
     /// Map from function name to entry
     pub by_name: HashMap<String, FuncEntry>,
+    /// All function names from the funcname table (includes inlined/wrapper functions
+    /// not referenced by the functab). Empty for Go < 1.18.
+    pub all_func_names: Vec<String>,
 }
 
 /// Detected Go version from pclntab magic.
@@ -149,6 +152,7 @@ impl Pclntab {
             go_version: GoVersion::Unknown,
             ptr_size,
             text_start: 0,
+            all_func_names: Vec::new(),
             functions,
             by_name,
         })
@@ -228,6 +232,7 @@ impl Pclntab {
             go_version: GoVersion::Go116,
             ptr_size,
             text_start: 0, // Not available in this format
+            all_func_names: Vec::new(),
             functions,
             by_name,
         })
@@ -266,6 +271,7 @@ impl Pclntab {
         let text_start = read_uint(data, 8 + 2 * ptr_size as usize, ptr_size)?;
 
         let funcname_off = read_uint(data, 8 + 3 * ptr_size as usize, ptr_size)? as usize;
+        let cu_off = read_uint(data, 8 + 4 * ptr_size as usize, ptr_size)? as usize;
 
         // In Go 1.18-1.19, the functab is right after the header.
         // In Go 1.20+, the functab is at pclnOffset (the last header field).
@@ -343,10 +349,17 @@ impl Pclntab {
             functions.push(entry);
         }
 
+        // Scan the funcname table for ALL function names (including inlined
+        // functions, compiler-generated wrappers, and closures that don't have
+        // functab entries). The funcname table runs from funcname_off to cu_off
+        // and contains null-terminated strings.
+        let all_func_names = scan_funcname_table(data, funcname_off, cu_off);
+
         Some(Self {
             go_version: version,
             ptr_size,
             text_start,
+            all_func_names,
             functions,
             by_name,
         })
@@ -377,28 +390,36 @@ impl Pclntab {
 
     /// Extract non-standard-library function names as strings.
     ///
+    /// Uses the full funcname table when available (Go 1.18+), which includes
+    /// inlined functions, closures, and compiler-generated wrappers that don't
+    /// have functab entries. Falls back to functab-derived names for older formats.
+    ///
     /// Returns function names that don't belong to the Go standard library,
     /// common runtime packages, or well-known third-party libraries. These
     /// custom function names are valuable for malware analysis as they reveal
     /// the binary's internal module structure and capabilities.
-    pub fn extract_custom_func_names(&self, min_length: usize) -> Vec<&FuncEntry> {
-        self.functions
-            .iter()
-            .filter(|f| {
-                let name = &f.name;
+    pub fn extract_custom_func_names(&self, min_length: usize) -> Vec<String> {
+        // Prefer the full funcname table scan (covers inlined/wrapper functions)
+        let source: Box<dyn Iterator<Item = &str>> = if !self.all_func_names.is_empty() {
+            Box::new(self.all_func_names.iter().map(String::as_str))
+        } else {
+            Box::new(self.functions.iter().map(|f| f.name.as_str()))
+        };
+
+        source
+            .filter(|name| {
                 if name.len() < min_length {
                     return false;
                 }
-                // Skip Go standard library and runtime
                 if is_stdlib_func(name) {
                     return false;
                 }
-                // Skip garble-obfuscated names (random hex-like strings)
                 if looks_garbled(name) {
                     return false;
                 }
                 true
             })
+            .map(String::from)
             .collect()
     }
 }
@@ -517,6 +538,44 @@ fn looks_garbled(name: &str) -> bool {
 
     // Single-case with no vowels is very likely garbled
     (all_lower || all_upper) && !has_vowel
+}
+
+/// Scan the funcname table for all null-terminated function names.
+///
+/// The funcname table in Go 1.18+ pclntab contains null-terminated strings
+/// for ALL functions, including those not in the functab (inlined functions,
+/// compiler-generated wrappers, closures). This gives complete coverage.
+fn scan_funcname_table(data: &[u8], start: usize, end: usize) -> Vec<String> {
+    let end = end.min(data.len());
+    if start >= end {
+        return Vec::new();
+    }
+
+    let table = &data[start..end];
+    let mut names = Vec::new();
+    let mut i = 0;
+
+    while i < table.len() {
+        // Find end of null-terminated string
+        let str_end = match table[i..].iter().position(|&b| b == 0) {
+            Some(pos) => i + pos,
+            None => break,
+        };
+
+        if str_end > i {
+            if let Ok(name) = std::str::from_utf8(&table[i..str_end]) {
+                // Only keep names that look like Go function names
+                // (contain a dot separating package from function)
+                if name.len() >= 4 && name.contains('.') {
+                    names.push(name.to_string());
+                }
+            }
+        }
+
+        i = str_end + 1;
+    }
+
+    names
 }
 
 /// Read a variable-size unsigned integer (4 or 8 bytes).

@@ -195,9 +195,8 @@ fn extract_pclntab_func_names_macho(
         .extract_custom_func_names(min_length)
         .into_iter()
         .enumerate()
-        .map(|(i, func)| ExtractedString {
-            value: func.name.clone(),
-            // Use pclntab_offset + index to ensure unique offsets for deduplication
+        .map(|(i, name)| ExtractedString {
+            value: name,
             data_offset: pclntab_offset + i as u64,
             section: Some("__gopclntab".to_string()),
             method: StringMethod::PclntabSymbol,
@@ -236,8 +235,8 @@ fn extract_pclntab_func_names_elf(
         .extract_custom_func_names(min_length)
         .into_iter()
         .enumerate()
-        .map(|(i, func)| ExtractedString {
-            value: func.name.clone(),
+        .map(|(i, name)| ExtractedString {
+            value: name,
             data_offset: pclntab_offset + i as u64,
             section: Some(".gopclntab".to_string()),
             method: StringMethod::PclntabSymbol,

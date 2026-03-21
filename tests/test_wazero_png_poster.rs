@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-const SAMPLE_PATH: &str = "testdata/malware/wazero_png_poster/sample.macho";
+const SAMPLE_PATH: &str = "/Users/t/data/known-bad/dissect-malware/macho/2026.wazero-png-poster/b3ff86f6fc849693a84e525b4839a58111c530c60fb117739a23dc7a7441f56c.macho";
 
 fn extract_strings() -> Vec<stng::ExtractedString> {
     if !std::path::Path::new(SAMPLE_PATH).exists() {
