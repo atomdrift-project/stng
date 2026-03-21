@@ -76,7 +76,7 @@ pub fn extract_garble_rodata_strings(
                     if let Some((s, score)) =
                         try_decode_pair(blob_a, blob_b, op, min_length, MIN_SCORE_THRESHOLD, &mut buf)
                     {
-                        if best.as_ref().map_or(true, |(_, bs)| score > *bs) {
+                        if best.as_ref().is_none_or(|(_, bs)| score > *bs) {
                             best = Some((s, score));
                         }
                     }
@@ -296,7 +296,7 @@ fn is_meaningful_decoded_string(s: &str) -> bool {
     // Detects "AQAQA", "JQJQJ", "OQOQO", etc.
     if len >= 5 {
         for period in 1..=3 {
-            if len % period != 0 && (len - 1) % period != 0 {
+            if !len.is_multiple_of(period) && !(len - 1).is_multiple_of(period) {
                 continue;
             }
             let repeats = bytes.windows(period).skip(1).all(|w| w == &bytes[..period]);

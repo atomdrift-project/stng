@@ -219,12 +219,11 @@ fn test_full_pipeline_deduplicates_by_offset() {
 
     let mut seen_offsets = std::collections::HashMap::new();
     for s in &strings {
-        if let Some(prev_value) = seen_offsets.insert(s.data_offset, &s.value) {
-            panic!(
-                "Duplicate offset {} found: '{}' and '{}' — deduplication failed",
-                s.data_offset, prev_value, s.value
-            );
-        }
+        assert!(
+            seen_offsets.insert(s.data_offset, &s.value).is_none(),
+            "Duplicate offset {} found for '{}' — deduplication failed",
+            s.data_offset, s.value
+        );
     }
 }
 
@@ -243,11 +242,10 @@ fn test_full_pipeline_pe_deduplicates_by_offset() {
 
     let mut seen_offsets = std::collections::HashMap::new();
     for s in &strings {
-        if let Some(prev_value) = seen_offsets.insert(s.data_offset, &s.value) {
-            panic!(
-                "Duplicate offset {} found: '{}' and '{}' — deduplication failed",
-                s.data_offset, prev_value, s.value
-            );
-        }
+        assert!(
+            seen_offsets.insert(s.data_offset, &s.value).is_none(),
+            "Duplicate offset {} found for '{}' — deduplication failed",
+            s.data_offset, s.value
+        );
     }
 }

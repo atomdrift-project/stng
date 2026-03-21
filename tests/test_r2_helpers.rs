@@ -148,17 +148,9 @@ fn test_extract_strings_caching() {
 
     // All should return the same result (if r2 available)
     // Just verify consistency
-    match (result1, result2, result3) {
-        (Some(s1), Some(s2), Some(s3)) => {
-            assert_eq!(s1.len(), s2.len(), "Cached result should match");
-            assert_eq!(s1.len(), s3.len(), "Non-cached result should match");
-        }
-        (None, None, None) => {
-            // All None is fine (r2 not available)
-        }
-        _ => {
-            // Mixed results is unexpected but possible if cache is flaky
-        }
+    if let (Some(s1), Some(s2), Some(s3)) = (result1, result2, result3) {
+        assert_eq!(s1.len(), s2.len(), "Cached result should match");
+        assert_eq!(s1.len(), s3.len(), "Non-cached result should match");
     }
 
     // Clean up cache
@@ -197,10 +189,7 @@ fn test_extract_function_metadata_small_file() {
         // Verify structure if functions were found
         for (name, meta) in metadata {
             assert!(!name.is_empty(), "Function name should not be empty");
-            assert!(
-                meta.size > 0 || meta.size == 0,
-                "Size should be non-negative"
-            );
+            let _ = meta.size; // size is u64, always non-negative
         }
     }
 
@@ -212,7 +201,7 @@ fn test_extract_function_metadata_small_file() {
 fn test_is_available_no_panic() {
     let available = stng::r2::is_available();
     // Just verify it returns a boolean without panicking
-    assert!(available == true || available == false);
+    let _ = available; // just verify it returns without panicking
 }
 
 /// Test verify_xor_keys with empty candidates

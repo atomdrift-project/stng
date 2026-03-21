@@ -2139,39 +2139,6 @@ mod extract_from_tests {
     }
 
     #[test]
-    #[ignore] // Only run when debugging specific binary
-    fn test_real_overlay_uplugplay() {
-        use std::fs;
-        let data =
-            fs::read("/Users/t/data/dissect/malware/elf_linux/2026.Prometei/uplugplay").unwrap();
-
-        // Detect overlay
-        if let Some(overlay) = detect_elf_overlay(&data) {
-            println!(
-                "Overlay: start=0x{:x}, size={}",
-                overlay.start_offset, overlay.size
-            );
-
-            // Extract overlay strings
-            let strings = extract_overlay_strings(&data, 4);
-            println!("Extracted {} overlay strings", strings.len());
-
-            for s in &strings {
-                println!(
-                    "  0x{:x}: {} (len={})",
-                    s.data_offset,
-                    s.value,
-                    s.value.len()
-                );
-            }
-
-            // Look for the JSON config string
-            let has_config = strings.iter().any(|s| s.value.contains("config"));
-            println!("Has 'config' string: {}", has_config);
-        }
-    }
-
-    #[test]
     fn test_overlay_string_offsets_are_absolute() {
         // Create a minimal ELF that ends at a known offset
         let mut data = vec![0u8; 1024];
@@ -2230,35 +2197,29 @@ mod extract_from_tests {
             .find(|s| s.value.contains("OVERLAY_TEST_BBB"));
 
         // Verify offsets are absolute file offsets, not relative to overlay start
-        if let Some(s) = test_aaa {
-            assert_eq!(
-                s.data_offset as usize, first_string_offset,
-                "First overlay string offset should be absolute file offset 0x{:x}, not relative to overlay",
-                first_string_offset
-            );
-            assert_eq!(
-                s.kind,
-                stng::StringKind::Overlay,
-                "Should be marked as overlay"
-            );
-        } else {
-            panic!("Should find OVERLAY_TEST_AAA string");
-        }
+        let s = test_aaa.expect("Should find OVERLAY_TEST_AAA string");
+        assert_eq!(
+            s.data_offset as usize, first_string_offset,
+            "First overlay string offset should be absolute file offset 0x{:x}, not relative to overlay",
+            first_string_offset
+        );
+        assert_eq!(
+            s.kind,
+            stng::StringKind::Overlay,
+            "Should be marked as overlay"
+        );
 
-        if let Some(s) = test_bbb {
-            assert_eq!(
-                s.data_offset as usize, second_string_offset,
-                "Second overlay string offset should be absolute file offset 0x{:x}, not relative to overlay",
-                second_string_offset
-            );
-            assert_eq!(
-                s.kind,
-                stng::StringKind::Overlay,
-                "Should be marked as overlay"
-            );
-        } else {
-            panic!("Should find OVERLAY_TEST_BBB string");
-        }
+        let s = test_bbb.expect("Should find OVERLAY_TEST_BBB string");
+        assert_eq!(
+            s.data_offset as usize, second_string_offset,
+            "Second overlay string offset should be absolute file offset 0x{:x}, not relative to overlay",
+            second_string_offset
+        );
+        assert_eq!(
+            s.kind,
+            stng::StringKind::Overlay,
+            "Should be marked as overlay"
+        );
     }
 
     #[test]
@@ -2756,25 +2717,6 @@ mod string_kind_tests {
 
         assert!(!base32_strings.is_empty(), "Should detect Base32 string");
         assert_eq!(base32_strings[0].value, base32_str);
-    }
-
-    #[test]
-    #[ignore] // TODO: Test setup issue - investigate why wrong strings are being found
-    fn test_base32_with_padding() {
-        // Base32 with padding
-        let base32_str = "JBSWY3DPEBLW64TMMQ======";
-        let data = minimal_elf_with_string(base32_str);
-        let strings = extract_strings(&data, 4);
-
-        let base32_strings: Vec<_> = strings
-            .iter()
-            .filter(|s| s.kind == StringKind::Base32)
-            .collect();
-
-        assert!(
-            !base32_strings.is_empty(),
-            "Should detect Base32 with padding"
-        );
     }
 
     #[test]

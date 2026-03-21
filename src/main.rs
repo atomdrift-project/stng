@@ -1406,8 +1406,8 @@ mod tests {
         assert_eq!(result[5].1, "F");
 
         // Check offsets increment by 1 each time
-        for i in 0..6 {
-            assert_eq!(result[i].0, i as u64);
+        for (i, item) in result.iter().enumerate().take(6) {
+            assert_eq!(item.0, i as u64);
         }
     }
 

@@ -288,21 +288,27 @@ fn decode_base64_fuzzy(input: &str) -> Option<FuzzyBase64Result> {
 
     // Try standard base64 first
     if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(input) {
-        if let Ok(decoded_str) = String::from_utf8(decoded_bytes.clone()) {
-            // Check if decoded string looks meaningful
-            if is_meaningful_decoded(&decoded_str) {
+        match String::from_utf8(decoded_bytes) {
+            Ok(decoded_str) if is_meaningful_decoded(&decoded_str) => {
                 return Some(FuzzyBase64Result {
                     decoded: decoded_str,
                 });
             }
-        }
-
-        // Try UTF-8 lossy
-        let decoded_str = String::from_utf8_lossy(&decoded_bytes).to_string();
-        if is_meaningful_decoded(&decoded_str) {
-            return Some(FuzzyBase64Result {
-                decoded: decoded_str,
-            });
+            Ok(decoded_str) => {
+                // Valid UTF-8 but not meaningful; try lossy path with the same bytes
+                // (no-op here since it's already valid UTF-8, but fall through)
+                let _ = decoded_str;
+            }
+            Err(err) => {
+                // Not valid UTF-8; recover bytes and try lossy decoding
+                let decoded_bytes = err.into_bytes();
+                let decoded_str = String::from_utf8_lossy(&decoded_bytes).into_owned();
+                if is_meaningful_decoded(&decoded_str) {
+                    return Some(FuzzyBase64Result {
+                        decoded: decoded_str,
+                    });
+                }
+            }
         }
     }
 
@@ -314,7 +320,7 @@ fn decode_base64_fuzzy(input: &str) -> Option<FuzzyBase64Result> {
         }
 
         if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(&padded) {
-            let decoded_str = String::from_utf8_lossy(&decoded_bytes).to_string();
+            let decoded_str = String::from_utf8_lossy(&decoded_bytes).into_owned();
             if is_meaningful_decoded(&decoded_str) {
                 return Some(FuzzyBase64Result {
                     decoded: decoded_str,

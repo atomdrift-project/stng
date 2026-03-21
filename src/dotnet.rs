@@ -333,9 +333,6 @@ fn read_compressed_uint(data: &[u8]) -> Option<(usize, usize)> {
     }
 }
 
-/// Add a new StringMethod variant for .NET metadata.
-/// Note: Using Structure method for now to avoid breaking changes.
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -364,7 +364,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                             let key_preview = if key.len() > 8 {
                                 format!("{}...", String::from_utf8_lossy(&key[..8]))
                             } else {
-                                String::from_utf8_lossy(key).to_string()
+                                String::from_utf8_lossy(key).into_owned()
                             };
 
                             // Clean up URLs by removing trailing garbage
@@ -478,7 +478,7 @@ fn extract_xor_strings_from_hints(
                         let key_preview = if key.len() > 8 {
                             format!("{}...", String::from_utf8_lossy(&key[..8]))
                         } else {
-                            String::from_utf8_lossy(key).to_string()
+                            String::from_utf8_lossy(key).into_owned()
                         };
 
                         results.push(ExtractedString {
@@ -586,7 +586,7 @@ fn extract_custom_xor_strings_pattern_based_simple(
     let key_preview = if key.len() > 8 {
         format!("{}...", String::from_utf8_lossy(&key[..8]))
     } else {
-        String::from_utf8_lossy(key).to_string()
+        String::from_utf8_lossy(key).into_owned()
     };
 
     // Track number of valid strings found across all parallel threads for early termination

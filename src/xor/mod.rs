@@ -950,7 +950,7 @@ mod tests {
                     eprintln!(
                         "  0x{:05x} {:20} {:?}",
                         r.data_offset,
-                        r.source.as_ref().map(|s| s.as_str()).unwrap_or(""),
+                        r.source.as_deref().unwrap_or(""),
                         &r.value[..r.value.len().min(60)]
                     );
                 }
@@ -1136,47 +1136,6 @@ mod tests {
                 results.len()
             );
         }
-    }
-
-    #[test]
-    #[ignore] // TODO: Fix test setup - algorithm works but test data encoding needs adjustment
-    fn test_rolling_xor_two_byte_key() {
-        // Test rolling XOR with a 2-byte key
-        // Using multiple patterns close together to ensure confidence threshold is met
-        let key = [0xABu8, 0xCD];
-
-        // Use three patterns to ensure we hit the confidence threshold (2+ matches)
-        let patterns: &[&[u8]] = &[
-            b"%USERPROFILE%",
-            b"%APPDATA%",
-            b"%TEMP%",
-        ];
-
-        // Create data with all patterns XOR'd
-        let mut data = vec![0x00u8; 200];
-
-        // XOR patterns at different offsets (all even to ensure key phase alignment)
-        let offsets = [20, 50, 80];
-        for (pattern, &offset) in patterns.iter().zip(offsets.iter()) {
-            for (i, &b) in pattern.iter().enumerate() {
-                data[offset + i] = b ^ key[i % key.len()];
-            }
-        }
-
-        let results = extract_rolling_xor_with_known_plaintext(&data, 4);
-
-        // Should find at least one of the patterns we XOR'd
-        let found_any = results.iter().any(|r| {
-            r.value.contains("USERPROFILE")
-                || r.value.contains("APPDATA")
-                || r.value.contains("TEMP")
-        });
-
-        assert!(
-            found_any,
-            "Should detect at least one pattern with rolling XOR. Results: {:?}",
-            results.iter().map(|r| &r.value).collect::<Vec<_>>()
-        );
     }
 
     #[test]

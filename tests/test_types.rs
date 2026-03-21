@@ -2,7 +2,6 @@
 //!
 //! Tests core type definitions, methods, serialization, and edge cases.
 
-use serde_json;
 use stng::{
     ExtractedString, FunctionMetadata, OverlayInfo, Severity, StringKind, StringMethod,
     StringStruct,
@@ -415,7 +414,7 @@ fn test_overlay_info_clone() {
         size: 0x8000,
     };
 
-    let cloned = overlay.clone();
+    let cloned = overlay;
     assert_eq!(overlay.start_offset, cloned.start_offset);
     assert_eq!(overlay.size, cloned.size);
 }

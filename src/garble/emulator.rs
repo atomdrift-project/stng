@@ -26,18 +26,16 @@ fn memory_size_bytes(size: MemorySize) -> usize {
     match size {
         MemorySize::UInt8 | MemorySize::Int8 => 1,
         MemorySize::UInt16 | MemorySize::Int16 => 2,
-        MemorySize::UInt32 | MemorySize::Int32 => 4,
-        MemorySize::UInt64 | MemorySize::Int64 => 8,
-        MemorySize::UInt128 | MemorySize::Int128 => 16,
-        MemorySize::Float32 => 4,
-        MemorySize::Float64 => 8,
-        MemorySize::Float128 => 16,
-        MemorySize::Packed128_Float32 | MemorySize::Packed128_Float64 => 16,
-        MemorySize::Packed128_UInt8 | MemorySize::Packed128_Int8 => 16,
-        MemorySize::Packed128_UInt16 | MemorySize::Packed128_Int16 => 16,
-        MemorySize::Packed128_UInt32 | MemorySize::Packed128_Int32 => 16,
-        MemorySize::Packed128_UInt64 | MemorySize::Packed128_Int64 => 16,
-        _ => 8, // Default to 8 bytes for unknown sizes
+        MemorySize::UInt32 | MemorySize::Int32 | MemorySize::Float32 => 4,
+        MemorySize::UInt128 | MemorySize::Int128
+        | MemorySize::Float128
+        | MemorySize::Packed128_Float32 | MemorySize::Packed128_Float64
+        | MemorySize::Packed128_UInt8 | MemorySize::Packed128_Int8
+        | MemorySize::Packed128_UInt16 | MemorySize::Packed128_Int16
+        | MemorySize::Packed128_UInt32 | MemorySize::Packed128_Int32
+        | MemorySize::Packed128_UInt64 | MemorySize::Packed128_Int64 => 16,
+        // UInt64, Int64, Float64, and any unknown sizes default to 8 bytes
+        _ => 8,
     }
 }
 
@@ -60,16 +58,12 @@ fn register_size_bytes(reg: Register) -> usize {
         | Register::ESP | Register::EBP | Register::ESI | Register::EDI
         | Register::R8D | Register::R9D | Register::R10D | Register::R11D
         | Register::R12D | Register::R13D | Register::R14D | Register::R15D => 4,
-        // 64-bit registers
-        Register::RAX | Register::RCX | Register::RDX | Register::RBX
-        | Register::RSP | Register::RBP | Register::RSI | Register::RDI
-        | Register::R8 | Register::R9 | Register::R10 | Register::R11
-        | Register::R12 | Register::R13 | Register::R14 | Register::R15 => 8,
         // XMM registers (128-bit)
         Register::XMM0 | Register::XMM1 | Register::XMM2 | Register::XMM3
         | Register::XMM4 | Register::XMM5 | Register::XMM6 | Register::XMM7
         | Register::XMM8 | Register::XMM9 | Register::XMM10 | Register::XMM11
         | Register::XMM12 | Register::XMM13 | Register::XMM14 | Register::XMM15 => 16,
+        // 64-bit registers and default
         _ => 8,
     }
 }
@@ -95,7 +89,7 @@ pub enum EmulationResult {
 }
 
 /// CPU state for x86-64 emulation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CpuState {
     /// General purpose registers (RAX=0, RCX=1, RDX=2, RBX=3, RSP=4, RBP=5, RSI=6, RDI=7, R8-R15=8-15)
     pub regs: [u64; 16],
@@ -105,17 +99,6 @@ pub struct CpuState {
     pub rflags: u64,
     /// XMM registers (16 x 128-bit)
     pub xmm: [[u8; 16]; 16],
-}
-
-impl Default for CpuState {
-    fn default() -> Self {
-        Self {
-            regs: [0; 16],
-            rip: 0,
-            rflags: 0,
-            xmm: [[0; 16]; 16],
-        }
-    }
 }
 
 impl CpuState {
@@ -245,13 +228,10 @@ impl Memory {
             }
         }
 
-        // Binary search for region
-        for (_idx, region) in self.regions.iter_mut().enumerate() {
-            if addr >= region.start && addr < region.start + region.data.len() as u64 {
-                return Some(region);
-            }
-        }
-        None
+        // Linear search for region
+        self.regions.iter_mut().find(|region| {
+            addr >= region.start && addr < region.start + region.data.len() as u64
+        })
     }
 
     /// Read bytes from memory.
@@ -1244,8 +1224,8 @@ impl Emulator {
             arr
         };
 
-        for i in 0..16 {
-            self.cpu.xmm[dst_idx][i] ^= src_data[i];
+        for (dst, src) in self.cpu.xmm[dst_idx].iter_mut().zip(src_data.iter()) {
+            *dst ^= src;
         }
         Ok(())
     }
@@ -1262,15 +1242,16 @@ impl Emulator {
             if dst_idx == src_idx {
                 self.cpu.xmm[dst_idx] = [0; 16];
             } else {
-                for i in 0..16 {
-                    self.cpu.xmm[dst_idx][i] ^= self.cpu.xmm[src_idx][i];
+                let src = self.cpu.xmm[src_idx];
+                for (dst, src) in self.cpu.xmm[dst_idx].iter_mut().zip(src.iter()) {
+                    *dst ^= src;
                 }
             }
         } else {
             let addr = self.calc_mem_addr(instr, 1);
             if let Some(data) = self.mem.read(addr, 16) {
-                for i in 0..16 {
-                    self.cpu.xmm[dst_idx][i] ^= data[i];
+                for (dst, src) in self.cpu.xmm[dst_idx].iter_mut().zip(data.iter()) {
+                    *dst ^= src;
                 }
             }
         }

@@ -1256,7 +1256,7 @@ mod tests {
             make_string("not_base32", StringKind::Const),
         ];
         let results = decode_base32_strings(&inputs);
-        assert!(results.len() >= 1);
+        assert!(!results.is_empty());
         assert_eq!(results[0].value, "Hello World");
         assert_eq!(results[0].method, StringMethod::Base32Decode);
     }

@@ -127,7 +127,7 @@ eval(atob("YWxlcnQoMSk="))
     fn test_deobfuscate_powershell_enc() {
         // "whoami" as UTF-16LE base64
         let payload = "whoami";
-        let utf16: Vec<u8> = payload.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let utf16: Vec<u8> = payload.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&utf16);
         let src = format!("powershell -EncodedCommand {encoded}");
         let results = deobfuscate_script(src.as_bytes());

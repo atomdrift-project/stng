@@ -353,5 +353,5 @@ fn test_base64_no_crash_on_malformed() {
         // Just verify no crash
     }
 
-    assert!(true, "Should handle malformed base64 without crashing");
+    // If we reach here, all cases were handled without crashing
 }

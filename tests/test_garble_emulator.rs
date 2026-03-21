@@ -122,9 +122,7 @@ fn test_func_finder_call_targets() {
     }
 
     let data = std::fs::read(path).unwrap();
-    let Ok(elf) = goblin::elf::Elf::parse(&data) else {
-        panic!("Not a valid ELF");
-    };
+    let elf = goblin::elf::Elf::parse(&data).expect("Not a valid ELF");
 
     // Find .text section
     let mut text_data = &[] as &[u8];
@@ -177,9 +175,7 @@ fn test_garble_fresh_extraction_v2() {
     }
 
     let data = std::fs::read(path).unwrap();
-    let Ok(elf) = goblin::elf::Elf::parse(&data) else {
-        panic!("Not a valid ELF");
-    };
+    let elf = goblin::elf::Elf::parse(&data).expect("Not a valid ELF");
 
     // Find sections
     let mut text_data = &[] as &[u8];

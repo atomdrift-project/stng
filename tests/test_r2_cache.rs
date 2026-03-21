@@ -216,7 +216,7 @@ fn test_cache_special_command_characters() {
     let file_path = temp_path.to_str().unwrap();
 
     // Commands with special characters that need sanitization
-    let commands = vec![
+    let commands = [
         "aaa; aflj",
         "aaa; e scr.color=0",
         "pdf @ entry0",

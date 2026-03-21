@@ -241,7 +241,7 @@ pub(crate) fn auto_detect_xor_key(
     // Build Aho-Corasick automaton for all killer patterns (byte-level, no UTF-8 needed)
     let killer_ac = aho_corasick::AhoCorasick::builder()
         .ascii_case_insensitive(true)
-        .build(&killer_patterns)
+        .build(killer_patterns)
         .ok();
 
     let mut promising_candidates = Vec::new();

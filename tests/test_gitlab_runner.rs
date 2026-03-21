@@ -12,9 +12,7 @@ fn test_gitlab_runner_gopclntab() {
     }
 
     let data = std::fs::read(path).unwrap();
-    let Ok(elf) = goblin::elf::Elf::parse(&data) else {
-        panic!("Failed to parse ELF");
-    };
+    let elf = goblin::elf::Elf::parse(&data).expect("Failed to parse ELF");
 
     // Find .gopclntab section
     for sh in &elf.section_headers {
@@ -61,11 +59,11 @@ fn test_gitlab_runner_gopclntab() {
                     "Expected to find A6tobd9AfDd.*.Decrypt"
                 );
             } else {
-                panic!("Failed to parse gopclntab");
+                unreachable!("Failed to parse gopclntab");
             }
             return;
         }
     }
 
-    panic!("No .gopclntab section found");
+    unreachable!("No .gopclntab section found");
 }

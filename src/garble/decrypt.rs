@@ -324,7 +324,9 @@ fn is_interesting_string(s: &str) -> bool {
     }
 
     // Skip if it's all same character
-    let first = s.chars().next().unwrap();
+    let Some(first) = s.chars().next() else {
+        return false;
+    };
     if s.chars().all(|c| c == first) {
         return false;
     }

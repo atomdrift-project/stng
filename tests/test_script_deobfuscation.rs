@@ -375,7 +375,7 @@ fn test_php_eval_str_rot13() {
 // ============================================================================
 
 fn powershell_encode_command(cmd: &str) -> String {
-    let utf16: Vec<u8> = cmd.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+    let utf16: Vec<u8> = cmd.encode_utf16().flat_map(u16::to_le_bytes).collect();
     base64::engine::general_purpose::STANDARD.encode(&utf16)
 }
 
@@ -573,12 +573,9 @@ fn test_classification_of_decoded_content() {
 fn test_real_world_tahmin_uygulamasi() {
     // Test against the actual malware sample if available
     let path = "/Users/t/data/known-bad/dissect-malware/python/2026.tahmin-uygulamasi/app.py";
-    let data = match std::fs::read(path) {
-        Ok(d) => d,
-        Err(_) => {
-            eprintln!("Skipping real-world test: {path} not found");
-            return;
-        }
+    let Ok(data) = std::fs::read(path) else {
+        eprintln!("Skipping real-world test: {path} not found");
+        return;
     };
 
     let opts = ExtractOptions::new(4);

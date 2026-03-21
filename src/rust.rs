@@ -946,12 +946,9 @@ mod tests {
         elf_data[18] = 0x3e;
         let test_strings = b"test_string\0another_test\0hello_world\0";
         elf_data[512..512 + test_strings.len()].copy_from_slice(test_strings);
-        match goblin::elf::Elf::parse(&elf_data) {
-            Ok(elf) => {
-                let strings = extractor.extract_elf(&elf, &elf_data);
-                assert!(strings.len() < 100);
-            }
-            Err(_) => {}
+        if let Ok(elf) = goblin::elf::Elf::parse(&elf_data) {
+            let strings = extractor.extract_elf(&elf, &elf_data);
+            assert!(strings.len() < 100);
         }
     }
 
@@ -960,12 +957,9 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let mut macho_data = vec![0u8; 4096];
         macho_data[0..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
-        match MachO::parse(&macho_data, 0) {
-            Ok(macho) => {
-                let strings = extractor.extract_macho(&macho, &macho_data);
-                assert!(strings.len() < 10);
-            }
-            Err(_) => {}
+        if let Ok(macho) = MachO::parse(&macho_data, 0) {
+            let strings = extractor.extract_macho(&macho, &macho_data);
+            assert!(strings.len() < 10);
         }
     }
 
@@ -1062,21 +1056,17 @@ mod tests {
     fn test_corrupted_binary_handling() {
         let extractor = RustStringExtractor::new(4);
         let garbage_data = vec![0xAA; 1024];
-        match goblin::elf::Elf::parse(&garbage_data) {
-            Ok(elf) => {
-                let strings = extractor.extract_elf(&elf, &garbage_data);
-                assert!(strings.len() < 500);
-            }
-            Err(_) => {}
+        if let Ok(elf) = goblin::elf::Elf::parse(&garbage_data) {
+            let strings = extractor.extract_elf(&elf, &garbage_data);
+            assert!(strings.len() < 500);
         }
     }
 
     #[test]
     fn test_empty_binary() {
         let extractor = RustStringExtractor::new(4);
-        match goblin::elf::Elf::parse(&[]) {
-            Ok(elf) => assert!(extractor.extract_elf(&elf, &[]).is_empty()),
-            Err(_) => {}
+        if let Ok(elf) = goblin::elf::Elf::parse(&[]) {
+            assert!(extractor.extract_elf(&elf, &[]).is_empty());
         }
     }
 

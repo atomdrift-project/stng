@@ -235,7 +235,7 @@ mod tests {
     fn test_encoded_command() {
         // "Write-Host 'hello'" as UTF-16LE then base64
         let payload = "Write-Host 'hello'";
-        let utf16: Vec<u8> = payload.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let utf16: Vec<u8> = payload.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&utf16);
         let src = format!("powershell -EncodedCommand {encoded}");
         let results = extract_obfuscated_payloads(&src);
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_encoded_command_short_flag() {
         let payload = "whoami";
-        let utf16: Vec<u8> = payload.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let utf16: Vec<u8> = payload.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&utf16);
         let src = format!("powershell.exe -enc {encoded}");
         let results = extract_obfuscated_payloads(&src);
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn test_convert_from_base64_utf16() {
         let payload = "Get-Process";
-        let utf16: Vec<u8> = payload.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let utf16: Vec<u8> = payload.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&utf16);
         let src = format!(r#"$bytes = [Convert]::FromBase64String("{encoded}")"#);
         let results = extract_obfuscated_payloads(&src);

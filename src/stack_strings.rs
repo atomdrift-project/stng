@@ -346,8 +346,8 @@ impl<'a> StackStringExtractor<'a> {
             else if opcode == 0x0F && opcode_start + 2 < self.data.len() {
                 let opcode2 = self.data[opcode_start + 1];
                 match opcode2 {
-                    // MOVUPS xmm, m128 (0F 10 /r) - load 16 bytes from memory into XMM
-                    0x10 => {
+                    // MOVUPS/MOVAPS xmm, m128 - load 16 bytes from memory into XMM
+                    0x10 | 0x28 => {
                         if let Some((instr_len, xmm_bytes)) =
                             self.decode_xmm_load(opcode_start + 2, rex, i)
                         {
@@ -358,27 +358,8 @@ impl<'a> StackStringExtractor<'a> {
                             handled = true;
                         }
                     }
-                    // MOVAPS xmm, m128 (0F 28 /r) - load aligned 16 bytes into XMM
-                    0x28 => {
-                        if let Some((instr_len, xmm_bytes)) =
-                            self.decode_xmm_load(opcode_start + 2, rex, i)
-                        {
-                            let modrm = self.data[opcode_start + 2];
-                            let xmm_reg = ((modrm >> 3) & 7) + if (rex & 4) != 0 { 8 } else { 0 };
-                            self.xmm_regs[xmm_reg as usize] = Some(xmm_bytes);
-                            len = (opcode_start - i) + 2 + instr_len;
-                            handled = true;
-                        }
-                    }
-                    // MOVUPS m128, xmm (0F 11 /r) - store XMM to memory
-                    0x11 => {
-                        if let Some(instr_len) = self.handle_xmm_store(opcode_start + 2, rex, i) {
-                            len = (opcode_start - i) + 2 + instr_len;
-                            handled = true;
-                        }
-                    }
-                    // MOVAPS m128, xmm (0F 29 /r) - store aligned XMM to memory
-                    0x29 => {
+                    // MOVUPS/MOVAPS m128, xmm - store XMM to memory
+                    0x11 | 0x29 => {
                         if let Some(instr_len) = self.handle_xmm_store(opcode_start + 2, rex, i) {
                             len = (opcode_start - i) + 2 + instr_len;
                             handled = true;
@@ -603,16 +584,17 @@ impl<'a> StackStringExtractor<'a> {
 
             for w in writes {
                 if first {
-                    current.value = w.string.clone();
+                    let string_len = w.string.len();
+                    current.value = w.string;
                     current.data_offset = w.instr_off;
                     if let Some(frags) = &mut current.fragments {
                         frags.push(StringFragment {
                             offset: w.instr_off,
-                            length: w.string.len(),
+                            length: string_len,
                             flavor: Some(w.flavor),
                         });
                     }
-                    current_end_disp = w.disp + w.string.len() as i64;
+                    current_end_disp = w.disp + string_len as i64;
                     first = false;
                     continue;
                 }
@@ -664,21 +646,22 @@ impl<'a> StackStringExtractor<'a> {
                 } else {
                     // Gap > 0: split into distinct strings
                     results.push(current);
+                    let string_len = w.string.len();
                     current = ExtractedString {
-                        value: w.string.clone(),
+                        value: w.string,
                         data_offset: w.instr_off,
                         section: None,
                         method: StringMethod::StackString,
                         kind: StringKind::StackString,
-        
+
                         fragments: Some(vec![StringFragment {
                             offset: w.instr_off,
-                            length: w.string.len(),
+                            length: string_len,
                             flavor: Some(w.flavor),
                         }]),
                         ..Default::default()
                     };
-                    current_end_disp = w.disp + w.string.len() as i64;
+                    current_end_disp = w.disp + string_len as i64;
                 }
             }
             results.push(current);
@@ -771,7 +754,7 @@ impl<'a> StackStringExtractor<'a> {
         for s in group.iter() {
             merged_value.push_str(&s.value);
             if let Some(frags) = &s.fragments {
-                merged_fragments.extend(frags.clone());
+                merged_fragments.extend(frags.iter().cloned());
             }
             // If there's a gap to the next string, we might want to note it
             // but for now we just concatenate
@@ -1400,9 +1383,8 @@ mod tests {
         use std::path::PathBuf;
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         d.push("testdata/malware/react2shell");
-        let data = match std::fs::read(&d) {
-            Ok(d) => d,
-            Err(_) => return, // skip if binary not present
+        let Ok(data) = std::fs::read(&d) else {
+            return; // skip if binary not present
         };
         let strings = extract_stack_strings(&data, 4);
         let interesting: Vec<String> = strings

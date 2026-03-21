@@ -421,7 +421,11 @@ fn test_utf16be_bom_detection() {
 
 #[test]
 fn test_dissect_vs_bare_options() {
-    let data = std::fs::read("/Users/t/data/dissect/malware/typescript/2026.property-demo/webfonts/fa-brands-regular.woff2").unwrap();
+    let path = "/Users/t/data/dissect/malware/typescript/2026.property-demo/webfonts/fa-brands-regular.woff2";
+    let Ok(data) = std::fs::read(path) else {
+        eprintln!("Skipping test: sample file not found at {path}");
+        return;
+    };
 
     // Test 1: bare options like the unit test
     let opts1 = stng::ExtractOptions::new(4);

@@ -624,12 +624,9 @@ fn test_xor_brew_agent_auto_detection() {
 
 #[test]
 fn test_c2_url_extraction_from_brew_agent() {
-    let data = match std::fs::read("/tmp/brew_agent") {
-        Ok(data) => data,
-        Err(_) => {
-            eprintln!("Skipping test: /tmp/brew_agent not found");
-            return;
-        }
+    let Ok(data) = std::fs::read("/tmp/brew_agent") else {
+        eprintln!("Skipping test: /tmp/brew_agent not found");
+        return;
     };
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf".to_vec();
     let min_length = 10;
@@ -643,26 +640,21 @@ fn test_c2_url_extraction_from_brew_agent() {
         .iter()
         .find(|s| s.value.contains("46.30.191.141") || s.data_offset == 0x211b0);
 
-    match c2_url {
-        Some(s) => {
-            println!("✓ Found C2 URL:");
-            println!("  Offset: 0x{:x}", s.data_offset);
-            println!("  Value: {:?}", s.value);
-            println!("  Kind: {:?}", s.kind);
-        }
-        None => {
-            // Debug: show what's near that offset
-            println!("✗ C2 URL NOT FOUND at offset 0x211b0!");
-            println!("\nStrings near 0x211b0:");
-            for s in results
-                .iter()
-                .filter(|s| s.data_offset >= 0x211a0 && s.data_offset <= 0x211d0)
-            {
-                println!("  0x{:x}: {:?} ({:?})", s.data_offset, s.value, s.kind);
-            }
-            panic!("C2 URL should be extracted!");
+    if c2_url.is_none() {
+        // Debug: show what's near that offset
+        println!("C2 URL NOT FOUND at offset 0x211b0!");
+        println!("\nStrings near 0x211b0:");
+        for s in results
+            .iter()
+            .filter(|s| s.data_offset >= 0x211a0 && s.data_offset <= 0x211d0)
+        {
+            println!("  0x{:x}: {:?} ({:?})", s.data_offset, s.value, s.kind);
         }
     }
 
-    assert!(c2_url.is_some(), "C2 URL should be extracted");
+    let s = c2_url.expect("C2 URL should be extracted");
+    println!("Found C2 URL:");
+    println!("  Offset: 0x{:x}", s.data_offset);
+    println!("  Value: {:?}", s.value);
+    println!("  Kind: {:?}", s.kind);
 }

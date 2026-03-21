@@ -1056,9 +1056,8 @@ mod tests {
     #[test]
     fn test_paddr_present_in_tool_output() {
         // Verify both rizin and r2 provide paddr field
-        let tool = match get_tool() {
-            Some(t) => t,
-            None => return,
+        let Some(tool) = get_tool() else {
+            return;
         };
 
         // Check symbols JSON has paddr

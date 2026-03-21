@@ -216,22 +216,23 @@ fn analyze_function(
         }
 
         // Check for LEA with RIP-relative addressing into rodata
-        if instr.mnemonic() == Mnemonic::Lea {
-            if instr.memory_base() == Register::RIP {
-                let target = calc_rip_target(&instr);
-                if target >= rodata_start && target < rodata_end {
-                    rodata_refs += 1;
-                }
+        if instr.mnemonic() == Mnemonic::Lea
+            && instr.memory_base() == Register::RIP
+        {
+            let target = calc_rip_target(&instr);
+            if target >= rodata_start && target < rodata_end {
+                rodata_refs += 1;
             }
         }
 
         // Check for MOV with RIP-relative addressing into rodata
-        if instr.mnemonic() == Mnemonic::Mov {
-            if instr.op1_kind() == OpKind::Memory && instr.memory_base() == Register::RIP {
-                let target = calc_rip_target(&instr);
-                if target >= rodata_start && target < rodata_end {
-                    rodata_refs += 1;
-                }
+        if instr.mnemonic() == Mnemonic::Mov
+            && instr.op1_kind() == OpKind::Memory
+            && instr.memory_base() == Register::RIP
+        {
+            let target = calc_rip_target(&instr);
+            if target >= rodata_start && target < rodata_end {
+                rodata_refs += 1;
             }
         }
     }
