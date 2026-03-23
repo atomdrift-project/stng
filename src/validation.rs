@@ -2118,16 +2118,7 @@ mod dotnet_tests {
         assert!(is_garbage("w wçw&wÇwØwhw°wqwµwyw^wHw"), "reloc w-pattern");
         assert!(is_garbage("sµsys^sHsYs0s8s"), "reloc s-pattern");
         // All-ASCII reloc patterns
-        let s = "uHu}uQu\\uYu0u";
-        if !is_garbage(s) {
-            let trimmed = s.trim();
-            let len = trimmed.len();
-            println!("u-pattern debug:");
-            println!("is_fast_path_valid: {}", is_fast_path_valid(trimmed, len));
-            println!("s.is_ascii(): {}", trimmed.is_ascii());
-            println!("classify_string: {:?}", crate::go::classify_string(trimmed));
-        }
-        assert!(is_garbage(s), "reloc u-pattern (all ASCII)");
+        assert!(is_garbage("uHu}uQu\\uYu0u"), "reloc u-pattern (all ASCII)");
         assert!(is_garbage("w{wQw\\wYw0w8w"), "reloc w-pattern (all ASCII)");
         assert!(is_garbage("t{t\\tYt0t8t"), "reloc t-pattern (all ASCII)");
     }
