@@ -2,17 +2,18 @@
 
 **stng** — modern string extraction for binary analysis. All of the good stuff, none of the garbage.
 
-## Screenshot
-
-Demonstrating the automatic XOR-decoding capabilities on a malware sample (macOS/machO):
 ![screenshot](media/screenshot.png)
 
 ## Installation
 
-Requires a modern version of rust & cargo:
+```bash
+brew install atomdrift/tap/stng
+```
+
+Or with cargo:
 
 ```bash
-cargo install --git https://codeberg.org/isotope13/stng
+cargo install --git https://codeberg.org/atomdrift/stng
 ```
 
 ## Quick Start
@@ -25,26 +26,14 @@ stng --json malware.bin       # Machine-readable output with encoding metadata
 
 ## Features
 
-- **Garbage filtering**: Filters out unusable garbage by default (but supports `--unfiltered`)
+- **Garbage filtering**: Filters out unusable garbage by default (supports `--unfiltered`)
 - **Language-aware extraction**: Go/Rust `{ptr, len}`, DWARF stack strings
-- **Binary network structures**: Finds hardcoded IPs/ports in socket structures
 - **XOR obfuscation**: Single/multi-byte keys with entropy analysis, double-layer (encoding+XOR)
 - **Encoding detection**: Base64, Base32, Base85, hex, URL-encoding, Unicode escapes
-- **IOC classification**: IPs, URLs, shell commands, paths, credentials
+- **IOC classification**: IPs, URLs, shell commands, paths, credentials, hardcoded socket structures
 - **Wide strings**: UTF-16LE in Windows PE binaries
 - **Format support**: ELF, PE, Mach-O, raw binaries, overlays
 
-## Use Cases
+Useful for initial triage, C2 enumeration, credential extraction, and YARA signature development.
 
-Initial triage of a binary for "what the hell does this program do?". Things it helps with in particularl:
-
-- **C2 enumeration**: Extract hardcoded callbacks, encryption keys, beacon URLs
-- **Credential/evasion analysis**: Database passwords, API keys, XOR'd strings, packed payloads
-- **YARA acceleration**: Find strings for signature development
-
-## Library
-
-```rust
-let strings = stng::extract_strings(&std::fs::read("sample")?, 4);
-```
 License: Apache-2.0
