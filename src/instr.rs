@@ -450,6 +450,20 @@ pub fn extract_inline_strings_amd64(
                 &mut seen,
             );
 
+            // Go stack-based string args (variadic, interface conversions, etc.)
+            // Pattern: LEA Rxx, [RIP+disp] into rodata + MOV QWORD [RSP+N], imm length
+            extract_amd64_stack_strings(
+                i,
+                text_data,
+                text_addr,
+                rodata_data,
+                rodata_addr,
+                rodata_end,
+                min_length,
+                &mut strings,
+                &mut seen,
+            );
+
             strings
         })
         .collect();
@@ -1093,6 +1107,148 @@ fn extract_amd64_go_arg2_string(
         }
 
         return;
+    }
+}
+
+/// Extract stack-based string arguments near a CALL site.
+///
+/// Go's compiler stores variadic/interface string arguments on the stack rather
+/// than in registers. The pattern is:
+///
+/// ```text
+/// LEA Rxx, [RIP+disp]           ; load rodata address into any register
+/// MOV [RSP+N], Rxx              ; store pointer on stack
+/// MOV QWORD [RSP+N+8], imm32   ; store length on stack (or vice versa)
+/// ```
+///
+/// The length MOV may appear before or after the LEA. We scan backward from the
+/// CALL for any RIP-relative LEA into rodata, then look nearby for a MOV immediate
+/// to stack that gives us a plausible string length.
+#[allow(clippy::too_many_arguments)]
+fn extract_amd64_stack_strings(
+    call_pos: usize,
+    text_data: &[u8],
+    text_addr: u64,
+    rodata_data: &[u8],
+    rodata_addr: u64,
+    rodata_end: u64,
+    min_length: usize,
+    strings: &mut Vec<ExtractedString>,
+    seen: &mut HashSet<String>,
+) {
+    let max_lookback = call_pos.min(120);
+
+    let mut pos = if call_pos > max_lookback {
+        call_pos - max_lookback
+    } else {
+        0
+    };
+
+    while pos + 7 <= call_pos {
+        // Match any RIP-relative LEA: [48|4C] 8D [modrm with mod=00, rm=101]
+        // 48 8D xx means REX.W + LEA with r64 registers (RAX-RDI)
+        // 4C 8D xx means REX.WR + LEA with r64 registers (R8-R15)
+        let is_lea = pos + 7 <= text_data.len()
+            && (text_data[pos] == 0x48 || text_data[pos] == 0x4C)
+            && text_data[pos + 1] == 0x8D
+            && (text_data[pos + 2] & 0xC7) == 0x05; // mod=00, rm=101 (RIP-relative)
+
+        if !is_lea {
+            pos += 1;
+            continue;
+        }
+
+        let offset = i32::from_le_bytes([
+            text_data[pos + 3],
+            text_data[pos + 4],
+            text_data[pos + 5],
+            text_data[pos + 6],
+        ]);
+        let rip_addr = text_addr + (pos + 7) as u64;
+        let str_addr = (rip_addr as i64 + i64::from(offset)) as u64;
+
+        // Must point into rodata
+        if str_addr < rodata_addr || str_addr >= rodata_end {
+            pos += 1;
+            continue;
+        }
+
+        // Search a window around the LEA for MOV QWORD [RSP+disp], imm32.
+        // Two encodings depending on displacement size:
+        //   8-bit disp:  48 C7 44 24 NN VV VV VV VV           (9 bytes)
+        //   32-bit disp: 48 C7 84 24 NN NN NN NN VV VV VV VV  (12 bytes)
+        let search_start = pos.saturating_sub(20);
+        let search_end = (pos + 30).min(call_pos);
+
+        let mut best_len: Option<u64> = None;
+
+        let mut j = search_start;
+        while j < search_end {
+            if j + 4 > text_data.len()
+                || text_data[j] != 0x48
+                || text_data[j + 1] != 0xC7
+            {
+                j += 1;
+                continue;
+            }
+
+            // Try to read the immediate value from MOV QWORD [RSP+disp], imm32
+            let imm_offset = if text_data[j + 2] == 0x44 && text_data[j + 3] == 0x24 {
+                // 8-bit displacement: 48 C7 44 24 NN VV VV VV VV
+                if j + 9 > text_data.len() { j += 1; continue; }
+                j + 5
+            } else if text_data[j + 2] == 0x84 && text_data[j + 3] == 0x24 {
+                // 32-bit displacement: 48 C7 84 24 NN NN NN NN VV VV VV VV
+                if j + 12 > text_data.len() { j += 1; continue; }
+                j + 8
+            } else {
+                j += 1;
+                continue;
+            };
+
+            let len = u64::from(u32::from_le_bytes([
+                text_data[imm_offset],
+                text_data[imm_offset + 1],
+                text_data[imm_offset + 2],
+                text_data[imm_offset + 3],
+            ]));
+
+            // Plausible string length that produces valid UTF-8 from rodata
+            if len > 0 && len <= 1000 && str_addr + len <= rodata_end {
+                let ro = (str_addr - rodata_addr) as usize;
+                if ro + len as usize <= rodata_data.len() {
+                    if let Ok(s) = std::str::from_utf8(&rodata_data[ro..ro + len as usize]) {
+                        if is_valid_utf8_string(s) && best_len.is_none() {
+                            best_len = Some(len);
+                        }
+                    }
+                }
+            }
+
+            j += 1;
+        }
+
+        if let Some(str_len) = best_len {
+            let rodata_offset = (str_addr - rodata_addr) as usize;
+            if let Ok(s) =
+                std::str::from_utf8(&rodata_data[rodata_offset..rodata_offset + str_len as usize])
+            {
+                if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
+                    seen.insert(s.to_string());
+                    let final_kind = classify_string(s);
+                    strings.push(ExtractedString {
+                        value: s.to_string(),
+                        data_offset: str_addr,
+                        section: Some(".rodata".to_string()),
+                        method: StringMethod::InstructionPattern,
+                        kind: final_kind,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+
+        pos += 7; // skip past this LEA
     }
 }
 

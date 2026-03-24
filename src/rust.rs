@@ -42,6 +42,13 @@ static RE_SNAKE_CASE: LazyLock<Regex> =
 static RE_DOMAIN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[a-z][a-z0-9]*\.[a-z][a-z0-9.]+").expect("static regex"));
 
+/// Minimum length for structure-based extraction.
+///
+/// Structure-based strings have high confidence (backed by actual {ptr, len}
+/// pairs in the binary), so we use a lower floor than the user-specified
+/// min_length to avoid dropping short but real strings.
+const STRUCTURE_MIN_LENGTH: usize = 2;
+
 /// Extracts strings from Rust binaries using structure analysis.
 pub struct RustStringExtractor {
     min_length: usize,
@@ -122,6 +129,8 @@ impl RustStringExtractor {
                     classify_string,
                 );
 
+                // Use lower floor for structure-based strings (high confidence)
+                let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
                 let existing: HashSet<&str> = strings
                     .iter()
                     .map(|s: &ExtractedString| s.value.as_str())
@@ -129,7 +138,7 @@ impl RustStringExtractor {
                 let new_strings: Vec<_> = structured
                     .into_iter()
                     .filter(|s| {
-                        s.value.len() >= self.min_length && !existing.contains(s.value.as_str())
+                        s.value.len() >= struct_min && !existing.contains(s.value.as_str())
                     })
                     .collect();
                 strings.extend(new_strings);
@@ -371,8 +380,9 @@ impl RustStringExtractor {
             classify_string,
         );
 
-        // Filter by minimum length
-        extracted.retain(|s| s.value.len() >= self.min_length);
+        // Use lower floor for structure-based strings (high confidence)
+        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
+        extracted.retain(|s| s.value.len() >= struct_min);
 
         Some(extracted)
     }

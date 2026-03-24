@@ -13,6 +13,13 @@ use rayon::prelude::*;
 
 use super::classifier::classify_string;
 
+/// Minimum length for structure-based extraction.
+///
+/// Structure-based strings have high confidence (backed by actual {ptr, len}
+/// pairs in the binary), so we use a lower floor than the user-specified
+/// min_length to avoid dropping short but real strings like "gh" or "sh".
+const STRUCTURE_MIN_LENGTH: usize = 2;
+
 /// Extracts strings from Go binaries using structure analysis.
 pub struct GoStringExtractor {
     min_length: usize,
@@ -86,14 +93,17 @@ impl GoStringExtractor {
             classify_string,
         );
 
-        // Filter by minimum length
+        // Filter by minimum length — use lower floor for structure-based strings
+        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
         for s in structured {
-            if s.value.len() >= self.min_length {
+            if s.value.len() >= struct_min {
                 strings.push(s);
             }
         }
 
         // Extract inline strings from instructions (ARM64 or x86_64)
+        // Use the same lower floor — instruction patterns (LEA+MOV with rodata
+        // pointer and immediate length) are high confidence.
         if let Some((text_addr, text_data)) = text_info {
             let cpu_type = macho.header.cputype();
             if cpu_type == CPU_TYPE_ARM64 {
@@ -102,10 +112,10 @@ impl GoStringExtractor {
                     text_addr,
                     rodata_data,
                     rodata_addr,
-                    self.min_length,
+                    struct_min,
                 );
                 for s in inline_strings {
-                    if s.value.len() >= self.min_length {
+                    if s.value.len() >= struct_min {
                         strings.push(s);
                     }
                 }
@@ -115,10 +125,10 @@ impl GoStringExtractor {
                     text_addr,
                     rodata_data,
                     rodata_addr,
-                    self.min_length,
+                    struct_min,
                 );
                 for s in inline_strings {
-                    if s.value.len() >= self.min_length {
+                    if s.value.len() >= struct_min {
                         strings.push(s);
                     }
                 }
@@ -191,35 +201,37 @@ impl GoStringExtractor {
             classify_string,
         );
 
+        // Use lower floor for structure-based strings (high confidence)
+        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
         for s in structured {
-            if s.value.len() >= self.min_length {
+            if s.value.len() >= struct_min {
                 strings.push(s);
             }
         }
 
         // Extract inline strings from .text section
+        // Use the same lower floor for instruction patterns (high confidence)
         if let Some((text_addr, text_data)) = text_info {
-            // Detect architecture from ELF machine type
             let inline_strings = match elf.header.e_machine {
                 goblin::elf::header::EM_AARCH64 => extract_inline_strings_arm64(
                     text_data,
                     text_addr,
                     rodata_data,
                     rodata_addr,
-                    self.min_length,
+                    struct_min,
                 ),
                 goblin::elf::header::EM_X86_64 => extract_inline_strings_amd64(
                     text_data,
                     text_addr,
                     rodata_data,
                     rodata_addr,
-                    self.min_length,
+                    struct_min,
                 ),
                 _ => Vec::new(),
             };
 
             for s in inline_strings {
-                if s.value.len() >= self.min_length {
+                if s.value.len() >= struct_min {
                     strings.push(s);
                 }
             }
@@ -277,8 +289,10 @@ impl GoStringExtractor {
             classify_string,
         );
 
+        // Use lower floor for structure-based strings (high confidence)
+        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
         for s in structured {
-            if s.value.len() >= self.min_length {
+            if s.value.len() >= struct_min {
                 strings.push(s);
             }
         }
