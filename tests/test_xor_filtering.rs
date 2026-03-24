@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Tests for XOR string filtering logic
 ///
 /// These tests ensure that legitimate XOR-decoded malware strings

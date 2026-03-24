@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for byte offset accuracy in text files and binaries
 
 use stng::{ExtractOptions, StringMethod};

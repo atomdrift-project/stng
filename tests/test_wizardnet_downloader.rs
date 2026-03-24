@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration test for WizardNet Downloader.dll (PE x86).
 //!
 //! Validates that stng does not produce false positives on this sample:

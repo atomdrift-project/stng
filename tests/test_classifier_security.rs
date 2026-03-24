@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Comprehensive tests for security-focused string classification
 /// Covers patterns in go/classifier.rs that detect malware indicators
 /// Tests JWT, API keys, ransom notes, injection attacks, crypto, and gopclntab classification

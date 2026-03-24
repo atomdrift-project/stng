@@ -1,3 +1,6 @@
+// Allow unwrap/expect/panic in test code — panicking on failure is idiomatic in tests.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 //! # stng - Language-aware string extraction
 //!
 //! This library provides language-aware string extraction for Go and Rust binaries.

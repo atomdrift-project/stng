@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Test that /etc/passwd entries are not misclassified
 
 use std::fs;

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Real-world test for multi-byte XOR extraction using actual malware sample
 use stng::{ExtractOptions, StringMethod};
 

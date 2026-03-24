@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Comprehensive tests for r2 cache functionality
 /// Covers src/r2/cache.rs (~245 lines, 0% → 80% coverage)
 use std::fs;

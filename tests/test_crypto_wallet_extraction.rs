@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Test XOR extraction of cryptocurrency wallet paths from real malware
 use stng::{ExtractOptions, StringMethod};
 

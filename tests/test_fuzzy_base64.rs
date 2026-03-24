@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Comprehensive tests for base64 extraction and decoding.
 //!
 //! Tests base64 patterns including fuzzy/obfuscated variants:

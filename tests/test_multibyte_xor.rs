@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Tests for multi-byte XOR string extraction
 ///
 /// This tests the pattern-free brute-force scanning approach for multi-byte XOR,

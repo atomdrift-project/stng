@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Additional tests for r2 module helper functions
 /// Covers src/r2.rs helper functions and edge cases
 use std::fs;
@@ -75,8 +76,7 @@ fn test_extract_string_boundaries_small_file() {
 
     // May return None if r2/rizin not available, or Some if available
     // Just verify it doesn't panic
-    if result.is_some() {
-        let boundaries = result.unwrap();
+    if let Some(boundaries) = result {
         // If r2 is available and found strings, verify structure
         for boundary in &boundaries {
             assert!(boundary.offset < 1024 * 1024, "Offset should be reasonable");

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests to ensure code signature classification is precise.
 //!
 //! Verifies that:

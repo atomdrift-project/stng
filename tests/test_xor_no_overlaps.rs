@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Test to ensure XOR extraction doesn't produce overlapping strings
 ///
 /// When scanning for XOR strings, we should avoid extracting multiple

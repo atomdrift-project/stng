@@ -1138,11 +1138,7 @@ fn extract_amd64_stack_strings(
 ) {
     let max_lookback = call_pos.min(120);
 
-    let mut pos = if call_pos > max_lookback {
-        call_pos - max_lookback
-    } else {
-        0
-    };
+    let mut pos = call_pos.saturating_sub(max_lookback);
 
     while pos + 7 <= call_pos {
         // Match any RIP-relative LEA: [48|4C] 8D [modrm with mod=00, rm=101]

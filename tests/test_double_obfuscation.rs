@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for double-layer obfuscation: Encoding + XOR
 //!
 //! This tests the automatic detection and decoding of data that has been:

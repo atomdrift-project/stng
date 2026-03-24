@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration tests for clean system binaries that should have minimal false positives.
 //!
 //! These tests verify that legitimate binaries without obfuscation don't trigger

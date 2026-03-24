@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Test garble extraction on real gitlab-runner sample.
 
 use std::path::Path;

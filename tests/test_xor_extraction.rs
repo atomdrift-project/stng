@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Comprehensive tests for XOR string extraction to prevent regression
 /// Uses a sanitized subset of brew_agent malware (non-executable data only)
 use stng::{ExtractOptions, StringKind, StringMethod};

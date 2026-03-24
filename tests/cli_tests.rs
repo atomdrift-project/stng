@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! CLI integration tests for stng.
 
 use std::path::Path;

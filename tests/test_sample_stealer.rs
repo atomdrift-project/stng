@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration test for Go credential stealer sample.
 //!
 //! Validates that structure-based and instruction-pattern extraction finds
@@ -30,7 +31,7 @@ fn test_sample_stealer_short_strings() {
     let required_short = ["gh", "auth", "token"];
     for needle in required_short {
         assert!(
-            values.iter().any(|v| *v == needle),
+            values.contains(&needle),
             "Missing short string {:?} — high-confidence extraction should find it",
             needle,
         );

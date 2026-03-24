@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for import/export symbol extraction (imports.rs).
 //!
 //! ELF import extraction is exercised via `extract_from_elf` which calls

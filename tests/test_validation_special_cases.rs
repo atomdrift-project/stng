@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Tests for validation::is_garbage() special cases
 /// These ensure that important malware indicators aren't filtered out
 use stng::ExtractOptions;

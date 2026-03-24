@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for improved text file decoding with embedded base64 extraction
 
 use stng::{classify_string, StringKind};

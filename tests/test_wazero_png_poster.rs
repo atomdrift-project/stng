@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration tests for the wazero-png-poster malware sample.
 //!
 //! This sample is a Go 1.26 x86_64 Mach-O binary that uses the wazero WebAssembly

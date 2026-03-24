@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for macOS code signature and entitlements extraction.
 //!
 //! These tests verify that we correctly extract and categorize:
@@ -62,10 +63,9 @@ fn test_codesig_base64_categorization() {
     use base64::Engine;
 
     for s in &codesig_hashes {
-        let decoded = BASE64.decode(s.value.trim()).expect(&format!(
-            "Failed to decode CD hash at 0x{:x}",
-            s.data_offset
-        ));
+        let decoded = BASE64
+            .decode(s.value.trim())
+            .unwrap_or_else(|_| panic!("Failed to decode CD hash at 0x{:x}", s.data_offset));
 
         assert_eq!(
             decoded.len(),
@@ -464,10 +464,9 @@ fn test_codesig_hashes_are_sha1() {
             hash.value.as_str()
         };
 
-        let decoded = BASE64.decode(base64_part).expect(&format!(
-            "Failed to decode hash at 0x{:x}",
-            hash.data_offset
-        ));
+        let decoded = BASE64
+            .decode(base64_part)
+            .unwrap_or_else(|_| panic!("Failed to decode hash at 0x{:x}", hash.data_offset));
 
         // CD hashes are SHA-1 (20 bytes) or SHA-256 (32 bytes)
         assert!(

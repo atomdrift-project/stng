@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for language and file type detection (detect.rs, binary.rs detection functions).
 
 use std::path::Path;
