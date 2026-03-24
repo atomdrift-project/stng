@@ -24,20 +24,25 @@
 //! - [`emulator`]: Lightweight x86-64 emulator for all modes
 //! - [`decrypt`]: Orchestration of emulation-based extraction
 
+mod decrypt;
+mod emulator;
+mod func_finder;
+mod gopclntab;
 mod ops;
 mod rodata;
-mod gopclntab;
-mod emulator;
-mod decrypt;
-mod func_finder;
 
 // Re-export public API
+pub use decrypt::{
+    emulate_decrypt_function, extract_garble_strings, extract_garble_strings_v2,
+    GarbleExtractResult, SectionData,
+};
+pub use emulator::{CpuState, EmulationResult, Emulator, Memory};
+pub use func_finder::{
+    find_call_targets, find_decrypt_candidates, find_init_functions, FuncCandidate,
+};
+pub use gopclntab::{FuncEntry, GoVersion, Pclntab};
 pub use ops::GarbleOp;
 pub use rodata::{
     check_printable, extract_garble_rodata_strings, find_nonprintable_blobs, is_printable_byte,
     score_decoded_string,
 };
-pub use gopclntab::{FuncEntry, GoVersion, Pclntab};
-pub use emulator::{CpuState, EmulationResult, Emulator, Memory};
-pub use decrypt::{emulate_decrypt_function, extract_garble_strings, extract_garble_strings_v2, GarbleExtractResult, SectionData};
-pub use func_finder::{find_call_targets, find_decrypt_candidates, find_init_functions, FuncCandidate};

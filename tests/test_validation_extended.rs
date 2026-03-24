@@ -220,7 +220,10 @@ fn test_short_string_patterns() {
 #[test]
 fn test_short_garbage_patterns() {
     // Consistent case alphanumeric is now accepted (could be identifiers)
-    assert!(!is_garbage("9N2A"), "Consistent uppercase with digits is valid");
+    assert!(
+        !is_garbage("9N2A"),
+        "Consistent uppercase with digits is valid"
+    );
     // Digits at BOTH ends is garbage
     assert!(is_garbage("0YI0"), "Digits at start AND end");
     // Mixed case (upper and lower) with digits is garbage

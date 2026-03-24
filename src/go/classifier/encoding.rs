@@ -133,6 +133,23 @@ pub(super) fn is_base64(s: &str) -> bool {
         return false;
     }
 
+    // Reject strings with long runs of consecutive digits (8+).
+    // These are typically ASN.1 certificate timestamps (e.g. "201229235959Z0b1")
+    // or version-like data, not real base64.
+    {
+        let mut digit_run = 0u32;
+        for &b in bytes {
+            if b.is_ascii_digit() {
+                digit_run += 1;
+                if digit_run >= 8 {
+                    return false;
+                }
+            } else {
+                digit_run = 0;
+            }
+        }
+    }
+
     // Final check: if input looks like readable text and output is garbage, reject
     // e.g., "IWorkItemQueriesExt2" (readable identifier) decodes to binary garbage
     // Only apply when input has high vowel ratio (indicates real words, not random chars)
@@ -141,13 +158,35 @@ pub(super) fn is_base64(s: &str) -> bool {
 
         // Skip check if input has many repeated characters (encoded binary, not readable text)
         // e.g., "TVqQAAMAAAAEAAAA" has many 'A's from null bytes
-        let max_char_count = bytes.iter().fold([0u8; 256], |mut acc, &b| {
-            acc[b as usize] = acc[b as usize].saturating_add(1);
-            acc
-        }).into_iter().max().unwrap_or(0);
+        let max_char_count = bytes
+            .iter()
+            .fold([0u8; 256], |mut acc, &b| {
+                acc[b as usize] = acc[b as usize].saturating_add(1);
+                acc
+            })
+            .into_iter()
+            .max()
+            .unwrap_or(0);
         let max_char_ratio = (max_char_count as usize * 100) / bytes.len();
-        if max_char_ratio > 30 {
+        if max_char_ratio > 30 && bytes.len() >= 24 {
             return true; // Likely encoded binary, not a readable identifier
+        }
+
+        // For short strings (< 24 chars) with high character repetition AND
+        // few input vowels, verify the decoded output is mostly printable.
+        // This catches x86 instruction patterns like "rtVHHtRHt2HtLHHu" where
+        // repeated opcodes (e.g. 'H' = REX prefix) inflate max_char_ratio but
+        // the decoded output is largely non-printable.
+        // Strings with many vowels (like "TVqQAAMAAAAEAAAA") skip this check
+        // since the repetition comes from null-byte padding in real encoded data.
+        if max_char_ratio > 30 && bytes.len() < 24 && input_vowel_ratio < 10 {
+            let printable = decoded
+                .iter()
+                .filter(|&&b| b.is_ascii_graphic() || b == b' ')
+                .count();
+            if printable * 2 < decoded.len() {
+                return false;
+            }
         }
 
         // Only check quality comparison if input looks like natural language

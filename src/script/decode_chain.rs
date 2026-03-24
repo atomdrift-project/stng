@@ -72,7 +72,10 @@ pub fn apply_chain(input: &[u8], steps: &[DecodeStep]) -> Option<DecodeResult> {
 
     for step in steps {
         if buf.len() > MAX_DECODED_SIZE {
-            tracing::warn!("Decode chain exceeded max size ({} bytes), aborting", buf.len());
+            tracing::warn!(
+                "Decode chain exceeded max size ({} bytes), aborting",
+                buf.len()
+            );
             return None;
         }
 
@@ -100,9 +103,7 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
             // Try standard first, then try without padding
             engine
                 .decode(input)
-                .or_else(|_| {
-                    base64::engine::general_purpose::STANDARD_NO_PAD.decode(input)
-                })
+                .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(input))
                 .ok()
         }
         DecodeStep::Zlib => {
@@ -127,21 +128,17 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
             }
             Some(out)
         }
-        DecodeStep::Xor(key) => {
-            Some(input.iter().map(|b| b ^ key).collect())
-        }
-        DecodeStep::Rot13 => {
-            Some(
-                input
-                    .iter()
-                    .map(|&b| match b {
-                        b'a'..=b'm' | b'A'..=b'M' => b + 13,
-                        b'n'..=b'z' | b'N'..=b'Z' => b - 13,
-                        _ => b,
-                    })
-                    .collect(),
-            )
-        }
+        DecodeStep::Xor(key) => Some(input.iter().map(|b| b ^ key).collect()),
+        DecodeStep::Rot13 => Some(
+            input
+                .iter()
+                .map(|&b| match b {
+                    b'a'..=b'm' | b'A'..=b'M' => b + 13,
+                    b'n'..=b'z' | b'N'..=b'Z' => b - 13,
+                    _ => b,
+                })
+                .collect(),
+        ),
         DecodeStep::Utf16Le => {
             if input.len() < 2 || !input.len().is_multiple_of(2) {
                 return None;
@@ -162,9 +159,7 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
             // Already pre-parsed to bytes
             Some(codes.clone())
         }
-        DecodeStep::HexDecode => {
-            hex::decode(input).ok()
-        }
+        DecodeStep::HexDecode => hex::decode(input).ok(),
     }
 }
 

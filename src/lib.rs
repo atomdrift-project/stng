@@ -81,10 +81,10 @@ pub use types::{
 pub use xor::MAX_XOR_SCAN_SIZE;
 
 // Internal — not part of the stable public API
+pub(crate) use garble::extract_garble_rodata_strings;
 pub(crate) use go::GoStringExtractor;
 pub use overlay::extract_overlay_strings;
 pub(crate) use rust::RustStringExtractor;
-pub(crate) use garble::extract_garble_rodata_strings;
 pub(crate) use stack_strings::{extract_stack_strings, extract_stack_strings_with_context};
 pub use validation::is_garbage;
 
@@ -106,7 +106,6 @@ use binary::{
 use binary_net::scan_binary_ips;
 use imports::{extract_elf_imports, extract_macho_imports};
 use raw::{extract_raw_strings, extract_wide_strings};
-
 
 /// Returns `true` if a string should be kept when garbage filtering is enabled.
 /// Encoded strings and special kinds are always kept regardless of content.
@@ -279,7 +278,8 @@ fn apply_xor_scan(
     // For PE binaries, also try rolling XOR with known plaintext patterns
     // This catches .NET malware like Redline that uses short cycling keys
     if is_pe && data.len() <= xor::MAX_XOR_SCAN_SIZE {
-        let rolling_results = xor::extract_rolling_xor_with_known_plaintext(data, opts.xor_min_length);
+        let rolling_results =
+            xor::extract_rolling_xor_with_known_plaintext(data, opts.xor_min_length);
         strings.extend(rolling_results);
     }
 
@@ -321,7 +321,10 @@ fn apply_xor_scan(
                 marked = true;
             }
             if !marked {
-                tracing::warn!("XOR key '{}' not found in extracted strings — injecting", key_str);
+                tracing::warn!(
+                    "XOR key '{}' not found in extracted strings — injecting",
+                    key_str
+                );
                 strings.push(ExtractedString {
                     value: key_str.clone(),
                     data_offset: 0,
@@ -944,13 +947,8 @@ fn append_script_deobfuscation(
     }
     for result in deob_results {
         let payload_bytes = result.decoded.as_bytes();
-        let mut payload_strings = extract_raw_strings(
-            payload_bytes,
-            opts.min_length,
-            None,
-            &[],
-            &HashMap::new(),
-        );
+        let mut payload_strings =
+            extract_raw_strings(payload_bytes, opts.min_length, None, &[], &HashMap::new());
 
         // Run decoders on the extracted payload strings
         let mut payload_decoded = Vec::new();
@@ -1306,11 +1304,7 @@ fn extract_from_object(
                     // Use the context-aware version to resolve RIP-relative XMM loads
                     // (garble loads obfuscated data from .rodata via [rip+disp])
                     let mut xor_results = extract_stack_strings_with_context(
-                        text,
-                        min_length,
-                        scan_data,
-                        text_vma,
-                        image_base,
+                        text, min_length, scan_data, text_vma, image_base,
                     );
                     // Adjust data_offset to file-relative position.
                     for r in &mut xor_results {
@@ -1586,5 +1580,3 @@ fn get_r2_strings(opts: &ExtractOptions) -> Option<Vec<ExtractedString>> {
     }
     None
 }
-
-

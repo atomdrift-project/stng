@@ -212,7 +212,8 @@ pub(super) fn classify_crypto_address(s: &str) -> Option<StringKind> {
     // Litecoin: starts with L or M, 26-35 chars, Base58
     if (s.starts_with('L') || s.starts_with('M')) && (26..=35).contains(&len) {
         // Must be valid Base58: no 0, O, I, or l characters
-        if !s.chars()
+        if !s
+            .chars()
             .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
         {
             return None;

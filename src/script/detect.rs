@@ -126,7 +126,8 @@ fn python_score(text: &str) -> u32 {
     if text.contains("exec(") || text.contains("compile(") {
         score += 1;
     }
-    if text.contains("# -*- coding:") || text.contains("#!/usr/bin/env python")
+    if text.contains("# -*- coding:")
+        || text.contains("#!/usr/bin/env python")
         || text.contains("#!/usr/bin/python")
     {
         score += 2;
@@ -172,8 +173,12 @@ fn javascript_score(text: &str) -> u32 {
 fn has_python_obfuscation(text: &str) -> bool {
     // Signs of Python obfuscation that boost confidence
     (text.contains("exec(") || text.contains("compile("))
-        && (text.contains("base64") || text.contains("b64decode") || text.contains("fromhex")
-            || text.contains("codecs") || text.contains("marshal") || text.contains("zlib"))
+        && (text.contains("base64")
+            || text.contains("b64decode")
+            || text.contains("fromhex")
+            || text.contains("codecs")
+            || text.contains("marshal")
+            || text.contains("zlib"))
 }
 
 fn has_javascript_obfuscation(text: &str) -> bool {
@@ -188,43 +193,65 @@ mod tests {
     #[test]
     fn test_detect_python() {
         let src = "import os\nimport sys\ndef main():\n    print('hello')\n";
-        assert_eq!(detect_script_language(src.as_bytes()), Some(ScriptLanguage::Python));
+        assert_eq!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::Python)
+        );
     }
 
     #[test]
     fn test_detect_python_obfuscated() {
         let src = "# -*- coding: utf-8 -*-\naqg = __import__('base64')\nexec(compile(aqg.b64decode('abc'), '<>', 'exec'))\n";
-        assert_eq!(detect_script_language(src.as_bytes()), Some(ScriptLanguage::Python));
+        assert_eq!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::Python)
+        );
     }
 
     #[test]
     fn test_detect_javascript() {
-        let src = "const http = require('http');\nfunction handler(req, res) {\n  res.end('ok');\n}\n";
-        assert_eq!(detect_script_language(src.as_bytes()), Some(ScriptLanguage::JavaScript));
+        let src =
+            "const http = require('http');\nfunction handler(req, res) {\n  res.end('ok');\n}\n";
+        assert_eq!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::JavaScript)
+        );
     }
 
     #[test]
     fn test_detect_javascript_eval() {
         let src = "var x = 1;\neval(atob('YWxlcnQoMSk='));\n";
-        assert_eq!(detect_script_language(src.as_bytes()), Some(ScriptLanguage::JavaScript));
+        assert_eq!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::JavaScript)
+        );
     }
 
     #[test]
     fn test_detect_php() {
         let src = "<?php\neval(base64_decode('aW1wb3J0IG9z'));\n?>\n";
-        assert_eq!(detect_script_language(src.as_bytes()), Some(ScriptLanguage::Php));
+        assert_eq!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::Php)
+        );
     }
 
     #[test]
     fn test_detect_powershell_encoded() {
         let src = "powershell -EncodedCommand ZAByAGkAdABlAC0AaABvAHMAdAA=\n";
-        assert_eq!(detect_script_language(src.as_bytes()), Some(ScriptLanguage::PowerShell));
+        assert_eq!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::PowerShell)
+        );
     }
 
     #[test]
     fn test_detect_powershell_iex() {
         let src = "$data = [Convert]::FromBase64String('abc')\nInvoke-Expression $decoded\n";
-        assert_eq!(detect_script_language(src.as_bytes()), Some(ScriptLanguage::PowerShell));
+        assert_eq!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::PowerShell)
+        );
     }
 
     #[test]

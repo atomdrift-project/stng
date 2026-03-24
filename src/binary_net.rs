@@ -69,10 +69,7 @@ fn is_go_binary_from_sections(
     // Fallback: check for "Go build ID:" string in first 4KB of binary
     // This catches Go binaries that lack standard section names
     let search_len = data.len().min(4096);
-    if data[..search_len]
-        .windows(12)
-        .any(|w| w == b"Go build ID:")
-    {
+    if data[..search_len].windows(12).any(|w| w == b"Go build ID:") {
         return true;
     }
 
@@ -81,10 +78,7 @@ fn is_go_binary_from_sections(
 
 /// Check if this is a .NET binary by examining the CLR header directory.
 /// .NET binaries have a COM descriptor (CLR header) and don't use C-style sockaddr_in.
-fn is_dotnet_binary(
-    pe_opt: Option<&crate::goblin::pe::PE<'_>>,
-    data: &[u8],
-) -> bool {
+fn is_dotnet_binary(pe_opt: Option<&crate::goblin::pe::PE<'_>>, data: &[u8]) -> bool {
     if let Some(pe) = pe_opt {
         // Check if PE has CLR runtime header (index 14 = COM_DESCRIPTOR / CLR header)
         if let Some(optional_header) = pe.header.optional_header {
@@ -104,10 +98,7 @@ fn is_dotnet_binary(
         if data.len() > 4 {
             // Search in first 1MB for "BSJB" (CLI metadata signature)
             let search_len = data.len().min(1024 * 1024);
-            if data[..search_len]
-                .windows(4)
-                .any(|w| w == b"BSJB")
-            {
+            if data[..search_len].windows(4).any(|w| w == b"BSJB") {
                 return true;
             }
         }
@@ -575,7 +566,10 @@ mod tests {
         let results = scan_binary_ips(&data, 4, elf_arm, None, None);
 
         // Should still find the sockaddr_in structure
-        assert!(!results.is_empty(), "Non-Go binaries should still be scanned");
+        assert!(
+            !results.is_empty(),
+            "Non-Go binaries should still be scanned"
+        );
         assert!(
             results.iter().any(|r| r.value.contains("192.168.1.1:8080")),
             "Should find IP in non-Go binary"

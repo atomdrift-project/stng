@@ -24,8 +24,10 @@ static ENCODED_CMD_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// [Convert]::FromBase64String("...") or [System.Convert]::FromBase64String("...")
 #[allow(clippy::expect_used)]
 static CONVERT_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)\[(?:System\.)?Convert\]::FromBase64String\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#)
-        .expect("static regex")
+    Regex::new(
+        r#"(?i)\[(?:System\.)?Convert\]::FromBase64String\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#,
+    )
+    .expect("static regex")
 });
 
 /// [char[]](72,101,108,...) -join '' or [char[]](72,101,108,...) -join ""
@@ -77,11 +79,11 @@ pub fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {
     results.extend(iex_results);
 
     // Only add convert_b64 results that don't overlap with iex_encoding_b64
-    results.extend(
-        try_convert_b64(source)
-            .into_iter()
-            .filter(|r| !covered_offsets.iter().any(|&o| r.offset >= o && r.offset < o + 200)),
-    );
+    results.extend(try_convert_b64(source).into_iter().filter(|r| {
+        !covered_offsets
+            .iter()
+            .any(|&o| r.offset >= o && r.offset < o + 200)
+    }));
 
     results.extend(try_char_array(source));
     results.extend(try_iex_reverse(source));

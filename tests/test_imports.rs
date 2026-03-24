@@ -133,10 +133,7 @@ fn test_macho_import_strings_have_library_field() {
 
     for s in &imports {
         if let Some(lib) = &s.source {
-            assert!(
-                !lib.is_empty(),
-                "Source name should not be an empty string"
-            );
+            assert!(!lib.is_empty(), "Source name should not be an empty string");
         }
     }
 }
@@ -222,7 +219,8 @@ fn test_full_pipeline_deduplicates_by_offset() {
         assert!(
             seen_offsets.insert(s.data_offset, &s.value).is_none(),
             "Duplicate offset {} found for '{}' — deduplication failed",
-            s.data_offset, s.value
+            s.data_offset,
+            s.value
         );
     }
 }
@@ -245,7 +243,8 @@ fn test_full_pipeline_pe_deduplicates_by_offset() {
         assert!(
             seen_offsets.insert(s.data_offset, &s.value).is_none(),
             "Duplicate offset {} found for '{}' — deduplication failed",
-            s.data_offset, s.value
+            s.data_offset,
+            s.value
         );
     }
 }

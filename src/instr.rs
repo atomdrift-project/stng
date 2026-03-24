@@ -1184,10 +1184,7 @@ fn extract_amd64_stack_strings(
 
         let mut j = search_start;
         while j < search_end {
-            if j + 4 > text_data.len()
-                || text_data[j] != 0x48
-                || text_data[j + 1] != 0xC7
-            {
+            if j + 4 > text_data.len() || text_data[j] != 0x48 || text_data[j + 1] != 0xC7 {
                 j += 1;
                 continue;
             }
@@ -1195,11 +1192,17 @@ fn extract_amd64_stack_strings(
             // Try to read the immediate value from MOV QWORD [RSP+disp], imm32
             let imm_offset = if text_data[j + 2] == 0x44 && text_data[j + 3] == 0x24 {
                 // 8-bit displacement: 48 C7 44 24 NN VV VV VV VV
-                if j + 9 > text_data.len() { j += 1; continue; }
+                if j + 9 > text_data.len() {
+                    j += 1;
+                    continue;
+                }
                 j + 5
             } else if text_data[j + 2] == 0x84 && text_data[j + 3] == 0x24 {
                 // 32-bit displacement: 48 C7 84 24 NN NN NN NN VV VV VV VV
-                if j + 12 > text_data.len() { j += 1; continue; }
+                if j + 12 > text_data.len() {
+                    j += 1;
+                    continue;
+                }
                 j + 8
             } else {
                 j += 1;

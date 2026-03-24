@@ -1367,7 +1367,10 @@ mod tests {
         // If the entire string is base64, it should be skipped (handled by decode_base64_strings)
         let input = make_string("SGVsbG8gV29ybGQh", StringKind::Base64);
         let results = extract_embedded_base64(&[input]);
-        assert!(results.is_empty(), "Should skip strings that are entirely base64");
+        assert!(
+            results.is_empty(),
+            "Should skip strings that are entirely base64"
+        );
     }
 
     #[test]
@@ -1375,7 +1378,10 @@ mod tests {
         // Base64 must be multiple of 4
         let input = make_string("decode('SGVsbG9Xb3JsZA')", StringKind::Const); // 14 chars, not multiple of 4
         let results = extract_embedded_base64(&[input]);
-        assert!(results.is_empty(), "Should reject base64 with invalid length");
+        assert!(
+            results.is_empty(),
+            "Should reject base64 with invalid length"
+        );
     }
 
     #[test]
@@ -1388,7 +1394,11 @@ mod tests {
             StringKind::Const,
         );
         let results = extract_embedded_base64(&[input]);
-        assert_eq!(results.len(), 2, "Should extract both embedded base64 strings");
+        assert_eq!(
+            results.len(),
+            2,
+            "Should extract both embedded base64 strings"
+        );
     }
 
     #[test]
@@ -1411,7 +1421,10 @@ mod tests {
         // Even if base64 is valid, decoded result must be >= 4 chars
         let input = make_string("decode('YWI=')", StringKind::Const); // decodes to "ab" (2 chars)
         let results = extract_embedded_base64(&[input]);
-        assert!(results.is_empty(), "Should reject base64 that decodes to < 4 chars");
+        assert!(
+            results.is_empty(),
+            "Should reject base64 that decodes to < 4 chars"
+        );
     }
 
     #[test]
@@ -1426,6 +1439,9 @@ mod tests {
         };
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].data_offset, 12345, "Should preserve original offset");
+        assert_eq!(
+            results[0].data_offset, 12345,
+            "Should preserve original offset"
+        );
     }
 }

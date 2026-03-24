@@ -23,29 +23,31 @@ static EVAL_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// eval(gzinflate(base64_decode("..."))) — the classic PHP webshell
 #[allow(clippy::expect_used)]
 static EVAL_GZINFLATE_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"eval\s*\(\s*gzinflate\s*\(\s*base64_decode\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#)
-        .expect("static regex")
+    Regex::new(
+        r#"eval\s*\(\s*gzinflate\s*\(\s*base64_decode\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#,
+    )
+    .expect("static regex")
 });
 
 /// eval(gzuncompress(base64_decode("...")))
 #[allow(clippy::expect_used)]
 static EVAL_GZUNCOMPRESS_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"eval\s*\(\s*gzuncompress\s*\(\s*base64_decode\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#)
-        .expect("static regex")
+    Regex::new(
+        r#"eval\s*\(\s*gzuncompress\s*\(\s*base64_decode\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#,
+    )
+    .expect("static regex")
 });
 
 /// eval(str_rot13("...")) — uses double-quote delimited capture to handle embedded single quotes
 #[allow(clippy::expect_used)]
 static EVAL_ROT13_DOUBLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"eval\s*\(\s*str_rot13\s*\(\s*"([^"]+)"\s*\)"#)
-        .expect("static regex")
+    Regex::new(r#"eval\s*\(\s*str_rot13\s*\(\s*"([^"]+)"\s*\)"#).expect("static regex")
 });
 
 /// eval(str_rot13('...')) — single-quote delimited
 #[allow(clippy::expect_used)]
 static EVAL_ROT13_SINGLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"eval\s*\(\s*str_rot13\s*\(\s*'([^']+)'\s*\)"#)
-        .expect("static regex")
+    Regex::new(r#"eval\s*\(\s*str_rot13\s*\(\s*'([^']+)'\s*\)"#).expect("static regex")
 });
 
 /// Extract all obfuscated payloads from a PHP source.

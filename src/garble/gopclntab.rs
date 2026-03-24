@@ -50,10 +50,10 @@ pub struct Pclntab {
 /// Detected Go version from pclntab magic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoVersion {
-    Go12,  // 1.2 - 1.15
-    Go116, // 1.16, 1.17
-    Go118, // 1.18, 1.19
-    Go120, // 1.20+
+    Go12,    // 1.2 - 1.15
+    Go116,   // 1.16, 1.17
+    Go118,   // 1.18, 1.19
+    Go120,   // 1.20+
     Unknown, // Unrecognized magic (possibly garble-modified)
 }
 
@@ -112,14 +112,25 @@ impl Pclntab {
         let mut i = 0;
         while i < data.len() {
             // Skip non-printable bytes
-            if !data[i].is_ascii_graphic() && data[i] != b'.' && data[i] != b'*' && data[i] != b'(' && data[i] != b')' {
+            if !data[i].is_ascii_graphic()
+                && data[i] != b'.'
+                && data[i] != b'*'
+                && data[i] != b'('
+                && data[i] != b')'
+            {
                 i += 1;
                 continue;
             }
 
             // Try to read a function name
             let start = i;
-            while i < data.len() && (data[i].is_ascii_alphanumeric() || matches!(data[i], b'.' | b'*' | b'(' | b')' | b'_' | b'/' | b'[' | b']')) {
+            while i < data.len()
+                && (data[i].is_ascii_alphanumeric()
+                    || matches!(
+                        data[i],
+                        b'.' | b'*' | b'(' | b')' | b'_' | b'/' | b'[' | b']'
+                    ))
+            {
                 i += 1;
             }
 
@@ -239,7 +250,12 @@ impl Pclntab {
     }
 
     /// Parse Go 1.18+ format.
-    fn parse_go118(data: &[u8], _section_va: u64, ptr_size: u8, version: GoVersion) -> Option<Self> {
+    fn parse_go118(
+        data: &[u8],
+        _section_va: u64,
+        ptr_size: u8,
+        version: GoVersion,
+    ) -> Option<Self> {
         // Header layout for Go 1.18+ (pcHeader struct):
         // [0:4]   magic (uint32)
         // [4:5]   pad1 (uint8)
@@ -532,9 +548,15 @@ fn looks_garbled(name: &str) -> bool {
 
     // Garble names are typically single-case alphanumeric with no meaningful patterns.
     // Real function names have mixed case, underscores, or recognizable words.
-    let all_lower = check.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-    let all_upper = check.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
-    let has_vowel = check.chars().any(|c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'A' | 'E' | 'I' | 'O' | 'U'));
+    let all_lower = check
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    let all_upper = check
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+    let has_vowel = check
+        .chars()
+        .any(|c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'A' | 'E' | 'I' | 'O' | 'U'));
 
     // Single-case with no vowels is very likely garbled
     (all_lower || all_upper) && !has_vowel
@@ -657,6 +679,9 @@ mod tests {
 
         let pclntab = Pclntab::parse(&data, 0);
         assert!(pclntab.is_some());
-        assert_eq!(pclntab.as_ref().map(|p| p.go_version), Some(GoVersion::Go118));
+        assert_eq!(
+            pclntab.as_ref().map(|p| p.go_version),
+            Some(GoVersion::Go118)
+        );
     }
 }

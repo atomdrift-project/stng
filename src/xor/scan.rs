@@ -452,10 +452,7 @@ fn extract_xor_strings_from_hints(
             }
 
             // Skip strings decoded from null-heavy regions (key reflection artifact)
-            let raw_null_count = data[offset..end]
-                .iter()
-                .filter(|&&b| b == 0)
-                .count();
+            let raw_null_count = data[offset..end].iter().filter(|&&b| b == 0).count();
             if raw_null_count * 2 > (end - offset) {
                 continue;
             }
@@ -986,7 +983,10 @@ pub fn extract_rolling_xor_with_known_plaintext(
                     continue;
                 }
                 // Skip keys where all bytes are identical (likely false positive)
-                if key_len > 1 && candidate_key[..key_len].iter().all(|&b| b == candidate_key[0])
+                if key_len > 1
+                    && candidate_key[..key_len]
+                        .iter()
+                        .all(|&b| b == candidate_key[0])
                 {
                     offset += 1;
                     continue;

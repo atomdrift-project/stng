@@ -216,9 +216,7 @@ fn analyze_function(
         }
 
         // Check for LEA with RIP-relative addressing into rodata
-        if instr.mnemonic() == Mnemonic::Lea
-            && instr.memory_base() == Register::RIP
-        {
+        if instr.mnemonic() == Mnemonic::Lea && instr.memory_base() == Register::RIP {
             let target = calc_rip_target(&instr);
             if target >= rodata_start && target < rodata_end {
                 rodata_refs += 1;

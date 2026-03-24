@@ -27,13 +27,19 @@ fn memory_size_bytes(size: MemorySize) -> usize {
         MemorySize::UInt8 | MemorySize::Int8 => 1,
         MemorySize::UInt16 | MemorySize::Int16 => 2,
         MemorySize::UInt32 | MemorySize::Int32 | MemorySize::Float32 => 4,
-        MemorySize::UInt128 | MemorySize::Int128
+        MemorySize::UInt128
+        | MemorySize::Int128
         | MemorySize::Float128
-        | MemorySize::Packed128_Float32 | MemorySize::Packed128_Float64
-        | MemorySize::Packed128_UInt8 | MemorySize::Packed128_Int8
-        | MemorySize::Packed128_UInt16 | MemorySize::Packed128_Int16
-        | MemorySize::Packed128_UInt32 | MemorySize::Packed128_Int32
-        | MemorySize::Packed128_UInt64 | MemorySize::Packed128_Int64 => 16,
+        | MemorySize::Packed128_Float32
+        | MemorySize::Packed128_Float64
+        | MemorySize::Packed128_UInt8
+        | MemorySize::Packed128_Int8
+        | MemorySize::Packed128_UInt16
+        | MemorySize::Packed128_Int16
+        | MemorySize::Packed128_UInt32
+        | MemorySize::Packed128_Int32
+        | MemorySize::Packed128_UInt64
+        | MemorySize::Packed128_Int64 => 16,
         // UInt64, Int64, Float64, and any unknown sizes default to 8 bytes
         _ => 8,
     }
@@ -43,26 +49,77 @@ fn memory_size_bytes(size: MemorySize) -> usize {
 fn register_size_bytes(reg: Register) -> usize {
     match reg {
         // 8-bit registers
-        Register::AL | Register::CL | Register::DL | Register::BL
-        | Register::AH | Register::CH | Register::DH | Register::BH
-        | Register::SPL | Register::BPL | Register::SIL | Register::DIL
-        | Register::R8L | Register::R9L | Register::R10L | Register::R11L
-        | Register::R12L | Register::R13L | Register::R14L | Register::R15L => 1,
+        Register::AL
+        | Register::CL
+        | Register::DL
+        | Register::BL
+        | Register::AH
+        | Register::CH
+        | Register::DH
+        | Register::BH
+        | Register::SPL
+        | Register::BPL
+        | Register::SIL
+        | Register::DIL
+        | Register::R8L
+        | Register::R9L
+        | Register::R10L
+        | Register::R11L
+        | Register::R12L
+        | Register::R13L
+        | Register::R14L
+        | Register::R15L => 1,
         // 16-bit registers
-        Register::AX | Register::CX | Register::DX | Register::BX
-        | Register::SP | Register::BP | Register::SI | Register::DI
-        | Register::R8W | Register::R9W | Register::R10W | Register::R11W
-        | Register::R12W | Register::R13W | Register::R14W | Register::R15W => 2,
+        Register::AX
+        | Register::CX
+        | Register::DX
+        | Register::BX
+        | Register::SP
+        | Register::BP
+        | Register::SI
+        | Register::DI
+        | Register::R8W
+        | Register::R9W
+        | Register::R10W
+        | Register::R11W
+        | Register::R12W
+        | Register::R13W
+        | Register::R14W
+        | Register::R15W => 2,
         // 32-bit registers
-        Register::EAX | Register::ECX | Register::EDX | Register::EBX
-        | Register::ESP | Register::EBP | Register::ESI | Register::EDI
-        | Register::R8D | Register::R9D | Register::R10D | Register::R11D
-        | Register::R12D | Register::R13D | Register::R14D | Register::R15D => 4,
+        Register::EAX
+        | Register::ECX
+        | Register::EDX
+        | Register::EBX
+        | Register::ESP
+        | Register::EBP
+        | Register::ESI
+        | Register::EDI
+        | Register::R8D
+        | Register::R9D
+        | Register::R10D
+        | Register::R11D
+        | Register::R12D
+        | Register::R13D
+        | Register::R14D
+        | Register::R15D => 4,
         // XMM registers (128-bit)
-        Register::XMM0 | Register::XMM1 | Register::XMM2 | Register::XMM3
-        | Register::XMM4 | Register::XMM5 | Register::XMM6 | Register::XMM7
-        | Register::XMM8 | Register::XMM9 | Register::XMM10 | Register::XMM11
-        | Register::XMM12 | Register::XMM13 | Register::XMM14 | Register::XMM15 => 16,
+        Register::XMM0
+        | Register::XMM1
+        | Register::XMM2
+        | Register::XMM3
+        | Register::XMM4
+        | Register::XMM5
+        | Register::XMM6
+        | Register::XMM7
+        | Register::XMM8
+        | Register::XMM9
+        | Register::XMM10
+        | Register::XMM11
+        | Register::XMM12
+        | Register::XMM13
+        | Register::XMM14
+        | Register::XMM15 => 16,
         // 64-bit registers and default
         _ => 8,
     }
@@ -111,9 +168,9 @@ impl CpuState {
     }
 
     // Flag bit positions
-    const CF: u64 = 1 << 0;  // Carry
-    const ZF: u64 = 1 << 6;  // Zero
-    const SF: u64 = 1 << 7;  // Sign
+    const CF: u64 = 1 << 0; // Carry
+    const ZF: u64 = 1 << 6; // Zero
+    const SF: u64 = 1 << 7; // Sign
     const OF: u64 = 1 << 11; // Overflow
 
     /// Set zero flag based on value.
@@ -229,9 +286,9 @@ impl Memory {
         }
 
         // Linear search for region
-        self.regions.iter_mut().find(|region| {
-            addr >= region.start && addr < region.start + region.data.len() as u64
-        })
+        self.regions
+            .iter_mut()
+            .find(|region| addr >= region.start && addr < region.start + region.data.len() as u64)
     }
 
     /// Read bytes from memory.
@@ -376,10 +433,7 @@ impl Emulator {
 
             // Fetch instruction bytes
             let Some(code) = self.mem.read(self.cpu.rip, 15) else {
-                return EmulationResult::Error(format!(
-                    "Cannot read code at {:#x}",
-                    self.cpu.rip
-                ));
+                return EmulationResult::Error(format!("Cannot read code at {:#x}", self.cpu.rip));
             };
 
             // Decode instruction
@@ -539,9 +593,18 @@ impl Emulator {
             }
 
             // Conditional jumps
-            Mnemonic::Je | Mnemonic::Jne | Mnemonic::Jl | Mnemonic::Jle | Mnemonic::Jg
-            | Mnemonic::Jge | Mnemonic::Jb | Mnemonic::Jbe | Mnemonic::Ja | Mnemonic::Jae
-            | Mnemonic::Js | Mnemonic::Jns => {
+            Mnemonic::Je
+            | Mnemonic::Jne
+            | Mnemonic::Jl
+            | Mnemonic::Jle
+            | Mnemonic::Jg
+            | Mnemonic::Jge
+            | Mnemonic::Jb
+            | Mnemonic::Jbe
+            | Mnemonic::Ja
+            | Mnemonic::Jae
+            | Mnemonic::Js
+            | Mnemonic::Jns => {
                 if self.check_condition(instr.mnemonic()) {
                     self.cpu.rip = self.get_branch_target(instr)?;
                 } else {
@@ -628,9 +691,18 @@ impl Emulator {
             }
 
             // CMOV variants
-            Mnemonic::Cmove | Mnemonic::Cmovne | Mnemonic::Cmovl | Mnemonic::Cmovle
-            | Mnemonic::Cmovg | Mnemonic::Cmovge | Mnemonic::Cmovb | Mnemonic::Cmovbe
-            | Mnemonic::Cmova | Mnemonic::Cmovae | Mnemonic::Cmovs | Mnemonic::Cmovns => {
+            Mnemonic::Cmove
+            | Mnemonic::Cmovne
+            | Mnemonic::Cmovl
+            | Mnemonic::Cmovle
+            | Mnemonic::Cmovg
+            | Mnemonic::Cmovge
+            | Mnemonic::Cmovb
+            | Mnemonic::Cmovbe
+            | Mnemonic::Cmova
+            | Mnemonic::Cmovae
+            | Mnemonic::Cmovs
+            | Mnemonic::Cmovns => {
                 self.exec_cmov(instr)?;
                 self.cpu.rip = next_ip;
             }
@@ -854,7 +926,9 @@ impl Emulator {
     fn get_operand(&mut self, instr: &Instruction, op: u32) -> Result<u64, String> {
         match instr.op_kind(op) {
             OpKind::Register => Ok(self.get_reg(instr.op_register(op))),
-            OpKind::Immediate8 | OpKind::Immediate8to16 | OpKind::Immediate8to32
+            OpKind::Immediate8
+            | OpKind::Immediate8to16
+            | OpKind::Immediate8to32
             | OpKind::Immediate8to64 => Ok(instr.immediate8() as u64),
             OpKind::Immediate16 => Ok(instr.immediate16() as u64),
             OpKind::Immediate32 | OpKind::Immediate32to64 => Ok(instr.immediate32() as u64),
@@ -979,7 +1053,10 @@ impl Emulator {
     }
 
     fn exec_pop(&mut self, instr: &Instruction) -> Result<(), String> {
-        let val = self.mem.read_u64(self.cpu.regs[4]).ok_or("Stack underflow")?;
+        let val = self
+            .mem
+            .read_u64(self.cpu.regs[4])
+            .ok_or("Stack underflow")?;
         self.cpu.regs[4] += 8;
         self.set_operand(instr, 0, val)
     }
@@ -1320,7 +1397,7 @@ mod tests {
     fn test_add_sub() {
         let mut emu = Emulator::new();
         emu.cpu.regs[0] = 10; // RAX = 10
-        emu.cpu.regs[1] = 3;  // RCX = 3
+        emu.cpu.regs[1] = 3; // RCX = 3
 
         // add rax, rcx
         let code = [0x48, 0x01, 0xc8];

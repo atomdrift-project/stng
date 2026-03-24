@@ -117,8 +117,18 @@ pub(super) fn is_php_code(s: &str) -> bool {
     }
 
     // Strong PHP indicators - opening tags are very distinctive
-    if s.contains("<?php") || s.contains("<?=") {
+    if s.contains("<?php") {
         return true;
+    }
+
+    // Short echo tag <?= requires plausible PHP content after it.
+    // Random binary data in .reloc sections can produce <?= followed by garbage
+    // (e.g. `<?=">.>|>`). Require a space, letter, or $ after the tag.
+    if let Some(pos) = s.find("<?=") {
+        let after = &s[pos + 3..];
+        if after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == ' ' || c == '$') {
+            return true;
+        }
     }
 
     // Fallback: look for PHP-specific patterns
@@ -163,15 +173,33 @@ pub(super) fn is_applescript(s: &str) -> bool {
         // Check for "tell", "path", "file", "end ", "set ", "with", "shel", "dial", "alia" (case insensitive)
         matches!(
             w,
-            b"tell" | b"Tell" | b"TELL" |
-            b"path" | b"Path" | b"PATH" |
-            b"file" | b"File" | b"FILE" |
-            b"end " | b"End " | b"END " |
-            b"set " | b"Set " | b"SET " |
-            b"with" | b"With" | b"WITH" |
-            b"shel" | b"Shel" | b"SHEL" |
-            b"dial" | b"Dial" | b"DIAL" |
-            b"alia" | b"Alia" | b"ALIA"
+            b"tell"
+                | b"Tell"
+                | b"TELL"
+                | b"path"
+                | b"Path"
+                | b"PATH"
+                | b"file"
+                | b"File"
+                | b"FILE"
+                | b"end "
+                | b"End "
+                | b"END "
+                | b"set "
+                | b"Set "
+                | b"SET "
+                | b"with"
+                | b"With"
+                | b"WITH"
+                | b"shel"
+                | b"Shel"
+                | b"SHEL"
+                | b"dial"
+                | b"Dial"
+                | b"DIAL"
+                | b"alia"
+                | b"Alia"
+                | b"ALIA"
         )
     });
     if !has_indicator {
@@ -227,12 +255,12 @@ pub(super) fn is_shell_command(s: &str) -> bool {
 
     // Must have some length
     if len < 4 {
-    // Shell commands are predominantly ASCII. Long strings with many non-ASCII chars
-    // (like localized UI text) are almost never shell commands.
-    let ascii_count = s.bytes().filter(u8::is_ascii).count();
-    if len > 100 && ascii_count * 100 / len < 95 {
-        return false;
-    }
+        // Shell commands are predominantly ASCII. Long strings with many non-ASCII chars
+        // (like localized UI text) are almost never shell commands.
+        let ascii_count = s.bytes().filter(u8::is_ascii).count();
+        if len > 100 && ascii_count * 100 / len < 95 {
+            return false;
+        }
 
         return false;
     }

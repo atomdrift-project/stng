@@ -494,7 +494,12 @@ impl<'a> StackStringExtractor<'a> {
     /// Handle XMM store to stack memory (e.g., movups [rsp+disp], xmm).
     /// Records the XMM contents as a raw blob for XOR-pair detection.
     /// Returns the instruction length if successful.
-    fn handle_xmm_store(&mut self, modrm_offset: usize, rex: u8, instr_off: usize) -> Option<usize> {
+    fn handle_xmm_store(
+        &mut self,
+        modrm_offset: usize,
+        rex: u8,
+        instr_off: usize,
+    ) -> Option<usize> {
         if modrm_offset >= self.data.len() {
             return None;
         }
@@ -1020,7 +1025,7 @@ impl<'a> StackStringExtractor<'a> {
                     section: None,
                     method: StringMethod::StackString,
                     kind: StringKind::StackString,
-    
+
                     fragments: Some(vec![StringFragment {
                         offset: start_pos as u64,
                         length: chunk_len,
@@ -1576,8 +1581,7 @@ mod tests {
         // ct  = [0x93, 0xBF, 0xBE, 0xC4, 0xB5, 0xBE, 0xC4, 0x7D] (all non-printable)
         // key = [0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0]
         // 0x93 + 0xB0 = 0x43 = 'C', 0xBF + 0xB0 = 0x6F = 'o', etc.
-        let ciphertext: u64 =
-            u64::from_le_bytes([0x93, 0xBF, 0xBE, 0xC4, 0xB5, 0xBE, 0xC4, 0x7D]);
+        let ciphertext: u64 = u64::from_le_bytes([0x93, 0xBF, 0xBE, 0xC4, 0xB5, 0xBE, 0xC4, 0x7D]);
         let key: u64 = u64::from_le_bytes([0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0]);
         let mut code = Vec::new();
         code.extend(movabs_rax(ciphertext));

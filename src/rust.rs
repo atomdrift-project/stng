@@ -137,9 +137,7 @@ impl RustStringExtractor {
                     .collect();
                 let new_strings: Vec<_> = structured
                     .into_iter()
-                    .filter(|s| {
-                        s.value.len() >= struct_min && !existing.contains(s.value.as_str())
-                    })
+                    .filter(|s| s.value.len() >= struct_min && !existing.contains(s.value.as_str()))
                     .collect();
                 strings.extend(new_strings);
             }

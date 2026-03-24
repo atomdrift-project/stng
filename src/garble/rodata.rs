@@ -73,9 +73,14 @@ pub fn extract_garble_rodata_strings(
                 let mut best: Option<(String, i32)> = None;
 
                 for op in GarbleOp::ALL {
-                    if let Some((s, score)) =
-                        try_decode_pair(blob_a, blob_b, op, min_length, MIN_SCORE_THRESHOLD, &mut buf)
-                    {
+                    if let Some((s, score)) = try_decode_pair(
+                        blob_a,
+                        blob_b,
+                        op,
+                        min_length,
+                        MIN_SCORE_THRESHOLD,
+                        &mut buf,
+                    ) {
                         if best.as_ref().is_none_or(|(_, bs)| score > *bs) {
                             best = Some((s, score));
                         }
@@ -273,7 +278,9 @@ fn is_meaningful_decoded_string(s: &str) -> bool {
         // For short strings, require at least one lowercase letter or digit.
         // Real garble strings almost always contain lowercase or digits
         // (e.g., "malware.com", "config", "http://").
-        let has_lower_or_digit = bytes.iter().any(|&b| b.is_ascii_lowercase() || b.is_ascii_digit());
+        let has_lower_or_digit = bytes
+            .iter()
+            .any(|&b| b.is_ascii_lowercase() || b.is_ascii_digit());
         if !has_lower_or_digit {
             return false;
         }
@@ -312,9 +319,7 @@ fn is_meaningful_decoded_string(s: &str) -> bool {
         let has_vowel_or_digit = bytes.iter().any(|&b| {
             matches!(
                 b,
-                b'a' | b'e' | b'i' | b'o' | b'u'
-                    | b'A' | b'E' | b'I' | b'O' | b'U'
-                    | b'0'..=b'9'
+                b'a' | b'e' | b'i' | b'o' | b'u' | b'A' | b'E' | b'I' | b'O' | b'U' | b'0'..=b'9'
             )
         });
         if !has_vowel_or_digit {

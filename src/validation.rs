@@ -528,10 +528,15 @@ fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     // Check for consonant-only strings (no vowels) - likely random garbage
     // unless it's a known pattern like "str", "ptr", "chr", "src", etc.
     if is_all_lower && len >= 4 {
-        let vowel_count = s.bytes().filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u')).count();
+        let vowel_count = s
+            .bytes()
+            .filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
+            .count();
         if vowel_count == 0 {
             // Whitelist common consonant-only strings
-            let known = ["str", "ptr", "chr", "src", "dst", "tmp", "prn", "sys", "cfg", "mgr", "ctx"];
+            let known = [
+                "str", "ptr", "chr", "src", "dst", "tmp", "prn", "sys", "cfg", "mgr", "ctx",
+            ];
             if !known.contains(&s) {
                 return true;
             }
@@ -1171,7 +1176,10 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     // Short strings (4-10 chars) with mixed case and digits that don't look like identifiers
     // e.g., "gvjc54" - lowercase + digit but no vowels and doesn't follow naming conventions
     if (4..=10).contains(&len) && stats.lower > 0 && stats.digit > 0 && stats.upper == 0 {
-        let vowel_count = s.bytes().filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u')).count();
+        let vowel_count = s
+            .bytes()
+            .filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
+            .count();
         // If no vowels and has digits embedded in lowercase, likely garbage
         if vowel_count == 0 && stats.lower >= 3 && stats.digit >= 1 {
             return true;
@@ -1181,14 +1189,19 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     // Short all-lowercase strings (4-5 chars) that don't look like real words
     // e.g., "oujr", "omor", "kmnro" - unusual phonotactic patterns
     if (4..=5).contains(&len) && stats.lower == len && stats.digit == 0 && stats.upper == 0 {
-        let vowel_count = s.bytes().filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u')).count();
+        let vowel_count = s
+            .bytes()
+            .filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
+            .count();
 
         // No vowels at all - likely random garbage
         if vowel_count <= 1 {
             // Whitelist common short words/abbreviations
-            let known_short = ["init", "main", "type", "file", "func", "data", "test", "temp",
-                               "code", "info", "user", "node", "sync", "async", "true", "null",
-                               "void", "char", "bool", "time", "size", "path", "name", "text"];
+            let known_short = [
+                "init", "main", "type", "file", "func", "data", "test", "temp", "code", "info",
+                "user", "node", "sync", "async", "true", "null", "void", "char", "bool", "time",
+                "size", "path", "name", "text",
+            ];
             if !known_short.contains(&s) {
                 return true;
             }
@@ -1201,19 +1214,28 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
             let chars: Vec<char> = s.chars().collect();
             if chars.len() == 4 {
                 // 4-char words starting with o/u are suspicious - whitelist known ones
-                let known_ou_4char = ["open", "over", "only", "once", "used", "upon", "unit", "user",
-                                       "undo", "unix", "okay", "oral", "opus"];
+                let known_ou_4char = [
+                    "open", "over", "only", "once", "used", "upon", "unit", "user", "undo", "unix",
+                    "okay", "oral", "opus",
+                ];
                 if !known_ou_4char.contains(&s) {
                     return true;
                 }
             } else if chars.len() == 5 {
                 // 5-char words starting with o/u - also whitelist
-                let known_ou_5char = ["other", "order", "offer", "under", "until", "using", "usual",
-                                       "opera", "outer", "owner", "union"];
+                let known_ou_5char = [
+                    "other", "order", "offer", "under", "until", "using", "usual", "opera",
+                    "outer", "owner", "union",
+                ];
                 if !known_ou_5char.contains(&s) {
                     // Check for common suffix patterns
-                    let ends_like_word = s.ends_with("er") || s.ends_with("ed") || s.ends_with("ly")
-                        || s.ends_with("al") || s.ends_with("le") || s.ends_with("en") || s.ends_with("es");
+                    let ends_like_word = s.ends_with("er")
+                        || s.ends_with("ed")
+                        || s.ends_with("ly")
+                        || s.ends_with("al")
+                        || s.ends_with("le")
+                        || s.ends_with("en")
+                        || s.ends_with("es");
                     if !ends_like_word {
                         return true;
                     }
@@ -1248,7 +1270,10 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     // Very short strings (4 chars) with lowercase + single digit at end
     // e.g., "kmo8", "abc1" - unless it follows naming conventions or is known
     if len == 4 && stats.lower >= 2 && stats.digit == 1 && stats.upper == 0 {
-        let vowel_count = s.bytes().filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u')).count();
+        let vowel_count = s
+            .bytes()
+            .filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
+            .count();
         // If has 0-1 vowels and ends with digit, likely garbage
         if vowel_count <= 1 && stats.last_char.is_ascii_digit() {
             // Whitelist known patterns (encoding, crypto, architecture suffixes)
@@ -1342,7 +1367,8 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
         && (stats.lower == 0 || stats.upper == 0)
         && !(stats.first_char.is_ascii_digit() && stats.last_char.is_ascii_digit())
         && !has_suspicious_leading_digit
-        && stats.alternations < 4 // Reject highly alternating patterns
+        && stats.alternations < 4
+    // Reject highly alternating patterns
     {
         return false; // Valid identifier pattern
     }
@@ -1506,8 +1532,8 @@ mod tests {
         assert!(is_garbage("P9O"));
         assert!(is_garbage("8ZAj"));
         assert!(is_garbage("pIo2")); // mixed case + digit = garbage
-        // Note: "PIO2" (3 upper + 1 digit) is now accepted as it matches
-        // common patterns like "UTF8", "SHA1", "3DES" (file sigs, algorithms)
+                                     // Note: "PIO2" (3 upper + 1 digit) is now accepted as it matches
+                                     // common patterns like "UTF8", "SHA1", "3DES" (file sigs, algorithms)
         assert!(!is_garbage("PIO2"));
         assert!(is_garbage("@E?"));
         assert!(is_garbage("P$O"));
@@ -1519,7 +1545,7 @@ mod tests {
         assert!(is_garbage("Uim0"));
         assert!(is_garbage("Ilu4")); // mixed case with digit
         assert!(is_garbage("cwZd")); // mixed case
-        // Consistent case alphanumeric patterns are accepted if they look like real identifiers
+                                     // Consistent case alphanumeric patterns are accepted if they look like real identifiers
         assert!(!is_garbage("9N2A")); // all uppercase + digits, leading 9 = valid
         assert!(is_garbage("0YI0")); // digits at BOTH ends = garbage
         assert!(is_garbage("0GZF")); // single leading 0 = garbage
@@ -2084,14 +2110,29 @@ mod dotnet_tests {
     #[test]
     fn test_dotnet_garbage_strings() {
         // These garbage strings from .NET native images should be filtered
-        assert!(is_garbage("omor"), "omor should be garbage (nonsense 4-char)");
-        assert!(is_garbage("uDuntßñ6OlÇÕ"), "non-ASCII garbage should be filtered");
-        assert!(is_garbage("ððððೳóóóóࣵ"), "Unicode garbage should be filtered");
+        assert!(
+            is_garbage("omor"),
+            "omor should be garbage (nonsense 4-char)"
+        );
+        assert!(
+            is_garbage("uDuntßñ6OlÇÕ"),
+            "non-ASCII garbage should be filtered"
+        );
+        assert!(
+            is_garbage("ððððೳóóóóࣵ"),
+            "Unicode garbage should be filtered"
+        );
 
         // Note: Short numeric strings with multiple unique digits (like "3343") could be
         // valid port numbers, IDs, etc. Only reject single-digit repeats like "3333"
-        assert!(!is_garbage("3343"), "3343 has multiple unique digits - could be valid");
-        assert!(is_garbage("3333"), "3333 is all same digit - likely garbage");
+        assert!(
+            !is_garbage("3343"),
+            "3343 has multiple unique digits - could be valid"
+        );
+        assert!(
+            is_garbage("3333"),
+            "3333 is all same digit - likely garbage"
+        );
 
         // Note: "poe" and "pot" are valid 3-char English words, so they shouldn't be filtered
         // 3-char strings aren't automatically garbage
@@ -2103,7 +2144,10 @@ mod dotnet_tests {
     fn test_repetitive_nonascii_patterns() {
         // Repetitive single-char patterns with non-ASCII are misaligned binary data
         // These come from .NET native images and have one letter repeated many times
-        assert!(is_garbage("zçz&zÇzÌzhzµzyz½z{zHz}zQz\\zYz0z8z"), "z-pattern garbage");
+        assert!(
+            is_garbage("zçz&zÇzÌzhzµzyz½z{zHz}zQz\\zYz0z8z"),
+            "z-pattern garbage"
+        );
         // These patterns are harder to catch because they have fewer non-ASCII chars
         // or different char distributions. Skip for now as main garbage is filtered.
     }
@@ -2112,8 +2156,14 @@ mod dotnet_tests {
     fn test_reloc_section_patterns() {
         // PE .reloc section patterns - single letter repeated with non-ASCII/special chars
         // These patterns have a dominant lowercase letter with non-ASCII mixed in
-        assert!(is_garbage("x xçx&xìxÇxqxµxyx^x½x{xHx\\xYx0x8x"), "reloc x-pattern 1");
-        assert!(is_garbage("xhx°xqxµxyx^x½x{xHx}xQx\\xYx0x8x"), "reloc x-pattern 2");
+        assert!(
+            is_garbage("x xçx&xìxÇxqxµxyx^x½x{xHx\\xYx0x8x"),
+            "reloc x-pattern 1"
+        );
+        assert!(
+            is_garbage("xhx°xqxµxyx^x½x{xHx}xQx\\xYx0x8x"),
+            "reloc x-pattern 2"
+        );
         assert!(is_garbage("yhyµyHy}yQy\\yYy0y8y"), "reloc y-pattern");
         assert!(is_garbage("w wçw&wÇwØwhw°wqwµwyw^wHw"), "reloc w-pattern");
         assert!(is_garbage("sµsys^sHsYs0s8s"), "reloc s-pattern");

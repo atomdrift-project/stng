@@ -97,7 +97,10 @@ fn test_gopclntab_magic_detection() {
 
     let pclntab = Pclntab::parse(&go118_header, 0);
     assert!(pclntab.is_some());
-    assert_eq!(pclntab.as_ref().map(|p| p.go_version), Some(GoVersion::Go118));
+    assert_eq!(
+        pclntab.as_ref().map(|p| p.go_version),
+        Some(GoVersion::Go118)
+    );
 
     // Go 1.20 magic
     let go120_header: [u8; 80] = {
@@ -109,7 +112,10 @@ fn test_gopclntab_magic_detection() {
 
     let pclntab = Pclntab::parse(&go120_header, 0);
     assert!(pclntab.is_some());
-    assert_eq!(pclntab.as_ref().map(|p| p.go_version), Some(GoVersion::Go120));
+    assert_eq!(
+        pclntab.as_ref().map(|p| p.go_version),
+        Some(GoVersion::Go120)
+    );
 }
 
 /// Test func_finder approach for finding CALL targets.
@@ -203,8 +209,18 @@ fn test_garble_fresh_extraction_v2() {
     assert!(!text_data.is_empty(), "Should find .text section");
     assert!(!rodata_data.is_empty(), "Should find .rodata section");
 
-    eprintln!(".text: {:#x} - {:#x} ({} bytes)", text_va, text_va + text_data.len() as u64, text_data.len());
-    eprintln!(".rodata: {:#x} - {:#x} ({} bytes)", rodata_va, rodata_va + rodata_data.len() as u64, rodata_data.len());
+    eprintln!(
+        ".text: {:#x} - {:#x} ({} bytes)",
+        text_va,
+        text_va + text_data.len() as u64,
+        text_data.len()
+    );
+    eprintln!(
+        ".rodata: {:#x} - {:#x} ({} bytes)",
+        rodata_va,
+        rodata_va + rodata_data.len() as u64,
+        rodata_data.len()
+    );
 
     // Try to find slicebytetostring address from gopclntab
     let mut slicebytetostring_addr = None;
@@ -314,7 +330,10 @@ fn test_garble_binary_expected_strings() {
 
     for exp in expected {
         if !values.contains(&exp) {
-            eprintln!("Note: expected string '{}' not found (may need emulation)", exp);
+            eprintln!(
+                "Note: expected string '{}' not found (may need emulation)",
+                exp
+            );
         }
     }
 

@@ -131,12 +131,8 @@ fn find_us_stream(metadata: &[u8]) -> Option<(usize, usize)> {
     // 8-12: Reserved
     // 12-16: Version string length (rounded up to 4-byte boundary)
 
-    let version_len = u32::from_le_bytes([
-        metadata[12],
-        metadata[13],
-        metadata[14],
-        metadata[15],
-    ]) as usize;
+    let version_len =
+        u32::from_le_bytes([metadata[12], metadata[13], metadata[14], metadata[15]]) as usize;
 
     // Version length must be reasonable
     if version_len > 256 || 16 + version_len > metadata.len() {
@@ -153,10 +149,8 @@ fn find_us_stream(metadata: &[u8]) -> Option<(usize, usize)> {
     }
 
     // Skip flags (2 bytes)
-    let stream_count = u16::from_le_bytes([
-        metadata[streams_offset + 2],
-        metadata[streams_offset + 3],
-    ]) as usize;
+    let stream_count =
+        u16::from_le_bytes([metadata[streams_offset + 2], metadata[streams_offset + 3]]) as usize;
 
     if stream_count > 10 {
         return None; // Too many streams, likely corrupt

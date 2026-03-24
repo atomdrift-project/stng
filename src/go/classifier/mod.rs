@@ -386,7 +386,10 @@ pub fn classify_string(s: &str) -> StringKind {
         }
 
         // Reject paths with too many special characters (likely garbage)
-        let special_count = s.bytes().filter(|b| !b.is_ascii_alphanumeric() && !b.is_ascii_whitespace()).count();
+        let special_count = s
+            .bytes()
+            .filter(|b| !b.is_ascii_alphanumeric() && !b.is_ascii_whitespace())
+            .count();
         let alphanumeric_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
         if alphanumeric_count == 0 || (len > 0 && special_count * 100 / len > 30) {
             return StringKind::Const; // Too many special chars for a valid path
@@ -1442,13 +1445,36 @@ mod tests {
     }
 
     #[test]
+    fn test_is_base64_rejects_cert_timestamps() {
+        use super::encoding::is_base64;
+
+        // ASN.1 certificate timestamps (UTCTime/GeneralizedTime + next field)
+        // e.g. "201229235959Z0b1" = "20121229235959Z" + ASN.1 tag "0b1"
+        assert!(!is_base64("201229235959Z0b1"));
+        assert!(!is_base64("310111235959Z0w1"));
+    }
+
+    #[test]
+    fn test_is_base64_rejects_x86_instruction_patterns() {
+        use super::encoding::is_base64;
+
+        // x86 conditional jump patterns: Ht (test+jz) and HH sequences
+        // These have high character repetition but decode to non-printable garbage
+        assert!(!is_base64("rtVHHtRHt2HtLHHu"));
+    }
+
+    #[test]
     fn test_is_base64_accepts_real_base64() {
         use super::encoding::is_base64;
 
         // Valid base64 should pass regardless of CamelCase patterns
         assert!(is_base64("SGVsbG8gV29ybGQhCg==")); // "Hello World!\n"
-        assert!(is_base64("VGhpcyBpcyBhIHNlY3JldCBtZXNzYWdlIGZvciB0ZXN0aW5n")); // Long
-        assert!(is_base64("YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODkw")); // alphabet
+        assert!(is_base64(
+            "VGhpcyBpcyBhIHNlY3JldCBtZXNzYWdlIGZvciB0ZXN0aW5n"
+        )); // Long
+        assert!(is_base64(
+            "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODkw"
+        )); // alphabet
 
         // Base64 with many accidental CamelCase transitions should still pass
         assert!(is_base64("aB3cD5eF7gH9iJ1kL2mN4oP6qR8sT0uV")); // Random patterns
@@ -1561,9 +1587,7 @@ mod tests {
     #[test]
     fn test_is_cryptographic_hash_valid() {
         // MD5 hash (32 chars)
-        assert!(is_cryptographic_hash(
-            "d41d8cd98f00b204e9800998ecf8427e"
-        ));
+        assert!(is_cryptographic_hash("d41d8cd98f00b204e9800998ecf8427e"));
 
         // SHA1 hash (40 chars)
         assert!(is_cryptographic_hash(
@@ -1587,20 +1611,14 @@ mod tests {
         assert!(!is_cryptographic_hash("d41d8cd98f00b204"));
 
         // Wrong length (not 32/40/64/128)
-        assert!(!is_cryptographic_hash(
-            "d41d8cd98f00b204e9800998ecf8427e00"
-        ));
+        assert!(!is_cryptographic_hash("d41d8cd98f00b204e9800998ecf8427e00"));
 
         // Hex-encoded ASCII text ("Hello World" repeated) - should NOT be hash
         // "Hello World" = 48656c6c6f20576f726c64
-        assert!(!is_cryptographic_hash(
-            "48656c6c6f20576f726c6448656c6c6f"
-        ));
+        assert!(!is_cryptographic_hash("48656c6c6f20576f726c6448656c6c6f"));
 
         // Not hex digits
-        assert!(!is_cryptographic_hash(
-            "ghijklmnopqrstuvwxyz123456789012"
-        ));
+        assert!(!is_cryptographic_hash("ghijklmnopqrstuvwxyz123456789012"));
     }
 
     #[test]
@@ -1628,5 +1646,20 @@ mod tests {
             classify_string("48656c6c6f20576f726c6448656c6c6f"),
             StringKind::Hash
         );
+    }
+
+    #[test]
+    fn test_php_detection() {
+        // Real PHP code
+        assert_eq!(
+            classify_string("<?php echo 'hello'; ?>"),
+            StringKind::PhpCode
+        );
+
+        // Short echo tag with valid content
+        assert_eq!(classify_string("<?= $variable ?>"), StringKind::PhpCode);
+
+        // .reloc section garbage starting with <?= must NOT trigger PHP detection
+        assert_ne!(classify_string("<?=\">.>|>"), StringKind::PhpCode);
     }
 }

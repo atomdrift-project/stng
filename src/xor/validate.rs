@@ -339,8 +339,19 @@ fn file_extension_automaton() -> &'static AhoCorasick {
     static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
     CACHE.get_or_init(|| {
         AhoCorasick::new([
-            ".plist", ".json", ".conf", ".sqlite", ".jpg", ".png", ".txt", ".log", ".xml", ".db",
-            ".dat", ".wallet", ".keystore",
+            ".plist",
+            ".json",
+            ".conf",
+            ".sqlite",
+            ".jpg",
+            ".png",
+            ".txt",
+            ".log",
+            ".xml",
+            ".db",
+            ".dat",
+            ".wallet",
+            ".keystore",
         ])
         .expect("static patterns")
     })
@@ -827,7 +838,10 @@ pub(crate) fn is_partial_xor_decode(s: &str) -> bool {
                 // Check if the divergent part contains garbage characters
                 let garbage_chars = divergent_part
                     .chars()
-                    .filter(|c| !c.is_ascii_alphanumeric() && !matches!(*c, '\\' | '/' | ':' | '.' | '_' | '-' | '%'))
+                    .filter(|c| {
+                        !c.is_ascii_alphanumeric()
+                            && !matches!(*c, '\\' | '/' | ':' | '.' | '_' | '-' | '%')
+                    })
                     .count();
 
                 let div_char_count = divergent_part.chars().count();
@@ -838,8 +852,14 @@ pub(crate) fn is_partial_xor_decode(s: &str) -> bool {
                 }
 
                 // Check for case inconsistency (mixed case in what should be consistent)
-                let upper_in_div = divergent_part.chars().filter(char::is_ascii_uppercase).count();
-                let lower_in_div = divergent_part.chars().filter(char::is_ascii_lowercase).count();
+                let upper_in_div = divergent_part
+                    .chars()
+                    .filter(char::is_ascii_uppercase)
+                    .count();
+                let lower_in_div = divergent_part
+                    .chars()
+                    .filter(char::is_ascii_lowercase)
+                    .count();
                 let alpha_in_div = upper_in_div + lower_in_div;
 
                 // Wild case mixing is suspicious (e.g., "ROViLE" instead of "ROFILE")

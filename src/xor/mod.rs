@@ -263,6 +263,24 @@ mod tests {
     }
 
     #[test]
+    fn test_xaml_margin_not_detected_as_ip() {
+        // XAML Margin="30,10,30,0" with key 0x02: comma (0x2C) XOR 0x02 = period (0x2E),
+        // turning "30,10,30,0" into "12.32.12.2" which looks like an IP.
+        // The scanner must reject keys where '.' maps to common separators.
+        let xaml = b"<StackPanel Margin=\"30,10,30,0\" Width=\"418\">";
+        let key: u8 = 0x02;
+        let data = make_xor_test_data(xaml, key, 10);
+        let results = extract_xor_strings(&data, 8, false);
+        assert!(
+            !results
+                .iter()
+                .any(|r| r.value == "12.32.12.2" && r.kind == StringKind::IP),
+            "XAML margin commas must not produce false IP via XOR key 0x02. Results: {:?}",
+            results
+        );
+    }
+
+    #[test]
     fn test_custom_xor_single_byte_key() {
         // Test with single-byte custom XOR key
         let plaintext = b"http://malware.example.com";

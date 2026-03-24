@@ -13,7 +13,6 @@ use std::io::{self, IsTerminal};
 use std::path::Path;
 use stng::{Severity, StringKind, StringMethod};
 
-
 #[derive(Parser, Debug)]
 #[command(name = "stng")]
 #[command(
@@ -725,48 +724,47 @@ fn main() -> Result<()> {
                     current_arch = Some(arch);
                     // Fall through to print_string_line instead of skipping
                 } else {
+                    // Record offset for this section (first string's offset)
+                    let section_key = section.map(std::string::ToString::to_string);
+                    section_offsets
+                        .entry(section_key.clone())
+                        .or_insert(s.data_offset);
+                    let section_offset = section_offsets.get(&section_key).copied().unwrap_or(0);
 
-                // Record offset for this section (first string's offset)
-                let section_key = section.map(std::string::ToString::to_string);
-                section_offsets
-                    .entry(section_key.clone())
-                    .or_insert(s.data_offset);
-                let section_offset = section_offsets.get(&section_key).copied().unwrap_or(0);
+                    let section_name = section.unwrap_or("(analysis)");
 
-                let section_name = section.unwrap_or("(analysis)");
+                    // Build section header with optional architecture
+                    let mut section_header = if let Some(sect) = section {
+                        // Try exact match first, then prefix match for section strings with trailing garbage
+                        let metadata = section_metadata.get(sect).or_else(|| {
+                            section_metadata
+                                .iter()
+                                .find(|(k, _)| k.starts_with(sect) || sect.starts_with(k.as_str()))
+                                .map(|(_, v)| v)
+                        });
 
-                // Build section header with optional architecture
-                let mut section_header = if let Some(sect) = section {
-                    // Try exact match first, then prefix match for section strings with trailing garbage
-                    let metadata = section_metadata.get(sect).or_else(|| {
-                        section_metadata
-                            .iter()
-                            .find(|(k, _)| k.starts_with(sect) || sect.starts_with(k.as_str()))
-                            .map(|(_, v)| v)
-                    });
-
-                    if let Some(meta) = metadata {
-                        format!("{} {}", section_name, meta)
+                        if let Some(meta) = metadata {
+                            format!("{} {}", section_name, meta)
+                        } else {
+                            section_name.to_string()
+                        }
                     } else {
                         section_name.to_string()
+                    };
+
+                    // Add architecture if present (for fat binaries)
+                    if let Some(architecture) = arch {
+                        section_header = format!("{} ({})", section_header, architecture);
                     }
-                } else {
-                    section_name.to_string()
-                };
 
-                // Add architecture if present (for fat binaries)
-                if let Some(architecture) = arch {
-                    section_header = format!("{} ({})", section_header, architecture);
-                }
-
-                let offset_str = format!("{:>8x}", section_offset);
-                if use_color {
-                    println!("{DIM}{} ── {} ──{RESET}", offset_str, section_header);
-                } else {
-                    println!("{} ── {} ──", offset_str, section_header);
-                }
-                current_section = Some(section);
-                current_arch = Some(arch);
+                    let offset_str = format!("{:>8x}", section_offset);
+                    if use_color {
+                        println!("{DIM}{} ── {} ──{RESET}", offset_str, section_header);
+                    } else {
+                        println!("{} ── {} ──", offset_str, section_header);
+                    }
+                    current_section = Some(section);
+                    current_arch = Some(arch);
                 }
             }
 

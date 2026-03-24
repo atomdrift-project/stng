@@ -240,7 +240,9 @@ pub fn extract_garble_strings_v2<'a>(
     result.decrypt_func_count = candidates.len();
 
     if candidates.is_empty() {
-        result.errors.push("No decrypt candidates found".to_string());
+        result
+            .errors
+            .push("No decrypt candidates found".to_string());
         return result;
     }
 

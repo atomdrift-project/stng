@@ -68,31 +68,27 @@ static IMPORT_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// String literal assignment: varname = 'long_base64_string'
 #[allow(clippy::expect_used)]
-static STRING_ASSIGN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(\w+)\s*=\s*'([A-Za-z0-9+/=\s]{20,})'"#)
-        .expect("static regex")
-});
+static STRING_ASSIGN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(\w+)\s*=\s*'([A-Za-z0-9+/=\s]{20,})'"#).expect("static regex"));
 
 /// Integer constant assignment: varname = 134
 #[allow(clippy::expect_used)]
-static INT_ASSIGN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(\w+)\s*=\s*(\d{1,3})\s*$"#)
-        .expect("static regex")
-});
+static INT_ASSIGN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(\w+)\s*=\s*(\d{1,3})\s*$"#).expect("static regex"));
 
 /// XOR lambda pattern: varname = lambda ...: bytes([x ^ key_var for x in ...])
 #[allow(clippy::expect_used)]
 static XOR_LAMBDA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\w+\s*=\s*lambda\s+\w+(?:\s*,\s*\w+)*\s*:\s*bytes\s*\(\s*\[\s*\w+\s*\^\s*(\w+)\s+for"#)
-        .expect("static regex")
+    Regex::new(
+        r#"\w+\s*=\s*lambda\s+\w+(?:\s*,\s*\w+)*\s*:\s*bytes\s*\(\s*\[\s*\w+\s*\^\s*(\w+)\s+for"#,
+    )
+    .expect("static regex")
 });
 
 /// b64decode(varname) call — used to find the blob variable reference
 #[allow(clippy::expect_used)]
-static B64DECODE_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\.b64decode\s*\(\s*(\w+)\s*\)"#)
-        .expect("static regex")
-});
+static B64DECODE_VAR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\.b64decode\s*\(\s*(\w+)\s*\)"#).expect("static regex"));
 
 /// Extract all obfuscated payloads from a Python script.
 pub fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {

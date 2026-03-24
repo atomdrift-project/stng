@@ -15,8 +15,7 @@ use super::DeobfuscationResult;
 /// eval(atob("..."))
 #[allow(clippy::expect_used)]
 static EVAL_ATOB_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"eval\s*\(\s*atob\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#)
-        .expect("static regex")
+    Regex::new(r#"eval\s*\(\s*atob\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#).expect("static regex")
 });
 
 /// eval(Buffer.from("...", "base64").toString())
