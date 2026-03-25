@@ -1129,6 +1129,14 @@ fn extract_from_object(
 
                 // Extract custom function names from gopclntab
                 strings.extend(extract_pclntab_func_names_macho(macho, data, min_length));
+
+                // Raw scan fallback for Go shared libraries / cgo binaries
+                let known: HashSet<String> = strings.iter().map(|s| s.value.clone()).collect();
+                for s in extract_raw_strings(data, min_length, None, &segments, &section_info) {
+                    if !known.contains(&s.value) {
+                        strings.push(s);
+                    }
+                }
             } else if binary::macho_is_rust(macho) {
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_macho(macho, data));
@@ -1175,6 +1183,17 @@ fn extract_from_object(
                         let extractor = GoStringExtractor::new(min_length);
                         strings.extend(extractor.extract_macho(&macho, data));
                         strings.extend(extract_pclntab_func_names_macho(&macho, data, min_length));
+
+                        // Raw scan fallback for Go shared libraries / cgo binaries
+                        let known: HashSet<String> =
+                            strings.iter().map(|s| s.value.clone()).collect();
+                        for s in
+                            extract_raw_strings(data, min_length, None, &segments, &section_info)
+                        {
+                            if !known.contains(&s.value) {
+                                strings.push(s);
+                            }
+                        }
                     } else if binary::macho_is_rust(&macho) {
                         is_rust = true;
                         let extractor = RustStringExtractor::new(min_length);
@@ -1239,6 +1258,18 @@ fn extract_from_object(
                 let extractor = GoStringExtractor::new(min_length);
                 strings.extend(extractor.extract_elf(elf, scan_data));
                 strings.extend(extract_pclntab_func_names_elf(elf, scan_data, min_length));
+
+                // Raw scan fallback: Go shared libraries (cgo) store many strings
+                // in .noptrdata, .strtab, .symtab etc. that the structure-based
+                // extractor misses because it only targets .rodata.  Run a raw
+                // scan and merge strings not already found by structure analysis.
+                let known: HashSet<String> = strings.iter().map(|s| s.value.clone()).collect();
+                for s in extract_raw_strings(scan_data, min_length, None, &segments, &section_info)
+                {
+                    if !known.contains(&s.value) {
+                        strings.push(s);
+                    }
+                }
             } else if has_rust {
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_elf(elf, scan_data));
