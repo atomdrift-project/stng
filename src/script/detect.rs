@@ -126,10 +126,7 @@ fn python_score(text: &str) -> u32 {
     if text.contains("exec(") || text.contains("compile(") {
         score += 1;
     }
-    if text.contains("# -*- coding:")
-        || text.contains("#!/usr/bin/env python")
-        || text.contains("#!/usr/bin/python")
-    {
+    if text.contains("# -*- coding:") || has_shebang(text, &["python", "python2", "python3"]) {
         score += 2;
     }
     if text.contains("print(") {
@@ -163,7 +160,7 @@ fn javascript_score(text: &str) -> u32 {
     if text.contains("console.log") {
         score += 1;
     }
-    if text.contains("#!/usr/bin/env node") {
+    if has_shebang(text, &["node"]) {
         score += 2;
     }
 
@@ -184,6 +181,31 @@ fn has_python_obfuscation(text: &str) -> bool {
 fn has_javascript_obfuscation(text: &str) -> bool {
     (text.contains("eval(") || text.contains("Function("))
         && (text.contains("atob(") || text.contains("Buffer.from") || text.contains("fromCharCode"))
+}
+
+fn has_shebang(text: &str, interpreters: &[&str]) -> bool {
+    let Some(first_line) = text.lines().next() else {
+        return false;
+    };
+
+    let first_line = first_line.trim_start_matches('\u{feff}').trim();
+    if !first_line.starts_with("#!") {
+        return false;
+    }
+
+    let mut parts = first_line[2..].split_whitespace();
+    let Some(command) = parts.next() else {
+        return false;
+    };
+
+    if command == "/usr/bin/env" {
+        return parts.next().is_some_and(|name| interpreters.contains(&name));
+    }
+
+    command
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| interpreters.contains(&name))
 }
 
 #[cfg(test)]
@@ -270,5 +292,29 @@ mod tests {
     fn test_detect_json() {
         let src = r#"{"name": "test", "version": "1.0", "description": "a package"}"#;
         assert_eq!(detect_script_language(src.as_bytes()), None);
+    }
+
+    #[test]
+    fn test_python_shebang_only_matches_first_line() {
+        let src = "#!/bin/sh\nprintf '%s\n' '#!/usr/bin/env python3'\n";
+        assert_eq!(detect_script_language(src.as_bytes()), None);
+    }
+
+    #[test]
+    fn test_detect_python_via_python3_shebang() {
+        let src = "#!/usr/bin/env python3\nprint('hello')\n";
+        assert_eq!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::Python)
+        );
+    }
+
+    #[test]
+    fn test_detect_javascript_via_node_path_shebang() {
+        let src = "#!/usr/bin/node\nconsole.log('hello')\n";
+        assert_eq!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::JavaScript)
+        );
     }
 }
