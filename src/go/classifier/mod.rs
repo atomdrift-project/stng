@@ -842,6 +842,21 @@ mod tests {
             StringKind::ShellCmd
         );
         assert_ne!(classify_string("exec format error"), StringKind::ShellCmd);
+
+        // Non-shell shebangs should NOT be classified as shell commands
+        assert_ne!(classify_string("#!/usr/bin/env ruby"), StringKind::ShellCmd);
+        assert_ne!(
+            classify_string("#!/usr/bin/env python3"),
+            StringKind::ShellCmd
+        );
+        assert_ne!(classify_string("#!/usr/bin/env node"), StringKind::ShellCmd);
+        assert_ne!(classify_string("#!/usr/bin/env perl"), StringKind::ShellCmd);
+
+        // Shell shebangs should still be classified as shell commands
+        assert_eq!(classify_string("#!/bin/bash"), StringKind::ShellCmd);
+        assert_eq!(classify_string("#!/bin/sh"), StringKind::ShellCmd);
+        assert_eq!(classify_string("#!/usr/bin/env bash"), StringKind::ShellCmd);
+        assert_eq!(classify_string("#!/usr/bin/env sh"), StringKind::ShellCmd);
     }
 
     #[test]

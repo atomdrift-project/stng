@@ -132,11 +132,17 @@ pub fn extract_printable_runs(
                 if let Ok(s) = std::str::from_utf8(run) {
                     let trimmed = s.trim();
                     if trimmed.len() >= min_length && !seen.contains(trimmed) {
-                        let kind = if segment_names_set.contains(trimmed) {
+                        let mut kind = if segment_names_set.contains(trimmed) {
                             StringKind::Section
                         } else {
                             go::classify_string(trimmed)
                         };
+
+                        // Shebangs at offset 0 are the file's interpreter declaration,
+                        // not embedded shell commands.
+                        if start == 0 && kind == StringKind::ShellCmd && trimmed.starts_with("#!") {
+                            kind = StringKind::Const;
+                        }
 
                         // Get section metadata if this is a section
                         let (sec_size, sec_exec, sec_write) = if kind == StringKind::Section {
@@ -180,11 +186,17 @@ pub fn extract_printable_runs(
             if let Ok(s) = std::str::from_utf8(run) {
                 let trimmed = s.trim();
                 if trimmed.len() >= min_length && !seen.contains(trimmed) {
-                    let kind = if segment_names_set.contains(trimmed) {
+                    let mut kind = if segment_names_set.contains(trimmed) {
                         StringKind::Section
                     } else {
                         go::classify_string(trimmed)
                     };
+
+                    // Shebangs at offset 0 are the file's interpreter declaration,
+                    // not embedded shell commands.
+                    if start == 0 && kind == StringKind::ShellCmd && trimmed.starts_with("#!") {
+                        kind = StringKind::Const;
+                    }
 
                     // Get section metadata if this is a section
                     let (sec_size, sec_exec, sec_write) = if kind == StringKind::Section {

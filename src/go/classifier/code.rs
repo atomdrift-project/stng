@@ -265,10 +265,22 @@ pub(super) fn is_shell_command(s: &str) -> bool {
         return false;
     }
 
-    // Shebang is a strong indicator
-    if s.starts_with("#!/bin/bash") || s.starts_with("#!/bin/sh") || s.starts_with("#!/usr/bin/env")
+    // Shebang for shell interpreters is a strong indicator.
+    // Only match actual shell interpreters, not #!/usr/bin/env ruby, python, etc.
+    if s.starts_with("#!/bin/bash")
+        || s.starts_with("#!/bin/sh")
+        || s.starts_with("#!/bin/zsh")
+        || s.starts_with("#!/bin/dash")
+        || s.starts_with("#!/bin/ksh")
     {
         return true;
+    }
+    if let Some(after_env) = s.strip_prefix("#!/usr/bin/env ") {
+        let interpreter = after_env.split_whitespace().next().unwrap_or("");
+        if matches!(interpreter, "bash" | "sh" | "zsh" | "dash" | "ksh") {
+            return true;
+        }
+        return false;
     }
 
     // Quick byte-level check: shell commands typically contain key indicators
