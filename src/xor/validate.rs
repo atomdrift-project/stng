@@ -363,7 +363,7 @@ pub(crate) fn count_common_word_matches(lower_s: &str, limit: usize) -> usize {
     let ac = get_common_words_automaton();
     let mut matched = [false; COMMON_WORDS.len()];
     let mut count = 0;
-    for mat in ac.find_overlapping_iter(lower_s) {
+    for mat in ac.find_iter(lower_s) {
         let pid = mat.pattern().as_usize();
         if !matched[pid] {
             matched[pid] = true;
