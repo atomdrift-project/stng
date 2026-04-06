@@ -29,7 +29,7 @@ use std::sync::LazyLock;
 /// - `Library` catches macOS paths (/Library/...)
 /// - `Ethereum` catches crypto wallet paths
 /// - ` %s ` catches format strings (common in C code)
-const XOR_PATTERNS: &[&[u8]] = &[
+pub(super) const XOR_PATTERNS: &[&[u8]] = &[
     b"://",
     b"/bin",
     b"C:\\",

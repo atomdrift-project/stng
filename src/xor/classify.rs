@@ -4,7 +4,7 @@
 //! pipeline to validate, classify, and clean decoded strings.
 
 use super::key::{calculate_entropy, is_good_xor_key_candidate, score_xor_key_candidate};
-use super::scan::extract_custom_xor_strings;
+use super::scan::{extract_custom_xor_strings, XOR_PATTERNS};
 use super::validate::{
     has_known_path_prefix, is_locale_string, is_meaningful_string, is_printable_char, is_valid_ip,
     is_valid_port, is_valid_xor_string, looks_like_text,
@@ -553,41 +553,61 @@ pub(crate) fn extract_multikey_xor_strings(
         .take(3)
     {
         let key_bytes = key_info.key.as_bytes();
+        if key_bytes.is_empty() {
+            continue;
+        }
 
-        // Scan through data looking for potential encrypted strings
-        for start in 0..data.len().saturating_sub(min_length) {
-            // Decode using multi-byte key (cycling through key bytes)
-            let max_decode_len = (min_length * 4).min(data.len() - start);
-            let decoded: Vec<u8> = data[start..start + max_decode_len]
-                .iter()
-                .enumerate()
-                .map(|(i, &byte)| byte ^ key_bytes[i % key_bytes.len()])
-                .collect();
+        // Build Aho-Corasick for all possible alignments of our patterns with this key.
+        // For a key of length L, each pattern can be XOR'd in L different ways.
+        let mut patterns = Vec::new();
+        for prefix in XOR_PATTERNS {
+            for shift in 0..key_bytes.len() {
+                let xored: Vec<u8> = prefix
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &b): (usize, &u8)| b ^ key_bytes[(i + shift) % key_bytes.len()])
+                    .collect();
+                patterns.push(xored);
+            }
+        }
 
-            // Try to find a valid string in the decoded data
-            if let Ok(decoded_str) = String::from_utf8(decoded.clone()) {
-                if let Some((valid_str, _, _)) = find_meaningful_substring(&decoded_str, min_length)
-                {
-                    if let Some(kind) = classify_xor_string(valid_str) {
-                        let offset = start as u64;
-                        if seen.insert((offset, valid_str.to_string())) {
-                            let key_preview = if key_info.key.len() > 8 {
-                                format!("{}...", &key_info.key[..8])
-                            } else {
-                                key_info.key.clone()
-                            };
+        let Ok(ac) = aho_corasick::AhoCorasick::new(patterns) else {
+            continue;
+        };
 
-                            results.push(ExtractedString {
-                                value: valid_str.to_string(),
-                                data_offset: offset,
-                                section: None,
-                                method: StringMethod::XorDecode,
-                                kind,
-                                source: Some(format!("xor:key:{key_preview}")),
-                                fragments: None,
-                                ..Default::default()
-                            });
-                        }
+        // Single pass through data for all pattern alignments
+        for mat in ac.find_overlapping_iter(data) {
+            let mat: aho_corasick::Match = mat;
+            let pattern_idx = mat.pattern().as_usize();
+            // Original pattern index is pattern_idx / key_bytes.len()
+            // Shift used was pattern_idx % key_bytes.len()
+            let shift = pattern_idx % key_bytes.len();
+            let pos = mat.start();
+
+            // Correct alignment: key_bytes[0] should match at (pos - shift)
+            // But we can just use expand_multikey_xor_string which handles arbitrary alignment
+            if let Some((decoded, start, _end)) =
+                expand_multikey_xor_string(data, pos, key_bytes, shift, min_length)
+            {
+                if let Some(kind) = classify_xor_string(&decoded) {
+                    let offset = start as u64;
+                    if seen.insert((offset, decoded.clone())) {
+                        let key_preview = if key_info.key.len() > 8 {
+                            format!("{}...", &key_info.key[..8])
+                        } else {
+                            key_info.key.clone()
+                        };
+
+                        results.push(ExtractedString {
+                            value: decoded,
+                            data_offset: offset,
+                            section: None,
+                            method: StringMethod::XorDecode,
+                            kind,
+                            source: Some(format!("xor:key:{key_preview}")),
+                            fragments: None,
+                            ..Default::default()
+                        });
                     }
                 }
             }
@@ -597,25 +617,85 @@ pub(crate) fn extract_multikey_xor_strings(
     results
 }
 
-/// Find the longest meaningful substring in decoded data.
-///
-/// Scans for regions of printable ASCII and validates them using the same
-/// heuristics as single-byte XOR detection.
-pub(crate) fn find_meaningful_substring(
-    s: &str,
+/// Expand outward from a match position to find the full multi-byte XOR'd string.
+pub(crate) fn expand_multikey_xor_string(
+    data: &[u8],
+    match_pos: usize,
+    key: &[u8],
+    shift: usize,
     min_length: usize,
-) -> Option<(&str, usize, usize)> {
-    let bytes = s.as_bytes();
-    for start in 0..bytes.len().saturating_sub(min_length) {
-        for end in (start + min_length..=bytes.len()).rev() {
-            if let Ok(substr) = std::str::from_utf8(&bytes[start..end]) {
-                if is_meaningful_string(substr) {
-                    return Some((substr, start, end));
-                }
-            }
-        }
+) -> Option<(String, usize, usize)> {
+    if key.is_empty() {
+        return None;
     }
-    None
+
+    // Determine which key byte corresponds to data[match_pos]
+    let offset_in_key = (shift_to_offset(shift, match_pos, key.len())) % key.len();
+
+    let min_start = match_pos.saturating_sub(MAX_EXPAND_DISTANCE);
+    let max_end = (match_pos + MAX_EXPAND_DISTANCE).min(data.len());
+
+    // Expand backward
+    let mut start = match_pos;
+    while start > min_start {
+        let k = key[(start - 1 + offset_in_key) % key.len()];
+        let decoded = data[start - 1] ^ k;
+        if !is_printable_char(decoded) {
+            break;
+        }
+        start -= 1;
+    }
+
+    // Expand forward
+    let mut end = match_pos;
+    while end < max_end {
+        let k = key[(end + offset_in_key) % key.len()];
+        let decoded = data[end] ^ k;
+        if !is_printable_char(decoded) {
+            break;
+        }
+        end += 1;
+    }
+
+    if end - start < min_length {
+        return None;
+    }
+
+    let decoded: Vec<u8> = data[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[(start + i + offset_in_key) % key.len()])
+        .collect();
+
+    let s = String::from_utf8(decoded).ok()?;
+    if s.len() < min_length {
+        return None;
+    }
+
+    let (trimmed, trim_start) = trim_low_entropy(&s);
+    let new_start = start + trim_start;
+    let trimmed_end = new_start + trimmed.len();
+
+    if !is_valid_xor_string(trimmed) {
+        return None;
+    }
+
+    if is_meaningful_string(trimmed) {
+        Some((trimmed.to_string(), new_start, trimmed_end))
+    } else if is_meaningful_string(&s) {
+        Some((s, start, end))
+    } else {
+        None
+    }
+}
+
+fn shift_to_offset(shift: usize, pos: usize, key_len: usize) -> usize {
+    let pos_mod = pos % key_len;
+    if shift >= pos_mod {
+        shift - pos_mod
+    } else {
+        shift + key_len - pos_mod
+    }
 }
 
 /// Scan for XOR'd IP addresses and hostnames.

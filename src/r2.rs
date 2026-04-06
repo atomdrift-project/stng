@@ -691,6 +691,26 @@ fn analyze_candidates_by_patterns(
     results
 }
 
+/// Calculate Shannon entropy of a string.
+fn calculate_entropy(s: &str) -> f64 {
+    if s.is_empty() {
+        return 0.0;
+    }
+    let mut counts = [0usize; 256];
+    for &b in s.as_bytes() {
+        counts[b as usize] += 1;
+    }
+    let mut entropy = 0.0;
+    let len = s.len() as f64;
+    for &count in &counts {
+        if count > 0 {
+            let p = count as f64 / len;
+            entropy -= p * p.log2();
+        }
+    }
+    entropy
+}
+
 /// Verify if strings are likely used as XOR keys by analyzing their usage.
 ///
 /// This function:
@@ -730,21 +750,38 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
     }
 
     // Filter candidates to reasonable XOR key lengths (8-64 chars)
-    let candidates: Vec<_> = candidates
+    // AND apply a quick heuristic to pick the most likely candidates first.
+    let mut candidates: Vec<_> = candidates
         .iter()
         .filter(|s| s.value.len() >= 8 && s.value.len() <= 64)
+        .map(|s| {
+            let entropy = calculate_entropy(&s.value);
+            // Heuristic score: entropy + bonus for non-alphanumeric (suspicious)
+            let mut score = entropy;
+            if s.value.chars().any(|c| !c.is_alphanumeric()) {
+                score += 1.0;
+            }
+            // Bonus for common key lengths (powers of 2)
+            if [8, 16, 32, 64].contains(&s.value.len()) {
+                score += 0.5;
+            }
+            (s, score)
+        })
         .collect();
 
+    // Sort by score descending
+    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
     tracing::debug!(
-        "verify_xor_keys: {} candidates after length filter (8-64 chars)",
+        "verify_xor_keys: {} candidates after length filter, taking top 100",
         candidates.len()
     );
 
+    // Take top 100 candidates for analysis
+    let candidates_to_check: Vec<_> = candidates.iter().take(100).map(|(s, _)| *s).collect();
+
     // Batch all axt commands into a single session to avoid process launch overhead
     // and ensure all xrefs are found in one analysis pass.
-    let max_candidates_to_check = 200.min(candidates.len());
-    let candidates_to_check: Vec<_> = candidates.iter().take(max_candidates_to_check).collect();
-
     let mut axt_batch_cmd = vec!["aa".to_string(), "e scr.color=0".to_string()];
     for c in &candidates_to_check {
         let vaddr = c.data_offset;
@@ -801,7 +838,8 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
             "verify_xor_keys: too few candidates with references ({}), falling back to pattern-based analysis",
             candidates_with_refs.len()
         );
-        return analyze_candidates_by_patterns(tool, path, &candidates);
+        let candidates_vec: Vec<_> = candidates.iter().map(|(s, _)| *s).collect();
+        return analyze_candidates_by_patterns(tool, path, &candidates_vec);
     }
 
     // Collect unique function names that reference our candidates
