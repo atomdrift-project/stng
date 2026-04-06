@@ -21,6 +21,7 @@ pub fn extract_raw_strings(
 
     // Strategy 1: Null-terminated strings
     let mut prev_end = 0usize;
+    let mut strat1_runs = Vec::new();
     for null_pos in memchr_iter(0, data) {
         let chunk = &data[prev_end..null_pos];
         let chunk_start = prev_end;
@@ -31,62 +32,71 @@ pub fn extract_raw_strings(
         }
 
         // Find the last contiguous printable run that ends at the chunk boundary
-        let mut run_start = None;
-        for (i, &b) in chunk.iter().enumerate() {
+        // Scan backwards from the end to stop early.
+        let mut run_len = 0;
+        for &b in chunk.iter().rev() {
             if b.is_ascii_graphic() || b.is_ascii_whitespace() {
-                if run_start.is_none() {
-                    run_start = Some(i);
-                }
+                run_len += 1;
             } else {
-                run_start = None;
+                break;
             }
         }
 
-        let Some(start) = run_start else { continue };
-        let candidate = &chunk[start..];
-
-        if candidate.len() < min_length {
-            continue;
+        if run_len >= min_length {
+            let start = chunk.len() - run_len;
+            strat1_runs.push((chunk_start + start, &chunk[start..]));
         }
+    }
 
-        if let Ok(s) = std::str::from_utf8(candidate) {
-            let trimmed = s.trim();
-            if trimmed.len() >= min_length && !trimmed.is_empty() && !seen.contains(trimmed) {
-                let kind = if segment_names_set.contains(trimmed) {
-                    StringKind::Section
-                } else {
-                    go::classify_string(trimmed)
-                };
+    use rayon::prelude::*;
+    let strat1_extracted: Vec<ExtractedString> = strat1_runs
+        .into_par_iter()
+        .filter_map(|(start, candidate)| {
+            if let Ok(s) = std::str::from_utf8(candidate) {
+                let trimmed = s.trim();
+                if trimmed.len() >= min_length {
+                    let kind = if segment_names_set.contains(trimmed) {
+                        StringKind::Section
+                    } else {
+                        go::classify_string(trimmed)
+                    };
 
-                // Get section metadata if this is a section
-                let (sec_size, sec_exec, sec_write) = if kind == StringKind::Section {
-                    section_info
-                        .get(trimmed)
-                        .map_or((None, None, None), |info| {
-                            (
-                                Some(info.size),
-                                Some(info.is_executable),
-                                Some(info.is_writable),
-                            )
-                        })
-                } else {
-                    (None, None, None)
-                };
+                    // Get section metadata if this is a section
+                    let (sec_size, sec_exec, sec_write) = if kind == StringKind::Section {
+                        section_info
+                            .get(trimmed)
+                            .map_or((None, None, None), |info| {
+                                (
+                                    Some(info.size),
+                                    Some(info.is_executable),
+                                    Some(info.is_writable),
+                                )
+                            })
+                    } else {
+                        (None, None, None)
+                    };
 
-                seen.insert(trimmed.to_string());
-                strings.push(ExtractedString {
-                    value: trimmed.to_string(),
-                    data_offset: (chunk_start + start) as u64,
-                    section: section.clone(),
-                    method: StringMethod::RawScan,
-                    kind,
-                    fragments: None,
-                    section_size: sec_size,
-                    section_executable: sec_exec,
-                    section_writable: sec_write,
-                    ..Default::default()
-                });
+                    return Some(ExtractedString {
+                        value: trimmed.to_string(),
+                        data_offset: start as u64,
+                        section: section.clone(),
+                        method: StringMethod::RawScan,
+                        kind,
+                        fragments: None,
+                        section_size: sec_size,
+                        section_executable: sec_exec,
+                        section_writable: sec_write,
+                        ..Default::default()
+                    });
+                }
             }
+            None
+        })
+        .collect();
+
+    for s in strat1_extracted {
+        if seen.insert(s.value.clone()) {
+            strings.push(s);
         }
     }
 
@@ -116,6 +126,7 @@ pub fn extract_printable_runs(
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
+    let mut runs = Vec::new();
     let mut run_start: Option<usize> = None;
 
     for (i, &b) in data.iter().enumerate() {
@@ -126,79 +137,36 @@ pub fn extract_printable_runs(
                 run_start = Some(i);
             }
         } else if let Some(start) = run_start {
-            // End of a printable run
-            let run = &data[start..i];
-            if run.len() >= min_length {
-                if let Ok(s) = std::str::from_utf8(run) {
-                    let trimmed = s.trim();
-                    if trimmed.len() >= min_length && !seen.contains(trimmed) {
-                        let mut kind = if segment_names_set.contains(trimmed) {
-                            StringKind::Section
-                        } else {
-                            go::classify_string(trimmed)
-                        };
-
-                        // Shebangs at offset 0 are the file's interpreter declaration,
-                        // not embedded shell commands.
-                        if start == 0 && kind == StringKind::ShellCmd && trimmed.starts_with("#!") {
-                            kind = StringKind::Const;
-                        }
-
-                        // Get section metadata if this is a section
-                        let (sec_size, sec_exec, sec_write) = if kind == StringKind::Section {
-                            section_info
-                                .get(trimmed)
-                                .map_or((None, None, None), |info| {
-                                    (
-                                        Some(info.size),
-                                        Some(info.is_executable),
-                                        Some(info.is_writable),
-                                    )
-                                })
-                        } else {
-                            (None, None, None)
-                        };
-
-                        seen.insert(trimmed.to_string());
-                        strings.push(ExtractedString {
-                            value: trimmed.to_string(),
-                            data_offset: start as u64,
-                            section: section.cloned(),
-                            method: StringMethod::RawScan,
-                            kind,
-                            fragments: None,
-                            section_size: sec_size,
-                            section_executable: sec_exec,
-                            section_writable: sec_write,
-                            ..Default::default()
-                        });
-                    }
-                }
+            if i - start >= min_length {
+                runs.push((start, &data[start..i]));
             }
             run_start = None;
         }
     }
 
-    // Handle run at end of data
     if let Some(start) = run_start {
-        let run = &data[start..];
-        if run.len() >= min_length {
+        if data.len() - start >= min_length {
+            runs.push((start, &data[start..]));
+        }
+    }
+
+    use rayon::prelude::*;
+    let extracted: Vec<ExtractedString> = runs
+        .into_par_iter()
+        .filter_map(|(start, run)| {
             if let Ok(s) = std::str::from_utf8(run) {
                 let trimmed = s.trim();
-                if trimmed.len() >= min_length && !seen.contains(trimmed) {
+                if trimmed.len() >= min_length {
                     let mut kind = if segment_names_set.contains(trimmed) {
                         StringKind::Section
                     } else {
                         go::classify_string(trimmed)
                     };
 
-                    // Shebangs at offset 0 are the file's interpreter declaration,
-                    // not embedded shell commands.
                     if start == 0 && kind == StringKind::ShellCmd && trimmed.starts_with("#!") {
                         kind = StringKind::Const;
                     }
 
-                    // Get section metadata if this is a section
                     let (sec_size, sec_exec, sec_write) = if kind == StringKind::Section {
                         section_info
                             .get(trimmed)
@@ -213,8 +181,7 @@ pub fn extract_printable_runs(
                         (None, None, None)
                     };
 
-                    seen.insert(trimmed.to_string());
-                    strings.push(ExtractedString {
+                    return Some(ExtractedString {
                         value: trimmed.to_string(),
                         data_offset: start as u64,
                         section: section.cloned(),
@@ -228,6 +195,13 @@ pub fn extract_printable_runs(
                     });
                 }
             }
+            None
+        })
+        .collect();
+
+    for s in extracted {
+        if seen.insert(s.value.clone()) {
+            strings.push(s);
         }
     }
 }

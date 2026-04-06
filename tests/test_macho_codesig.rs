@@ -21,12 +21,10 @@ fn test_codesig_base64_categorization() {
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
 
-    // Skip if not a Mach-O binary (CD hashes are Mach-O specific)
-    if data.len() < 4 || (data[0..4] != [0xca, 0xfe, 0xba, 0xbe] && data[0..4] != [0xcf, 0xfa, 0xed, 0xfe] && data[0..4] != [0xce, 0xfa, 0xed, 0xfe]) {
-        if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-            eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
-            return;
-        }
+    // Skip if it's an ELF binary (Mach-O specific test)
+    if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
+        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        return;
     }
 
     let opts = ExtractOptions::new(10);
@@ -239,12 +237,10 @@ fn test_linkedit_section_enrichment() {
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
 
-    // Skip if not a Mach-O binary (CD hashes are Mach-O specific)
-    if data.len() < 4 || (data[0..4] != [0xca, 0xfe, 0xba, 0xbe] && data[0..4] != [0xcf, 0xfa, 0xed, 0xfe] && data[0..4] != [0xce, 0xfa, 0xed, 0xfe]) {
-        if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-            eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
-            return;
-        }
+    // Skip if it's an ELF binary (Mach-O specific test)
+    if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
+        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        return;
     }
 
     let opts = ExtractOptions::new(10);
@@ -286,12 +282,10 @@ fn test_codesig_hash_format() {
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
 
-    // Skip if not a Mach-O binary (CD hashes are Mach-O specific)
-    if data.len() < 4 || (data[0..4] != [0xca, 0xfe, 0xba, 0xbe] && data[0..4] != [0xcf, 0xfa, 0xed, 0xfe] && data[0..4] != [0xce, 0xfa, 0xed, 0xfe]) {
-        if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-            eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
-            return;
-        }
+    // Skip if it's an ELF binary (Mach-O specific test)
+    if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
+        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        return;
     }
 
     let opts = ExtractOptions::new(10);
@@ -395,12 +389,10 @@ fn test_no_entitlements_in_clean_binaries() {
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
 
-    // Skip if not a Mach-O binary (CD hashes are Mach-O specific)
-    if data.len() < 4 || (data[0..4] != [0xca, 0xfe, 0xba, 0xbe] && data[0..4] != [0xcf, 0xfa, 0xed, 0xfe] && data[0..4] != [0xce, 0xfa, 0xed, 0xfe]) {
-        if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-            eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
-            return;
-        }
+    // Skip if it's an ELF binary (Mach-O specific test)
+    if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
+        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        return;
     }
 
     let opts = ExtractOptions::new(10);

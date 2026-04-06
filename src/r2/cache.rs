@@ -189,7 +189,7 @@ fn compute_file_hash(path: &str) -> Result<String, std::io::Error> {
 
     {
         let cache = HASH_CACHE.lock().map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("Hash cache lock failed: {e}"))
+            std::io::Error::other(format!("Hash cache lock failed: {e}"))
         })?;
         if let Some(hash) = cache.get(&canon_path) {
             return Ok(hash.clone());

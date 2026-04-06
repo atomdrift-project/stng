@@ -1015,12 +1015,19 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
     }
 
     if let Ok(object) = Object::parse(data) {
+        let t0 = std::time::Instant::now();
         let mut strings = extract_from_object(&object, data, opts);
+        tracing::debug!("TIME: extract_from_object took {:?}", t0.elapsed());
+        
         // For text files parsed by goblin (e.g. as Unknown), also run script deobfuscation
         if is_text_file(data) {
             append_script_deobfuscation(&mut strings, data, opts);
         }
-        deduplicate_by_offset(strings)
+        
+        let t0 = std::time::Instant::now();
+        let res = deduplicate_by_offset(strings);
+        tracing::debug!("TIME: deduplicate_by_offset(1) took {:?}", t0.elapsed());
+        res
     } else {
         // Unknown format - use r2 if available, plus raw scan
         let mut strings = Vec::new();
@@ -1054,9 +1061,12 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         }
 
         // XOR string detection
+        let t0 = std::time::Instant::now();
         apply_xor_scan(&mut strings, data, opts, is_pe);
+        tracing::debug!("TIME: apply_xor_scan took {:?}", t0.elapsed());
 
         // Decode encoded strings (base64, hex, URL-encoding, unicode escapes)
+        let t0 = std::time::Instant::now();
         let mut decoded = Vec::new();
         decoded.extend(decoders::decode_base64_strings(&strings));
         decoded.extend(decoders::extract_embedded_base64(&strings));
@@ -1067,9 +1077,12 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         decoded.extend(decoders::decode_url_strings(&strings));
         decoded.extend(decoders::decode_unicode_escape_strings(&strings));
         strings.extend(decoded);
+        tracing::debug!("TIME: decoders took {:?}", t0.elapsed());
 
         // Decode spaced ASCII strings (common in PE .rsrc, .NET metadata)
+        let t0 = std::time::Instant::now();
         decode_spaced_strings(&mut strings, opts.min_length);
+        tracing::debug!("TIME: decode_spaced_strings took {:?}", t0.elapsed());
 
         // Script deobfuscation for text files that didn't parse as a known binary format
         if is_text_file(data) {
@@ -1077,12 +1090,18 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         }
 
         if opts.filter_garbage {
+            let t0 = std::time::Instant::now();
             strings.retain(passes_garbage_filter);
+            tracing::debug!("TIME: garbage_filter took {:?}", t0.elapsed());
         }
 
-        deduplicate_by_offset(strings)
+        let t0 = std::time::Instant::now();
+        let res = deduplicate_by_offset(strings);
+        tracing::debug!("TIME: deduplicate_by_offset took {:?}", t0.elapsed());
+        res
     }
 }
+
 
 /// Extract strings from a pre-parsed binary object.
 ///
@@ -1226,6 +1245,7 @@ fn extract_from_object(
             }
         }
         Object::Elf(elf) => {
+            let t0 = std::time::Instant::now();
             let segments = collect_elf_segments(elf);
             let section_info = collect_elf_section_info(elf);
 
@@ -1252,7 +1272,9 @@ fn extract_from_object(
                 let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
                 name.contains("rust") || name == ".rustc"
             });
+            tracing::debug!("TIME: ELF preamble took {:?}", t0.elapsed());
 
+            let t0 = std::time::Instant::now();
             if has_go {
                 is_go_binary = true;
                 let extractor = GoStringExtractor::new(min_length);
@@ -1290,6 +1312,9 @@ fn extract_from_object(
                     &section_info,
                 ));
             }
+            tracing::debug!("TIME: ELF lang extraction took {:?}", t0.elapsed());
+
+            let t0 = std::time::Instant::now();
             // Extract UTF-16LE wide strings (less common in ELF but can occur, especially in malware)
             strings.extend(extract_wide_strings(
                 scan_data,
@@ -1307,6 +1332,8 @@ fn extract_from_object(
                 Some(elf),
                 None,
             ));
+            tracing::debug!("TIME: ELF extra extraction took {:?}", t0.elapsed());
+
 
             if is_go_binary {
                 // For Go binaries, run XOR-pair extraction on the .text section only.
@@ -1370,18 +1397,40 @@ fn extract_from_object(
                     }
                 }
             } else {
-                strings.extend(extract_stack_strings(scan_data, min_length));
+                let t0 = std::time::Instant::now();
+                // Only scan executable sections for stack strings to avoid wasting time on data
+                for sh in &elf.section_headers {
+                    if sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) != 0 {
+                        let start = sh.sh_offset as usize;
+                        let end = start.saturating_add(sh.sh_size as usize);
+                        if let Some(text) = scan_data.get(start..end) {
+                            let mut results = extract_stack_strings(text, min_length);
+                            for r in &mut results {
+                                r.data_offset += start as u64;
+                            }
+                            strings.extend(results);
+                        }
+                    }
+                }
+                tracing::debug!("TIME: ELF extract_stack_strings took {:?}", t0.elapsed());
             }
+            
+            let t0 = std::time::Instant::now();
             merge_imports(&mut strings, extract_elf_imports(elf, min_length));
+            tracing::debug!("TIME: ELF merge_imports took {:?}", t0.elapsed());
 
             // Filter out any strings that fall within the overlay region
             // (they'll be re-extracted with proper section="overlay" marking)
             if let Some(ref overlay) = overlay_info {
+                let t0 = std::time::Instant::now();
                 strings.retain(|s| s.data_offset < overlay.start_offset);
+                tracing::debug!("TIME: ELF strings.retain took {:?}", t0.elapsed());
             }
 
+            let t0 = std::time::Instant::now();
             // Extract overlay/appended data (common malware technique)
             strings.extend(extract_overlay_strings(data, min_length));
+            tracing::debug!("TIME: ELF extract_overlay_strings took {:?}", t0.elapsed());
         }
         Object::PE(pe) => {
             // Collect PE section names and metadata

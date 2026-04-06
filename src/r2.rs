@@ -216,7 +216,10 @@ pub fn extract_strings(
 
     // Process symbols
     if let Some(symbols) = symbols_result {
+        let t0 = std::time::Instant::now();
         if let Ok(json) = serde_json::from_str::<Vec<R2Symbol>>(&symbols) {
+            tracing::debug!("r2::extract_strings: serde_json parse took {:?}", t0.elapsed());
+            let t1 = std::time::Instant::now();
             for s in json {
                 // Skip symbols with invalid file offsets
                 if s.paddr > file_size {
@@ -264,6 +267,7 @@ pub fn extract_strings(
                     });
                 }
             }
+            tracing::debug!("r2::extract_strings: processing symbols took {:?}", t1.elapsed());
         }
     }
 
