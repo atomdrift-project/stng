@@ -99,6 +99,7 @@ use goblin::mach::cputype::{
 };
 use goblin::mach::MachO;
 use goblin::Object;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 // Import internal modules for use in this file
@@ -751,24 +752,24 @@ fn method_priority(m: StringMethod) -> u8 {
         | StringMethod::GarbleRodata
         | StringMethod::GarbleEmulated
         | StringMethod::InstructionPattern
-        | StringMethod::Base64ObfuscatedDecode => 3,
-
-        // High priority: decoded/extracted content
-        StringMethod::R2String
-        | StringMethod::R2Symbol
-        | StringMethod::WideString
-        | StringMethod::SpacedAscii
         | StringMethod::XorDecode
+        | StringMethod::Base64ObfuscatedDecode
         | StringMethod::Base64Decode
         | StringMethod::Base32Decode
         | StringMethod::Base85Decode
         | StringMethod::HexDecode
         | StringMethod::UrlDecode
         | StringMethod::UnicodeEscapeDecode
-        | StringMethod::CodeSignature
         | StringMethod::Utf16LeDecode
         | StringMethod::Utf16BeDecode
-        | StringMethod::ScriptDecode
+        | StringMethod::ScriptDecode => 3,
+
+        // High priority: decoded/extracted content
+        StringMethod::R2String
+        | StringMethod::R2Symbol
+        | StringMethod::WideString
+        | StringMethod::SpacedAscii
+        | StringMethod::CodeSignature
         | StringMethod::PclntabSymbol => 2,
 
         // Medium priority: heuristics
@@ -825,31 +826,41 @@ fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_length: usize) 
 /// When multiple strings exist at the same offset, keeps the one with:
 /// 1. Highest method priority (decoded > raw scan)
 /// 2. Longest value (if same priority)
-fn deduplicate_by_offset(mut strings: Vec<ExtractedString>) -> Vec<ExtractedString> {
+fn deduplicate_by_offset(strings: Vec<ExtractedString>) -> Vec<ExtractedString> {
     if strings.is_empty() {
         return strings;
     }
 
-    // Sort by offset first, then by priority (best first), then by length (longest first)
-    strings.sort_by(|a, b| {
-        a.data_offset
-            .cmp(&b.data_offset)
-            .then_with(|| {
-                // Higher priority first (reverse comparison)
-                let pa = method_priority(a.method);
-                let pb = method_priority(b.method);
-                pb.cmp(&pa)
-            })
-            .then_with(|| {
-                // Longer strings first (reverse comparison)
-                b.value.len().cmp(&a.value.len())
-            })
-    });
+    let mut offset_map: HashMap<u64, Vec<ExtractedString>> = HashMap::new();
+    for s in strings {
+        offset_map.entry(s.data_offset).or_default().push(s);
+    }
 
-    // Remove duplicates at the same offset (keep first, which is best due to sort)
-    strings.dedup_by(|a, b| a.data_offset == b.data_offset);
+    let mut result = Vec::new();
+    for (_offset, mut candidates) in offset_map {
+        if candidates.len() == 1 {
+            if let Some(s) = candidates.pop() {
+                result.push(s);
+            }
+        } else {
+            // Multiple strings at same offset - prefer decoded strings, then longest
+            candidates.sort_by(|a, b| {
+                let priority_a = method_priority(a.method);
+                let priority_b = method_priority(b.method);
 
-    strings
+                // Sort descending: Higher priority first, then longer string first
+                priority_b
+                    .cmp(&priority_a)
+                    .then_with(|| b.value.len().cmp(&a.value.len()))
+            });
+            
+            // Take the first one (best candidate)
+            result.push(candidates.remove(0));
+        }
+    }
+
+    result.sort_by_key(|s| s.data_offset);
+    result
 }
 
 /// Extract strings from a UTF-16 encoded file (detected by BOM).
@@ -1399,20 +1410,25 @@ fn extract_from_object(
             } else {
                 let t0 = std::time::Instant::now();
                 // Only scan executable sections for stack strings to avoid wasting time on data
-                for sh in &elf.section_headers {
-                    if sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) != 0 {
+                // Parallelize section scanning using Rayon
+                let results: Vec<ExtractedString> = elf.section_headers.par_iter()
+                    .filter(|sh| sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) != 0)
+                    .filter_map(|sh| {
                         let start = sh.sh_offset as usize;
                         let end = start.saturating_add(sh.sh_size as usize);
-                        if let Some(text) = scan_data.get(start..end) {
+                        scan_data.get(start..end).map(|text| {
                             let mut results = extract_stack_strings(text, min_length);
                             for r in &mut results {
                                 r.data_offset += start as u64;
                             }
-                            strings.extend(results);
-                        }
-                    }
-                }
-                tracing::debug!("TIME: ELF extract_stack_strings took {:?}", t0.elapsed());
+                            results
+                        })
+                    })
+                    .flatten()
+                    .collect();
+                
+                strings.extend(results);
+                tracing::debug!("TIME: ELF parallel extract_stack_strings took {:?}", t0.elapsed());
             }
             
             let t0 = std::time::Instant::now();
@@ -1453,45 +1469,62 @@ fn extract_from_object(
                 strings.extend(extractor.extract_pe(pe, data));
             }
 
-            // Extract .NET User Strings (#US heap) if this is a .NET assembly
-            strings.extend(dotnet::extract_us_heap_strings(pe, data, min_length));
+            let (
+                (us_strings, r2_strings),
+                (wide_strings, (net_strings, (raw_strings, stack_strings))),
+            ) = rayon::join(
+                || {
+                    rayon::join(
+                        || dotnet::extract_us_heap_strings(pe, data, min_length),
+                        || get_r2_strings(opts).unwrap_or_default(),
+                    )
+                },
+                || {
+                    rayon::join(
+                        || extract_wide_strings(data, min_length, None, &segments, &section_info),
+                        || {
+                            rayon::join(
+                                || {
+                                    scan_binary_ips(
+                                        data,
+                                        min_length,
+                                        pe.header.coff_header.machine,
+                                        None,
+                                        Some(pe),
+                                    )
+                                },
+                                || {
+                                    rayon::join(
+                                        || {
+                                            extract_raw_strings(
+                                                data,
+                                                min_length,
+                                                None,
+                                                &segments,
+                                                &section_info,
+                                            )
+                                        },
+                                        || {
+                                            if !is_go_binary {
+                                                extract_stack_strings(data, min_length)
+                                            } else {
+                                                Vec::new()
+                                            }
+                                        },
+                                    )
+                                },
+                            )
+                        },
+                    )
+                },
+            );
 
-            // Use r2 if available
-            if let Some(r2_strings) = get_r2_strings(opts) {
-                strings.extend(r2_strings);
-            }
-
-            // Extract UTF-16LE wide strings (common in Windows binaries)
-            strings.extend(extract_wide_strings(
-                data,
-                min_length,
-                None,
-                &segments,
-                &section_info,
-            ));
-
-            // Extract binary network data (IPs and ports in network byte order)
-            strings.extend(scan_binary_ips(
-                data,
-                min_length,
-                pe.header.coff_header.machine,
-                None,
-                Some(pe),
-            ));
-
-            // Raw scan for PE (catches strings missed by structure extraction)
-            strings.extend(extract_raw_strings(
-                data,
-                min_length,
-                None,
-                &segments,
-                &section_info,
-            ));
-
-            // Skip stack string extraction for Go binaries
-            if !is_go_binary {
-                strings.extend(extract_stack_strings(data, min_length));
-            }
+            strings.extend(us_strings);
+            strings.extend(r2_strings);
+            strings.extend(wide_strings);
+            strings.extend(net_strings);
+            strings.extend(raw_strings);
+            strings.extend(stack_strings);
 
             // Extract overlay/appended data (common malware technique)
             strings.extend(extract_overlay_strings(data, min_length));
