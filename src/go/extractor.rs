@@ -201,7 +201,7 @@ impl GoStringExtractor {
             classify_string,
         );
 
-        // Use lower floor for structure-based strings (high confidence)
+        // Filter by minimum length — use lower floor for structure-based strings
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
         for s in structured {
             if s.value.len() >= struct_min {
@@ -289,7 +289,7 @@ impl GoStringExtractor {
             classify_string,
         );
 
-        // Use lower floor for structure-based strings (high confidence)
+        // Filter by minimum length — use lower floor for structure-based strings
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
         for s in structured {
             if s.value.len() >= struct_min {

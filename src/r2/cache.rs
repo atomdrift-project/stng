@@ -10,8 +10,15 @@
 //! ```
 
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
+
+/// Global cache for file hashes to avoid redundant hashing of large binaries.
+/// Map of absolute path -> SHA256 hex string.
+static HASH_CACHE: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub struct R2Cache {
     cache_dir: PathBuf,
@@ -175,32 +182,56 @@ impl R2Cache {
     }
 }
 
-/// Compute SHA256 hash of file contents.
+/// Compute SHA256 hash of file contents with memoization.
 fn compute_file_hash(path: &str) -> Result<String, std::io::Error> {
+    // Check cache first (canonicalize path to ensure consistent keys)
+    let canon_path = fs::canonicalize(path)?.to_string_lossy().to_string();
+
+    {
+        let cache = HASH_CACHE.lock().map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, format!("Hash cache lock failed: {e}"))
+        })?;
+        if let Some(hash) = cache.get(&canon_path) {
+            return Ok(hash.clone());
+        }
+    }
+
+    // Cache miss - compute hash
+    tracing::debug!("compute_file_hash: cache miss for {}, hashing...", path);
     let data = fs::read(path)?;
     let hash = Sha256::digest(&data);
-    Ok(format!("{:x}", hash))
+    let hash_hex = format!("{:x}", hash);
+
+    // Update cache
+    if let Ok(mut cache) = HASH_CACHE.lock() {
+        cache.insert(canon_path, hash_hex.clone());
+    }
+
+    Ok(hash_hex)
 }
 
 /// Sanitize r2 command for use as filename.
 ///
 /// Replaces non-alphanumeric characters (except dash and period) with underscore.
-/// This makes commands filesystem-safe while keeping them readable.
-///
-/// Examples:
-/// - "isj" → "isj"
-/// - "aaa; aflj" → "aaa__aflj"
-/// - "aaa; e scr.color=0; pdf" → "aaa__e_scr.color_0__pdf"
+/// For very long commands, returns a hash of the command to avoid exceeding
+/// OS filename limits (typically 255 characters).
 fn sanitize_command_for_filename(cmd: &str) -> String {
-    cmd.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '.' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    if cmd.len() < 100 {
+        cmd.chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '.' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    } else {
+        // Use SHA256 hash for long commands to ensure safe filename
+        let mut hasher = Sha256::new();
+        hasher.update(cmd.as_bytes());
+        format!("cmd_{:x}", hasher.finalize())
+    }
 }
 
 #[cfg(test)]

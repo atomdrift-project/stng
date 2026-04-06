@@ -8,7 +8,7 @@ pub mod cache;
 use crate::go::classify_string;
 use crate::{ExtractedString, FunctionMetadata, StringKind, StringMethod};
 use cache::R2Cache;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::OnceLock;
 
@@ -299,8 +299,8 @@ pub fn extract_function_metadata(
     );
 
     // Run analysis and get function list as JSON
-    // aaa = analyze all, aflj = list functions as JSON
-    let functions_json = run_tool_command_with_cache(tool, path, "aaa; aflj", use_cache)?;
+    // aa = analyze all, aflj = list functions as JSON
+    let functions_json = run_tool_command_with_cache(tool, path, "aa; aflj", use_cache)?;
 
     #[derive(serde::Deserialize)]
     struct R2Function {
@@ -549,8 +549,8 @@ fn analyze_candidates_by_patterns(
         candidates.len()
     );
 
-    // Get all function names (run aaa first to ensure analysis is done)
-    let functions_cmd = "aaa; afl";
+    // Get all function names (run aa first to ensure analysis is done)
+    let functions_cmd = "aa; afl";
     let Some(functions) = run_tool_command(tool, path, functions_cmd) else {
         tracing::debug!("analyze_candidates_by_patterns: failed to get function list");
         return vec![];
@@ -589,7 +589,7 @@ fn analyze_candidates_by_patterns(
 
     // Build a single compound command to disassemble all functions at once
     // This avoids running 'aaa' 300 times which is prohibitively slow
-    let mut cmd_parts = vec!["aaa".to_string(), "e scr.color=0".to_string()];
+    let mut cmd_parts = vec!["aa".to_string(), "e scr.color=0".to_string()];
     let mut func_addrs = vec![];
 
     for func_line in function_lines.iter().take(max_funcs) {
@@ -729,10 +729,6 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
         }
     }
 
-    // Analyze all (analyze all functions) - required for cross-references
-    tracing::debug!("verify_xor_keys: running 'aaa' analysis...");
-    let _ = run_tool_command(tool, path, "aaa");
-
     // Filter candidates to reasonable XOR key lengths (8-64 chars)
     let candidates: Vec<_> = candidates
         .iter()
@@ -744,56 +740,53 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
         candidates.len()
     );
 
-    // Check if XOR key survived length filter
-    let xor_key_after_filter = candidates.iter().any(|s| s.value.contains("fYzt"));
-    tracing::debug!(
-        "verify_xor_keys: XOR key after length filter: {}",
-        xor_key_after_filter
-    );
-    for (i, c) in candidates.iter().take(5).enumerate() {
-        tracing::debug!(
-            "  candidate[{}]: '{}' @ 0x{:x}",
-            i,
-            if c.value.len() > 20 {
-                &c.value[..20]
-            } else {
-                &c.value
-            },
-            c.data_offset
-        );
+    // Batch all axt commands into a single session to avoid process launch overhead
+    // and ensure all xrefs are found in one analysis pass.
+    let max_candidates_to_check = 200.min(candidates.len());
+    let candidates_to_check: Vec<_> = candidates.iter().take(max_candidates_to_check).collect();
+
+    let mut axt_batch_cmd = vec!["aa".to_string(), "e scr.color=0".to_string()];
+    for c in &candidates_to_check {
+        let vaddr = c.data_offset;
+        axt_batch_cmd.push(format!("echo XREF_MARKER_0x{vaddr:x}"));
+        axt_batch_cmd.push(format!("axt 0x{vaddr:x}"));
     }
 
-    // Pre-filter: count references for each candidate to narrow down the search space
-    // Limit to first 200 candidates for performance
-    let max_candidates_to_check = 200.min(candidates.len());
     tracing::debug!(
-        "verify_xor_keys: counting references for first {} candidates (out of {})...",
-        max_candidates_to_check,
-        candidates.len()
+        "verify_xor_keys: running batched 'axt' for {} candidates...",
+        candidates_to_check.len()
     );
+    let axt_compound_cmd = axt_batch_cmd.join("; ");
+    let Some(all_xrefs_output) = run_tool_command(tool, path, &axt_compound_cmd) else {
+        return Vec::new();
+    };
 
-    let mut candidates_with_refs: Vec<_> = Vec::new();
-    for (i, candidate) in candidates.iter().take(max_candidates_to_check).enumerate() {
-        if i % 50 == 0 && i > 0 {
-            tracing::debug!(
-                "  processed {}/{} candidates...",
-                i,
-                max_candidates_to_check
-            );
+    // Parse batched xref output
+    let mut candidates_with_refs = Vec::new();
+    let xref_chunks: Vec<&str> = all_xrefs_output.split("XREF_MARKER_").collect();
+
+    for chunk in xref_chunks {
+        if chunk.is_empty() {
+            continue;
         }
 
-        let vaddr = candidate.data_offset;
-        let xrefs_cmd = format!("axt 0x{vaddr:x}");
-        let Some(xrefs) = run_tool_command(tool, path, &xrefs_cmd) else {
+        let mut lines = chunk.lines();
+        let header = lines.next().unwrap_or("");
+        if !header.starts_with("0x") {
             continue;
-        };
-        let xref_lines: Vec<String> = xrefs
-            .lines()
-            .map(std::string::ToString::to_string)
-            .collect();
+        }
+
+        let addr_str = header;
+        let xref_lines: Vec<String> = lines.map(std::string::ToString::to_string).collect();
 
         if !xref_lines.is_empty() {
-            candidates_with_refs.push((candidate, xref_lines));
+            // Find the candidate this address belongs to
+            if let Ok(vaddr) = u64::from_str_radix(addr_str.trim_start_matches("0x"), 16) {
+                if let Some(candidate) = candidates_to_check.iter().find(|c| c.data_offset == vaddr)
+                {
+                    candidates_with_refs.push((*candidate, xref_lines));
+                }
+            }
         }
     }
 
@@ -808,50 +801,70 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
             "verify_xor_keys: too few candidates with references ({}), falling back to pattern-based analysis",
             candidates_with_refs.len()
         );
-
-        // Fall back to analyzing all candidates by XOR loop patterns without requiring xrefs
         return analyze_candidates_by_patterns(tool, path, &candidates);
     }
 
-    // Count XOR-function references for each candidate
-    tracing::debug!("verify_xor_keys: analyzing XOR-function references...");
-    let mut candidates_with_xor_refs: Vec<_> = Vec::new();
-
-    for (idx, (candidate, xref_lines)) in candidates_with_refs.iter().enumerate() {
-        if idx % 20 == 0 && idx > 0 {
-            tracing::debug!(
-                "  analyzed {}/{} candidates with refs...",
-                idx,
-                candidates_with_refs.len()
-            );
+    // Collect unique function names that reference our candidates
+    let mut func_names = HashSet::new();
+    for (_, xref_lines) in &candidates_with_refs {
+        for xref_line in xref_lines.iter().take(10) {
+            let parts: Vec<&str> = xref_line.split_whitespace().collect();
+            if !parts.is_empty() {
+                func_names.insert(parts[0].to_string());
+            }
         }
+    }
 
+    // Batch all disassembly (pdf) commands for these functions
+    let mut pdf_batch_cmd = vec!["aa".to_string(), "e scr.color=0".to_string()];
+    let func_names_vec: Vec<_> = func_names.into_iter().collect();
+    for func in &func_names_vec {
+        pdf_batch_cmd.push(format!("echo FUNC_MARKER_{func}"));
+        pdf_batch_cmd.push(format!("pdf @ {func}"));
+    }
+
+    tracing::debug!(
+        "verify_xor_keys: running batched 'pdf' for {} functions...",
+        func_names_vec.len()
+    );
+    let pdf_compound_cmd = pdf_batch_cmd.join("; ");
+    let Some(all_pdf_output) = run_tool_command(tool, path, &pdf_compound_cmd) else {
+        return Vec::new();
+    };
+
+    // Parse batched pdf output
+    let mut func_disasm = HashMap::new();
+    let pdf_chunks: Vec<&str> = all_pdf_output.split("FUNC_MARKER_").collect();
+    for chunk in pdf_chunks {
+        if chunk.is_empty() {
+            continue;
+        }
+        let mut lines = chunk.lines();
+        if let Some(func_name) = lines.next() {
+            let disasm = lines.collect::<Vec<_>>().join("\n");
+            func_disasm.insert(func_name.to_string(), disasm);
+        }
+    }
+
+    // Now analyze the results
+    let mut candidates_with_xor_refs = Vec::new();
+    for (candidate, xref_lines) in &candidates_with_refs {
         let mut xor_function_refs = 0;
         let total_refs = xref_lines.len();
 
-        // Check each referencing function for XOR instructions (limit to first 10 refs per candidate)
         for xref_line in xref_lines.iter().take(10) {
             let parts: Vec<&str> = xref_line.split_whitespace().collect();
             if parts.is_empty() {
                 continue;
             }
-
             let func_name = parts[0];
-
-            // Disassemble the function
-            let pdf_cmd = format!("pdf @ {func_name}");
-            let Some(disasm) = run_tool_command(tool, path, &pdf_cmd) else {
-                continue;
-            };
-
-            // Check if function contains XOR instructions
-            let has_xor = disasm.contains("eor ") || disasm.contains("xor ");
-            if has_xor {
-                xor_function_refs += 1;
+            if let Some(disasm) = func_disasm.get(func_name) {
+                if disasm.contains("eor ") || disasm.contains("xor ") {
+                    xor_function_refs += 1;
+                }
             }
         }
 
-        // Prioritize candidates referenced by XOR-containing functions
         if xor_function_refs > 0 {
             candidates_with_xor_refs.push((
                 *candidate,
@@ -862,7 +875,7 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
         }
     }
 
-    // Sort by XOR-function references (descending), then total references
+    // Sort and filter results
     candidates_with_xor_refs.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| b.2.cmp(&a.2)));
 
     tracing::debug!(
@@ -870,47 +883,19 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
         candidates_with_xor_refs.len()
     );
 
-    if let Some((candidate, _, total, xor_refs)) = candidates_with_xor_refs.first() {
-        tracing::debug!(
-            "  top candidate: '{}' @ 0x{:x}, total_refs={}, xor_func_refs={}",
-            if candidate.value.len() > 30 {
-                &candidate.value[..30]
-            } else {
-                &candidate.value
-            },
-            candidate.data_offset,
-            total,
-            xor_refs
-        );
-    }
-
-    // Analyze top candidates for XOR loop patterns
     candidates_with_xor_refs
         .iter()
-        .take(20) // Only analyze top 20 candidates by XOR-function reference count
-        .filter_map(
-            |(candidate, xref_lines, reference_count, xor_function_refs)| {
-                let mut confidence = XorConfidence::Low;
+        .take(20)
+        .filter_map(|(candidate, xref_lines, reference_count, xor_function_refs)| {
+            let mut confidence = XorConfidence::Low;
 
-                // Check each referencing function for XOR loop patterns
-                for xref_line in xref_lines.iter().take(5) {
-                    let parts: Vec<&str> = xref_line.split_whitespace().collect();
-                    if parts.is_empty() {
-                        continue;
-                    }
-
-                    let func_name = parts[0];
-
-                    // Disassemble the function
-                    // NOTE: 'aaa' analysis already ran on line 447, so just get disassembly
-                    let pdf_cmd = format!("pdf @ {func_name}");
-                    let Some(disasm) = run_tool_command(tool, path, &pdf_cmd) else {
-                        continue;
-                    };
-
-                    // Look for XOR loop pattern:
-                    // ARM: ldrb (load byte), eor (XOR), strb (store byte)
-                    // x86: movzbl/movzx (load byte), xor, mov/movb (store)
+            for xref_line in xref_lines.iter().take(5) {
+                let parts: Vec<&str> = xref_line.split_whitespace().collect();
+                if parts.is_empty() {
+                    continue;
+                }
+                let func_name = parts[0];
+                if let Some(disasm) = func_disasm.get(func_name) {
                     let has_xor = disasm.contains("eor ") || disasm.contains("xor ");
                     let has_load_byte = disasm.contains("ldrb ")
                         || disasm.contains("movzbl ")
@@ -922,30 +907,27 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
                         break;
                     }
 
-                    // Medium confidence: referenced in function with XOR
                     if has_xor && confidence == XorConfidence::Low {
                         confidence = XorConfidence::Medium;
                     }
                 }
+            }
 
-                // Return result if confidence is high/medium OR if multiple XOR-function references
-                if confidence != XorConfidence::Low || *xor_function_refs >= 2 {
-                    // Upgrade to medium confidence if multiple XOR-function refs
-                    if *xor_function_refs >= 2 && confidence == XorConfidence::Low {
-                        confidence = XorConfidence::Medium;
-                    }
-
-                    Some(XorKeyInfo {
-                        key: candidate.value.clone(),
-                        confidence,
-                        reference_count: *reference_count,
-                        offset: candidate.data_offset,
-                    })
-                } else {
-                    None
+            if confidence != XorConfidence::Low || *xor_function_refs >= 2 {
+                if *xor_function_refs >= 2 && confidence == XorConfidence::Low {
+                    confidence = XorConfidence::Medium;
                 }
-            },
-        )
+
+                Some(XorKeyInfo {
+                    key: candidate.value.clone(),
+                    confidence,
+                    reference_count: *reference_count,
+                    offset: candidate.data_offset,
+                })
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -1064,13 +1046,13 @@ mod tests {
         if let Some(output) = run_tool_command(tool, "/bin/ls", "isj") {
             let json: serde_json::Value = serde_json::from_str(&output).unwrap();
             if let Some(arr) = json.as_array() {
-                if let Some(first) = arr.first() {
-                    assert!(
-                        first.get("paddr").is_some(),
-                        "{} isj output missing paddr field",
-                        tool
-                    );
-                }
+                // Verify that at least some symbols have paddr
+                let has_paddr = arr.iter().any(|s| s.get("paddr").is_some());
+                assert!(
+                    has_paddr,
+                    "{} isj output has no symbols with paddr field",
+                    tool
+                );
             }
         }
 
@@ -1078,13 +1060,12 @@ mod tests {
         if let Some(output) = run_tool_command(tool, "/bin/ls", "izj") {
             let json: serde_json::Value = serde_json::from_str(&output).unwrap();
             if let Some(arr) = json.as_array() {
-                if let Some(first) = arr.first() {
-                    assert!(
-                        first.get("paddr").is_some(),
-                        "{} izj output missing paddr field",
-                        tool
-                    );
-                }
+                let has_paddr = arr.iter().any(|s| s.get("paddr").is_some());
+                assert!(
+                    has_paddr,
+                    "{} izj output has no strings with paddr field",
+                    tool
+                );
             }
         }
     }

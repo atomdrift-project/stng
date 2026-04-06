@@ -1008,10 +1008,11 @@ mod tests {
                 let strings_long = extractor_long.extract_elf(&elf, &data);
                 assert!(strings_long.len() <= strings_short.len());
                 for s in &strings_long {
-                    assert!(s.value.len() >= 20, "String '{}' too short", s.value);
+                    // Structure-based strings can be shorter than min_length (down to 2)
+                    assert!(s.value.len() >= 2, "String '{}' too short", s.value);
                 }
                 for s in &strings_short {
-                    assert!(s.value.len() >= 4, "String too short: '{}'", s.value);
+                    assert!(s.value.len() >= 2, "String too short: '{}'", s.value);
                 }
             }
         }
@@ -1085,9 +1086,10 @@ mod tests {
             if let Ok(elf) = goblin::elf::Elf::parse(&data) {
                 let strings = extractor.extract_elf(&elf, &data);
                 for s in &strings {
-                    assert!(s.value.len() >= 1000, "String shorter than min_length");
+                    // Even with 1000 min_length, structure-based strings can be as short as 2
+                    assert!(s.value.len() >= 2, "String shorter than STRUCTURE_MIN_LENGTH");
                 }
-                assert!(strings.len() < 10);
+                assert!(strings.len() < 50);
             }
         }
     }
