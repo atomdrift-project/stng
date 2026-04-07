@@ -10,7 +10,7 @@ use super::validate::{
     is_valid_port, is_valid_xor_string, looks_like_text,
 };
 use super::{MAX_AUTO_DETECT_SIZE, MAX_XOR_SCAN_SIZE, SKIP_XOR_KEYS};
-use crate::{go::classify_string, ExtractedString, StringKind, StringMethod};
+use crate::{classifier::classify_string, ExtractedString, StringKind, StringMethod};
 use rayon::prelude::*;
 use std::collections::HashSet;
 
@@ -333,7 +333,7 @@ pub(crate) fn auto_detect_xor_key(
                 }
 
                 // Suspicious paths (very high priority) - only count unique values
-                if matches!(r.kind, StringKind::SuspiciousPath)
+                if matches!(r.kind, Some(StringKind::SuspiciousPath))
                     && scored_values.insert(value_lower.clone())
                 {
                     score += 75;
@@ -342,7 +342,7 @@ pub(crate) fn auto_detect_xor_key(
                 // URLs and network indicators - only count unique values
                 if matches!(
                     r.kind,
-                    StringKind::Url | StringKind::IP | StringKind::IPPort
+                    Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort)
                 ) && scored_values.insert(value_lower.clone())
                 {
                     score += 50;
@@ -357,7 +357,7 @@ pub(crate) fn auto_detect_xor_key(
                 }
 
                 // Shell commands - only count unique values
-                if matches!(r.kind, StringKind::ShellCmd)
+                if matches!(r.kind, Some(StringKind::ShellCmd))
                     && scored_values.insert(value_lower.clone())
                 {
                     score += 30;
@@ -369,12 +369,12 @@ pub(crate) fn auto_detect_xor_key(
                 }
 
                 // Generic paths (lower priority, only if they match known prefixes)
-                if matches!(r.kind, StringKind::Path) && has_known_path_prefix(&r.value) {
+                if matches!(r.kind, Some(StringKind::Path)) && has_known_path_prefix(&r.value) {
                     score += 10;
                 }
 
                 // Base64 (low priority)
-                if matches!(r.kind, StringKind::Base64) {
+                if matches!(r.kind, Some(StringKind::Base64)) {
                     score += 5;
                 }
             }
@@ -739,7 +739,7 @@ pub(crate) fn scan_dotted_patterns(
                                 data_offset: offset,
                                 section: None,
                                 method: StringMethod::XorDecode,
-                                kind: StringKind::IP,
+                                kind: Some(StringKind::IP),
                                 source: Some(format!("xor:0x{key:02X}")),
                                 fragments: None,
                                 ..Default::default()
@@ -757,7 +757,7 @@ pub(crate) fn scan_dotted_patterns(
                                 data_offset: offset,
                                 section: None,
                                 method: StringMethod::XorDecode,
-                                kind: StringKind::IPPort,
+                                kind: Some(StringKind::IPPort),
                                 source: Some(format!("xor:0x{key:02X}")),
                                 fragments: None,
                                 ..Default::default()
@@ -778,7 +778,7 @@ pub(crate) fn scan_dotted_patterns(
                             data_offset: offset,
                             section: None,
                             method: StringMethod::XorDecode,
-                            kind: StringKind::Hostname,
+                            kind: Some(StringKind::Hostname),
                             source: Some(format!("xor:0x{key:02X}")),
                             fragments: None,
                             ..Default::default()
@@ -1460,7 +1460,7 @@ pub(crate) fn has_multiple_locales(s: &str) -> bool {
 }
 
 /// Classify an XOR-decoded string. Returns None if it doesn't look interesting.
-pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
+pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     // EARLY REJECTION: Check for partial/failed XOR decodes before any classification.
     // These are strings that start like known patterns (e.g., "%USERPROFILE%") but
     // diverge into garbage (e.g., "%UsERP4NFINE%\"). Must check this BEFORE
@@ -1477,13 +1477,13 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
     // Standard format: language_COUNTRY or language-COUNTRY (e.g., en_US, ru-RU, zh_CN)
     // Malware often includes lists like "en_US;fr_FR;de_DE" to check victim's locale
     if has_multiple_locales(s) {
-        return Some(StringKind::SuspiciousPath); // Classify as suspicious (indicates geofencing)
+        return Some(Some(StringKind::SuspiciousPath)); // Classify as suspicious (indicates geofencing)
     }
 
     // Check for well-known suspicious paths (even with garbage around them)
     for sus_path in SUSPICIOUS_PATHS {
         if s.contains(sus_path) {
-            return Some(StringKind::SuspiciousPath);
+            return Some(Some(StringKind::SuspiciousPath));
         }
     }
 
@@ -1493,21 +1493,21 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
     // Check for shell executable paths (before shell commands)
     for exe_path in SHELL_EXECUTABLE_PATHS {
         if lower.contains(exe_path) {
-            return Some(StringKind::SuspiciousPath);
+            return Some(Some(StringKind::SuspiciousPath));
         }
     }
 
     // Check for well-known shell commands (even with trailing garbage)
     for cmd in SHELL_COMMANDS {
         if lower.contains(cmd) {
-            return Some(StringKind::ShellCmd);
+            return Some(Some(StringKind::ShellCmd));
         }
     }
 
     // Check for credential keywords
     for keyword in CREDENTIAL_KEYWORDS {
         if lower.contains(keyword) {
-            return Some(StringKind::SuspiciousPath);
+            return Some(Some(StringKind::SuspiciousPath));
         }
     }
 
@@ -1533,7 +1533,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
 
     for indicator in &exfil_indicators {
         if lower.contains(indicator) {
-            return Some(StringKind::SuspiciousPath);
+            return Some(Some(StringKind::SuspiciousPath));
         }
     }
 
@@ -1541,7 +1541,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
     if lower.contains("http://") || lower.contains("https://") || lower.contains("://") {
         // Likely a URL, allow through
         let kind = classify_string(s);
-        if matches!(kind, StringKind::Url) {
+        if matches!(kind, Some(StringKind::Url)) {
             return Some(kind);
         }
     }
@@ -1556,7 +1556,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
         {
             // Likely an IP address, allow through
             let kind = classify_string(s);
-            if matches!(kind, StringKind::IP | StringKind::IPPort) {
+            if matches!(kind, Some(StringKind::IP) | Some(StringKind::IPPort)) {
                 return Some(kind);
             }
         }
@@ -1573,11 +1573,11 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
         // NOTE: Path is intentionally excluded - paths must go through strict validation below
         if matches!(
             kind,
-            StringKind::SuspiciousPath
-                | StringKind::ShellCmd
-                | StringKind::IP
-                | StringKind::IPPort
-                | StringKind::Url
+            Some(StringKind::SuspiciousPath)
+                | Some(StringKind::ShellCmd)
+                | Some(StringKind::IP)
+                | Some(StringKind::IPPort)
+                | Some(StringKind::Url)
         ) {
             return Some(kind);
         }
@@ -1590,7 +1590,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
         let kind = classify_string(s);
         if matches!(
             kind,
-            StringKind::Base64 | StringKind::HexEncoded | StringKind::UrlEncoded
+            Some(StringKind::Base64) | Some(StringKind::HexEncoded) | Some(StringKind::UrlEncoded)
         ) {
             return Some(kind);
         }
@@ -1600,8 +1600,8 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
         if remainder == 2 || remainder == 3 {
             let padding = if remainder == 2 { "==" } else { "=" };
             let padded = format!("{s}{padding}");
-            if matches!(classify_string(&padded), StringKind::Base64) {
-                return Some(StringKind::Base64);
+            if matches!(classify_string(&padded), Some(StringKind::Base64)) {
+                return Some(Some(StringKind::Base64));
             }
         }
     }
@@ -1615,16 +1615,16 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
     let kind = classify_string(s);
 
     match kind {
-        StringKind::IP
-        | StringKind::IPPort
-        | StringKind::Url
-        | StringKind::SuspiciousPath
-        | StringKind::UnicodeEscaped
-        | StringKind::HexEncoded
-        | StringKind::UrlEncoded
-        | StringKind::Registry
-        | StringKind::Base64 => Some(kind),
-        StringKind::ShellCmd | StringKind::AppleScript => {
+        Some(StringKind::IP)
+        | Some(StringKind::IPPort)
+        | Some(StringKind::Url)
+        | Some(StringKind::SuspiciousPath)
+        | Some(StringKind::UnicodeEscaped)
+        | Some(StringKind::HexEncoded)
+        | Some(StringKind::UrlEncoded)
+        | Some(StringKind::Registry)
+        | Some(StringKind::Base64) => Some(kind),
+        Some(StringKind::ShellCmd) | Some(StringKind::AppleScript) => {
             // Reject obvious garbage that starts with backtick but no valid command
             if s.starts_with('`')
                 && !s[1..]
@@ -1638,7 +1638,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
                 Some(kind)
             }
         }
-        StringKind::Path => {
+        Some(StringKind::Path) => {
             // STRICT PATH VALIDATION: Only accept paths matching known OS patterns
 
             // Check for known UNIX/macOS path prefixes
@@ -1764,7 +1764,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
             // Longer strings with spaces should look like natural text
             if char_count >= 30 && s.contains(' ') {
                 if looks_like_text(s) {
-                    return Some(StringKind::Const);
+                    return Some(None);
                 }
                 return None;
             }
@@ -1778,7 +1778,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<StringKind> {
                 return None;
             }
 
-            Some(StringKind::Const)
+            Some(None)
         }
     }
 }

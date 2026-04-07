@@ -969,7 +969,7 @@ fn is_fast_path_valid(s: &str, len: usize) -> bool {
     // SQL injection, registry paths, and all other classified string kinds.
     // Restricted to ASCII strings: non-ASCII content requires full heuristic analysis
     // because the classifier doesn't account for non-ASCII garbage from misaligned reads.
-    if s.is_ascii() && crate::go::classify_string(s) != crate::types::StringKind::Const {
+    if s.is_ascii() && crate::classifier::classify_string(s).is_some() {
         return true;
     }
 

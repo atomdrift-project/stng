@@ -123,3 +123,10 @@ use_self = "warn"                        # use Self in impl blocks instead of re
 redundant_closure_for_method_calls = "warn"  # |x| x.foo() → Type::foo
 manual_let_else = "warn"                 # match/if-let that returns/continues/breaks → let-else
 match_same_arms = "warn"                 # merge identical match arms
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "classify"
+harness = false

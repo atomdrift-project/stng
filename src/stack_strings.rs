@@ -317,7 +317,7 @@ impl<'a> StackStringExtractor<'a> {
                 value: first.string,
                 data_offset: first.instr_off,
                 method: StringMethod::StackString,
-                kind: StringKind::StackString,
+                kind: Some(StringKind::StackString),
                 fragments: Some(vec![StringFragment {
                     offset: first.instr_off,
                     length: 0, // updated below
@@ -370,7 +370,7 @@ impl<'a> StackStringExtractor<'a> {
                         value: w.string,
                         data_offset: w.instr_off,
                         method: StringMethod::StackString,
-                        kind: StringKind::StackString,
+                        kind: Some(StringKind::StackString),
                         fragments: Some(vec![StringFragment {
                             offset: w.instr_off,
                             length: string_len,
@@ -443,7 +443,7 @@ impl<'a> StackStringExtractor<'a> {
             value: merged_value,
             data_offset: first_offset,
             method: StringMethod::StackString,
-            kind: StringKind::StackString,
+            kind: Some(StringKind::StackString),
             fragments: if merged_fragments.is_empty() { None } else { Some(merged_fragments) },
             ..Default::default()
         }
@@ -537,7 +537,7 @@ impl<'a> StackStringExtractor<'a> {
                             value: trimmed.to_string(),
                             data_offset: min_off,
                             method: StringMethod::XorStackPair,
-                            kind: StringKind::StackString,
+                            kind: Some(StringKind::StackString),
                             ..Default::default()
                         });
                     }
@@ -577,7 +577,7 @@ impl<'a> StackStringExtractor<'a> {
                             value: chunk,
                             data_offset: start_pos as u64,
                             method: StringMethod::StackString,
-                            kind: StringKind::StackString,
+                            kind: Some(StringKind::StackString),
                             ..Default::default()
                         });
                     }

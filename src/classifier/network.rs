@@ -6,41 +6,37 @@ use crate::types::StringKind;
 
 /// Check if a string is a suspicious/security-relevant path
 pub(super) fn is_suspicious_path(s: &str) -> bool {
-    // Hidden paths (contain /. component)
-    if s.contains("/.") {
+    // Hidden paths (contain /. component) — fast memchr check
+    if memchr::memmem::find(s.as_bytes(), b"/.").is_some() {
         return true;
     }
 
-    // Known suspicious/rootkit locations
-    let suspicious = [
-        "/etc/ld.so.preload",
-        "/etc/ld.so.conf",
-        "/dev/shm",
-        "/dev/mem",
-        "/dev/kmem",
-        "/proc/",
-        "/sys/",
-        "/.ssh/",
-        "/etc/cron",
-        "/etc/init.d",
-        "/etc/systemd",
-        "/etc/rc.local",
-        "/var/spool/cron",
-        "/Library/LaunchAgents",
-        "/Library/LaunchDaemons",
-        "/.bash_profile",
-        "/.bashrc",
-        "/.profile",
-        "/.bash_login",
-        "/.zshrc",
-        "/tmp/",
-        "/var/tmp/",
-    ];
-
-    for path in suspicious {
-        if s.contains(path) {
-            return true;
-        }
+    // Known suspicious locations — only check prefixes that could match.
+    // Most suspicious paths start with /etc, /dev, /proc, /sys, /tmp, /var, /Library.
+    if s.starts_with("/etc/") {
+        return memchr::memmem::find(s.as_bytes(), b"ld.so.preload").is_some()
+            || memchr::memmem::find(s.as_bytes(), b"ld.so.conf").is_some()
+            || memchr::memmem::find(s.as_bytes(), b"cron").is_some()
+            || memchr::memmem::find(s.as_bytes(), b"init.d").is_some()
+            || memchr::memmem::find(s.as_bytes(), b"systemd").is_some()
+            || memchr::memmem::find(s.as_bytes(), b"rc.local").is_some();
+    }
+    if s.starts_with("/dev/") {
+        return memchr::memmem::find(s.as_bytes(), b"shm").is_some()
+            || memchr::memmem::find(s.as_bytes(), b"mem").is_some()
+            || memchr::memmem::find(s.as_bytes(), b"kmem").is_some();
+    }
+    if s.starts_with("/proc/") || s.starts_with("/sys/") {
+        return true;
+    }
+    if s.starts_with("/tmp/") || s.starts_with("/var/tmp/") {
+        return true;
+    }
+    if s.starts_with("/var/spool/cron") {
+        return true;
+    }
+    if s.starts_with("/Library/Launch") {
+        return true;
     }
 
     false

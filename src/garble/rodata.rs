@@ -4,7 +4,7 @@
 //! same-length byte arrays in .rodata. This module finds such pairs and
 //! tries XOR/ADD/SUB to recover the original strings.
 
-use crate::types::{ExtractedString, StringKind, StringMethod};
+use crate::types::{ExtractedString, StringMethod};
 use std::collections::{HashMap, HashSet};
 
 use super::ops::GarbleOp;
@@ -99,7 +99,7 @@ pub fn extract_garble_rodata_strings(
                             data_offset: rodata_file_offset + off_a as u64,
                             section: Some(".rodata".to_string()),
                             method: StringMethod::GarbleRodata,
-                            kind: StringKind::Const,
+                            kind: None,
                             ..Default::default()
                         });
                     }

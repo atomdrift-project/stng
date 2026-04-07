@@ -23,7 +23,7 @@ pub fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec<Extrac
                     data_offset: file_offset,
                     section,
                     method: StringMethod::Structure,
-                    kind: StringKind::Import,
+                    kind: Some(StringKind::Import),
                     source: Some(lib.to_string()),
                     ..Default::default()
                 });
@@ -43,7 +43,7 @@ pub fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec<Extrac
                     data_offset: file_offset,
                     section,
                     method: StringMethod::Structure,
-                    kind: StringKind::Export,
+                    kind: Some(StringKind::Export),
                     ..Default::default()
                 });
             }
@@ -84,12 +84,12 @@ pub fn extract_elf_imports(elf: &goblin::elf::Elf<'_>, min_length: usize) -> Vec
                 })
                 .and_then(|vn| elf.dynstrtab.get_at(vn.vn_file))
                 .map(std::string::ToString::to_string);
-            (StringKind::Import, lib)
+            (Some(StringKind::Import), lib)
         } else if sym.st_bind() == goblin::elf::sym::STB_GLOBAL
             || sym.st_bind() == goblin::elf::sym::STB_WEAK
         {
             // Defined global/weak symbol - this is an export
-            (StringKind::Export, None)
+            (Some(StringKind::Export), None)
         } else {
             continue;
         };

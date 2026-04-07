@@ -1,6 +1,6 @@
 //! Raw string scanning for binaries without structure information.
 
-use crate::go;
+use crate::classifier;
 use crate::types::{ExtractedString, StringKind, StringMethod};
 use memchr::memchr_iter;
 use std::collections::HashMap;
@@ -56,13 +56,13 @@ pub fn extract_raw_strings(
                 let trimmed = s.trim();
                 if trimmed.len() >= min_length {
                     let kind = if segment_names_set.contains(trimmed) {
-                        StringKind::Section
+                        Some(StringKind::Section)
                     } else {
-                        go::classify_string(trimmed)
+                        classifier::classify_string(trimmed)
                     };
 
                     // Get section metadata if this is a section
-                    let (sec_size, sec_exec, sec_write) = if kind == StringKind::Section {
+                    let (sec_size, sec_exec, sec_write) = if kind == Some(StringKind::Section) {
                         section_info
                             .get(trimmed)
                             .map_or((None, None, None), |info| {
@@ -158,16 +158,19 @@ pub fn extract_printable_runs(
                 let trimmed = s.trim();
                 if trimmed.len() >= min_length {
                     let mut kind = if segment_names_set.contains(trimmed) {
-                        StringKind::Section
+                        Some(StringKind::Section)
                     } else {
-                        go::classify_string(trimmed)
+                        classifier::classify_string(trimmed)
                     };
 
-                    if start == 0 && kind == StringKind::ShellCmd && trimmed.starts_with("#!") {
-                        kind = StringKind::Const;
+                    // Shebangs at offset 0 are the file's interpreter declaration,
+                    // not embedded shell commands.
+                    if start == 0 && kind == Some(StringKind::ShellCmd) && trimmed.starts_with("#!") {
+                        kind = None;
                     }
 
-                    let (sec_size, sec_exec, sec_write) = if kind == StringKind::Section {
+                    // Get section metadata if this is a section
+                    let (sec_size, sec_exec, sec_write) = if kind == Some(StringKind::Section) {
                         section_info
                             .get(trimmed)
                             .map_or((None, None, None), |info| {
@@ -266,13 +269,13 @@ pub fn extract_wide_strings(
 
                 if trimmed.len() >= min_length && !trimmed.is_empty() && !seen.contains(trimmed) {
                     let kind = if segment_names_set.contains(trimmed) {
-                        StringKind::Section
+                        Some(StringKind::Section)
                     } else {
-                        go::classify_string(trimmed)
+                        classifier::classify_string(trimmed)
                     };
 
                     // Get section metadata if this is a section
-                    let (sec_size, sec_exec, sec_write) = if kind == StringKind::Section {
+                    let (sec_size, sec_exec, sec_write) = if kind == Some(StringKind::Section) {
                         section_info
                             .get(trimmed)
                             .map_or((None, None, None), |info| {

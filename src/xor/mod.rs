@@ -274,7 +274,7 @@ mod tests {
         assert!(
             !results
                 .iter()
-                .any(|r| r.value == "12.32.12.2" && r.kind == StringKind::IP),
+                .any(|r| r.value == "12.32.12.2" && r.kind == Some(StringKind::IP)),
             "XAML margin commas must not produce false IP via XOR key 0x02. Results: {:?}",
             results
         );
@@ -431,7 +431,7 @@ mod tests {
 
         let results = extract_custom_xor_strings(&xored, key, 10, false);
         assert!(
-            results.iter().any(|r| r.kind == StringKind::SuspiciousPath
+            results.iter().any(|r| r.kind == Some(StringKind::SuspiciousPath)
                 && r.value.contains("/Library/Ethereum/keystore")),
             "Should detect Ethereum keystore path. Results: {:?}",
             results
@@ -453,7 +453,7 @@ mod tests {
         assert!(
             results
                 .iter()
-                .any(|r| r.kind == StringKind::ShellCmd && r.value.contains("screencapture")),
+                .any(|r| r.kind == Some(StringKind::ShellCmd) && r.value.contains("screencapture")),
             "Should detect screencapture command even with trailing garbage. Results: {:?}",
             results
         );
@@ -472,7 +472,7 @@ mod tests {
 
         let results = extract_custom_xor_strings(&xored, key, 10, false);
         assert!(
-            !results.iter().any(|r| r.kind == StringKind::ShellCmd),
+            !results.iter().any(|r| r.kind == Some(StringKind::ShellCmd)),
             "Garbage with backtick should NOT be shell command. Results: {:?}",
             results
         );
@@ -491,7 +491,7 @@ mod tests {
             .collect();
         let results1 = extract_custom_xor_strings(&xored1, key, 4, false);
         assert!(
-            !results1.iter().any(|r| r.kind == StringKind::Path),
+            !results1.iter().any(|r| r.kind == Some(StringKind::Path)),
             "Garbage with special chars should NOT be path"
         );
 
@@ -504,7 +504,7 @@ mod tests {
             .collect();
         let results2 = extract_custom_xor_strings(&xored2, key, 4, false);
         assert!(
-            !results2.iter().any(|r| r.kind == StringKind::Path),
+            !results2.iter().any(|r| r.kind == Some(StringKind::Path)),
             "Garbage with mixed case and digits should NOT be path"
         );
 
@@ -517,7 +517,7 @@ mod tests {
             .collect();
         let results3 = extract_custom_xor_strings(&xored3, key, 4, false);
         assert!(
-            !results3.iter().any(|r| r.kind == StringKind::Path),
+            !results3.iter().any(|r| r.kind == Some(StringKind::Path)),
             "Garbage with special chars should NOT be path"
         );
     }
@@ -657,7 +657,7 @@ mod tests {
                 data_offset: 0,
                 section: None,
                 method: StringMethod::RawScan,
-                kind: StringKind::Const,
+                kind: None,
                 ..Default::default()
             },
             ExtractedString {
@@ -665,7 +665,7 @@ mod tests {
                 data_offset: 100,
                 section: None,
                 method: StringMethod::RawScan,
-                kind: StringKind::Const,
+                kind: None,
                 ..Default::default()
             },
             ExtractedString {
@@ -673,7 +673,7 @@ mod tests {
                 data_offset: 200,
                 section: None,
                 method: StringMethod::RawScan,
-                kind: StringKind::Const,
+                kind: None,
                 ..Default::default()
             },
             ExtractedString {
@@ -681,7 +681,7 @@ mod tests {
                 data_offset: 300,
                 section: None,
                 method: StringMethod::RawScan,
-                kind: StringKind::Const,
+                kind: None,
                 ..Default::default()
             },
         ];
@@ -747,7 +747,7 @@ mod tests {
                 data_offset: 0,
                 section: None,
                 method: StringMethod::RawScan,
-                kind: StringKind::Const,
+                kind: None,
                 ..Default::default()
             },
             ExtractedString {
@@ -755,7 +755,7 @@ mod tests {
                 data_offset: 100,
                 section: None,
                 method: StringMethod::RawScan,
-                kind: StringKind::Const,
+                kind: None,
                 ..Default::default()
             },
         ];
@@ -1051,7 +1051,7 @@ mod tests {
         assert!(
             results1
                 .iter()
-                .any(|r| r.kind == StringKind::Path || r.kind == StringKind::SuspiciousPath),
+                .any(|r| r.kind == Some(StringKind::Path) || r.kind == Some(StringKind::SuspiciousPath)),
             "/usr/bin/bash should be detected as path or suspicious path. Found: {:?}",
             results1
                 .iter()
@@ -1070,7 +1070,7 @@ mod tests {
         assert!(
             results2
                 .iter()
-                .any(|r| r.kind == StringKind::Path || r.kind == StringKind::SuspiciousPath),
+                .any(|r| r.kind == Some(StringKind::Path) || r.kind == Some(StringKind::SuspiciousPath)),
             "/etc/passwd should be detected as path"
         );
 
@@ -1083,7 +1083,7 @@ mod tests {
             .collect();
         let results3 = extract_custom_xor_strings(&xored3, key, 4, false);
         assert!(
-            results3.iter().any(|r| r.kind == StringKind::Path),
+            results3.iter().any(|r| r.kind == Some(StringKind::Path)),
             "/dev/urandom should be detected as path"
         );
     }

@@ -5,7 +5,7 @@
 
 pub mod cache;
 
-use crate::go::classify_string;
+use crate::classifier::classify_string;
 use crate::{ExtractedString, FunctionMetadata, StringKind, StringMethod};
 use cache::R2Cache;
 use std::collections::{HashMap, HashSet};
@@ -515,12 +515,12 @@ pub fn decode_spaced_ascii(s: &str) -> Option<String> {
     }
 }
 
-fn classify_r2_symbol(type_str: &str, bind: &str) -> StringKind {
+fn classify_r2_symbol(type_str: &str, bind: &str) -> Option<StringKind> {
     match type_str {
-        "FUNC" | "METH" => StringKind::FuncName,
-        "FILE" => StringKind::FilePath,
-        "OBJECT" if bind == "GLOBAL" => StringKind::Ident,
-        _ => StringKind::Ident,
+        "FUNC" | "METH" => Some(StringKind::FuncName),
+        "FILE" => Some(StringKind::FilePath),
+        "OBJECT" if bind == "GLOBAL" => Some(StringKind::Ident),
+        _ => Some(StringKind::Ident),
     }
 }
 
@@ -985,28 +985,28 @@ mod tests {
 
     #[test]
     fn test_classify_r2_symbol() {
-        assert_eq!(classify_r2_symbol("FUNC", "GLOBAL"), StringKind::FuncName);
-        assert_eq!(classify_r2_symbol("FILE", "LOCAL"), StringKind::FilePath);
-        assert_eq!(classify_r2_symbol("OBJECT", "GLOBAL"), StringKind::Ident);
+        assert_eq!(classify_r2_symbol("FUNC", "GLOBAL"), Some(StringKind::FuncName));
+        assert_eq!(classify_r2_symbol("FILE", "LOCAL"), Some(StringKind::FilePath));
+        assert_eq!(classify_r2_symbol("OBJECT", "GLOBAL"), Some(StringKind::Ident));
     }
 
     #[test]
     fn test_classify_r2_symbol_meth() {
-        assert_eq!(classify_r2_symbol("METH", "GLOBAL"), StringKind::FuncName);
-        assert_eq!(classify_r2_symbol("METH", "LOCAL"), StringKind::FuncName);
+        assert_eq!(classify_r2_symbol("METH", "GLOBAL"), Some(StringKind::FuncName));
+        assert_eq!(classify_r2_symbol("METH", "LOCAL"), Some(StringKind::FuncName));
     }
 
     #[test]
     fn test_classify_r2_symbol_unknown_type() {
-        assert_eq!(classify_r2_symbol("UNKNOWN", "GLOBAL"), StringKind::Ident);
-        assert_eq!(classify_r2_symbol("", ""), StringKind::Ident);
-        assert_eq!(classify_r2_symbol("NOTYPE", "LOCAL"), StringKind::Ident);
+        assert_eq!(classify_r2_symbol("UNKNOWN", "GLOBAL"), Some(StringKind::Ident));
+        assert_eq!(classify_r2_symbol("", ""), Some(StringKind::Ident));
+        assert_eq!(classify_r2_symbol("NOTYPE", "LOCAL"), Some(StringKind::Ident));
     }
 
     #[test]
     fn test_classify_r2_symbol_object_local() {
         // OBJECT with LOCAL binding should not be Ident
-        assert_eq!(classify_r2_symbol("OBJECT", "LOCAL"), StringKind::Ident);
+        assert_eq!(classify_r2_symbol("OBJECT", "LOCAL"), Some(StringKind::Ident));
     }
 
     #[test]
@@ -1250,9 +1250,9 @@ pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
                 section: Some(".text".to_string()),
                 method: StringMethod::InstructionPattern,
                 kind: if sockaddr.port > 0 {
-                    StringKind::IPPort
+                    Some(StringKind::IPPort)
                 } else {
-                    StringKind::IP
+                    Some(StringKind::IP)
                 },
                 source: Some("connect()".to_string()),
                 fragments: None,
@@ -1281,9 +1281,9 @@ pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
                     section: Some(".text".to_string()),
                     method: StringMethod::InstructionPattern,
                     kind: if sockaddr.port > 0 {
-                        StringKind::IPPort
+                        Some(StringKind::IPPort)
                     } else {
-                        StringKind::IP
+                        Some(StringKind::IP)
                     },
                     source: Some("connect()".to_string()),
                     fragments: None,
@@ -1324,9 +1324,9 @@ fn scan_binary_for_connect_addrs(data: &[u8]) -> Vec<ExtractedString> {
                 section: Some(".text".to_string()),
                 method: StringMethod::InstructionPattern,
                 kind: if sockaddr.port > 0 {
-                    StringKind::IPPort
+                    Some(StringKind::IPPort)
                 } else {
-                    StringKind::IP
+                    Some(StringKind::IP)
                 },
                 source: Some("connect()".to_string()),
                 fragments: None,

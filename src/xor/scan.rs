@@ -204,8 +204,8 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
         // Network IOCs (URL, IP) are priority 0 so they beat longer Const strings.
         all_results.sort_by_key(|s| {
             let priority = match s.kind {
-                StringKind::Url | StringKind::IP | StringKind::IPPort => 0,
-                StringKind::SuspiciousPath | StringKind::ShellCmd => 1,
+                Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort) => 0,
+                Some(StringKind::SuspiciousPath) | Some(StringKind::ShellCmd) => 1,
                 _ => 2,
             };
             (priority, std::cmp::Reverse(s.value.len()))
@@ -313,7 +313,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                     let kind_opt = if apply_filters {
                         classify_xor_string(&s)
                     } else {
-                        Some(StringKind::Const)
+                        Some(None)
                     };
 
                     if let Some(kind) = kind_opt {
@@ -334,10 +334,10 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                         // natural language vowel patterns
                         let is_encoded_format = matches!(
                             kind,
-                            StringKind::Base64
-                                | StringKind::UnicodeEscaped
-                                | StringKind::HexEncoded
-                                | StringKind::UrlEncoded
+                            Some(StringKind::Base64)
+                                | Some(StringKind::UnicodeEscaped)
+                                | Some(StringKind::HexEncoded)
+                                | Some(StringKind::UrlEncoded)
                         );
                         if !is_encoded_format && alpha >= 3 {
                             let has_non_ascii = !s.is_ascii();
@@ -368,7 +368,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                             };
 
                             // Clean up URLs by removing trailing garbage
-                            let cleaned_value = if matches!(kind, StringKind::Url) {
+                            let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
                                 clean_url_trailing_garbage(&s)
                             } else {
                                 s.clone()
@@ -467,7 +467,7 @@ fn extract_xor_strings_from_hints(
                 let kind_opt = if apply_filters {
                     classify_xor_string(&s)
                 } else {
-                    Some(StringKind::Const)
+                    Some(None)
                 };
 
                 if let Some(kind) = kind_opt {
@@ -502,7 +502,7 @@ fn is_high_quality_string(s: &ExtractedString) -> bool {
     // High quality = shell commands, suspicious paths, URLs, crypto terms
     matches!(
         s.kind,
-        StringKind::ShellCmd | StringKind::SuspiciousPath | StringKind::Url | StringKind::IP
+        Some(StringKind::ShellCmd) | Some(StringKind::SuspiciousPath) | Some(StringKind::Url) | Some(StringKind::IP)
     ) || {
         let vl = s.value.to_ascii_lowercase();
         vl.contains("ethereum") || vl.contains("bitcoin") || vl.contains("osascript")
@@ -768,7 +768,7 @@ fn extract_custom_xor_strings_pattern_based_simple(
                     if apply_filters {
                         return None; // Filter rejected this string
                     }
-                    StringKind::Const
+                    None
                 }
             };
 
@@ -802,7 +802,7 @@ fn extract_custom_xor_strings_pattern_based_simple(
             // names like "http" or "ftp"). Always apply for other string types regardless of
             // apply_filters, since vowel ratio is a reliable noise filter even in unfiltered mode.
             let is_network_ioc =
-                matches!(kind, StringKind::Url | StringKind::IP | StringKind::IPPort);
+                matches!(kind, Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort));
             if !is_network_ioc && alpha >= 3 && !is_locale_string(&trimmed_s) {
                 let has_non_ascii = !trimmed_s.is_ascii();
                 if !has_non_ascii {
@@ -829,11 +829,11 @@ fn extract_custom_xor_strings_pattern_based_simple(
             }
 
             // Apply category-specific fine-tuning after consonant cluster trimming
-            let cleaned_value = if matches!(kind, StringKind::Url) {
+            let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
                 clean_url_trailing_garbage(&trimmed_s)
-            } else if matches!(kind, StringKind::SuspiciousPath) && is_locale_string(&trimmed_s) {
+            } else if matches!(kind, Some(StringKind::SuspiciousPath)) && is_locale_string(&trimmed_s) {
                 clean_locale_trailing_garbage(&trimmed_s)
-            } else if matches!(kind, StringKind::SuspiciousPath) {
+            } else if matches!(kind, Some(StringKind::SuspiciousPath)) {
                 // Trim trailing backtick+letter pattern: XOR misalignment can produce e.g. `R at the end
                 let s = trimmed_s.as_str();
                 let bytes = s.as_bytes();
@@ -850,7 +850,7 @@ fn extract_custom_xor_strings_pattern_based_simple(
                 } else {
                     trimmed_s
                 }
-            } else if matches!(kind, StringKind::ShellCmd) {
+            } else if matches!(kind, Some(StringKind::ShellCmd)) {
                 // For shell commands and AppleScript, use the existing trimmer
                 trim_trailing_garbage(&trimmed_s).to_string()
             } else {
@@ -1081,7 +1081,7 @@ pub fn extract_rolling_xor_with_known_plaintext(
                         if let Ok(s) = String::from_utf8(decoded_bytes.clone()) {
                             if s.bytes().any(|b| b.is_ascii_alphabetic()) {
                                 let file_offset = (region_start + start_pos) as u64;
-                                let kind = classify_xor_string(&s).unwrap_or(StringKind::Const);
+                                let kind = classify_xor_string(&s).flatten();
                                 results.push(ExtractedString {
                                     value: s,
                                     data_offset: file_offset,

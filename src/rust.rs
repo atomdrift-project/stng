@@ -12,7 +12,7 @@
 //! For inline literals, we also perform instruction pattern analysis.
 
 use super::extraction::{extract_from_structures, find_string_structures};
-use super::go::classify_string;
+use super::classifier::classify_string;
 use super::instr::{extract_inline_strings_amd64, extract_inline_strings_arm64};
 use super::types::{BinaryInfo, ExtractedString, StringMethod};
 use goblin::elf::Elf;
@@ -913,10 +913,10 @@ mod tests {
             .iter()
             .find(|s| s.value.contains("example"))
             .unwrap();
-        assert_eq!(url.kind, StringKind::Url);
+        assert_eq!(url.kind, Some(StringKind::Url));
 
         let path = strings.iter().find(|s| s.value.contains("/usr")).unwrap();
-        assert_eq!(path.kind, StringKind::Path);
+        assert_eq!(path.kind, Some(StringKind::Path));
     }
 
     #[test]

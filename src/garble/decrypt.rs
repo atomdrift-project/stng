@@ -19,7 +19,7 @@
 //! 4. Emulate until `slicebytetostring` call
 //! 5. Capture the decrypted string bytes
 
-use crate::types::{ExtractedString, StringKind, StringMethod};
+use crate::types::{ExtractedString, StringMethod};
 
 use super::emulator::{EmulationResult, Emulator};
 use super::func_finder::{find_call_targets, find_decrypt_candidates};
@@ -147,7 +147,7 @@ pub fn extract_garble_strings<'a>(
                                 data_offset: call_site,
                                 section: Some(".text".to_string()),
                                 method: StringMethod::GarbleEmulated,
-                                kind: StringKind::Const,
+                                kind: None,
                                 ..Default::default()
                             });
                             result.success_count += 1;
@@ -284,7 +284,7 @@ pub fn extract_garble_strings_v2<'a>(
                             data_offset: candidate.entry,
                             section: Some(".text".to_string()),
                             method: StringMethod::GarbleEmulated,
-                            kind: StringKind::Const,
+                            kind: None,
                             ..Default::default()
                         });
                         result.success_count += 1;

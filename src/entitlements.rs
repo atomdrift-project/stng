@@ -41,7 +41,7 @@ pub fn extract_macho_entitlements(
                             data_offset: (offset + xml_start) as u64,
                             section: Some("__LINKEDIT".to_string()),
                             method: StringMethod::CodeSignature,
-                            kind: StringKind::EntitlementsXml,
+                            kind: Some(StringKind::EntitlementsXml),
                             ..Default::default()
                         });
                     }

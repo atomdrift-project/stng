@@ -4,7 +4,7 @@
 //! pointer+length structures. Instead, compilers pass string addresses and lengths
 //! through registers. We extract these by pattern matching instruction sequences.
 
-use super::go::classify_string;
+use super::classifier::classify_string;
 use super::types::{ExtractedString, StringKind, StringMethod};
 use std::collections::HashSet;
 
@@ -53,7 +53,7 @@ pub fn extract_inline_strings_arm64(
             0, // address register
             1, // length register
             min_length,
-            StringKind::Arg,
+            Some(StringKind::Arg),
             &mut strings,
             &mut seen,
         );
@@ -69,7 +69,7 @@ pub fn extract_inline_strings_arm64(
             2,
             3,
             min_length,
-            StringKind::MapKey,
+            Some(StringKind::MapKey),
             &mut strings,
             &mut seen,
         );
@@ -92,7 +92,7 @@ fn extract_arm64_string_pattern(
     addr_reg: u32,
     len_reg: u32,
     min_length: usize,
-    _kind: StringKind,
+    _kind: Option<StringKind>,
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
@@ -185,8 +185,8 @@ fn extract_arm64_string_pattern(
             if s.len() >= min_length && !seen.contains(&s) {
                 seen.insert(s.clone());
                 // Use content-based classification, but prefer MapKey hint from register position
-                let final_kind = if _kind == StringKind::MapKey && looks_like_key(&s) {
-                    StringKind::MapKey
+                let final_kind = if _kind == Some(StringKind::MapKey) && looks_like_key(&s) {
+                    Some(StringKind::MapKey)
                 } else {
                     classify_string(&s)
                 };
@@ -393,7 +393,7 @@ pub fn extract_inline_strings_amd64(
                 rodata_addr,
                 rodata_end,
                 min_length,
-                StringKind::Arg,
+                Some(StringKind::Arg),
                 &mut strings,
                 &mut seen,
             );
@@ -407,7 +407,7 @@ pub fn extract_inline_strings_amd64(
                 rodata_addr,
                 rodata_end,
                 min_length,
-                StringKind::MapKey,
+                Some(StringKind::MapKey),
                 &mut strings,
                 &mut seen,
             );
@@ -421,7 +421,7 @@ pub fn extract_inline_strings_amd64(
                 rodata_addr,
                 rodata_end,
                 min_length,
-                StringKind::Const,
+                None,
                 &mut strings,
                 &mut seen,
             );
@@ -520,7 +520,7 @@ fn extract_amd64_first_arg_string(
     rodata_addr: u64,
     rodata_end: u64,
     min_length: usize,
-    _kind: StringKind,
+    _kind: Option<StringKind>,
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
@@ -663,7 +663,7 @@ fn extract_amd64_key_string(
     rodata_addr: u64,
     rodata_end: u64,
     min_length: usize,
-    _kind: StringKind,
+    _kind: Option<StringKind>,
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
@@ -728,8 +728,8 @@ fn extract_amd64_key_string(
                 if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                     seen.insert(s.to_string());
                     // Use content-based classification, but prefer MapKey hint from register position
-                    let final_kind = if _kind == StringKind::MapKey && looks_like_key(s) {
-                        StringKind::MapKey
+                    let final_kind = if _kind == Some(StringKind::MapKey) && looks_like_key(s) {
+                        Some(StringKind::MapKey)
                     } else {
                         classify_string(s)
                     };
@@ -798,7 +798,7 @@ fn extract_amd64_value_string(
     rodata_addr: u64,
     rodata_end: u64,
     min_length: usize,
-    _kind: StringKind,
+    _kind: Option<StringKind>,
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
@@ -1511,7 +1511,7 @@ mod tests {
             0x2000,
             0x2004,
             4,
-            StringKind::Arg,
+            Some(StringKind::Arg),
             &mut strings,
             &mut seen,
         );
@@ -1534,7 +1534,7 @@ mod tests {
             0x2000,
             0x2004,
             4,
-            StringKind::MapKey,
+            Some(StringKind::MapKey),
             &mut strings,
             &mut seen,
         );
@@ -1557,7 +1557,7 @@ mod tests {
             0x2000,
             0x2004,
             4,
-            StringKind::Const,
+            None,
             &mut strings,
             &mut seen,
         );
@@ -1620,7 +1620,7 @@ mod tests {
         let rodata_addr = text_addr + text_data.len() as u64 + 0x50 - 7;
         let results =
             extract_inline_strings_amd64(&text_data, text_addr, &rodata_data, rodata_addr, 4);
-        for key in results.iter().filter(|s| s.kind == StringKind::MapKey) {
+        for key in results.iter().filter(|s| s.kind == Some(StringKind::MapKey)) {
             assert!(!key.value.is_empty());
             assert_eq!(key.method, StringMethod::InstructionPattern);
         }

@@ -59,6 +59,9 @@ pub mod garble;
 // Script deobfuscation
 pub mod script;
 
+// String classifier
+pub mod classifier;
+
 // Language-specific extractors
 mod go;
 pub(crate) mod instr;
@@ -74,7 +77,7 @@ mod fuzzy_base64;
 pub use binary::{is_go_binary, is_rust_binary};
 pub use detect::{detect_language, is_text_file};
 pub use error::{Result, StngError};
-pub use go::classify_string;
+pub use classifier::classify_string;
 pub use overlay::detect_elf_overlay;
 pub use types::{
     BinaryInfo, ExtractedString, FunctionMetadata, OverlayInfo, Severity, StringKind, StringMethod,
@@ -116,22 +119,22 @@ use raw::{extract_raw_strings, extract_wide_strings};
 fn passes_garbage_filter(s: &ExtractedString) -> bool {
     matches!(
         s.kind,
-        StringKind::EntitlementsXml
-            | StringKind::Section
-            | StringKind::Base64
-            | StringKind::Base32
-            | StringKind::Base85
-            | StringKind::HexEncoded
-            | StringKind::UrlEncoded
-            | StringKind::UnicodeEscaped
-            | StringKind::XorKey
+        Some(StringKind::EntitlementsXml)
+            | Some(StringKind::Section)
+            | Some(StringKind::Base64)
+            | Some(StringKind::Base32)
+            | Some(StringKind::Base85)
+            | Some(StringKind::HexEncoded)
+            | Some(StringKind::UrlEncoded)
+            | Some(StringKind::UnicodeEscaped)
+            | Some(StringKind::XorKey)
     ) || !validation::is_garbage(&s.value)
 }
 
 /// Merge a set of imports into the strings list.
 /// Updates kind/source for strings already present, then appends new ones.
 fn merge_imports(strings: &mut Vec<ExtractedString>, imports: Vec<ExtractedString>) {
-    let import_map: HashMap<&str, (StringKind, Option<&str>)> = imports
+    let import_map: HashMap<&str, (Option<StringKind>, Option<&str>)> = imports
         .iter()
         .map(|s| (s.value.as_str(), (s.kind, s.source.as_deref())))
         .collect();
@@ -162,7 +165,7 @@ fn apply_entitlements(
 ) {
     let entitlements = entitlements::extract_macho_entitlements(macho, data, min_length);
     for ent in &entitlements {
-        if ent.kind == StringKind::EntitlementsXml {
+        if ent.kind == Some(StringKind::EntitlementsXml) {
             let ent_start = ent.data_offset;
             let ent_end = ent_start.saturating_add(ent.value.len() as u64);
             strings.retain(|s| {
@@ -203,7 +206,7 @@ fn extract_pclntab_func_names_macho(
             data_offset: pclntab_offset + i as u64,
             section: Some("__gopclntab".to_string()),
             method: StringMethod::PclntabSymbol,
-            kind: StringKind::FuncName,
+            kind: Some(StringKind::FuncName),
             ..Default::default()
         })
         .collect()
@@ -243,7 +246,7 @@ fn extract_pclntab_func_names_elf(
             data_offset: pclntab_offset + i as u64,
             section: Some(".gopclntab".to_string()),
             method: StringMethod::PclntabSymbol,
-            kind: StringKind::FuncName,
+            kind: Some(StringKind::FuncName),
             ..Default::default()
         })
         .collect()
@@ -297,7 +300,7 @@ fn apply_xor_scan(
         tracing::debug!("Custom XOR: using {} byte key", key.len());
         let key_str = String::from_utf8_lossy(key);
         if let Some(ks) = strings.iter_mut().find(|s| s.value == key_str.as_ref()) {
-            ks.kind = StringKind::XorKey;
+            ks.kind = Some(StringKind::XorKey);
         }
         strings.extend(xor::extract_custom_xor_strings_with_hints(
             data,
@@ -321,7 +324,7 @@ fn apply_xor_scan(
             // carry the XorKey kind to survive as the correct kind.
             let mut marked = false;
             for ks in strings.iter_mut().filter(|s| s.value == key_str) {
-                ks.kind = StringKind::XorKey;
+                ks.kind = Some(StringKind::XorKey);
                 marked = true;
             }
             if !marked {
@@ -334,7 +337,7 @@ fn apply_xor_scan(
                     data_offset: 0,
                     section: None,
                     method: StringMethod::XorDecode,
-                    kind: StringKind::XorKey,
+                    kind: Some(StringKind::XorKey),
                     source: None,
                     fragments: None,
                     ..Default::default()
@@ -803,7 +806,7 @@ fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_length: usize) 
                 seen.insert(decoded.clone());
 
                 // Create a new decoded string entry
-                let kind = go::classify_string(&decoded);
+                let kind = classifier::classify_string(&decoded);
                 new_strings.push(ExtractedString {
                     value: decoded,
                     data_offset: s.data_offset,
@@ -980,7 +983,7 @@ fn append_script_deobfuscation(
         for s in &mut payload_strings {
             s.method = StringMethod::ScriptDecode;
             s.source = Some(result.chain_description.clone());
-            s.kind = go::classify_string(&s.value);
+            s.kind = classifier::classify_string(&s.value);
             s.data_offset += base_offset;
         }
 
@@ -1607,7 +1610,7 @@ fn extract_from_object(
                 // Base64 strings in __LINKEDIT that decode to SHA-1 (20 bytes) or
                 // SHA-256 (32 bytes) are CD hashes. Other base64 content (certificate
                 // data, etc.) decodes to different sizes and must not be promoted.
-                if s.kind == StringKind::Base64 {
+                if s.kind == Some(StringKind::Base64) {
                     let decoded_len = base64::Engine::decode(
                         &base64::engine::general_purpose::STANDARD,
                         s.value.trim(),
@@ -1615,14 +1618,14 @@ fn extract_from_object(
                     .map(|b| b.len())
                     .unwrap_or(0);
                     if decoded_len == 20 || decoded_len == 32 {
-                        s.kind = StringKind::CodeSignatureHash;
+                        s.kind = Some(StringKind::CodeSignatureHash);
                         s.method = StringMethod::CodeSignature;
                     }
                 }
 
                 // XML/plist strings in __LINKEDIT are part of code signature
                 // (entitlements or code signature metadata like cdhashes)
-                if s.kind == StringKind::Const
+                if s.kind.is_none()
                     && (s.value.starts_with("<?xml")
                         || s.value.starts_with("<!DOCTYPE plist")
                         || s.value.starts_with("<plist")
@@ -1642,15 +1645,15 @@ fn extract_from_object(
                 // These are Distinguished Names, dates, CRL URLs, and policy text.
                 // Also covers Base64-classified strings that are actually ASN.1 date
                 // fragments (e.g. "350209214036Z0b1") which are not CD hashes.
-                if (s.kind == StringKind::Const || s.kind == StringKind::Base64)
+                if (s.kind.is_none() || s.kind == Some(StringKind::Base64))
                     && is_certificate_string(&s.value)
                 {
                     s.method = StringMethod::CodeSignature;
                 }
 
                 // Bundle IDs (reverse domain notation) in __LINKEDIT are often app identifiers
-                if s.kind == StringKind::Const && is_bundle_id(&s.value) {
-                    s.kind = StringKind::AppId;
+                if s.kind.is_none() && is_bundle_id(&s.value) {
+                    s.kind = Some(StringKind::AppId);
                 }
             }
         }

@@ -261,7 +261,7 @@ fn parse_us_heap(heap: &[u8], file_base_offset: u64, min_length: usize) -> Vec<E
                 if decoded.chars().count() >= min_length && !seen.contains(&decoded) {
                     seen.insert(decoded.clone());
 
-                    let kind = crate::go::classify_string(&decoded);
+                    let kind = crate::classifier::classify_string(&decoded);
 
                     results.push(ExtractedString {
                         value: decoded,

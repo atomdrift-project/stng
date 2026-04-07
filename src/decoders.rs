@@ -138,7 +138,7 @@ pub fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<ExtractedString
 
     for s in strings {
         // Try normal base64 decoding first
-        if s.kind == StringKind::Base64 || is_likely_base64(&s.value) {
+        if s.kind == Some(StringKind::Base64) || is_likely_base64(&s.value) {
             if let Some(decoded) = decode_base64_string(s) {
                 results.push(decoded);
                 continue;
@@ -235,7 +235,7 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
 pub fn decode_hex_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     let candidates: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::HexEncoded || is_likely_hex(&s.value))
+        .filter(|s| s.kind == Some(StringKind::HexEncoded) || is_likely_hex(&s.value))
         .collect();
 
     tracing::debug!("decode_hex_strings: found {} candidates", candidates.len());
@@ -314,7 +314,7 @@ fn decode_hex_string(s: &ExtractedString) -> Option<ExtractedString> {
 pub fn decode_url_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .iter()
-        .filter(|s| s.kind == StringKind::UrlEncoded || is_likely_url_encoded(&s.value))
+        .filter(|s| s.kind == Some(StringKind::UrlEncoded) || is_likely_url_encoded(&s.value))
         .filter_map(decode_url_string)
         .collect()
 }
@@ -358,7 +358,7 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
 pub fn decode_unicode_escape_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .iter()
-        .filter(|s| s.kind == StringKind::UnicodeEscaped || is_likely_unicode_escaped(&s.value))
+        .filter(|s| s.kind == Some(StringKind::UnicodeEscaped) || is_likely_unicode_escaped(&s.value))
         .filter_map(decode_unicode_escape_string)
         .collect()
 }
@@ -570,7 +570,7 @@ fn is_likely_unicode_escaped(s: &str) -> bool {
 pub fn decode_base32_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base32 || is_likely_base32(&s.value))
+        .filter(|s| s.kind == Some(StringKind::Base32) || is_likely_base32(&s.value))
         .filter_map(decode_base32_string)
         .collect()
 }
@@ -636,7 +636,7 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
 pub fn decode_base85_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base85 || is_likely_base85(&s.value))
+        .filter(|s| s.kind == Some(StringKind::Base85) || is_likely_base85(&s.value))
         .filter_map(decode_base85_string)
         .collect()
 }
@@ -900,10 +900,9 @@ fn is_likely_base85(s: &str) -> bool {
     false
 }
 
-/// Classify a decoded string into a StringKind.
-fn classify_decoded_string(s: &str) -> StringKind {
-    // Use the general classifier from go::classifier module
-    crate::go::classifier::classify_string(s)
+/// Classify a decoded string into an `Option<StringKind>`.
+fn classify_decoded_string(s: &str) -> Option<StringKind> {
+    crate::classifier::classify_string(s)
 }
 
 #[cfg(test)]
@@ -917,7 +916,7 @@ mod tests {
             data_offset: 0,
             section: None,
             method: StringMethod::RawScan,
-            kind: StringKind::Base64,
+            kind: Some(StringKind::Base64),
             ..Default::default()
         };
 
@@ -933,7 +932,7 @@ mod tests {
             data_offset: 0,
             section: None,
             method: StringMethod::RawScan,
-            kind: StringKind::HexEncoded,
+            kind: Some(StringKind::HexEncoded),
             ..Default::default()
         };
 
@@ -949,7 +948,7 @@ mod tests {
             data_offset: 0,
             section: None,
             method: StringMethod::RawScan,
-            kind: StringKind::UrlEncoded,
+            kind: Some(StringKind::UrlEncoded),
             ..Default::default()
         };
 
@@ -965,7 +964,7 @@ mod tests {
             data_offset: 0,
             section: None,
             method: StringMethod::RawScan,
-            kind: StringKind::UnicodeEscaped,
+            kind: Some(StringKind::UnicodeEscaped),
             ..Default::default()
         };
 
@@ -995,7 +994,7 @@ mod tests {
             data_offset: 0,
             section: None,
             method: StringMethod::RawScan,
-            kind: StringKind::Base32,
+            kind: Some(StringKind::Base32),
             ..Default::default()
         };
 
@@ -1011,7 +1010,7 @@ mod tests {
             data_offset: 0,
             section: None,
             method: StringMethod::RawScan,
-            kind: StringKind::Base32,
+            kind: Some(StringKind::Base32),
             ..Default::default()
         };
 
@@ -1028,7 +1027,7 @@ mod tests {
             data_offset: 0,
             section: None,
             method: StringMethod::RawScan,
-            kind: StringKind::Base32,
+            kind: Some(StringKind::Base32),
             ..Default::default()
         };
 
@@ -1082,7 +1081,7 @@ mod tests {
         // significantly better text quality to be accepted
     }
 
-    fn make_string(value: &str, kind: StringKind) -> ExtractedString {
+    fn make_string(value: &str, kind: Option<StringKind>) -> ExtractedString {
         ExtractedString {
             value: value.to_string(),
             data_offset: 0,
@@ -1140,9 +1139,9 @@ mod tests {
     #[test]
     fn test_decode_base64_strings_batch() {
         let inputs = vec![
-            make_string("SGVsbG8gV29ybGQh", StringKind::Base64),
-            make_string("VGVzdCBEYXRhISE=", StringKind::Base64),
-            make_string("not_base64", StringKind::Const),
+            make_string("SGVsbG8gV29ybGQh", Some(StringKind::Base64)),
+            make_string("VGVzdCBEYXRhISE=", Some(StringKind::Base64)),
+            make_string("not_base64", None),
         ];
         let results = decode_base64_strings(&inputs);
         assert_eq!(results.len(), 2);
@@ -1153,7 +1152,7 @@ mod tests {
 
     #[test]
     fn test_decode_base64_strings_with_concatenation() {
-        let inputs = vec![make_string(r#""SGVsbG8g" + "V29ybGQh""#, StringKind::Const)];
+        let inputs = vec![make_string(r#""SGVsbG8g" + "V29ybGQh""#, None)];
         let results = decode_base64_strings(&inputs);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].value, "Hello World!");
@@ -1167,13 +1166,13 @@ mod tests {
 
     #[test]
     fn test_base64_too_short() {
-        assert!(decode_base64_strings(&[make_string("SGVs", StringKind::Base64)]).is_empty());
+        assert!(decode_base64_strings(&[make_string("SGVs", Some(StringKind::Base64))]).is_empty());
     }
 
     #[test]
     fn test_base64_whitespace_trimming() {
         let results =
-            decode_base64_strings(&[make_string("  SGVsbG8gV29ybGQh  ", StringKind::Base64)]);
+            decode_base64_strings(&[make_string("  SGVsbG8gV29ybGQh  ", Some(StringKind::Base64))]);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].value, "Hello World!");
     }
@@ -1181,9 +1180,9 @@ mod tests {
     #[test]
     fn test_decode_hex_strings_batch() {
         let inputs = vec![
-            make_string("48656c6c6f20576f726c6421", StringKind::HexEncoded),
-            make_string("54657374204461746121", StringKind::HexEncoded),
-            make_string("not_hex", StringKind::Const),
+            make_string("48656c6c6f20576f726c6421", Some(StringKind::HexEncoded)),
+            make_string("54657374204461746121", Some(StringKind::HexEncoded)),
+            make_string("not_hex", None),
         ];
         let results = decode_hex_strings(&inputs);
         assert_eq!(results.len(), 2);
@@ -1196,7 +1195,7 @@ mod tests {
     fn test_hex_odd_length() {
         assert!(decode_hex_strings(&[make_string(
             "48656c6c6f20576f726c642",
-            StringKind::HexEncoded
+            Some(StringKind::HexEncoded)
         )])
         .is_empty());
     }
@@ -1205,7 +1204,7 @@ mod tests {
     fn test_hex_uppercase() {
         let results = decode_hex_strings(&[make_string(
             "48656C6C6F20576F726C6421",
-            StringKind::HexEncoded,
+            Some(StringKind::HexEncoded),
         )]);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].value, "Hello World!");
@@ -1214,9 +1213,9 @@ mod tests {
     #[test]
     fn test_decode_url_strings_batch() {
         let inputs = vec![
-            make_string("Hello%20World%21", StringKind::UrlEncoded),
-            make_string("Test%20Data%21%21", StringKind::UrlEncoded),
-            make_string("no_encoding", StringKind::Const),
+            make_string("Hello%20World%21", Some(StringKind::UrlEncoded)),
+            make_string("Test%20Data%21%21", Some(StringKind::UrlEncoded)),
+            make_string("no_encoding", None),
         ];
         let results = decode_url_strings(&inputs);
         assert_eq!(results.len(), 2);
@@ -1229,7 +1228,7 @@ mod tests {
     fn test_url_special_chars() {
         let results = decode_url_strings(&[make_string(
             "path%2Fto%2Ffile%3Fquery%3Dvalue%26foo%3Dbar",
-            StringKind::UrlEncoded,
+            Some(StringKind::UrlEncoded),
         )]);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].value, "path/to/file?query=value&foo=bar");
@@ -1238,9 +1237,9 @@ mod tests {
     #[test]
     fn test_decode_unicode_escape_strings_batch() {
         let inputs = vec![
-            make_string("\\x48\\x65\\x6c\\x6c\\x6f", StringKind::UnicodeEscaped),
-            make_string("\\u0054\\u0065\\u0073\\u0074", StringKind::UnicodeEscaped),
-            make_string("no_escapes", StringKind::Const),
+            make_string("\\x48\\x65\\x6c\\x6c\\x6f", Some(StringKind::UnicodeEscaped)),
+            make_string("\\u0054\\u0065\\u0073\\u0074", Some(StringKind::UnicodeEscaped)),
+            make_string("no_escapes", None),
         ];
         let results = decode_unicode_escape_strings(&inputs);
         assert_eq!(results.len(), 2);
@@ -1252,8 +1251,8 @@ mod tests {
     #[test]
     fn test_decode_base32_strings_batch() {
         let inputs = vec![
-            make_string("JBSWY3DPEBLW64TMMQ======", StringKind::Base32),
-            make_string("not_base32", StringKind::Const),
+            make_string("JBSWY3DPEBLW64TMMQ======", Some(StringKind::Base32)),
+            make_string("not_base32", None),
         ];
         let results = decode_base32_strings(&inputs);
         assert!(!results.is_empty());
@@ -1263,7 +1262,7 @@ mod tests {
 
     #[test]
     fn test_base32_too_short() {
-        assert!(decode_base32_strings(&[make_string("JBSWY3DP", StringKind::Base32)]).is_empty());
+        assert!(decode_base32_strings(&[make_string("JBSWY3DP", Some(StringKind::Base32))]).is_empty());
     }
 
     #[test]
@@ -1294,11 +1293,11 @@ mod tests {
     fn test_decoded_ip_classification() {
         let results = decode_hex_strings(&[make_string(
             "3139322e3136382e312e31",
-            StringKind::HexEncoded,
+            Some(StringKind::HexEncoded),
         )]);
         if !results.is_empty() {
             assert_eq!(results[0].value, "192.168.1.1");
-            assert_eq!(results[0].kind, StringKind::IP);
+            assert_eq!(results[0].kind, Some(StringKind::IP));
         }
     }
 
@@ -1319,7 +1318,7 @@ mod tests {
         ];
 
         for input in false_positives {
-            let result = decode_base64_strings(&[make_string(input, StringKind::Const)]);
+            let result = decode_base64_strings(&[make_string(input, None)]);
             assert!(
                 result.is_empty(),
                 "Should reject '{}' as false positive base64",
@@ -1335,7 +1334,7 @@ mod tests {
         // Python: exec(base64.b64decode('SGVsbG8gV29ybGQh'))
         let input = make_string(
             "exec(base64.b64decode('SGVsbG8gV29ybGQh'))",
-            StringKind::Const,
+            None,
         );
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1, "Should extract one embedded base64");
@@ -1347,7 +1346,7 @@ mod tests {
     #[test]
     fn test_extract_embedded_base64_shell_style() {
         // Shell: echo SGVsbG8gV29ybGQh | base64 -d
-        let input = make_string("echo SGVsbG8gV29ybGQh | base64 -d", StringKind::ShellCmd);
+        let input = make_string("echo SGVsbG8gV29ybGQh | base64 -d", Some(StringKind::ShellCmd));
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1, "Should extract one embedded base64");
         assert_eq!(results[0].value, "Hello World!");
@@ -1356,7 +1355,7 @@ mod tests {
     #[test]
     fn test_extract_embedded_base64_javascript_atob() {
         // JavaScript: eval(atob('SGVsbG8gV29ybGQh'))
-        let input = make_string("eval(atob('SGVsbG8gV29ybGQh'))", StringKind::Const);
+        let input = make_string("eval(atob('SGVsbG8gV29ybGQh'))", None);
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1, "Should extract one embedded base64");
         assert_eq!(results[0].value, "Hello World!");
@@ -1365,7 +1364,7 @@ mod tests {
     #[test]
     fn test_extract_embedded_base64_skips_whole_string() {
         // If the entire string is base64, it should be skipped (handled by decode_base64_strings)
-        let input = make_string("SGVsbG8gV29ybGQh", StringKind::Base64);
+        let input = make_string("SGVsbG8gV29ybGQh", Some(StringKind::Base64));
         let results = extract_embedded_base64(&[input]);
         assert!(
             results.is_empty(),
@@ -1376,7 +1375,7 @@ mod tests {
     #[test]
     fn test_extract_embedded_base64_requires_valid_length() {
         // Base64 must be multiple of 4
-        let input = make_string("decode('SGVsbG9Xb3JsZA')", StringKind::Const); // 14 chars, not multiple of 4
+        let input = make_string("decode('SGVsbG9Xb3JsZA')", None); // 14 chars, not multiple of 4
         let results = extract_embedded_base64(&[input]);
         assert!(
             results.is_empty(),
@@ -1391,7 +1390,7 @@ mod tests {
         // "Test String!" = VGVzdCBTdHJpbmch (16 chars)
         let input = make_string(
             "a = 'SGVsbG8gV29ybGQh'; b = 'VGVzdCBTdHJpbmch'",
-            StringKind::Const,
+            None,
         );
         let results = extract_embedded_base64(&[input]);
         assert_eq!(
@@ -1408,7 +1407,7 @@ mod tests {
         let inner_b64 = "aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ3dob2FtaScp";
         let input = make_string(
             &format!("exec(base64.b64decode('{}'))", inner_b64),
-            StringKind::Const,
+            None,
         );
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1);
@@ -1419,7 +1418,7 @@ mod tests {
     #[test]
     fn test_extract_embedded_base64_rejects_short_decoded() {
         // Even if base64 is valid, decoded result must be >= 4 chars
-        let input = make_string("decode('YWI=')", StringKind::Const); // decodes to "ab" (2 chars)
+        let input = make_string("decode('YWI=')", None); // decodes to "ab" (2 chars)
         let results = extract_embedded_base64(&[input]);
         assert!(
             results.is_empty(),
@@ -1434,7 +1433,7 @@ mod tests {
             data_offset: 12345,
             section: Some("__TEXT".to_string()),
             method: StringMethod::RawScan,
-            kind: StringKind::Const,
+            kind: None,
             ..Default::default()
         };
         let results = extract_embedded_base64(&[input]);

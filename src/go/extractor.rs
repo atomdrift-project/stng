@@ -11,7 +11,7 @@ use goblin::mach::MachO;
 use goblin::pe::PE;
 use rayon::prelude::*;
 
-use super::classifier::classify_string;
+use crate::classifier::classify_string;
 
 /// Minimum length for structure-based extraction.
 ///

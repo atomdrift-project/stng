@@ -303,7 +303,7 @@ fn scan_sockaddr_in(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
             data_offset: i as u64,
             section: None,
             method: StringMethod::RawScan,
-            kind: StringKind::IPPort,
+            kind: Some(StringKind::IPPort),
             source: Some("sockaddr_in".to_string()),
             ..Default::default()
         });
@@ -334,7 +334,7 @@ mod tests {
             "Should find 192.168.1.1:8080 in sockaddr_in"
         );
         assert_eq!(found.unwrap().data_offset, 270);
-        assert_eq!(found.unwrap().kind, StringKind::IPPort);
+        assert_eq!(found.unwrap().kind, Some(StringKind::IPPort));
         assert_eq!(found.unwrap().source, Some("sockaddr_in".to_string()));
     }
 

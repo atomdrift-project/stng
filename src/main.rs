@@ -558,7 +558,7 @@ fn main() -> Result<()> {
         let xor_key_display = if let Some(ref key) = custom_xor_key {
             // Custom XOR key from --xor flag
             format!(" · xor:{}", String::from_utf8_lossy(key))
-        } else if let Some(xor_key_str) = strings.iter().find(|s| s.kind == StringKind::XorKey) {
+        } else if let Some(xor_key_str) = strings.iter().find(|s| s.kind == Some(StringKind::XorKey)) {
             // Auto-detected XOR key
             format!(" · xor:{}", xor_key_str.value)
         } else {
@@ -771,7 +771,7 @@ fn main() -> Result<()> {
             print_string_line(s, use_color);
 
             // Collect all high-severity items (we'll sort and truncate later)
-            if s.kind.severity() == Severity::High {
+            if s.kind.map_or(Severity::Info, |k| k.severity()) == Severity::High {
                 notable.push(s);
             }
         }
@@ -805,11 +805,11 @@ fn main() -> Result<()> {
 
         // Sort notable items by priority: IPs first, then shell/suspicious, then base64, then URLs
         notable.sort_by_key(|s| match s.kind {
-            stng::StringKind::IP | stng::StringKind::IPPort => 0,
-            stng::StringKind::ShellCmd | stng::StringKind::SuspiciousPath => 1,
-            stng::StringKind::Base64 => 2,
-            stng::StringKind::Overlay | stng::StringKind::OverlayWide => 3,
-            stng::StringKind::Url => 4,
+            Some(stng::StringKind::IP) | Some(stng::StringKind::IPPort) => 0,
+            Some(stng::StringKind::ShellCmd) | Some(stng::StringKind::SuspiciousPath) => 1,
+            Some(stng::StringKind::Base64) => 2,
+            Some(stng::StringKind::Overlay) | Some(stng::StringKind::OverlayWide) => 3,
+            Some(stng::StringKind::Url) => 4,
             _ => 5,
         });
         notable.truncate(8);
@@ -910,7 +910,7 @@ fn get_terminal_width() -> usize {
 
 fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
     // Special handling for multi-line entitlements XML
-    if s.kind == stng::StringKind::EntitlementsXml {
+    if s.kind == Some(stng::StringKind::EntitlementsXml) {
         let kind_color = if use_color { CYAN } else { "" };
         let mut byte_offset = s.data_offset;
 
@@ -940,9 +940,9 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         && s.value.contains('\n')
     {
         let (method, classification) = if s.method == stng::StringMethod::XorDecode {
-            ("xor", s.kind.short_name())
+            ("xor", s.kind.map_or("-", |k| k.short_name()))
         } else {
-            ("b64+obf", s.kind.short_name())
+            ("b64+obf", s.kind.map_or("-", |k| k.short_name()))
         };
         // Decoded content always uses bright yellow to stand out
         let (color, kind_color) = if use_color {
@@ -974,33 +974,33 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
 
     // Split method/encoding from classification for separate columns
     let (method, classification) = if s.method == stng::StringMethod::XorDecode {
-        ("xor", s.kind.short_name())
+        ("xor", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::Base64ObfuscatedDecode {
-        ("b64+obf", s.kind.short_name())
+        ("b64+obf", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::Base64Decode {
-        ("b64", s.kind.short_name())
+        ("b64", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::HexDecode {
-        ("hex", s.kind.short_name())
+        ("hex", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::UrlDecode {
-        ("url", s.kind.short_name())
+        ("url", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::UnicodeEscapeDecode {
-        ("unicode", s.kind.short_name())
+        ("unicode", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::Base32Decode {
-        ("b32", s.kind.short_name())
+        ("b32", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::Base85Decode {
-        ("b85", s.kind.short_name())
+        ("b85", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::CodeSignature {
         // All CodeSignature strings get the "codesig" method tag
-        ("codesig", s.kind.short_name())
-    } else if s.method == stng::StringMethod::WideString && s.kind != stng::StringKind::OverlayWide
+        ("codesig", s.kind.map_or("-", |k| k.short_name()))
+    } else if s.method == stng::StringMethod::WideString && s.kind != Some(stng::StringKind::OverlayWide)
     {
-        ("wide", s.kind.short_name())
+        ("wide", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::SpacedAscii {
-        ("spaced", s.kind.short_name())
+        ("spaced", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::ScriptDecode {
-        ("script", s.kind.short_name())
+        ("script", s.kind.map_or("-", |k| k.short_name()))
     } else {
-        ("", s.kind.short_name())
+        ("", s.kind.map_or("-", |k| k.short_name()))
     };
 
     // Get color based on method and severity
@@ -1011,11 +1011,11 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
             || s.method == stng::StringMethod::ScriptDecode
         {
             (BRIGHT_YELLOW, BRIGHT_YELLOW)
-        } else if s.kind == stng::StringKind::Section {
+        } else if s.kind == Some(stng::StringKind::Section) {
             // Section names are rarely interesting - show in dim grey
             (DIM, DIM)
         } else {
-            match s.kind.severity() {
+            match s.kind.map_or(Severity::Info, |k| k.severity()) {
                 Severity::High => (RED, RED),
                 Severity::Medium => (CYAN, CYAN),
                 Severity::Low => (GREEN, GREEN),
@@ -1047,7 +1047,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
 
     if show_inline_preview {
         // Decode base64 strings and show plaintext/hex in brackets
-        if s.kind == stng::StringKind::Base64 {
+        if s.kind == Some(stng::StringKind::Base64) {
             if let Ok(decoded) = BASE64.decode(s.value.trim()) {
                 if !decoded.is_empty() {
                     let printable = decoded
@@ -1095,7 +1095,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         }
 
         // Decode hex-encoded strings
-        if s.kind == stng::StringKind::HexEncoded {
+        if s.kind == Some(stng::StringKind::HexEncoded) {
             let decoded: Vec<u8> = (0..s.value.len().saturating_sub(1))
                 .step_by(2)
                 .filter_map(|i| {
@@ -1120,7 +1120,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         }
 
         // Decode Unicode escape sequences
-        if s.kind == stng::StringKind::UnicodeEscaped {
+        if s.kind == Some(stng::StringKind::UnicodeEscaped) {
             let decoded = decode_unicode_escapes(&s.value);
             if !decoded.is_empty() {
                 if let Ok(text) = String::from_utf8(decoded) {
@@ -1137,7 +1137,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         }
 
         // Decode URL-encoded strings
-        if s.kind == stng::StringKind::UrlEncoded {
+        if s.kind == Some(stng::StringKind::UrlEncoded) {
             let decoded = decode_url_encoding(&s.value);
             if !decoded.is_empty() {
                 if let Ok(text) = String::from_utf8(decoded) {
@@ -1199,7 +1199,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
     };
 
     // Add function metadata for interesting functions
-    let display_value = if s.kind == stng::StringKind::FuncName {
+    let display_value = if s.kind == Some(stng::StringKind::FuncName) {
         if let Some(ref meta) = s.function_meta {
             // Check if function is "interesting" - worth showing metadata
             let is_interesting = meta.basic_blocks >= 5  // Complex branching

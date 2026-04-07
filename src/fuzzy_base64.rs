@@ -371,11 +371,11 @@ fn create_decoded_string(
 ) -> ExtractedString {
     // Determine the kind based on the decoded content
     let kind = if result.decoded.contains("http://") || result.decoded.contains("https://") {
-        StringKind::Url
+        Some(StringKind::Url)
     } else if result.decoded.contains("powershell") || result.decoded.contains("cmd.exe") {
-        StringKind::ShellCmd
+        Some(StringKind::ShellCmd)
     } else {
-        StringKind::Const
+        None
     };
 
     ExtractedString {

@@ -211,7 +211,7 @@ pub fn extract_from_structures<F>(
     classify_fn: F,
 ) -> Vec<ExtractedString>
 where
-    F: Fn(&str) -> StringKind + Sync,
+    F: Fn(&str) -> Option<StringKind> + Sync,
 {
     structs
         .par_iter()
@@ -363,7 +363,7 @@ mod tests {
         ];
 
         let strings =
-            extract_from_structures(blob, 0x1000, &structs, Some("test"), |_| StringKind::Const);
+            extract_from_structures(blob, 0x1000, &structs, Some("test"), |_| None);
 
         assert_eq!(strings.len(), 2);
         assert_eq!(strings[0].value, "Hello");
@@ -380,7 +380,7 @@ mod tests {
             len: 5,
         }];
 
-        let strings = extract_from_structures(blob, 0x1000, &structs, None, |_| StringKind::Const);
+        let strings = extract_from_structures(blob, 0x1000, &structs, None, |_| None);
 
         // Invalid UTF-8 should be skipped
         assert!(strings.is_empty());
@@ -395,7 +395,7 @@ mod tests {
             len: 5,
         }];
 
-        let strings = extract_from_structures(blob, 0x1000, &structs, None, |_| StringKind::Const);
+        let strings = extract_from_structures(blob, 0x1000, &structs, None, |_| None);
 
         // Mostly non-printable should be skipped
         assert!(strings.is_empty());
@@ -410,7 +410,7 @@ mod tests {
             len: 5,
         }];
 
-        let strings = extract_from_structures(blob, 0x1000, &structs, None, |_| StringKind::Const);
+        let strings = extract_from_structures(blob, 0x1000, &structs, None, |_| None);
 
         assert!(strings.is_empty());
     }
@@ -424,7 +424,7 @@ mod tests {
             len: 100, // Longer than blob
         }];
 
-        let strings = extract_from_structures(blob, 0x1000, &structs, None, |_| StringKind::Const);
+        let strings = extract_from_structures(blob, 0x1000, &structs, None, |_| None);
 
         assert!(strings.is_empty());
     }
@@ -438,9 +438,7 @@ mod tests {
             len: 5,
         }];
 
-        let strings = extract_from_structures(blob, 0x1000, &structs, Some(".rodata"), |_| {
-            StringKind::Const
-        });
+        let strings = extract_from_structures(blob, 0x1000, &structs, Some(".rodata"), |_| None);
 
         assert_eq!(strings.len(), 1);
         assert_eq!(strings[0].section, Some(".rodata".to_string()));
@@ -457,13 +455,13 @@ mod tests {
 
         let strings = extract_from_structures(blob, 0x1000, &structs, None, |s| {
             if s.starts_with('/') {
-                StringKind::Path
+                Some(StringKind::Path)
             } else {
-                StringKind::Const
+                None
             }
         });
 
         assert_eq!(strings.len(), 1);
-        assert_eq!(strings[0].kind, StringKind::Path);
+        assert_eq!(strings[0].kind, Some(StringKind::Path));
     }
 }

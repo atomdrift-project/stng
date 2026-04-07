@@ -39,8 +39,8 @@ pub struct ExtractedString {
     pub section: Option<String>,
     /// How the string was found
     pub method: StringMethod,
-    /// Semantic kind of the string
-    pub kind: StringKind,
+    /// Semantic kind of the string (None means no specific classification)
+    pub kind: Option<StringKind>,
     /// Original pre-decoded form (for spaced, base64, wide, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
@@ -99,7 +99,7 @@ impl Default for ExtractedString {
             data_offset: 0,
             section: None,
             method: StringMethod::RawScan,
-            kind: StringKind::Const,
+            kind: None,
             raw: None,
             source: None,
             fragments: None,
@@ -115,7 +115,7 @@ impl Default for ExtractedString {
 impl ExtractedString {
     /// Get formatted section metadata if this is a section string
     pub fn section_metadata_str(&self) -> Option<String> {
-        if self.kind != StringKind::Section {
+        if self.kind != Some(StringKind::Section) {
             return None;
         }
 
@@ -205,12 +205,10 @@ pub enum StringMethod {
 /// Semantic kind of the extracted string.
 ///
 /// Classifies strings by their purpose and security relevance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+/// None means the string has no specific classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StringKind {
-    /// Generic string constant
-    #[default]
-    Const,
     /// Function or method name
     FuncName,
     /// Source file path
@@ -395,7 +393,6 @@ impl StringKind {
     /// Get short display name for the kind
     pub fn short_name(&self) -> &'static str {
         match self {
-            Self::Const => "-",
             Self::FuncName => "func",
             Self::FilePath => "file",
             Self::MapKey => "key",
@@ -611,9 +608,10 @@ mod tests {
 
     #[test]
     fn test_string_kind_equality() {
-        assert_eq!(StringKind::Const, StringKind::Const);
-        assert_ne!(StringKind::Const, StringKind::Import);
-        assert_ne!(StringKind::Import, StringKind::Export);
+        let none: Option<StringKind> = None;
+        assert_eq!(none, None);
+        assert_ne!(Some(StringKind::Import), None);
+        assert_ne!(Some(StringKind::Import), Some(StringKind::Export));
     }
 
     #[test]
@@ -629,7 +627,7 @@ mod tests {
             data_offset: 100,
             section: Some("section".to_string()),
             method: StringMethod::Structure,
-            kind: StringKind::Const,
+            kind: None,
             source: Some("lib".to_string()),
             ..Default::default()
         };

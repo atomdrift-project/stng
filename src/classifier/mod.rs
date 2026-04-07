@@ -1,6 +1,7 @@
-//! String classification for Go binaries.
+//! String classification by semantic type.
 //!
-//! Classifies extracted strings by their semantic type (path, URL, error, etc.).
+//! Classifies extracted strings as URLs, IPs, paths, shell commands, code
+//! fragments, encoding schemes, and other security-relevant categories.
 
 mod code;
 mod encoding;
@@ -10,18 +11,20 @@ use crate::types::StringKind;
 
 /// Classify a general string by its content.
 /// Note: Section names are detected via goblin, not pattern matching here.
-pub fn classify_string(s: &str) -> StringKind {
+pub fn classify_string(s: &str) -> Option<StringKind> {
     let len = s.len();
 
-    // Fast early exit for very short strings
     if len < 3 {
-        return StringKind::Const;
+        return None;
     }
 
-    // Skip expensive classification for very long strings (>1000 chars)
-    // They're unlikely to be patterns we care about and are expensive to check
+    // For long strings, classify using only the first 256 bytes.
+    // Most high-value patterns (URLs, paths, shebangs, code markers) are
+    // prefix-based and don't need the full string. Skip encoding checks
+    // (base64, hex, etc.) since those require full-content validation.
     if len > 1000 {
-        return StringKind::Const;
+        let prefix = &s[..s.floor_char_boundary(256.min(len))];
+        return classify_prefix(prefix);
     }
 
     let bytes = s.as_bytes();
@@ -38,7 +41,7 @@ pub fn classify_string(s: &str) -> StringKind {
         || s.starts_with("HTB{"))
         && s.ends_with('}')
     {
-        return StringKind::CTFFlag;
+        return Some(StringKind::CTFFlag);
     }
 
     // GUIDs: {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}
@@ -46,18 +49,18 @@ pub fn classify_string(s: &str) -> StringKind {
         let dash_count = memchr::memchr_iter(b'-', s.as_bytes()).count();
         let hex_count = s.bytes().filter(u8::is_ascii_hexdigit).count();
         if dash_count == 4 && (30..=32).contains(&hex_count) {
-            return StringKind::GUID;
+            return Some(StringKind::GUID);
         }
     }
 
     // Cryptographic hashes (MD5=32, SHA1=40, SHA256=64, SHA512=128)
     if encoding::is_cryptographic_hash(s) {
-        return StringKind::Hash;
+        return Some(StringKind::Hash);
     }
 
     // Cryptocurrency wallet addresses (high value IOC)
     if let Some(kind) = network::classify_crypto_address(s) {
-        return kind;
+        return Some(kind);
     }
 
     // Email addresses (often used in ransomware) - use memchr for speed
@@ -67,12 +70,12 @@ pub fn classify_string(s: &str) -> StringKind {
             // Must be mostly ASCII (>95%) - reject garbage with non-ASCII chars
             let ascii_count = s.bytes().filter(u8::is_ascii).count();
             if ascii_count * 100 / len < 95 {
-                return StringKind::Const; // Skip - has too much non-ASCII
+                return None; // Skip - has too much non-ASCII
             }
 
             // Reject consecutive dots (invalid email format)
             if s.contains("..") {
-                return StringKind::Const; // Skip - has consecutive dots
+                return None; // Skip - has consecutive dots
             }
 
             // Split on @ to validate structure
@@ -84,23 +87,23 @@ pub fn classify_string(s: &str) -> StringKind {
                 // Local part must exist, not be empty, and start with alphanumeric
                 let starts_with_alnum = local.chars().next().is_some_and(char::is_alphanumeric);
                 if !starts_with_alnum {
-                    return StringKind::Const; // Skip - starts with @ or non-alphanumeric
+                    return None; // Skip - starts with @ or non-alphanumeric
                 }
 
                 // Local part must have at least one alphanumeric character
                 if !local.chars().any(char::is_alphanumeric) {
-                    return StringKind::Const; // Skip - local part has no alphanumeric
+                    return None; // Skip - local part has no alphanumeric
                 }
 
                 // Domain must have a dot (not @domain or @.domain)
                 if !domain.contains('.') || domain.starts_with('.') {
-                    return StringKind::Const; // Skip - invalid domain structure
+                    return None; // Skip - invalid domain structure
                 }
 
                 // Domain must have at least one letter (not just numbers/symbols like @0.x)
                 let domain_has_letter = domain.chars().any(|c| c.is_ascii_alphabetic());
                 if !domain_has_letter {
-                    return StringKind::Const; // Skip - domain has no letters
+                    return None; // Skip - domain has no letters
                 }
 
                 // Extract TLD (everything after last dot)
@@ -108,7 +111,7 @@ pub fn classify_string(s: &str) -> StringKind {
                     let tld = &domain[last_dot_pos + 1..];
                     // TLD must be at least 2 chars and all alphabetic
                     if tld.len() < 2 || !tld.chars().all(|c| c.is_ascii_alphabetic()) {
-                        return StringKind::Const; // Skip - invalid TLD
+                        return None; // Skip - invalid TLD
                     }
                 }
 
@@ -117,11 +120,11 @@ pub fn classify_string(s: &str) -> StringKind {
                 if let Some(dot_pos) = domain.find('.') {
                     let main_domain = &domain[..dot_pos];
                     if main_domain.len() < 2 {
-                        return StringKind::Const; // Skip - main domain too short (e.g., E.MM)
+                        return None; // Skip - main domain too short (e.g., E.MM)
                     }
                     let main_has_letter = main_domain.chars().any(|c| c.is_ascii_alphabetic());
                     if !main_has_letter {
-                        return StringKind::Const; // Skip - main domain has no letters (e.g., 0.x)
+                        return None; // Skip - main domain has no letters (e.g., 0.x)
                     }
                 }
 
@@ -131,7 +134,7 @@ pub fn classify_string(s: &str) -> StringKind {
                     .filter(|c| c.is_alphanumeric() || matches!(c, '@' | '.' | '-' | '_' | '+'))
                     .count();
                 if valid_chars * 100 / len >= 85 {
-                    return StringKind::Email;
+                    return Some(StringKind::Email);
                 }
             }
         }
@@ -139,7 +142,7 @@ pub fn classify_string(s: &str) -> StringKind {
 
     // Tor/Onion addresses
     if s.contains(".onion") && len >= 10 {
-        return StringKind::TorAddress;
+        return Some(StringKind::TorAddress);
     }
 
     // JWT tokens (3 base64 parts separated by dots)
@@ -151,14 +154,14 @@ pub fn classify_string(s: &str) -> StringKind {
                 .filter(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '='))
                 .count();
             if base64_chars * 100 / len >= 95 {
-                return StringKind::JWT;
+                return Some(StringKind::JWT);
             }
         }
     }
 
     // API keys (AWS, GitHub, Stripe, Slack)
     if let Some(kind) = network::classify_api_key(s) {
-        return kind;
+        return Some(kind);
     }
 
     // SQL injection patterns - only check if contains ' or - which are key indicators
@@ -167,7 +170,7 @@ pub fn classify_string(s: &str) -> StringKind {
             || (s.contains("UNION") && s.contains("SELECT"))
             || s.contains("admin'--"))
     {
-        return StringKind::SQLInjection;
+        return Some(StringKind::SQLInjection);
     }
 
     // XSS payloads - only check if contains < or = which are key indicators
@@ -176,24 +179,24 @@ pub fn classify_string(s: &str) -> StringKind {
             || (s.contains("onerror=") && s.contains("alert("))
             || s.starts_with("javascript:"))
     {
-        return StringKind::XSSPayload;
+        return Some(StringKind::XSSPayload);
     }
 
     // LDAP/AD paths
     if s.contains("LDAP://") || (s.contains("CN=") && s.contains("DC=")) {
-        return StringKind::LDAPPath;
+        return Some(StringKind::LDAPPath);
     }
 
     // Windows mutex names (often weird strings used for malware synchronization)
     if s.starts_with("Global\\") || s.starts_with("Local\\") {
-        return StringKind::Mutex;
+        return Some(StringKind::Mutex);
     }
 
     // Ransomware patterns
     if s.contains("ENCRYPTED") || s.contains("DECRYPT") || s.contains("RANSOM") {
         let uppercase_count = s.bytes().filter(u8::is_ascii_uppercase).count();
         if uppercase_count * 100 / len > 50 {
-            return StringKind::RansomNote;
+            return Some(StringKind::RansomNote);
         }
     }
     // Ransomware file extensions
@@ -206,7 +209,7 @@ pub fn classify_string(s: &str) -> StringKind {
         || s.ends_with("-DECRYPT-INSTRUCTIONS.txt")
         || s.ends_with("HOW-TO-DECRYPT.html")
     {
-        return StringKind::RansomNote;
+        return Some(StringKind::RansomNote);
     }
 
     // Cryptocurrency mining pools - only check if contains ':' or 'pool'
@@ -215,7 +218,7 @@ pub fn classify_string(s: &str) -> StringKind {
             || ((s.contains("pool.") || s.contains("nanopool") || s.contains("minergate"))
                 && (s.contains(".com") || s.contains(".org") || s.contains(":"))))
     {
-        return StringKind::MiningPool;
+        return Some(StringKind::MiningPool);
     }
 
     // ===== ORIGINAL CLASSIFICATION CONTINUES =====
@@ -242,28 +245,28 @@ pub fn classify_string(s: &str) -> StringKind {
     {
         // Skip common benign URLs (Apple certs, etc.)
         if s.starts_with("https://www.apple.com/appleca") {
-            return StringKind::Const;
+            return None;
         }
-        return StringKind::Url;
+        return Some(StringKind::Url);
     }
 
     // Check for embedded code first (most specific markers)
     // PHP has very distinctive markers (<?php tags) so check it first
     if code::is_php_code(s) {
-        return StringKind::PhpCode;
+        return Some(StringKind::PhpCode);
     }
 
     if code::is_python_code(s) {
-        return StringKind::PythonCode;
+        return Some(StringKind::PythonCode);
     }
 
     if code::is_javascript_code(s) {
-        return StringKind::JavaScriptCode;
+        return Some(StringKind::JavaScriptCode);
     }
 
     // Check for AppleScript syntax (common in macOS malware)
     if code::is_applescript(s) {
-        return StringKind::AppleScript;
+        return Some(StringKind::AppleScript);
     }
 
     // Command injection patterns - check AFTER code detection but BEFORE generic shell commands.
@@ -275,7 +278,7 @@ pub fn classify_string(s: &str) -> StringKind {
             || (s.contains("| ")
                 && (s.contains("whoami") || s.contains("id") || s.contains("uname")))
         {
-            return StringKind::CommandInjection;
+            return Some(StringKind::CommandInjection);
         }
 
         // Command substitution: $(...) - require actual command content inside
@@ -301,7 +304,7 @@ pub fn classify_string(s: &str) -> StringKind {
                     && alpha_count * 100 / content_len > 40;
 
                 if is_command && is_valid {
-                    return StringKind::CommandInjection;
+                    return Some(StringKind::CommandInjection);
                 }
             }
         }
@@ -324,7 +327,7 @@ pub fn classify_string(s: &str) -> StringKind {
                 || content.contains("wget")
                 || content.contains("curl")
             {
-                return StringKind::CommandInjection;
+                return Some(StringKind::CommandInjection);
             }
         }
     }
@@ -332,19 +335,19 @@ pub fn classify_string(s: &str) -> StringKind {
     // Check for shell commands after injection detection (catches generic commands like 'echo', 'curl')
     // This is intentionally after code detection to avoid false positives
     if code::is_shell_command(s) {
-        return StringKind::ShellCmd;
+        return Some(StringKind::ShellCmd);
     }
 
     // IP addresses and IP:port - only if starts with digit
     if first.is_ascii_digit() {
         if let Some(kind) = network::classify_ip(s) {
-            return kind;
+            return Some(kind);
         }
     }
 
     // Windows registry paths
     if s.starts_with("HKEY_") || s.starts_with("HKLM\\") || s.starts_with("HKCU\\") {
-        return StringKind::Registry;
+        return Some(StringKind::Registry);
     }
 
     // Well-known config/system files (even without path prefix)
@@ -373,7 +376,7 @@ pub fn classify_string(s: &str) -> StringKind {
     ];
     for file in &well_known_files {
         if s == *file || s.ends_with(file) {
-            return StringKind::FilePath;
+            return Some(StringKind::FilePath);
         }
     }
 
@@ -382,7 +385,7 @@ pub fn classify_string(s: &str) -> StringKind {
     if s.starts_with('/') || s.starts_with("C:\\") || s.starts_with("./") || s.starts_with("../") {
         // Go runtime metrics start with / and have colon (not URLs like file://)
         if s.starts_with('/') && s.contains(':') && !s.contains("://") {
-            return StringKind::Const;
+            return None;
         }
 
         // Reject paths with too many special characters (likely garbage)
@@ -392,48 +395,48 @@ pub fn classify_string(s: &str) -> StringKind {
             .count();
         let alphanumeric_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
         if alphanumeric_count == 0 || (len > 0 && special_count * 100 / len > 30) {
-            return StringKind::Const; // Too many special chars for a valid path
+            return None; // Too many special chars for a valid path
         }
 
         if network::is_suspicious_path(s) {
-            return StringKind::SuspiciousPath;
+            return Some(StringKind::SuspiciousPath);
         }
-        return StringKind::Path;
+        return Some(StringKind::Path);
     }
 
     // Unicode escape sequences (common in JavaScript malware)
     if encoding::is_unicode_escaped(s) {
-        return StringKind::UnicodeEscaped;
+        return Some(StringKind::UnicodeEscaped);
     }
 
     // URL-encoded data (common in web shells and HTTP payloads)
     if encoding::is_url_encoded(s) {
-        return StringKind::UrlEncoded;
+        return Some(StringKind::UrlEncoded);
     }
 
     // Hex-encoded ASCII data (common in malware obfuscation)
     if encoding::is_hex_encoded(s) {
-        return StringKind::HexEncoded;
+        return Some(StringKind::HexEncoded);
     }
 
     // Base58-encoded data (Bitcoin/cryptocurrency addresses)
     if encoding::is_base58(s) {
-        return StringKind::Base58;
+        return Some(StringKind::Base58);
     }
 
     // Base32-encoded data (Tor, some malware)
     if encoding::is_base32(s) {
-        return StringKind::Base32;
+        return Some(StringKind::Base32);
     }
 
     // Base85-encoded data (ASCII85/Z85, some compressed formats)
     if encoding::is_base85(s) {
-        return StringKind::Base85;
+        return Some(StringKind::Base85);
     }
 
     // Base64-encoded data (long strings, right charset, proper padding)
     if encoding::is_base64(s) {
-        return StringKind::Base64;
+        return Some(StringKind::Base64);
     }
 
     // Environment variable names (UPPERCASE, optionally with _ and digits)
@@ -493,11 +496,82 @@ pub fn classify_string(s: &str) -> StringKind {
 
         // Accept if: well-known name, has underscore (like BUILD_ID, CI_JOB), or Go env var
         if is_known || (has_underscore && env_name.len() >= 3) || is_go_env {
-            return StringKind::EnvVar;
+            return Some(StringKind::EnvVar);
         }
     }
 
-    StringKind::Const
+    None
+}
+
+/// Classify a long string using only its prefix.
+///
+/// Uses first-byte dispatch to avoid running expensive checks on irrelevant
+/// prefixes. Skips encoding checks (base64, hex) that need full content.
+fn classify_prefix(prefix: &str) -> Option<StringKind> {
+    if prefix.len() < 3 {
+        return None;
+    }
+
+    let first = prefix.as_bytes()[0];
+
+    match first {
+        // URLs: http://, https://, ftp://, etc.
+        b'h' | b'f' | b'p' | b'm' | b'r' | b's' | b't' | b'u' => {
+            if prefix.starts_with("http://")
+                || prefix.starts_with("https://")
+                || prefix.starts_with("ftp://")
+                || prefix.starts_with("postgresql://")
+                || prefix.starts_with("mysql://")
+                || prefix.starts_with("redis://")
+                || prefix.starts_with("mongodb://")
+                || prefix.starts_with("ssh://")
+                || prefix.starts_with("tcp://")
+                || prefix.starts_with("udp://")
+            {
+                return Some(StringKind::Url);
+            }
+        }
+        // File paths
+        b'/' | b'.' => {
+            if prefix.starts_with('/')
+                || prefix.starts_with("./")
+                || prefix.starts_with("../")
+            {
+                if network::is_suspicious_path(prefix) {
+                    return Some(StringKind::SuspiciousPath);
+                }
+                return Some(StringKind::Path);
+            }
+        }
+        // Windows paths / registry
+        b'C' if prefix.starts_with("C:\\") => return Some(StringKind::Path),
+        b'H' => {
+            if prefix.starts_with("HKEY_")
+                || prefix.starts_with("HKLM\\")
+                || prefix.starts_with("HKCU\\")
+            {
+                return Some(StringKind::Registry);
+            }
+        }
+        // PHP opening tag
+        b'<' if prefix.starts_with("<?php") => return Some(StringKind::PhpCode),
+        // Shebang / shell
+        b'#' if prefix.starts_with("#!") => return Some(StringKind::ShellCmd),
+        _ => {}
+    }
+
+    // Code detection (only if first byte didn't already resolve)
+    if code::is_python_code(prefix) {
+        return Some(StringKind::PythonCode);
+    }
+    if code::is_javascript_code(prefix) {
+        return Some(StringKind::JavaScriptCode);
+    }
+    if code::is_shell_command(prefix) {
+        return Some(StringKind::ShellCmd);
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -552,7 +626,7 @@ mod tests {
         ];
 
         let strings =
-            extract_from_structures(blob, 0x1000, &structs, Some("test"), |_| StringKind::Const);
+            extract_from_structures(blob, 0x1000, &structs, Some("test"), |_| None);
 
         assert_eq!(strings.len(), 2);
         assert_eq!(strings[0].value, "Hello");
@@ -562,77 +636,77 @@ mod tests {
     #[test]
     fn test_classify_string_env_vars() {
         // Should be classified as EnvVar
-        assert_eq!(classify_string("COLUMNS"), StringKind::EnvVar);
-        assert_eq!(classify_string("TERM"), StringKind::EnvVar);
-        assert_eq!(classify_string("CLICOLOR"), StringKind::EnvVar);
-        assert_eq!(classify_string("LSCOLORS"), StringKind::EnvVar);
-        assert_eq!(classify_string("COLORTERM"), StringKind::EnvVar);
-        assert_eq!(classify_string("LS_SAMESORT"), StringKind::EnvVar);
-        assert_eq!(classify_string("CLICOLOR_FORCE"), StringKind::EnvVar);
-        assert_eq!(classify_string("PATH"), StringKind::EnvVar);
-        assert_eq!(classify_string("HOME"), StringKind::EnvVar);
-        assert_eq!(classify_string("USER"), StringKind::EnvVar);
-        assert_eq!(classify_string("LC_ALL"), StringKind::EnvVar);
-        assert_eq!(classify_string("XDG_CONFIG_HOME"), StringKind::EnvVar);
-        assert_eq!(classify_string("GO111MODULE"), StringKind::EnvVar);
+        assert_eq!(classify_string("COLUMNS"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("TERM"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("CLICOLOR"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("LSCOLORS"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("COLORTERM"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("LS_SAMESORT"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("CLICOLOR_FORCE"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("PATH"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("HOME"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("USER"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("LC_ALL"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("XDG_CONFIG_HOME"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("GO111MODULE"), Some(StringKind::EnvVar));
 
         // Go runtime env vars (no underscore, but start with GO)
-        assert_eq!(classify_string("GODEBUG"), StringKind::EnvVar);
-        assert_eq!(classify_string("GOTRACEBACK"), StringKind::EnvVar);
-        assert_eq!(classify_string("GOMAXPROCS"), StringKind::EnvVar);
-        assert_eq!(classify_string("GOMEMLIMIT"), StringKind::EnvVar);
-        assert_eq!(classify_string("GOMEMLIMIT="), StringKind::EnvVar);
+        assert_eq!(classify_string("GODEBUG"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("GOTRACEBACK"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("GOMAXPROCS"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("GOMEMLIMIT"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("GOMEMLIMIT="), Some(StringKind::EnvVar));
 
         // Whitelisted well-known vars
-        assert_eq!(classify_string("GLIBC_TUNABLES"), StringKind::EnvVar);
-        assert_eq!(classify_string("LD_PRELOAD"), StringKind::EnvVar);
-        assert_eq!(classify_string("DYLD_INSERT_LIBRARIES"), StringKind::EnvVar);
-        assert_eq!(classify_string("JAVA_HOME"), StringKind::EnvVar);
-        assert_eq!(classify_string("HTTP_PROXY"), StringKind::EnvVar);
+        assert_eq!(classify_string("GLIBC_TUNABLES"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("LD_PRELOAD"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("DYLD_INSERT_LIBRARIES"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("JAVA_HOME"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("HTTP_PROXY"), Some(StringKind::EnvVar));
 
         // Should NOT be classified as EnvVar (not in whitelist, no underscore)
-        assert_ne!(classify_string("THE"), StringKind::EnvVar);
-        assert_ne!(classify_string("FOR"), StringKind::EnvVar);
-        assert_ne!(classify_string("AND"), StringKind::EnvVar);
-        assert_ne!(classify_string("DATA"), StringKind::EnvVar);
-        assert_ne!(classify_string("OBJECT"), StringKind::EnvVar);
-        assert_ne!(classify_string("CLASS"), StringKind::EnvVar);
+        assert_ne!(classify_string("THE"), Some(StringKind::EnvVar));
+        assert_ne!(classify_string("FOR"), Some(StringKind::EnvVar));
+        assert_ne!(classify_string("AND"), Some(StringKind::EnvVar));
+        assert_ne!(classify_string("DATA"), Some(StringKind::EnvVar));
+        assert_ne!(classify_string("OBJECT"), Some(StringKind::EnvVar));
+        assert_ne!(classify_string("CLASS"), Some(StringKind::EnvVar));
 
         // With underscore, 3+ chars is OK
-        assert_eq!(classify_string("A_B"), StringKind::EnvVar);
-        assert_eq!(classify_string("BUILD_ID"), StringKind::EnvVar);
-        assert_eq!(classify_string("CI_JOB"), StringKind::EnvVar);
+        assert_eq!(classify_string("A_B"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("BUILD_ID"), Some(StringKind::EnvVar));
+        assert_eq!(classify_string("CI_JOB"), Some(StringKind::EnvVar));
     }
 
     #[test]
     fn test_classify_string_urls() {
-        assert_eq!(classify_string("https://example.com"), StringKind::Url);
-        assert_eq!(classify_string("http://localhost:8080"), StringKind::Url);
+        assert_eq!(classify_string("https://example.com"), Some(StringKind::Url));
+        assert_eq!(classify_string("http://localhost:8080"), Some(StringKind::Url));
         assert_eq!(
             classify_string("postgresql://user:pass@host/db"),
-            StringKind::Url
+            Some(StringKind::Url)
         );
     }
 
     #[test]
     fn test_classify_string_paths() {
-        assert_eq!(classify_string("/usr/bin/ls"), StringKind::Path);
-        assert_eq!(classify_string("./config.yaml"), StringKind::Path);
-        assert_eq!(classify_string("../parent/file"), StringKind::Path);
+        assert_eq!(classify_string("/usr/bin/ls"), Some(StringKind::Path));
+        assert_eq!(classify_string("./config.yaml"), Some(StringKind::Path));
+        assert_eq!(classify_string("../parent/file"), Some(StringKind::Path));
 
         // Go runtime metrics should NOT be classified as paths
-        assert_eq!(classify_string("/gc/heap/allocs:bytes"), StringKind::Const);
+        assert_eq!(classify_string("/gc/heap/allocs:bytes"), None);
         assert_eq!(
             classify_string("/sched/latencies:seconds"),
-            StringKind::Const
+            None
         );
         assert_eq!(
             classify_string("/memory/classes/total:bytes"),
-            StringKind::Const
+            None
         );
         assert_eq!(
             classify_string("/cpu/classes/gc/mark/assist:cpu-seconds"),
-            StringKind::Const
+            None
         );
     }
 
@@ -807,13 +881,13 @@ mod tests {
     #[test]
     fn test_classify_string_ip_detection() {
         // Real IPs should be classified as IP
-        assert_eq!(classify_string("168.235.103.57"), StringKind::IP);
-        assert_eq!(classify_string("192.168.1.100"), StringKind::IP);
+        assert_eq!(classify_string("168.235.103.57"), Some(StringKind::IP));
+        assert_eq!(classify_string("192.168.1.100"), Some(StringKind::IP));
 
         // Version numbers should NOT be classified as IP
-        assert_ne!(classify_string("1.0.0.0"), StringKind::IP);
-        assert_ne!(classify_string("4.0.0.0"), StringKind::IP);
-        assert_ne!(classify_string("2.1.0.0"), StringKind::IP);
+        assert_ne!(classify_string("1.0.0.0"), Some(StringKind::IP));
+        assert_ne!(classify_string("4.0.0.0"), Some(StringKind::IP));
+        assert_ne!(classify_string("2.1.0.0"), Some(StringKind::IP));
     }
 
     #[test]
@@ -821,42 +895,42 @@ mod tests {
         // Shell commands should be classified
         assert_eq!(
             classify_string("curl http://evil.com"),
-            StringKind::ShellCmd
+            Some(StringKind::ShellCmd)
         );
         assert_eq!(
             classify_string("cat /etc/passwd | grep root"),
-            StringKind::ShellCmd
+            Some(StringKind::ShellCmd)
         );
 
         // .NET generics should NOT be classified as shell commands
-        assert_ne!(classify_string("IEnumerable`1"), StringKind::ShellCmd);
-        assert_ne!(classify_string("Dictionary`2"), StringKind::ShellCmd);
+        assert_ne!(classify_string("IEnumerable`1"), Some(StringKind::ShellCmd));
+        assert_ne!(classify_string("Dictionary`2"), Some(StringKind::ShellCmd));
 
         // Go runtime strings should NOT be classified as shell commands
         assert_ne!(
             classify_string("s.allocCount != s.nelems && freeIndex == s.nelems"),
-            StringKind::ShellCmd
+            Some(StringKind::ShellCmd)
         );
         assert_ne!(
             classify_string("malformed GOMEMLIMIT; see `go doc runtime/debug.SetMemoryLimit`"),
-            StringKind::ShellCmd
+            Some(StringKind::ShellCmd)
         );
-        assert_ne!(classify_string("exec format error"), StringKind::ShellCmd);
+        assert_ne!(classify_string("exec format error"), Some(StringKind::ShellCmd));
 
         // Non-shell shebangs should NOT be classified as shell commands
-        assert_ne!(classify_string("#!/usr/bin/env ruby"), StringKind::ShellCmd);
+        assert_ne!(classify_string("#!/usr/bin/env ruby"), Some(StringKind::ShellCmd));
         assert_ne!(
             classify_string("#!/usr/bin/env python3"),
-            StringKind::ShellCmd
+            Some(StringKind::ShellCmd)
         );
-        assert_ne!(classify_string("#!/usr/bin/env node"), StringKind::ShellCmd);
-        assert_ne!(classify_string("#!/usr/bin/env perl"), StringKind::ShellCmd);
+        assert_ne!(classify_string("#!/usr/bin/env node"), Some(StringKind::ShellCmd));
+        assert_ne!(classify_string("#!/usr/bin/env perl"), Some(StringKind::ShellCmd));
 
         // Shell shebangs should still be classified as shell commands
-        assert_eq!(classify_string("#!/bin/bash"), StringKind::ShellCmd);
-        assert_eq!(classify_string("#!/bin/sh"), StringKind::ShellCmd);
-        assert_eq!(classify_string("#!/usr/bin/env bash"), StringKind::ShellCmd);
-        assert_eq!(classify_string("#!/usr/bin/env sh"), StringKind::ShellCmd);
+        assert_eq!(classify_string("#!/bin/bash"), Some(StringKind::ShellCmd));
+        assert_eq!(classify_string("#!/bin/sh"), Some(StringKind::ShellCmd));
+        assert_eq!(classify_string("#!/usr/bin/env bash"), Some(StringKind::ShellCmd));
+        assert_eq!(classify_string("#!/usr/bin/env sh"), Some(StringKind::ShellCmd));
     }
 
     #[test]
@@ -864,70 +938,70 @@ mod tests {
         // AppleScript code should be classified as AppleScript
         assert_eq!(
             classify_string("set desktopFolder to path to desktop folder"),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
         assert_eq!(
             classify_string("tell application \"Finder\""),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
         assert_eq!(
             classify_string("every file of desktopFolder whose name extension is in"),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
         assert_eq!(
             classify_string("duplicate aFile to POSIX file \"/tmp/backup\""),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
         assert_eq!(
             classify_string("path to documents folder"),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
-        assert_eq!(classify_string("end tell"), StringKind::AppleScript);
+        assert_eq!(classify_string("end tell"), Some(StringKind::AppleScript));
         assert_eq!(
             classify_string("repeat with aFile in allFiles"),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
         assert_eq!(
             classify_string("do shell script \"ls -la\""),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
 
         // Additional AppleScript patterns from real malware
         assert_eq!(
             classify_string("play dialog \"macOS needs to access System"),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
         assert_eq!(
             classify_string("ile \"%s\" as alias) with replacing"),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
         assert_eq!(
             classify_string("set tf to POSIX file \"%s\" as ali"),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
 
         // Regular shell commands should NOT be AppleScript
         assert_ne!(
             classify_string("curl http://example.com"),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
-        assert_ne!(classify_string("cat /etc/passwd"), StringKind::AppleScript);
+        assert_ne!(classify_string("cat /etc/passwd"), Some(StringKind::AppleScript));
 
         // Passwd entries should NOT be AppleScript (avoid "_assetcache" matching "set ")
         assert_ne!(
             classify_string("_assetcache:*:235:235:Asset Cache Service:/var/empty:/usr/bin/false"),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
         assert_ne!(
             classify_string("_mobileasset:*:253:253:MobileAsset User:/var/ma:/usr/bin/false"),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
 
         // AppleScript "set" must have proper context (variable assignment)
-        assert_eq!(classify_string("set myVar to 10"), StringKind::AppleScript);
+        assert_eq!(classify_string("set myVar to 10"), Some(StringKind::AppleScript));
         assert_eq!(
             classify_string("set desktopPath = \"/Users/test\""),
-            StringKind::AppleScript
+            Some(StringKind::AppleScript)
         );
     }
 
@@ -991,7 +1065,7 @@ mod tests {
         // Hex-encoded JavaScript (from actual malware)
         assert_eq!(
             classify_string("636F6E7374205F307831633331303030333D5F3078323330643B"),
-            StringKind::HexEncoded
+            Some(StringKind::HexEncoded)
         );
 
         // Hex-encoded function
@@ -999,16 +1073,16 @@ mod tests {
             classify_string(
                 "66756E6374696F6E205F307832333064285F3078393961322C5F30783538613536297B"
             ),
-            StringKind::HexEncoded
+            Some(StringKind::HexEncoded)
         );
 
         // Should not be hex-encoded (too short)
-        assert_ne!(classify_string("48656C6C6F"), StringKind::HexEncoded);
+        assert_ne!(classify_string("48656C6C6F"), Some(StringKind::HexEncoded));
 
         // Should not be hex-encoded (odd length)
         assert_ne!(
             classify_string("48656C6C6F20576F726C642120546869732069732061207465737420737472696E6"),
-            StringKind::HexEncoded
+            Some(StringKind::HexEncoded)
         );
     }
 
@@ -1065,19 +1139,19 @@ mod tests {
         // JavaScript with \xXX escapes (from actual malware)
         assert_eq!(
             classify_string("\\x27;\\x20const\\x20fs\\x20=\\x20require(\\x27fs\\x27);"),
-            StringKind::UnicodeEscaped
+            Some(StringKind::UnicodeEscaped)
         );
 
         // \uXXXX format
         assert_eq!(
             classify_string("\\u0048\\u0065\\u006c\\u006c\\u006f"),
-            StringKind::UnicodeEscaped
+            Some(StringKind::UnicodeEscaped)
         );
 
         // Should not be Unicode escaped (too few sequences)
         assert_ne!(
             classify_string("Hello \\x20 World"),
-            StringKind::UnicodeEscaped
+            Some(StringKind::UnicodeEscaped)
         );
     }
 
@@ -1152,17 +1226,17 @@ mod tests {
         // XSS payload
         assert_eq!(
             classify_string("%3Cscript%3Ealert%28%27XSS%27%29%3C%2Fscript%3E"),
-            StringKind::UrlEncoded
+            Some(StringKind::UrlEncoded)
         );
 
         // SQL injection
         assert_eq!(
             classify_string("%27%20OR%20%271%27%3D%271"),
-            StringKind::UrlEncoded
+            Some(StringKind::UrlEncoded)
         );
 
         // Should not be URL encoded (too few percent signs)
-        assert_ne!(classify_string("Hello%20World"), StringKind::UrlEncoded);
+        assert_ne!(classify_string("Hello%20World"), Some(StringKind::UrlEncoded));
     }
 
     #[test]
@@ -1227,16 +1301,16 @@ mod tests {
     #[test]
     fn test_classify_string_base32() {
         // Tor onion address
-        assert_eq!(classify_string("THEHIDDENWIKI3IKNKD7A"), StringKind::Base32);
+        assert_eq!(classify_string("THEHIDDENWIKI3IKNKD7A"), Some(StringKind::Base32));
 
         // With padding
         assert_eq!(
             classify_string("JBSWY3DPEBLW64TMMQ======"),
-            StringKind::Base32
+            Some(StringKind::Base32)
         );
 
         // Should not be Base32 (has lowercase)
-        assert_ne!(classify_string("JbSwY3DpEbLw64TmMq"), StringKind::Base32);
+        assert_ne!(classify_string("JbSwY3DpEbLw64TmMq"), Some(StringKind::Base32));
     }
 
     #[test]
@@ -1386,17 +1460,17 @@ mod tests {
         // Bitcoin address - now classified as CryptoWallet (more specific than Base58)
         assert_eq!(
             classify_string("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
-            StringKind::CryptoWallet
+            Some(StringKind::CryptoWallet)
         );
 
         // Should not be Base58/CryptoWallet (contains 0, which is invalid in Base58)
         assert_ne!(
             classify_string("1A1zP1eP5QGefi2DMP0fTL5SLmv7DivfNa"),
-            StringKind::Base58
+            Some(StringKind::Base58)
         );
         assert_ne!(
             classify_string("1A1zP1eP5QGefi2DMP0fTL5SLmv7DivfNa"),
-            StringKind::CryptoWallet
+            Some(StringKind::CryptoWallet)
         );
     }
 
@@ -1641,25 +1715,25 @@ mod tests {
         // SHA256 hash should be classified as Hash
         assert_eq!(
             classify_string("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-            StringKind::Hash
+            Some(StringKind::Hash)
         );
 
         // SHA1 hash should be classified as Hash
         assert_eq!(
             classify_string("da39a3ee5e6b4b0d3255bfef95601890afd80709"),
-            StringKind::Hash
+            Some(StringKind::Hash)
         );
 
         // MD5 hash should be classified as Hash
         assert_eq!(
             classify_string("d41d8cd98f00b204e9800998ecf8427e"),
-            StringKind::Hash
+            Some(StringKind::Hash)
         );
 
         // Hex-encoded text should NOT be classified as Hash
         assert_ne!(
             classify_string("48656c6c6f20576f726c6448656c6c6f"),
-            StringKind::Hash
+            Some(StringKind::Hash)
         );
     }
 
@@ -1668,13 +1742,13 @@ mod tests {
         // Real PHP code
         assert_eq!(
             classify_string("<?php echo 'hello'; ?>"),
-            StringKind::PhpCode
+            Some(StringKind::PhpCode)
         );
 
         // Short echo tag with valid content
-        assert_eq!(classify_string("<?= $variable ?>"), StringKind::PhpCode);
+        assert_eq!(classify_string("<?= $variable ?>"), Some(StringKind::PhpCode));
 
         // .reloc section garbage starting with <?= must NOT trigger PHP detection
-        assert_ne!(classify_string("<?=\">.>|>"), StringKind::PhpCode);
+        assert_ne!(classify_string("<?=\">.>|>"), Some(StringKind::PhpCode));
     }
 }
