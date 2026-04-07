@@ -39,7 +39,7 @@ fn test_macho_binary_has_import_strings() {
     let strings = extract_strings(&data, 4);
     let imports: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Import)
+        .filter(|s| s.kind == Some(StringKind::Import))
         .collect();
 
     assert!(
@@ -61,7 +61,7 @@ fn test_macho_import_strings_have_nonempty_values() {
     }
 
     let strings = extract_strings(&data, 4);
-    for s in strings.iter().filter(|s| s.kind == StringKind::Import) {
+    for s in strings.iter().filter(|s| s.kind == Some(StringKind::Import)) {
         assert!(
             !s.value.is_empty(),
             "Import at offset {} must have a non-empty symbol name",
@@ -86,7 +86,7 @@ fn test_macho_import_strings_added_from_symbol_table_use_structure_method() {
     let strings = extract_strings(&data, 4);
     let structure_imports: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Import && s.method == StringMethod::Structure)
+        .filter(|s| s.kind == Some(StringKind::Import) && s.method == StringMethod::Structure)
         .collect();
 
     // At least some imports should come directly from the symbol table
@@ -115,7 +115,7 @@ fn test_macho_import_strings_have_library_field() {
     let strings = extract_strings(&data, 4);
     let imports: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Import)
+        .filter(|s| s.kind == Some(StringKind::Import))
         .collect();
 
     if imports.is_empty() {
@@ -182,7 +182,7 @@ fn test_elf_import_export_strings_have_nonempty_values_when_present() {
     let strings = extract_strings_with_options(&data, &ExtractOptions::new(4));
     for s in strings
         .iter()
-        .filter(|s| s.kind == StringKind::Import || s.kind == StringKind::Export)
+        .filter(|s| s.kind == Some(StringKind::Import) || s.kind == Some(StringKind::Export))
     {
         assert!(
             !s.value.is_empty(),

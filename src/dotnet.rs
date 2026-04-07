@@ -279,10 +279,6 @@ fn parse_us_heap(heap: &[u8], file_base_offset: u64, min_length: usize) -> Vec<E
         pos = string_end;
     }
 
-    if !results.is_empty() {
-        tracing::debug!(".NET #US heap: extracted {} strings", results.len());
-    }
-
     results
 }
 

@@ -316,6 +316,7 @@ fn method_priority(m: StringMethod) -> u8 {
 }
 
 fn main() -> Result<()> {
+    let t_total = std::time::Instant::now();
     let cli = Cli::parse();
 
     // Initialize tracing (modern structured logging)
@@ -343,7 +344,9 @@ fn main() -> Result<()> {
         anyhow::bail!("File does not exist: {}", cli.target);
     }
 
+    let t_read = std::time::Instant::now();
     let data = fs::read(path)?;
+    tracing::debug!("TIME: Reading file took {:?}", t_read.elapsed());
 
     // Handle --detect flag
     if cli.detect {
@@ -830,6 +833,7 @@ fn main() -> Result<()> {
         println!();
     }
 
+    tracing::debug!("TIME: Total execution time: {:?}", t_total.elapsed());
     Ok(())
 }
 

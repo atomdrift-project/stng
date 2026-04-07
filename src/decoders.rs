@@ -238,22 +238,9 @@ pub fn decode_hex_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
         .filter(|s| s.kind == Some(StringKind::HexEncoded) || is_likely_hex(&s.value))
         .collect();
 
-    tracing::debug!("decode_hex_strings: found {} candidates", candidates.len());
-
     candidates
         .into_iter()
-        .filter_map(|s| {
-            let result = decode_hex_string(s);
-            if result.is_some() {
-                tracing::debug!(
-                    "Successfully decoded hex string of length {}",
-                    s.value.len()
-                );
-            } else {
-                tracing::debug!("Failed to decode hex string of length {}", s.value.len());
-            }
-            result
-        })
+        .filter_map(decode_hex_string)
         .collect()
 }
 

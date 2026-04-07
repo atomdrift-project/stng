@@ -161,13 +161,6 @@ impl RustStringExtractor {
         // Skip for large sections (> 1MB) as regex scanning is expensive
         const MAX_HEURISTIC_SECTION_SIZE: usize = 1024 * 1024;
         if let Some((text_const_addr, text_const_data)) = text_const_info {
-            if text_const_data.len() > MAX_HEURISTIC_SECTION_SIZE {
-                tracing::debug!(
-                    "Skipping heuristic extraction for __TEXT,__const ({} bytes > {} limit)",
-                    text_const_data.len(),
-                    MAX_HEURISTIC_SECTION_SIZE
-                );
-            }
             let heuristic = if text_const_data.len() <= MAX_HEURISTIC_SECTION_SIZE {
                 self.extract_packed_strings(text_const_data, Some("__TEXT,__const".to_string()))
             } else {

@@ -16,7 +16,7 @@ fn test_stack_strings_poolrat() {
 
     let stack_strings: Vec<&str> = extracted
         .iter()
-        .filter(|s| s.kind == StringKind::StackString)
+        .filter(|s| s.kind == Some(StringKind::StackString))
         .map(|s| s.value.as_str())
         .collect();
 

@@ -257,8 +257,8 @@ fn test_is_garbage_hex_patterns() {
 // Test StringKind variants
 #[test]
 fn test_string_kind_default() {
-    let kind: StringKind = Default::default();
-    assert_eq!(kind, StringKind::Const);
+    let kind: Option<StringKind> = None;
+    assert_eq!(kind, None);
 }
 
 // Test StringMethod display
@@ -286,7 +286,7 @@ fn test_extracted_string_serialization() {
         data_offset: 0x1000,
         section: Some("__rodata".to_string()),
         method: StringMethod::Structure,
-        kind: StringKind::Const,
+        kind: None,
         ..Default::default()
     };
 
@@ -302,7 +302,7 @@ fn test_extracted_string_with_source() {
         data_offset: 0x2000,
         section: None,
         method: StringMethod::Structure,
-        kind: StringKind::Import,
+        kind: Some(StringKind::Import),
         source: Some("libSystem.B.dylib".to_string()),
         ..Default::default()
     };
@@ -318,7 +318,7 @@ fn test_extracted_string_without_source_skips_field() {
         data_offset: 0x1000,
         section: None,
         method: StringMethod::Structure,
-        kind: StringKind::Const,
+        kind: None,
         ..Default::default()
     };
 
@@ -568,7 +568,7 @@ mod go_binary_tests {
         );
 
         // If we do find FuncName strings, that's great, but not required
-        let _has_funcname = strings.iter().any(|s| s.kind == StringKind::FuncName);
+        let _has_funcname = strings.iter().any(|s| s.kind == Some(StringKind::FuncName));
     }
 }
 
@@ -676,12 +676,12 @@ mod rust_binary_tests {
         let strings = extract_strings(&data, 4);
 
         // Should have various kinds of strings
-        let has_const = strings.iter().any(|s| s.kind == StringKind::Const);
-        let has_import = strings.iter().any(|s| s.kind == StringKind::Import);
+        let has_const = strings.iter().any(|s| s.kind == None);
+        let has_import = strings.iter().any(|s| s.kind == Some(StringKind::Import));
 
         assert!(
             has_const || has_import,
-            "Should have Const or Import strings"
+            "Should have None (Const) or Import strings"
         );
     }
 
@@ -858,7 +858,7 @@ mod fat_binary_tests {
         let strings = extract_strings(&data, 4);
 
         // System binaries should have imports
-        let has_imports = strings.iter().any(|s| s.kind == StringKind::Import);
+        let has_imports = strings.iter().any(|s| s.kind == Some(StringKind::Import));
         assert!(has_imports, "Fat binary should have imports");
     }
 }
@@ -1063,7 +1063,7 @@ mod cross_compiled_tests {
         );
 
         // Modern Go binaries may not have traditional gopclntab structure
-        let _has_func = strings.iter().any(|s| s.kind == StringKind::FuncName);
+        let _has_func = strings.iter().any(|s| s.kind == Some(StringKind::FuncName));
     }
 
     #[test]
@@ -1083,7 +1083,7 @@ mod cross_compiled_tests {
         // File paths may or may not be present depending on build flags
         let _has_path = strings
             .iter()
-            .any(|s| s.kind == StringKind::FilePath || s.kind == StringKind::Path);
+            .any(|s| s.kind == Some(StringKind::FilePath) || s.kind == Some(StringKind::Path));
     }
 
     // PE Go binary tests
@@ -1251,7 +1251,7 @@ mod api_tests {
             data_offset: 0x1000,
             section: None,
             method: StringMethod::R2String,
-            kind: StringKind::Const,
+            kind: None,
             ..Default::default()
         }];
 
@@ -1276,7 +1276,7 @@ mod api_tests {
             data_offset: 0,
             section: None,
             method: StringMethod::R2String,
-            kind: StringKind::Const,
+            kind: None,
             ..Default::default()
         }];
 
@@ -1351,7 +1351,7 @@ mod filter_tests {
         // All strings should pass is_garbage check, except for special kinds
         // that are exempt from garbage filtering (Section, EntitlementsXml)
         for s in &strings {
-            if s.kind != StringKind::Section && s.kind != StringKind::EntitlementsXml {
+            if s.kind != Some(StringKind::Section) && s.kind != Some(StringKind::EntitlementsXml) {
                 assert!(
                     !is_garbage(&s.value),
                     "Found garbage string: {} (kind: {:?})",
@@ -1397,19 +1397,19 @@ mod edge_case_tests {
     #[test]
     fn test_string_kind_debug() {
         let kinds = vec![
-            StringKind::Const,
-            StringKind::FuncName,
-            StringKind::FilePath,
-            StringKind::EnvVar,
-            StringKind::Error,
-            StringKind::Url,
-            StringKind::Path,
-            StringKind::Section,
-            StringKind::Ident,
-            StringKind::Arg,
-            StringKind::MapKey,
-            StringKind::Import,
-            StringKind::Export,
+            None,
+            Some(StringKind::FuncName),
+            Some(StringKind::FilePath),
+            Some(StringKind::EnvVar),
+            Some(StringKind::Error),
+            Some(StringKind::Url),
+            Some(StringKind::Path),
+            Some(StringKind::Section),
+            Some(StringKind::Ident),
+            Some(StringKind::Arg),
+            Some(StringKind::MapKey),
+            Some(StringKind::Import),
+            Some(StringKind::Export),
         ];
         for kind in kinds {
             let s = format!("{:?}", kind);
@@ -1448,7 +1448,7 @@ mod edge_case_tests {
             data_offset: 0x1000,
             section: Some("test".to_string()),
             method: StringMethod::Structure,
-            kind: StringKind::Const,
+            kind: None,
             ..Default::default()
         };
         let s2 = ExtractedString {
@@ -1456,7 +1456,7 @@ mod edge_case_tests {
             data_offset: 0x1000,
             section: Some("test".to_string()),
             method: StringMethod::Structure,
-            kind: StringKind::Const,
+            kind: None,
             ..Default::default()
         };
         // Clone check
@@ -1637,14 +1637,14 @@ mod wide_string_tests {
 
         // Check URL classification
         if let Some(url) = strings.iter().find(|s| s.value.contains("example.com")) {
-            assert_eq!(url.kind, StringKind::Url, "URL should be classified as Url");
+            assert_eq!(url.kind, Some(StringKind::Url), "URL should be classified as Url");
         }
 
         // Check path classification
         if let Some(path) = strings.iter().find(|s| s.value.contains("Users")) {
             assert_eq!(
                 path.kind,
-                StringKind::Path,
+                Some(StringKind::Path),
                 "Windows path should be classified as Path"
             );
         }
@@ -1653,7 +1653,7 @@ mod wide_string_tests {
         if let Some(reg) = strings.iter().find(|s| s.value.contains("HKEY_")) {
             assert_eq!(
                 reg.kind,
-                StringKind::Registry,
+                Some(StringKind::Registry),
                 "Registry path should be classified as Registry"
             );
         }
@@ -1790,7 +1790,7 @@ mod ip_detection_tests {
         assert!(ip_string.is_some(), "Real IP should be extracted");
         assert_eq!(
             ip_string.unwrap().kind,
-            StringKind::IP,
+            Some(StringKind::IP),
             "Real IP should be classified as IP"
         );
     }
@@ -1807,7 +1807,7 @@ mod ip_detection_tests {
         if let Some(s) = version_string {
             assert_ne!(
                 s.kind,
-                StringKind::IP,
+                Some(StringKind::IP),
                 "Version number 1.0.0.0 should NOT be classified as IP"
             );
         }
@@ -1824,7 +1824,7 @@ mod ip_detection_tests {
         if let Some(s) = version_string {
             assert_ne!(
                 s.kind,
-                StringKind::IP,
+                Some(StringKind::IP),
                 "Version number 4.5.0.0 should NOT be classified as IP"
             );
         }
@@ -1840,7 +1840,7 @@ mod ip_detection_tests {
 
         if let Some(s) = ip_string {
             assert_eq!(
-                s.kind.severity(),
+                s.kind.map(|k| k.severity()).unwrap_or(Severity::Info),
                 Severity::High,
                 "IP addresses should have High severity"
             );
@@ -1900,7 +1900,7 @@ mod shell_detection_tests {
         if let Some(s) = generic_string {
             assert_ne!(
                 s.kind,
-                StringKind::ShellCmd,
+                Some(StringKind::ShellCmd),
                 "IEnumerable`1 should NOT be classified as shell command"
             );
         }
@@ -1916,7 +1916,7 @@ mod shell_detection_tests {
         if let Some(s) = generic_string {
             assert_ne!(
                 s.kind,
-                StringKind::ShellCmd,
+                Some(StringKind::ShellCmd),
                 "Dictionary`2 should NOT be classified as shell command"
             );
         }
@@ -1935,7 +1935,7 @@ mod shell_detection_tests {
         assert!(cmd_string.is_some(), "Shell command should be extracted");
         assert_eq!(
             cmd_string.unwrap().kind,
-            StringKind::ShellCmd,
+            Some(StringKind::ShellCmd),
             "curl command should be classified as shell command"
         );
     }
@@ -1952,7 +1952,7 @@ mod shell_detection_tests {
         if let Some(s) = cmd_string {
             assert_eq!(
                 s.kind,
-                StringKind::ShellCmd,
+                Some(StringKind::ShellCmd),
                 "Pipe command should be classified as shell command"
             );
         }
@@ -2206,7 +2206,7 @@ mod extract_from_tests {
         );
         assert_eq!(
             s.kind,
-            stng::StringKind::Overlay,
+            Some(stng::StringKind::Overlay),
             "Should be marked as overlay"
         );
 
@@ -2218,7 +2218,7 @@ mod extract_from_tests {
         );
         assert_eq!(
             s.kind,
-            stng::StringKind::Overlay,
+            Some(stng::StringKind::Overlay),
             "Should be marked as overlay"
         );
     }
@@ -2286,7 +2286,7 @@ mod testdata_binary_tests {
         // Should have some imports
         let _imports: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::Import)
+            .filter(|s| s.kind == Some(StringKind::Import))
             .collect();
 
         // Go binaries may not have traditional imports, but should have strings
@@ -2476,7 +2476,7 @@ mod string_kind_tests {
 
         let env_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::EnvVar)
+            .filter(|s| s.kind == Some(StringKind::EnvVar))
             .collect();
 
         // May or may not be classified as Env depending on heuristics
@@ -2490,7 +2490,7 @@ mod string_kind_tests {
 
         let url_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::Url)
+            .filter(|s| s.kind == Some(StringKind::Url))
             .collect();
 
         assert!(
@@ -2506,7 +2506,7 @@ mod string_kind_tests {
 
         let ip_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::IPPort || s.kind == StringKind::IP)
+            .filter(|s| s.kind == Some(StringKind::IPPort) || s.kind == Some(StringKind::IP))
             .collect();
 
         // IP detection may or may not trigger depending on context
@@ -2520,7 +2520,7 @@ mod string_kind_tests {
 
         let path_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::SuspiciousPath || s.value.contains("/etc/"))
+            .filter(|s| s.kind == Some(StringKind::SuspiciousPath) || s.value.contains("/etc/"))
             .collect();
 
         assert!(!path_strings.is_empty(), "Should detect suspicious path");
@@ -2534,7 +2534,7 @@ mod string_kind_tests {
 
         let b64_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::Base64)
+            .filter(|s| s.kind == Some(StringKind::Base64))
             .collect();
 
         // Base64 detection depends on various heuristics
@@ -2574,7 +2574,7 @@ mod string_kind_tests {
 
         let hex_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::HexEncoded)
+            .filter(|s| s.kind == Some(StringKind::HexEncoded))
             .collect();
 
         assert!(
@@ -2635,7 +2635,7 @@ mod string_kind_tests {
 
         let unicode_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::UnicodeEscaped)
+            .filter(|s| s.kind == Some(StringKind::UnicodeEscaped))
             .collect();
 
         assert!(
@@ -2695,7 +2695,7 @@ mod string_kind_tests {
 
         let url_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::UrlEncoded)
+            .filter(|s| s.kind == Some(StringKind::UrlEncoded))
             .collect();
 
         assert!(
@@ -2713,7 +2713,7 @@ mod string_kind_tests {
 
         let base32_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::Base32)
+            .filter(|s| s.kind == Some(StringKind::Base32))
             .collect();
 
         assert!(!base32_strings.is_empty(), "Should detect Base32 string");
@@ -2729,7 +2729,7 @@ mod string_kind_tests {
 
         let base32_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::Base32)
+            .filter(|s| s.kind == Some(StringKind::Base32))
             .collect();
 
         assert!(
@@ -2747,7 +2747,7 @@ mod string_kind_tests {
 
         let crypto_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::CryptoWallet)
+            .filter(|s| s.kind == Some(StringKind::CryptoWallet))
             .collect();
 
         assert!(
@@ -2766,7 +2766,7 @@ mod string_kind_tests {
 
         let base58_strings: Vec<_> = strings
             .iter()
-            .filter(|s| s.kind == StringKind::Base58)
+            .filter(|s| s.kind == Some(StringKind::Base58))
             .collect();
 
         assert!(
@@ -2868,30 +2868,30 @@ mod severity_tests {
     fn test_all_kinds_have_severity() {
         // Ensure all StringKind variants return a valid severity
         let kinds = vec![
-            StringKind::Const,
-            StringKind::FuncName,
-            StringKind::Ident,
-            StringKind::Import,
-            StringKind::Export,
-            StringKind::Url,
-            StringKind::IP,
-            StringKind::IPPort,
-            StringKind::EnvVar,
-            StringKind::Path,
-            StringKind::SuspiciousPath,
-            StringKind::ShellCmd,
-            StringKind::Base64,
-            StringKind::HexEncoded,
-            StringKind::UnicodeEscaped,
-            StringKind::UrlEncoded,
-            StringKind::Base32,
-            StringKind::Base58,
-            StringKind::Overlay,
-            StringKind::OverlayWide,
+            None,
+            Some(StringKind::FuncName),
+            Some(StringKind::Ident),
+            Some(StringKind::Import),
+            Some(StringKind::Export),
+            Some(StringKind::Url),
+            Some(StringKind::IP),
+            Some(StringKind::IPPort),
+            Some(StringKind::EnvVar),
+            Some(StringKind::Path),
+            Some(StringKind::SuspiciousPath),
+            Some(StringKind::ShellCmd),
+            Some(StringKind::Base64),
+            Some(StringKind::HexEncoded),
+            Some(StringKind::UnicodeEscaped),
+            Some(StringKind::UrlEncoded),
+            Some(StringKind::Base32),
+            Some(StringKind::Base58),
+            Some(StringKind::Overlay),
+            Some(StringKind::OverlayWide),
         ];
 
         for kind in kinds {
-            let severity = kind.severity();
+            let severity = kind.map(|k| k.severity()).unwrap_or(Severity::Info);
             assert!(
                 matches!(
                     severity,
@@ -2934,7 +2934,8 @@ mod severity_tests {
 
     #[test]
     fn test_info_severity_kinds() {
-        assert_eq!(StringKind::Const.severity(), Severity::Info);
+        // Test None instead of Const
+        assert_eq!(None::<StringKind>.map(|k| k.severity()).unwrap_or(Severity::Info), Severity::Info);
         assert_eq!(StringKind::Ident.severity(), Severity::Info);
     }
 }
@@ -3096,7 +3097,7 @@ mod xor_detection_tests {
         let xor_strings: Vec<_> = strings
             .iter()
             .filter(|s| s.method == StringMethod::XorDecode)
-            .filter(|s| s.kind == StringKind::IP || s.kind == StringKind::IPPort)
+            .filter(|s| s.kind == Some(StringKind::IP) || s.kind == Some(StringKind::IPPort))
             .collect();
 
         assert!(
@@ -3203,7 +3204,7 @@ mod sockaddr_extraction_tests {
         // Should find the hardcoded C2 IP: 45.139.197.87
         let ip_strings: Vec<_> = strings
             .iter()
-            .filter(|s| matches!(s.kind, StringKind::IP | StringKind::IPPort))
+            .filter(|s| matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort)))
             .collect();
 
         assert!(

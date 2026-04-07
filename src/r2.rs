@@ -35,6 +35,7 @@ fn get_tool() -> Option<&'static str> {
             .map(|o| o.status.success())
             .unwrap_or(false)
         {
+            tracing::debug!("r2::get_tool: using rizin");
             Some("rizin")
         } else if Command::new("r2")
             .arg("-v")
@@ -42,6 +43,7 @@ fn get_tool() -> Option<&'static str> {
             .map(|o| o.status.success())
             .unwrap_or(false)
         {
+            tracing::debug!("r2::get_tool: using r2");
             Some("r2")
         } else {
             None
@@ -61,14 +63,8 @@ pub fn extract_string_boundaries(path: &str) -> Option<Vec<StringBoundary>> {
     // Check file size - skip for large files (izzj is too slow)
     let file_size = std::fs::metadata(path).ok()?.len();
     if file_size > 10 * 1024 * 1024 {
-        tracing::debug!(
-            "r2::extract_string_boundaries: skipping large file ({}MB)",
-            file_size / 1024 / 1024
-        );
         return None;
     }
-
-    tracing::debug!("r2::extract_string_boundaries: extracting from {}", path);
 
     // Use izzj for whole binary scan (better than izj for data sections only)
     let data_strings = run_tool_command(tool, path, "izzj")?;
@@ -86,14 +82,8 @@ pub fn extract_string_boundaries(path: &str) -> Option<Vec<StringBoundary>> {
             })
             .collect();
 
-        tracing::debug!(
-            "r2::extract_string_boundaries: found {} string boundaries",
-            boundaries.len()
-        );
-
         Some(boundaries)
     } else {
-        tracing::debug!("r2::extract_string_boundaries: failed to parse JSON");
         None
     }
 }
@@ -115,20 +105,10 @@ pub fn extract_strings(
     let file_size = std::fs::metadata(path).ok()?.len();
     let is_large_file = file_size > 10 * 1024 * 1024; // >10MB
 
-    tracing::debug!(
-        "r2::extract_strings: file_size={} (0x{:x}), large_file={}",
-        file_size,
-        file_size,
-        is_large_file
-    );
-
     // For large files: only extract symbols (fast), skip slow string scan
     // For small files: extract both strings and symbols
     let path_owned = path.to_string();
     let (data_result, symbols_result) = if is_large_file {
-        tracing::debug!(
-            "r2::extract_strings: large file, skipping izzj scan (slow), using symbols only"
-        );
         (
             None,
             run_tool_command_with_cache(tool, &path_owned, "isj", use_cache),
@@ -145,32 +125,11 @@ pub fn extract_strings(
 
     // Process strings from all sections (whole binary scan)
     if let Some(data_strings) = data_result {
-        tracing::debug!("r2::extract_strings: got izzj output, parsing JSON...");
         if let Ok(json) = serde_json::from_str::<Vec<R2String>>(&data_strings) {
-            tracing::debug!(
-                "r2::extract_strings: parsed {} strings from izzj",
-                json.len()
-            );
             for s in json {
                 // Skip strings with invalid file offsets
                 if s.paddr > file_size {
-                    tracing::debug!(
-                        "r2::extract_strings: SKIP paddr {} > file_size {} for '{}'",
-                        s.paddr,
-                        file_size,
-                        if s.string.len() > 20 {
-                            &s.string[..20]
-                        } else {
-                            &s.string
-                        }
-                    );
                     continue;
-                }
-
-                // Check if it's our target XOR key
-                if s.string.contains("fYzt") {
-                    tracing::debug!("r2::extract_strings: FOUND XOR KEY: paddr=0x{:x}, len={}, section='{}', string='{}'",
-                        s.paddr, s.string.len(), s.section, s.string);
                 }
 
                 if s.string.len() >= min_length && seen.insert(s.string.clone()) {
@@ -199,27 +158,17 @@ pub fn extract_strings(
                             ..Default::default()
                         });
                     }
-                } else if s.string.contains("fYzt") {
-                    tracing::debug!("r2::extract_strings: XOR KEY FILTERED: len={} < min_length={}, or already seen",
-                        s.string.len(), min_length);
                 }
             }
         }
     }
-    tracing::debug!(
-        "r2::extract_strings: collected {} strings from izj",
-        strings.len()
-    );
 
     // Extract function metadata (for files < 2MB)
     let function_metadata = extract_function_metadata(path, file_size, use_cache);
 
     // Process symbols
     if let Some(symbols) = symbols_result {
-        let t0 = std::time::Instant::now();
         if let Ok(json) = serde_json::from_str::<Vec<R2Symbol>>(&symbols) {
-            tracing::debug!("r2::extract_strings: serde_json parse took {:?}", t0.elapsed());
-            let t1 = std::time::Instant::now();
             for s in json {
                 // Skip symbols with invalid file offsets
                 if s.paddr > file_size {
@@ -267,9 +216,10 @@ pub fn extract_strings(
                     });
                 }
             }
-            tracing::debug!("r2::extract_strings: processing symbols took {:?}", t1.elapsed());
         }
     }
+
+    tracing::debug!("r2::extract_strings: extracted {} strings", strings.len());
 
     if strings.is_empty() {
         None
@@ -288,19 +238,10 @@ pub fn extract_function_metadata(
 ) -> Option<std::collections::HashMap<String, FunctionMetadata>> {
     // Only analyze functions for files < 2MB
     if file_size > 2 * 1024 * 1024 {
-        tracing::debug!(
-            "r2::extract_function_metadata: skipping large file ({}MB)",
-            file_size / 1024 / 1024
-        );
         return None;
     }
 
     let tool = get_tool()?;
-
-    tracing::debug!(
-        "r2::extract_function_metadata: analyzing functions for {}",
-        path
-    );
 
     // Run analysis and get function list as JSON
     // aa = analyze all, aflj = list functions as JSON
@@ -348,10 +289,7 @@ pub fn extract_function_metadata(
         );
     }
 
-    tracing::debug!(
-        "r2::extract_function_metadata: extracted metadata for {} functions",
-        metadata_map.len()
-    );
+    tracing::debug!("r2::extract_function_metadata: extracted {} functions", metadata_map.len());
 
     Some(metadata_map)
 }
@@ -548,45 +486,18 @@ fn analyze_candidates_by_patterns(
     path: &str,
     candidates: &[&ExtractedString],
 ) -> Vec<XorKeyInfo> {
-    tracing::debug!(
-        "analyze_candidates_by_patterns: analyzing {} candidates",
-        candidates.len()
-    );
-
     // Get all function names (run aa first to ensure analysis is done)
     let functions_cmd = "aa; afl";
     let Some(functions) = run_tool_command(tool, path, functions_cmd) else {
-        tracing::debug!("analyze_candidates_by_patterns: failed to get function list");
         return vec![];
     };
 
     let function_lines: Vec<&str> = functions.lines().collect();
-    tracing::debug!(
-        "analyze_candidates_by_patterns: found {} functions",
-        function_lines.len()
-    );
     if function_lines.is_empty() {
-        tracing::debug!(
-            "analyze_candidates_by_patterns: functions output length: {} bytes",
-            functions.len()
-        );
-        tracing::debug!(
-            "analyze_candidates_by_patterns: functions output preview: '{}'",
-            if functions.len() > 100 {
-                &functions[..100]
-            } else {
-                &functions
-            }
-        );
-    } else {
-        tracing::debug!(
-            "analyze_candidates_by_patterns: first function line: '{}'",
-            function_lines[0]
-        );
+        return vec![];
     }
 
     let mut results = vec![];
-    let mut xor_func_count = 0;
 
     // Check first 300 functions for XOR loops (more thorough search)
     let max_funcs = 300.min(function_lines.len());
@@ -608,15 +519,8 @@ fn analyze_candidates_by_patterns(
     }
 
     let compound_cmd = cmd_parts.join("; ");
-    tracing::debug!(
-        "analyze_candidates_by_patterns: disassembling {} functions in one session",
-        func_addrs.len()
-    );
 
     let Some(all_output) = run_tool_command(tool, path, &compound_cmd) else {
-        tracing::debug!(
-            "analyze_candidates_by_patterns: failed to run compound disassembly command"
-        );
         return vec![];
     };
 
@@ -624,16 +528,7 @@ fn analyze_candidates_by_patterns(
     // Split by generic separator pattern, then match with function addresses
     let separator_parts: Vec<&str> = all_output.split("===FUNC_SEPARATOR_").collect();
 
-    for (func_idx, func_addr) in func_addrs.iter().enumerate() {
-        if func_idx % 50 == 0 && func_idx > 0 {
-            tracing::debug!(
-                "  analyzed {}/{} functions... ({} with XOR so far)",
-                func_idx,
-                func_addrs.len(),
-                xor_func_count
-            );
-        }
-
+    for (func_idx, _func_addr) in func_addrs.iter().enumerate() {
         // Get the disassembly chunk for this function
         // Index is func_idx because first split is before any separator
         let disasm = if func_idx + 1 < separator_parts.len() {
@@ -649,16 +544,6 @@ fn analyze_candidates_by_patterns(
             continue;
         }
 
-        // Track how many XOR functions we've found
-        xor_func_count += 1;
-        if xor_func_count <= 5 {
-            tracing::debug!(
-                "analyze_candidates_by_patterns: function {} (#{}) has XOR instructions",
-                func_addr,
-                xor_func_count
-            );
-        }
-
         // Check if any candidate addresses appear in this XOR function
         for candidate in candidates {
             let addr_str = format!("0x{:x}", candidate.data_offset);
@@ -667,17 +552,6 @@ fn analyze_candidates_by_patterns(
             let vaddr_str = format!("0x{:x}", candidate.data_offset + 0x100000000);
 
             if disasm.contains(&addr_str) || disasm.contains(&vaddr_str) {
-                tracing::debug!(
-                    "analyze_candidates_by_patterns: found candidate '{}' @ {} in XOR function {}",
-                    if candidate.value.len() > 20 {
-                        &candidate.value[..20]
-                    } else {
-                        &candidate.value
-                    },
-                    addr_str,
-                    func_addr
-                );
-
                 results.push(XorKeyInfo {
                     key: candidate.value.clone(),
                     confidence: XorConfidence::High,
@@ -688,10 +562,6 @@ fn analyze_candidates_by_patterns(
         }
     }
 
-    tracing::debug!(
-        "analyze_candidates_by_patterns: found {} high-confidence keys",
-        results.len()
-    );
     results
 }
 
@@ -723,35 +593,11 @@ fn calculate_entropy(s: &str) -> f64 {
 /// 3. Looks for XOR loop patterns (load byte, XOR, store byte)
 /// 4. Returns high-confidence keys for decryption attempts
 pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKeyInfo> {
-    tracing::debug!(
-        "verify_xor_keys: called with {} candidates",
-        candidates.len()
-    );
-
-    let tool = if let Some(t) = get_tool() {
-        tracing::debug!("verify_xor_keys: using tool={}", t);
-        t
-    } else {
-        tracing::debug!("verify_xor_keys: no r2/rizin tool found");
+    let Some(tool) = get_tool() else {
         return Vec::new();
     };
 
-    // Check if XOR key is in input candidates
-    let xor_key_in_input = candidates.iter().any(|s| s.value.contains("fYzt"));
-    tracing::debug!(
-        "verify_xor_keys: XOR key in input candidates: {}",
-        xor_key_in_input
-    );
-    if xor_key_in_input {
-        if let Some(key_candidate) = candidates.iter().find(|s| s.value.contains("fYzt")) {
-            tracing::debug!(
-                "verify_xor_keys: XOR key found in input: '{}' @ 0x{:x}, method={:?}",
-                key_candidate.value,
-                key_candidate.data_offset,
-                key_candidate.method
-            );
-        }
-    }
+    tracing::debug!("verify_xor_keys: analyzing {} candidates", candidates.len());
 
     // Filter candidates to reasonable XOR key lengths (8-64 chars)
     // AND apply a quick heuristic to pick the most likely candidates first.
@@ -776,11 +622,6 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
     // Sort by score descending
     candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    tracing::debug!(
-        "verify_xor_keys: {} candidates after length filter, taking top 100",
-        candidates.len()
-    );
-
     // Take top 100 candidates for analysis
     let candidates_to_check: Vec<_> = candidates.iter().take(100).map(|(s, _)| *s).collect();
 
@@ -793,10 +634,6 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
         axt_batch_cmd.push(format!("axt 0x{vaddr:x}"));
     }
 
-    tracing::debug!(
-        "verify_xor_keys: running batched 'axt' for {} candidates...",
-        candidates_to_check.len()
-    );
     let axt_compound_cmd = axt_batch_cmd.join("; ");
     let Some(all_xrefs_output) = run_tool_command(tool, path, &axt_compound_cmd) else {
         return Vec::new();
@@ -831,17 +668,8 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
         }
     }
 
-    tracing::debug!(
-        "verify_xor_keys: {} candidates have at least one reference",
-        candidates_with_refs.len()
-    );
-
     // If we found very few candidates with references, fall back to analyzing all candidates
     if candidates_with_refs.len() < 10 {
-        tracing::debug!(
-            "verify_xor_keys: too few candidates with references ({}), falling back to pattern-based analysis",
-            candidates_with_refs.len()
-        );
         let candidates_vec: Vec<_> = candidates.iter().map(|(s, _)| *s).collect();
         return analyze_candidates_by_patterns(tool, path, &candidates_vec);
     }
@@ -865,10 +693,6 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
         pdf_batch_cmd.push(format!("pdf @ {func}"));
     }
 
-    tracing::debug!(
-        "verify_xor_keys: running batched 'pdf' for {} functions...",
-        func_names_vec.len()
-    );
     let pdf_compound_cmd = pdf_batch_cmd.join("; ");
     let Some(all_pdf_output) = run_tool_command(tool, path, &pdf_compound_cmd) else {
         return Vec::new();
@@ -920,12 +744,7 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
     // Sort and filter results
     candidates_with_xor_refs.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| b.2.cmp(&a.2)));
 
-    tracing::debug!(
-        "verify_xor_keys: {} candidates referenced by XOR-containing functions",
-        candidates_with_xor_refs.len()
-    );
-
-    candidates_with_xor_refs
+    let results: Vec<_> = candidates_with_xor_refs
         .iter()
         .take(20)
         .filter_map(|(candidate, xref_lines, reference_count, xor_function_refs)| {
@@ -970,7 +789,10 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
                 None
             }
         })
-        .collect()
+        .collect();
+
+    tracing::debug!("verify_xor_keys: found {} keys", results.len());
+    results
 }
 
 #[cfg(test)]
@@ -1154,30 +976,6 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_spaced_ascii_with_control_chars() {
-        // .NET strings often have length prefixes (control chars) between concatenated strings
-        // Short strings with control chars may not be detected due to threshold
-        // This longer example should still be detected as mostly wide
-        let wide = "W i n d o w s . F o u n d a t i o n . P o i n t \x0Bf 4 ";
-        let decoded = decode_spaced_ascii(wide);
-        // Long enough string should still decode despite one control char
-        assert!(decoded.is_some());
-        let result = decoded.unwrap();
-        assert!(result.contains("Windows.Foundation.Point"));
-    }
-
-    #[test]
-    fn test_decode_spaced_ascii_dotnet_style() {
-        // Real-world .NET pattern: struct(Windows.Foundation.Point;f4;f4)
-        let wide = "s t r u c t ( W i n d o w s . F o u n d a t i o n . P o i n t ; f 4 ; f 4 ) ";
-        let decoded = decode_spaced_ascii(wide);
-        assert_eq!(
-            decoded,
-            Some("struct(Windows.Foundation.Point;f4;f4)".to_string())
-        );
-    }
-
-    #[test]
     fn test_decode_spaced_ascii_with_embedded_space() {
         // Content with spaces: "Hello World" becomes "H e l l o   W o r l d " (double space for space char)
         let wide = "H e l l o   W o r l d ";
@@ -1199,14 +997,9 @@ pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
 
     // Check file size - skip R2 analysis for large files (aaa is very slow)
     if data.len() > 10 * 1024 * 1024 {
-        tracing::debug!(
-            "extract_connect_addrs: large file, skipping R2 analysis, using binary scan only"
-        );
         // Scan binary directly without R2 analysis
         return scan_binary_for_connect_addrs(data);
     }
-
-    tracing::debug!("extract_connect_addrs: analyzing with {}", tool);
 
     // Analyze binary and disassemble entire .text section
     let cmd = "aaa; e scr.color=0; s entry0; pdf";
@@ -1224,11 +1017,8 @@ pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
         || output.contains("sym.imp.connect"); // Imported connect
 
     if !has_connect {
-        tracing::debug!("extract_connect_addrs: no connect syscalls found");
         return Vec::new();
     }
-
-    tracing::debug!("extract_connect_addrs: found potential connect syscall");
 
     // First try parsing from disassembly
     if let Some(sockaddr) = parse_sockaddr_from_disasm(&output, data) {
@@ -1261,7 +1051,6 @@ pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
         }
     } else {
         // Fallback: scan for IP patterns directly in instruction bytes
-        tracing::debug!("extract_connect_addrs: disasm parsing failed, scanning binary");
         for sockaddr in find_sockaddr_in_binary(data) {
             let ip_str = format!(
                 "{}.{}.{}.{}",
@@ -1293,10 +1082,6 @@ pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
         }
     }
 
-    tracing::debug!(
-        "extract_connect_addrs: found {} unique addresses",
-        results.len()
-    );
     results
 }
 
@@ -1335,10 +1120,6 @@ fn scan_binary_for_connect_addrs(data: &[u8]) -> Vec<ExtractedString> {
         }
     }
 
-    tracing::debug!(
-        "scan_binary_for_connect_addrs: found {} unique addresses",
-        results.len()
-    );
     results
 }
 
@@ -1391,13 +1172,6 @@ fn parse_sockaddr_from_disasm(disasm: &str, _data: &[u8]) -> Option<SockaddrIn> 
         // ARM32: strb r*, [stack_offset] (stores the byte)
         if line.contains("strb") || line.contains("str ") {
             if let (Some(byte_val), Some(sp_offset)) = (pending_byte, extract_stack_offset(line)) {
-                tracing::debug!(
-                    "parse_sockaddr: found byte 0x{:02x} at sp+{} from line: {}",
-                    byte_val,
-                    sp_offset,
-                    line.trim()
-                );
-
                 // sockaddr_in: sin_family (2 bytes), sin_port (2 bytes), sin_addr (4 bytes)
                 // sin_addr starts at offset 4
                 // ONLY accept offsets 4, 5, 6, 7 (exact IP bytes)
@@ -1528,14 +1302,6 @@ fn find_sockaddr_in_binary(data: &[u8]) -> Vec<SockaddrIn> {
 
         // Check if we found all 4 bytes
         if found == 15 && !is_zero_or_invalid(&ip_bytes) {
-            tracing::debug!(
-                "find_sockaddr_in_binary: found IP {}.{}.{}.{} at offset 0x{:x}",
-                ip_bytes[0],
-                ip_bytes[1],
-                ip_bytes[2],
-                ip_bytes[3],
-                i
-            );
             results.push(SockaddrIn {
                 ip: ip_bytes,
                 port: 0,

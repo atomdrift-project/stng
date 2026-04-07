@@ -9,7 +9,7 @@ fn test_base64_classification_short_strings() {
     let s = "SGVsbG8gV29ybGQ="; // "Hello World"
     assert_eq!(s.len(), 16);
     let kind = classify_string(s);
-    assert_eq!(kind, StringKind::Base64);
+    assert_eq!(kind, Some(StringKind::Base64));
 }
 
 #[test]
@@ -18,7 +18,7 @@ fn test_base64_classification_20_chars() {
     let s = "VGhpcyBpcyBhIHRlc3Q="; // "This is a test"
     assert_eq!(s.len(), 20);
     let kind = classify_string(s);
-    assert_eq!(kind, StringKind::Base64);
+    assert_eq!(kind, Some(StringKind::Base64));
 }
 
 #[test]
@@ -27,7 +27,7 @@ fn test_hex_classification_short_strings() {
     let s = "48656c6c6f20576f"; // "Hello Wo"
     assert_eq!(s.len(), 16);
     let kind = classify_string(s);
-    assert_eq!(kind, StringKind::HexEncoded);
+    assert_eq!(kind, Some(StringKind::HexEncoded));
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn test_hex_classification_longer() {
     let s = "48656c6c6f20576f726c6421"; // "Hello World!"
     assert_eq!(s.len(), 24);
     let kind = classify_string(s);
-    assert_eq!(kind, StringKind::HexEncoded);
+    assert_eq!(kind, Some(StringKind::HexEncoded));
 }
 
 #[test]
@@ -44,14 +44,14 @@ fn test_url_encoding_classification_short() {
     // Test that 2 percent sequences are now enough (was 3)
     let s = "Hello%20World%21"; // "Hello World!"
     let kind = classify_string(s);
-    assert_eq!(kind, StringKind::UrlEncoded);
+    assert_eq!(kind, Some(StringKind::UrlEncoded));
 }
 
 #[test]
 fn test_url_encoding_classification_longer() {
     let s = "Hello%20World%21%20Test%20123"; // "Hello World! Test 123"
     let kind = classify_string(s);
-    assert_eq!(kind, StringKind::UrlEncoded);
+    assert_eq!(kind, Some(StringKind::UrlEncoded));
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn test_base64_not_detected_too_short() {
     let s = "SGVsbG8="; // Only 8 chars
     assert!(s.len() < 16);
     let kind = classify_string(s);
-    assert_ne!(kind, StringKind::Base64);
+    assert_ne!(kind, Some(StringKind::Base64));
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn test_hex_not_detected_too_short() {
     let s = "48656c6c6f"; // Only 10 chars
     assert!(s.len() < 16);
     let kind = classify_string(s);
-    assert_ne!(kind, StringKind::HexEncoded);
+    assert_ne!(kind, Some(StringKind::HexEncoded));
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn test_url_encoding_not_detected_one_sequence() {
     // Only 1 percent sequence should not be detected
     let s = "Hello%20World"; // Only one %XX
     let kind = classify_string(s);
-    assert_ne!(kind, StringKind::UrlEncoded);
+    assert_ne!(kind, Some(StringKind::UrlEncoded));
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn test_jwt_token_classification() {
     // JWT should be classified as JWT, not just base64
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123";
     let kind = classify_string(jwt);
-    assert_eq!(kind, StringKind::JWT);
+    assert_eq!(kind, Some(StringKind::JWT));
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn test_command_injection_classification() {
     // Shell commands should be detected
     let cmd = r#"eval "$(echo SGVsbG8gV29ybGQ= | base64 -d)""#;
     let kind = classify_string(cmd);
-    assert_eq!(kind, StringKind::CommandInjection);
+    assert_eq!(kind, Some(StringKind::CommandInjection));
 }
 
 #[test]

@@ -42,7 +42,7 @@ fn test_text_file_hex_decoding() {
     // The kind should be based on the decoded content, not the encoding
     assert_ne!(
         decoded.kind,
-        StringKind::HexEncoded,
+        Some(StringKind::HexEncoded),
         "Decoded string should not be marked as HexEncoded"
     );
 }

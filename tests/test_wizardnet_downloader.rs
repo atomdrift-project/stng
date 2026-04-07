@@ -33,7 +33,7 @@ fn test_no_xor_ip_false_positives_from_xaml_margins() {
 
     let xor_ips: Vec<&str> = extracted
         .iter()
-        .filter(|s| s.method == StringMethod::XorDecode && s.kind == StringKind::IP)
+        .filter(|s| s.method == StringMethod::XorDecode && s.kind == Some(StringKind::IP))
         .map(|s| s.value.as_str())
         .collect();
 
@@ -59,7 +59,7 @@ fn test_no_base64_false_positives_from_cert_timestamps() {
 
     let base64_strings: Vec<&str> = extracted
         .iter()
-        .filter(|s| s.kind == StringKind::Base64)
+        .filter(|s| s.kind == Some(StringKind::Base64))
         .map(|s| s.value.as_str())
         .collect();
 
@@ -83,7 +83,7 @@ fn test_no_base64_false_positives_from_x86_code() {
     // x86 conditional jump instruction bytes that look like base64
     let base64_strings: Vec<&str> = extracted
         .iter()
-        .filter(|s| s.kind == StringKind::Base64)
+        .filter(|s| s.kind == Some(StringKind::Base64))
         .map(|s| s.value.as_str())
         .collect();
 
@@ -104,7 +104,7 @@ fn test_no_php_false_positives_from_reloc_section() {
 
     let php_strings: Vec<&str> = extracted
         .iter()
-        .filter(|s| s.kind == StringKind::PhpCode)
+        .filter(|s| s.kind == Some(StringKind::PhpCode))
         .map(|s| s.value.as_str())
         .collect();
 

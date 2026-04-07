@@ -26,7 +26,7 @@ fn test_classify_base64() {
     let kind = classify_string(base64_str);
     assert_eq!(
         kind,
-        StringKind::Base64,
+        Some(StringKind::Base64),
         "Base64 string should be classified as Base64"
     );
 }
@@ -42,8 +42,8 @@ fn test_hex_case_sensitivity() {
     println!("Lowercase hex ({}): {:?}", lowercase_hex.len(), kind_lower);
     println!("Uppercase hex ({}): {:?}", uppercase_hex.len(), kind_upper);
 
-    assert_eq!(kind_lower, StringKind::HexEncoded);
-    assert_eq!(kind_upper, StringKind::HexEncoded);
+    assert_eq!(kind_lower, Some(StringKind::HexEncoded));
+    assert_eq!(kind_upper, Some(StringKind::HexEncoded));
 }
 
 #[test]
@@ -67,10 +67,10 @@ fn test_all_encoding_classifications() {
         classify_string(unicode_str)
     );
 
-    assert_eq!(classify_string(base64_str), StringKind::Base64);
-    assert_eq!(classify_string(hex_str), StringKind::HexEncoded);
-    assert_eq!(classify_string(url_str), StringKind::UrlEncoded);
-    assert_eq!(classify_string(unicode_str), StringKind::UnicodeEscaped);
+    assert_eq!(classify_string(base64_str), Some(StringKind::Base64));
+    assert_eq!(classify_string(hex_str), Some(StringKind::HexEncoded));
+    assert_eq!(classify_string(url_str), Some(StringKind::UrlEncoded));
+    assert_eq!(classify_string(unicode_str), Some(StringKind::UnicodeEscaped));
 }
 
 #[test]
@@ -92,12 +92,12 @@ fn test_base64_length_requirements() {
     // Both should be classified as Base64
     assert_eq!(
         kind_short,
-        StringKind::Base64,
+        Some(StringKind::Base64),
         "Short base64 should be classified as Base64"
     );
     assert_eq!(
         kind_long,
-        StringKind::Base64,
+        Some(StringKind::Base64),
         "Long base64 should be classified as Base64"
     );
 }
@@ -142,7 +142,7 @@ fn test_decoders_run_on_xor_strings() {
     // The XOR-decoded string should be classified as Base64
     let base64_classified: Vec<_> = xor_decoded
         .iter()
-        .filter(|s| s.kind == StringKind::Base64)
+        .filter(|s| s.kind == Some(StringKind::Base64))
         .collect();
 
     println!("\nXOR-decoded strings: {}", xor_decoded.len());
@@ -197,7 +197,7 @@ fn test_xor_then_base64() {
     // The XOR-decoded string should be classified as Base64
     let base64_strings: Vec<_> = xor_decoded
         .iter()
-        .filter(|s| s.kind == StringKind::Base64)
+        .filter(|s| s.kind == Some(StringKind::Base64))
         .collect();
 
     assert!(
@@ -229,7 +229,7 @@ fn test_xor_then_hex() {
     let kind = classify_string(hex_string);
     assert_eq!(
         kind,
-        StringKind::HexEncoded,
+        Some(StringKind::HexEncoded),
         "Hex string should be classified as HexEncoded"
     );
 
@@ -248,7 +248,7 @@ fn test_xor_then_url_encoding() {
     let kind = classify_string(url_string);
     assert_eq!(
         kind,
-        StringKind::UrlEncoded,
+        Some(StringKind::UrlEncoded),
         "URL-encoded string should be classified as UrlEncoded"
     );
 
@@ -287,7 +287,7 @@ fn test_xor_then_unicode_escapes() {
     // The XOR-decoded string should be classified as UnicodeEscaped
     let unicode_strings: Vec<_> = xor_decoded
         .iter()
-        .filter(|s| s.kind == StringKind::UnicodeEscaped)
+        .filter(|s| s.kind == Some(StringKind::UnicodeEscaped))
         .collect();
 
     assert!(

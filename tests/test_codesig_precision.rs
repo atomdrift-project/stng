@@ -34,7 +34,7 @@ fn test_imports_not_marked_as_codesig() {
     // Find all imports
     let imports: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Import)
+        .filter(|s| s.kind == Some(StringKind::Import))
         .collect();
 
     assert!(!imports.is_empty(), "Should find imports in /bin/ls");
@@ -74,7 +74,7 @@ fn test_only_base64_gets_codesig_hash_kind() {
     // All CodeSignatureHash strings must be base64-encoded
     let codesig_hashes: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::CodeSignatureHash)
+        .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
         .collect();
 
     assert!(
@@ -191,7 +191,7 @@ fn test_linkedit_const_strings_selective_codesig() {
     let non_codesig_consts: Vec<_> = strings
         .iter()
         .filter(|s| {
-            s.kind == StringKind::Const
+            s.kind == None
                 && s.section.as_deref() == Some("__LINKEDIT")
                 && !s.value.starts_with('<')
                 && !s.value.starts_with("<?xml")
@@ -330,7 +330,7 @@ fn test_codesig_method_on_signatures() {
     // 2. XML/plist strings from code signature blob
     // 3. Certificate strings (X.509 certificate chain components)
     for s in &codesig_method {
-        let is_valid = s.kind == StringKind::CodeSignatureHash
+        let is_valid = s.kind == Some(StringKind::CodeSignatureHash)
             || s.value.starts_with("<?xml")
             || s.value.starts_with("<!DOCTYPE")
             || s.value.starts_with("<plist")
@@ -383,7 +383,7 @@ fn test_no_base64_kind_in_linkedit() {
     let hash_sized_base64_in_linkedit: Vec<_> = strings
         .iter()
         .filter(|s| {
-            s.kind == StringKind::Base64
+            s.kind == Some(StringKind::Base64)
                 && s.section.as_deref() == Some("__LINKEDIT")
                 && BASE64
                     .decode(s.value.trim())
@@ -436,7 +436,7 @@ fn test_cert_strings_not_marked_as_hashes() {
     for s in &cert_strings {
         assert_ne!(
             s.kind,
-            StringKind::CodeSignatureHash,
+            Some(StringKind::CodeSignatureHash),
             "Certificate string '{}' should not be marked as CodeSignatureHash",
             s.value
         );
@@ -466,7 +466,7 @@ fn test_exact_hash_count() {
     // Count CodeSignatureHash kind strings (the actual CD hashes)
     let hash_count = strings
         .iter()
-        .filter(|s| s.kind == StringKind::CodeSignatureHash)
+        .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
         .count();
 
     // /bin/ls should have exactly 2 CD hashes (one per architecture)
@@ -493,7 +493,7 @@ fn test_exact_hash_count() {
     // Count AppId strings (bundle identifiers)
     let appid_count = strings
         .iter()
-        .filter(|s| s.kind == StringKind::AppId)
+        .filter(|s| s.kind == Some(StringKind::AppId))
         .count();
 
     // /bin/ls should have at least 1 AppId (com.apple.ls)

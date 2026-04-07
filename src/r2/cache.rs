@@ -75,29 +75,12 @@ impl R2Cache {
             .join(&hash)
             .join(format!("{}.json", filename));
 
-        tracing::debug!(
-            "r2::cache::get: checking cache for {} command '{}' -> {}",
-            hash,
-            command,
-            cache_path.display()
-        );
-
         // Validate cache is still valid
         if !self.is_cache_valid(file_path, &hash) {
-            tracing::debug!("r2::cache::get: cache invalid for {}", hash);
             return None;
         }
 
-        match fs::read_to_string(&cache_path) {
-            Ok(content) => {
-                tracing::debug!("r2::cache::get: cache HIT for command '{}'", command);
-                Some(content)
-            }
-            Err(_) => {
-                tracing::debug!("r2::cache::get: cache MISS for command '{}'", command);
-                None
-            }
-        }
+        fs::read_to_string(&cache_path).ok()
     }
 
     /// Set cached r2 command output.
@@ -113,12 +96,6 @@ impl R2Cache {
         // Write command output
         let filename = sanitize_command_for_filename(command);
         let output_path = cache_dir.join(format!("{}.json", filename));
-
-        tracing::debug!(
-            "r2::cache::set: writing cache for command '{}' -> {}",
-            command,
-            output_path.display()
-        );
 
         fs::write(output_path, output)?;
 
@@ -138,7 +115,6 @@ impl R2Cache {
         let cache_dir = self.cache_dir.join(&hash);
 
         if cache_dir.exists() {
-            tracing::debug!("r2::cache::clear: removing cache for {}", hash);
             fs::remove_dir_all(cache_dir)?;
         }
 
@@ -197,7 +173,6 @@ fn compute_file_hash(path: &str) -> Result<String, std::io::Error> {
     }
 
     // Cache miss - compute hash
-    tracing::debug!("compute_file_hash: cache miss for {}, hashing...", path);
     let data = fs::read(path)?;
     let hash = Sha256::digest(&data);
     let hash_hex = format!("{:x}", hash);

@@ -211,15 +211,6 @@ pub(crate) fn auto_detect_xor_key(
         return None;
     }
 
-    tracing::debug!(
-        "Auto-detecting XOR key from {} best-scored candidates",
-        candidates.len()
-    );
-
-    for (score, _offset, candidate) in candidates_with_score.iter().take(5) {
-        tracing::debug!("  Candidate (score={}): {}", score, candidate);
-    }
-
     // OPTIMIZATION 1: Phase 1 Quick Pre-filter
     // Skip candidates that don't decode killer IOCs in first 32KB - saves time by avoiding full extraction
     let quick_scan_size = std::cmp::min(32768, data.len());
@@ -257,33 +248,18 @@ pub(crate) fn auto_detect_xor_key(
         let found = killer_ac.as_ref().is_some_and(|ac| ac.is_match(&decoded));
         if found {
             promising_candidates.push((*offset, *candidate));
-            tracing::debug!("Phase 1: Candidate '{}' found killer pattern", candidate);
         }
     }
 
     // Fall back to all candidates if Phase 1 eliminates everything (safety net)
     let candidates_to_test = if promising_candidates.is_empty() {
-        tracing::info!(
-            "Phase 1: No killer patterns in first 32KB, testing all {} candidates",
-            candidates.len()
-        );
         candidates
     } else {
-        tracing::info!(
-            "Phase 1: {} promising candidates (skipped {})",
-            promising_candidates.len(),
-            candidates.len() - promising_candidates.len()
-        );
         promising_candidates
     };
 
     // OPTIMIZATION 2: Parallel candidate testing
     // Test all promising candidates in parallel for 2-3x speedup on multi-core CPUs
-    tracing::info!(
-        "Phase 2: Testing {} candidates in parallel",
-        candidates_to_test.len()
-    );
-
     let candidate_scores: Vec<(i32, u64, String, Vec<u8>)> = candidates_to_test
         .into_par_iter()
         .filter_map(|(offset, candidate): (u64, &str)| {
@@ -293,11 +269,6 @@ pub(crate) fn auto_detect_xor_key(
 
             // Sanity check: if we extracted way too many strings, it's likely noise
             if results.len() > 5000 {
-                tracing::debug!(
-                    "Rejecting XOR key '{}' - extracted {} strings (> 5000 = likely noise)",
-                    candidate,
-                    results.len()
-                );
                 return None;
             }
 
@@ -379,13 +350,6 @@ pub(crate) fn auto_detect_xor_key(
                 }
             }
 
-            tracing::debug!(
-                "XOR key candidate '{}': score={} ({} strings)",
-                candidate,
-                score,
-                results.len()
-            );
-
             Some((score, offset, candidate.to_string(), key))
         })
         .collect();
@@ -402,7 +366,6 @@ pub(crate) fn auto_detect_xor_key(
 
         // Early termination: if we found a key with very high confidence
         if score > 500 {
-            tracing::debug!("High-confidence XOR key found, stopping search");
             break;
         }
     }
@@ -417,12 +380,6 @@ pub(crate) fn auto_detect_xor_key(
     // while accepting real malware which typically has shell commands (100+ pts) or URLs.
     let min_xor_confidence_threshold = 375;
 
-    tracing::debug!(
-        "Best XOR score overall: {} (threshold: {})",
-        best_score,
-        min_xor_confidence_threshold
-    );
-
     if best_score >= min_xor_confidence_threshold {
         if let Some((ref _key, ref key_str, _)) = best_key {
             tracing::info!(
@@ -432,11 +389,6 @@ pub(crate) fn auto_detect_xor_key(
             );
         }
     } else {
-        tracing::debug!(
-            "No valid XOR key found (best score {} < required {})",
-            best_score,
-            min_xor_confidence_threshold
-        );
         return None;
     }
 
@@ -458,11 +410,6 @@ pub(crate) fn extract_xor_strings(
 ) -> Vec<ExtractedString> {
     // Skip XOR scanning for very large files - too slow and unlikely to have simple XOR
     if data.len() > MAX_XOR_SCAN_SIZE {
-        tracing::debug!(
-            "Skipping XOR scan: file size {} MB exceeds {} MB limit",
-            data.len() / (1024 * 1024),
-            MAX_XOR_SCAN_SIZE / (1024 * 1024)
-        );
         return Vec::new();
     }
 
@@ -1666,7 +1613,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
             let bad_chars = s
                 .chars()
                 .filter(|&c| {
-                    !c.is_ascii_alphanumeric()
+                    !c.is_alphanumeric()
                         && !matches!(c, '/' | '\\' | '.' | '_' | '-' | ' ' | ':' | '%')
                 })
                 .count();

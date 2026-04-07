@@ -34,22 +34,22 @@ fn test_bin_ls_clean() {
 
     let base85_count = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base85)
+        .filter(|s| s.kind == Some(StringKind::Base85))
         .count();
 
     let urlenc_count = strings
         .iter()
-        .filter(|s| s.kind == StringKind::UrlEncoded)
+        .filter(|s| s.kind == Some(StringKind::UrlEncoded))
         .count();
 
     let base32_count = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base32)
+        .filter(|s| s.kind == Some(StringKind::Base32))
         .count();
 
     let base64_count = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base64)
+        .filter(|s| s.kind == Some(StringKind::Base64))
         .count();
 
     // /bin/ls should have ZERO XOR false positives
@@ -95,7 +95,7 @@ fn test_bin_ls_clean() {
     // Verify no XOR key was detected
     let xor_key_count = strings
         .iter()
-        .filter(|s| s.kind == StringKind::XorKey)
+        .filter(|s| s.kind == Some(StringKind::XorKey))
         .count();
 
     assert_eq!(
@@ -109,12 +109,12 @@ fn test_bin_ls_clean() {
     // They should be categorized as CodeSignature method, not generic base64
     let codesig_base64_count = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base64 && s.method == stng::StringMethod::CodeSignature)
+        .filter(|s| s.kind == Some(StringKind::Base64) && s.method == stng::StringMethod::CodeSignature)
         .count();
 
     if base64_count > 0 {
         eprintln!("Found {} base64 strings in /bin/ls:", base64_count);
-        for s in strings.iter().filter(|s| s.kind == StringKind::Base64) {
+        for s in strings.iter().filter(|s| s.kind == Some(StringKind::Base64)) {
             eprintln!(
                 "  offset=0x{:x} method={:?} section={:?} value={:?}",
                 s.data_offset, s.method, s.section, s.value
@@ -183,7 +183,7 @@ fn test_vget_sample_no_base85() {
 
     let base85_count = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base85)
+        .filter(|s| s.kind == Some(StringKind::Base85))
         .count();
 
     // Rust binaries have lots of paths/strings with base85-valid chars,

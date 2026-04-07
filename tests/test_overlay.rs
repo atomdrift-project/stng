@@ -184,7 +184,7 @@ fn test_overlay_generic_strings_have_overlay_kind() {
     let strings = extract_overlay_strings(&data, 4);
     let overlay_kind: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Overlay)
+        .filter(|s| s.kind == Some(StringKind::Overlay))
         .collect();
 
     assert!(
@@ -216,7 +216,7 @@ fn test_overlay_url_ioc_preserves_classification() {
     for s in &url_strings {
         assert_ne!(
             s.kind,
-            StringKind::Overlay,
+            Some(StringKind::Overlay),
             "URL '{}' in overlay should preserve specific classification, not be demoted to Overlay",
             s.value
         );

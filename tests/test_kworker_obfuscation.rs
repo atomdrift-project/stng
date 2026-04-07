@@ -25,9 +25,9 @@ fn test_kworker_character_assembly_detection() {
     let suspicious: Vec<_> = extracted
         .iter()
         .filter(|s| {
-            s.kind == StringKind::SuspiciousPath
-                || s.kind == StringKind::ShellCmd
-                || s.kind == StringKind::StackString
+            s.kind == Some(StringKind::SuspiciousPath)
+                || s.kind == Some(StringKind::ShellCmd)
+                || s.kind == Some(StringKind::StackString)
         })
         .collect();
 
@@ -39,7 +39,7 @@ fn test_kworker_character_assembly_detection() {
     // Print stack strings (character-by-character constructions)
     let stack_strings: Vec<_> = extracted
         .iter()
-        .filter(|s| s.kind == StringKind::StackString)
+        .filter(|s| s.kind == Some(StringKind::StackString))
         .map(|s| s.value.as_str())
         .collect();
 

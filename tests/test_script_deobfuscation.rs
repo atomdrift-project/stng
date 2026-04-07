@@ -554,7 +554,7 @@ fn test_classification_of_decoded_content() {
     // The decoded URL should be classified as a URL
     let url_strings: Vec<_> = strings
         .iter()
-        .filter(|s| s.method == StringMethod::ScriptDecode && s.kind == StringKind::Url)
+        .filter(|s| s.method == StringMethod::ScriptDecode && s.kind == Some(StringKind::Url))
         .collect();
 
     assert!(

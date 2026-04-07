@@ -143,7 +143,6 @@ pub(crate) fn extract_custom_xor_strings_with_hints(
     // Step 1: Try radare2 hints first if available
     let mut hint_results = Vec::new();
     if let Some(hints) = r2_hints {
-        tracing::info!("Trying {} radare2 string boundary hints", hints.len());
         hint_results = extract_xor_strings_from_hints(data, key, min_length, hints, apply_filters);
 
         // Mark high-quality hint results as excluded from file-wide scanning
@@ -154,12 +153,6 @@ pub(crate) fn extract_custom_xor_strings_with_hints(
                 excluded_ranges.push((start, end));
             }
         }
-
-        tracing::info!(
-            "Radare2 hints produced {} strings, {} high-quality regions excluded",
-            hint_results.len(),
-            excluded_ranges.len()
-        );
     }
 
     // Step 2: Continue with normal extraction, excluding hint regions
@@ -578,8 +571,6 @@ fn extract_custom_xor_strings_pattern_based_simple(
     excluded_ranges: &[(usize, usize)],
     enable_early_termination: bool,
 ) -> Vec<ExtractedString> {
-    let start_time = std::time::Instant::now();
-
     let key_preview = if key.len() > 8 {
         format!("{}...", String::from_utf8_lossy(&key[..8]))
     } else {
@@ -897,22 +888,6 @@ fn extract_custom_xor_strings_pattern_based_simple(
     let mut results: Vec<ExtractedString> = results;
     results.sort_by_key(|s| s.data_offset);
 
-    let final_count = strings_found.load(Ordering::Relaxed);
-    if final_count >= MAX_STRINGS_BEFORE_EARLY_TERMINATION {
-        tracing::info!(
-            "XOR scan: {} strings in {:.2}s (early termination after {} strings)",
-            results.len(),
-            start_time.elapsed().as_secs_f64(),
-            final_count
-        );
-    } else {
-        tracing::info!(
-            "XOR scan: {} strings in {:.2}s",
-            results.len(),
-            start_time.elapsed().as_secs_f64()
-        );
-    }
-
     results
 }
 
@@ -1039,13 +1014,6 @@ pub fn extract_rolling_xor_with_known_plaintext(
                 let region = &data[region_start..region_end];
                 covered_ranges.push((region_start, region_end));
 
-                tracing::debug!(
-                    "Rolling XOR: found key {:02x?} at offset 0x{:x} ({} pattern matches)",
-                    &candidate_key[..key_len],
-                    offset,
-                    pattern_matches
-                );
-
                 let key_hex = hex::encode(&candidate_key[..key_len]);
 
                 let mut pos = 0;
@@ -1106,13 +1074,6 @@ pub fn extract_rolling_xor_with_known_plaintext(
     // Deduplicate by offset + value
     results.sort_by_key(|s| s.data_offset);
     results.dedup_by(|a, b| a.data_offset == b.data_offset && a.value == b.value);
-
-    if !results.is_empty() {
-        tracing::info!(
-            "Rolling XOR: extracted {} strings using known plaintext patterns",
-            results.len()
-        );
-    }
 
     results
 }

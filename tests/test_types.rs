@@ -17,7 +17,7 @@ fn test_extracted_string_default() {
     assert_eq!(s.data_offset, 0);
     assert_eq!(s.section, None);
     assert_eq!(s.method, StringMethod::RawScan);
-    assert_eq!(s.kind, StringKind::Const);
+    assert_eq!(s.kind, None);
     assert_eq!(s.source, None);
     assert_eq!(s.fragments, None);
     assert_eq!(s.section_size, None);
@@ -31,7 +31,7 @@ fn test_extracted_string_default() {
 fn test_section_metadata_str_not_section_kind() {
     let s = ExtractedString {
         value: "test".to_string(),
-        kind: StringKind::Const,
+        kind: None,
         section_size: Some(1024),
         section_executable: Some(true),
         section_writable: Some(false),
@@ -46,7 +46,7 @@ fn test_section_metadata_str_not_section_kind() {
 fn test_section_metadata_str_missing_size() {
     let s = ExtractedString {
         value: ".text".to_string(),
-        kind: StringKind::Section,
+        kind: Some(StringKind::Section),
         section_size: None,
         ..Default::default()
     };
@@ -59,7 +59,7 @@ fn test_section_metadata_str_missing_size() {
 fn test_section_metadata_str_bytes() {
     let s = ExtractedString {
         value: ".text".to_string(),
-        kind: StringKind::Section,
+        kind: Some(StringKind::Section),
         section_size: Some(512), // < 1024
         section_executable: Some(true),
         section_writable: Some(false),
@@ -74,7 +74,7 @@ fn test_section_metadata_str_bytes() {
 fn test_section_metadata_str_kilobytes() {
     let s = ExtractedString {
         value: ".data".to_string(),
-        kind: StringKind::Section,
+        kind: Some(StringKind::Section),
         section_size: Some(2048), // 2kb
         section_executable: Some(false),
         section_writable: Some(true),
@@ -89,7 +89,7 @@ fn test_section_metadata_str_kilobytes() {
 fn test_section_metadata_str_megabytes() {
     let s = ExtractedString {
         value: ".rodata".to_string(),
-        kind: StringKind::Section,
+        kind: Some(StringKind::Section),
         section_size: Some(5 * 1024 * 1024), // 5mb
         section_executable: Some(false),
         section_writable: Some(false),
@@ -104,7 +104,7 @@ fn test_section_metadata_str_megabytes() {
 fn test_section_metadata_str_text_exec_only() {
     let s = ExtractedString {
         value: ".text".to_string(),
-        kind: StringKind::Section,
+        kind: Some(StringKind::Section),
         section_size: Some(1024),
         section_executable: Some(true),
         section_writable: Some(false),
@@ -120,7 +120,7 @@ fn test_section_metadata_str_text_exec_only() {
 fn test_section_metadata_str_data_write_only() {
     let s = ExtractedString {
         value: ".data".to_string(),
-        kind: StringKind::Section,
+        kind: Some(StringKind::Section),
         section_size: Some(1024),
         section_executable: Some(false),
         section_writable: Some(true),
@@ -136,7 +136,7 @@ fn test_section_metadata_str_data_write_only() {
 fn test_section_metadata_str_text_plus_data() {
     let s = ExtractedString {
         value: ".weird".to_string(),
-        kind: StringKind::Section,
+        kind: Some(StringKind::Section),
         section_size: Some(1024),
         section_executable: Some(true),
         section_writable: Some(true),
@@ -151,7 +151,7 @@ fn test_section_metadata_str_text_plus_data() {
 fn test_section_metadata_str_default_permissions() {
     let s = ExtractedString {
         value: ".bss".to_string(),
-        kind: StringKind::Section,
+        kind: Some(StringKind::Section),
         section_size: Some(1024),
         section_executable: None,
         section_writable: None,
@@ -225,7 +225,6 @@ fn test_severity_low() {
 
 #[test]
 fn test_severity_info() {
-    assert_eq!(StringKind::Const.severity(), Severity::Info);
     assert_eq!(StringKind::Ident.severity(), Severity::Info);
     assert_eq!(StringKind::Arg.severity(), Severity::Info);
     assert_eq!(StringKind::MapKey.severity(), Severity::Info);
@@ -244,7 +243,6 @@ fn test_severity_ordering() {
 
 #[test]
 fn test_short_name_basic() {
-    assert_eq!(StringKind::Const.short_name(), "-");
     assert_eq!(StringKind::FuncName.short_name(), "func");
     assert_eq!(StringKind::FilePath.short_name(), "file");
     assert_eq!(StringKind::MapKey.short_name(), "key");
@@ -444,7 +442,7 @@ fn test_extracted_string_serialization() {
         data_offset: 0x1234,
         section: Some(".text".to_string()),
         method: StringMethod::Structure,
-        kind: StringKind::FuncName,
+        kind: Some(StringKind::FuncName),
         source: Some("libc.so".to_string()),
         architecture: Some("x86_64".to_string()),
         ..Default::default()
@@ -557,7 +555,7 @@ fn test_section_metadata_str_boundary_sizes() {
     // Test exactly at 1kb boundary
     let s1kb = ExtractedString {
         value: "test".to_string(),
-        kind: StringKind::Section,
+        kind: Some(StringKind::Section),
         section_size: Some(1024),
         ..Default::default()
     };
@@ -566,7 +564,7 @@ fn test_section_metadata_str_boundary_sizes() {
     // Test exactly at 1mb boundary
     let s1mb = ExtractedString {
         value: "test".to_string(),
-        kind: StringKind::Section,
+        kind: Some(StringKind::Section),
         section_size: Some(1024 * 1024),
         ..Default::default()
     };
@@ -580,7 +578,7 @@ fn test_extracted_string_with_all_fields() {
         data_offset: 0x5000,
         section: Some(".data".to_string()),
         method: StringMethod::StackString,
-        kind: StringKind::StackString,
+        kind: Some(StringKind::StackString),
         source: Some("lib.so".to_string()),
         section_size: Some(4096),
         section_executable: Some(false),
@@ -609,8 +607,8 @@ fn test_extracted_string_with_all_fields() {
 #[test]
 fn test_string_kind_default() {
     // Test that Default trait works
-    let kind: StringKind = Default::default();
-    assert_eq!(kind, StringKind::Const);
+    let kind: Option<StringKind> = None;
+    assert_eq!(kind, None);
 }
 
 #[test]

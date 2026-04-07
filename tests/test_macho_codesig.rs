@@ -33,7 +33,7 @@ fn test_codesig_base64_categorization() {
     // Find all code signature hash strings
     let codesig_hashes: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::CodeSignatureHash)
+        .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
         .collect();
 
     // /bin/ls should have exactly 2 CD hashes
@@ -100,7 +100,7 @@ fn test_entitlements_extraction_brew_agent() {
     // Find entitlements XML
     let entitlements: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::EntitlementsXml)
+        .filter(|s| s.kind == Some(StringKind::EntitlementsXml))
         .collect();
 
     assert_eq!(
@@ -164,7 +164,7 @@ fn test_entitlements_extraction_securityd() {
     // Find entitlements XML
     let entitlements: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::EntitlementsXml)
+        .filter(|s| s.kind == Some(StringKind::EntitlementsXml))
         .collect();
 
     assert_eq!(
@@ -250,7 +250,7 @@ fn test_linkedit_section_enrichment() {
     let linkedit_hashes: Vec<_> = strings
         .iter()
         .filter(|s| {
-            s.section.as_deref() == Some("__LINKEDIT") && s.kind == StringKind::CodeSignatureHash
+            s.section.as_deref() == Some("__LINKEDIT") && s.kind == Some(StringKind::CodeSignatureHash)
         })
         .collect();
 
@@ -294,7 +294,7 @@ fn test_codesig_hash_format() {
     // Only check CodeSignatureHash kind (not all CodeSignature method strings)
     let codesig_hashes: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::CodeSignatureHash)
+        .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
         .collect();
 
     assert!(
@@ -347,7 +347,7 @@ fn test_entitlements_vs_codesign_count() {
     // Count entitlement keys in our extraction
     let entitlements: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::EntitlementsXml)
+        .filter(|s| s.kind == Some(StringKind::EntitlementsXml))
         .collect();
 
     assert_eq!(
@@ -400,7 +400,7 @@ fn test_no_entitlements_in_clean_binaries() {
 
     let entitlements: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::EntitlementsXml)
+        .filter(|s| s.kind == Some(StringKind::EntitlementsXml))
         .collect();
 
     assert_eq!(
@@ -426,7 +426,7 @@ fn test_entitlements_offset_accuracy() {
 
     let entitlements: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::EntitlementsXml)
+        .filter(|s| s.kind == Some(StringKind::EntitlementsXml))
         .collect();
 
     assert_eq!(
@@ -472,7 +472,7 @@ fn test_codesig_hashes_are_sha1() {
     let codesig_hashes: Vec<_> = strings
         .iter()
         .filter(|s| {
-            s.method == StringMethod::CodeSignature && s.kind == StringKind::CodeSignatureHash
+            s.method == StringMethod::CodeSignature && s.kind == Some(StringKind::CodeSignatureHash)
         })
         .collect();
 

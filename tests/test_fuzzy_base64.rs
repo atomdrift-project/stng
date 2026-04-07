@@ -25,7 +25,7 @@ fn make_test_data(content: &str) -> Vec<u8> {
 #[test]
 fn test_long_valid_base64_detection() {
     // Long valid base64 string (100+ chars) - guaranteed to be detected
-    let long_b64 = "VGhpcyBpcyBhIHJlYWxseSBsb25nIGJhc2U2NCBzdHJpbmcgdGhhdCBzaG91bGQgYmUgZGV0ZWN0ZWQgYW5kIGRlY29kZWQgcHJvcGVybHkgd2l0aG91dCBhbnkgaXNzdWVzIGJlY2F1c2UgaXQgbWVldHMgdGhlIG1pbmltdW0gbGVuZ3RoIHJlcXVpcmVtZW50";
+    let long_b64 = "VGhpcyBpcyBhIHJlYWxseSBsb25nIGJhc2U2NCBzdHJpbmcgdGhhdCBzaG91bGQgYmUgZGV0ZWN0ZWQgYW5kIGRlY29kZWQgcHJvcGVybHkgd2l0aG91dCBhbnkgaXNzdWVzIGJlY2F1c2UgaXQgbWVldHMgdGhlIG1pbmltdW0gbGVuZ3RoIHJlcXVpcmZWZW50";
     let data = make_test_data(long_b64);
 
     let opts = ExtractOptions::new(4);
@@ -35,7 +35,7 @@ fn test_long_valid_base64_detection() {
     let base64_strings: Vec<_> = strings
         .iter()
         .filter(|s| {
-            (s.kind == StringKind::Base64
+            (s.kind == Some(StringKind::Base64)
                 || s.method == StringMethod::Base64Decode
                 || s.method == StringMethod::Base64ObfuscatedDecode)
                 && s.value.len() > 50
@@ -59,7 +59,7 @@ fn test_base64_decoding_enabled() {
 
     // Should either detect as base64 or decode it
     let has_base64_or_decoded = strings.iter().any(|s| {
-        s.kind == StringKind::Base64
+        s.kind == Some(StringKind::Base64)
             || s.method == StringMethod::Base64Decode
             || s.value.contains("Hello World")
     });
@@ -82,7 +82,7 @@ fn test_no_false_positive_on_plain_text() {
     // Should find the plain string but not classify it as base64
     let wrong_base64: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base64 && s.value.contains("regular"))
+        .filter(|s| s.kind == Some(StringKind::Base64) && s.value.contains("regular"))
         .collect();
 
     assert!(
@@ -103,7 +103,7 @@ fn test_invalid_base64_chars_rejected() {
     // Should not detect as base64
     let base64_strings: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base64)
+        .filter(|s| s.kind == Some(StringKind::Base64))
         .collect();
 
     assert!(
@@ -143,7 +143,7 @@ fn test_malware_pe_header_base64() {
     // Should detect as base64
     let base64_strings: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base64 && s.value.contains("TVq"))
+        .filter(|s| s.kind == Some(StringKind::Base64) && s.value.contains("TVq"))
         .collect();
 
     assert!(
@@ -164,7 +164,7 @@ fn test_base64_minimum_length_threshold() {
     // Should not detect very short strings as base64
     let base64_strings: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base64 && s.value == "abc=")
+        .filter(|s| s.kind == Some(StringKind::Base64) && s.value == "abc=")
         .collect();
 
     assert!(
@@ -197,7 +197,7 @@ fn test_binary_only_no_false_positives() {
     // Should find no base64
     let base64_strings: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base64)
+        .filter(|s| s.kind == Some(StringKind::Base64))
         .collect();
 
     assert!(
@@ -219,7 +219,7 @@ fn test_base64_with_standard_padding() {
     let base64_strings: Vec<_> = strings
         .iter()
         .filter(|s| {
-            (s.kind == StringKind::Base64
+            (s.kind == Some(StringKind::Base64)
                 || s.method == StringMethod::Base64Decode
                 || s.method == StringMethod::Base64ObfuscatedDecode)
                 && s.value.len() > 30
@@ -243,7 +243,7 @@ fn test_multiple_base64_in_data() {
 
     // Should find at least one string containing base64 content (encoded or decoded)
     let has_base64_content = strings.iter().any(|s| {
-        s.kind == StringKind::Base64
+        s.kind == Some(StringKind::Base64)
             || s.method == StringMethod::Base64Decode
             || s.method == StringMethod::Base64ObfuscatedDecode
             || s.value.contains("SGVsbG8")
@@ -268,7 +268,7 @@ fn test_base64_quality_threshold() {
     // Should not detect low quality strings as base64
     let base64_strings: Vec<_> = strings
         .iter()
-        .filter(|s| s.kind == StringKind::Base64 && s.value.contains("!!!"))
+        .filter(|s| s.kind == Some(StringKind::Base64) && s.value.contains("!!!"))
         .collect();
 
     assert!(
@@ -289,7 +289,7 @@ fn test_pem_certificate_base64() {
     // Should find base64 sections
     let has_base64 = strings
         .iter()
-        .any(|s| s.kind == StringKind::Base64 || s.value.contains("MIIDXTCCAkWgAw"));
+        .any(|s| s.kind == Some(StringKind::Base64) || s.value.contains("MIIDXTCCAkWgAw"));
 
     assert!(has_base64, "Should extract base64 from PEM certificate");
 }
@@ -306,7 +306,7 @@ fn test_jwt_token_base64() {
     // Should find the JWT components (either encoded or decoded)
     let has_jwt_parts = strings.iter().any(|s| {
         s.value.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9")
-            || s.kind == StringKind::Base64
+            || s.kind == Some(StringKind::Base64)
             || s.method == StringMethod::Base64Decode
             || s.method == StringMethod::Base64ObfuscatedDecode
     });

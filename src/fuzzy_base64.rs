@@ -61,41 +61,19 @@ pub fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<ExtractedString>
 
         // Try different extraction strategies
         if let Some(decoded) = try_deobfuscate_js_base64(&s.value) {
-            tracing::debug!(
-                "Fuzzy base64: decoded {} bytes from offset 0x{:x} via JSObfuscation",
-                decoded.decoded.len(),
-                s.data_offset
-            );
             results.push(create_decoded_string(s, decoded, "JSObfuscation"));
         }
 
         if let Some(decoded) = try_fuzzy_extract(&s.value) {
-            tracing::debug!(
-                "Fuzzy base64: decoded {} bytes from offset 0x{:x} via FuzzyExtract",
-                decoded.decoded.len(),
-                s.data_offset
-            );
             results.push(create_decoded_string(s, decoded, "FuzzyExtract"));
         }
 
         // Try extracting from substrings if this looks like a variable assignment
         if s.value.contains('=') && s.value.contains('"') {
             if let Some(decoded) = extract_from_assignment(&s.value) {
-                tracing::debug!(
-                    "Fuzzy base64: decoded {} bytes from offset 0x{:x} via Assignment",
-                    decoded.decoded.len(),
-                    s.data_offset
-                );
                 results.push(create_decoded_string(s, decoded, "Assignment"));
             }
         }
-    }
-
-    if !results.is_empty() {
-        tracing::info!(
-            "Fuzzy base64: extracted {} obfuscated base64 strings",
-            results.len()
-        );
     }
 
     results

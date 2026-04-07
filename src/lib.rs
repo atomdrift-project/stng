@@ -282,6 +282,8 @@ fn apply_xor_scan(
         return;
     }
 
+    let t_xor = std::time::Instant::now();
+
     // For PE binaries, also try rolling XOR with known plaintext patterns
     // This catches .NET malware like Redline that uses short cycling keys
     if is_pe && data.len() <= xor::MAX_XOR_SCAN_SIZE {
@@ -297,7 +299,6 @@ fn apply_xor_scan(
     };
 
     if let Some(ref key) = opts.xor_key {
-        tracing::debug!("Custom XOR: using {} byte key", key.len());
         let key_str = String::from_utf8_lossy(key);
         if let Some(ks) = strings.iter_mut().find(|s| s.value == key_str.as_ref()) {
             ks.kind = Some(StringKind::XorKey);
@@ -317,7 +318,6 @@ fn apply_xor_scan(
             None
         };
         if let Some((key, key_str, _)) = auto_key {
-            tracing::info!("Auto-detected XOR key: '{}'", key_str);
             // Mark ALL occurrences of the key string as XorKey. Fat binaries
             // contain the same string at multiple arch offsets; the value-dedup
             // in main.rs keeps whichever copy comes first, so every copy must
@@ -356,19 +356,17 @@ fn apply_xor_scan(
             if opts.xor_scan_multi {
                 if let Some(ref path) = opts.path {
                     let xor_keys = r2::verify_xor_keys(path, strings);
-                    tracing::debug!("Multi-byte XOR: found {} potential keys", xor_keys.len());
                     if !xor_keys.is_empty() {
                         let decoded =
                             xor::extract_multikey_xor_strings(data, &xor_keys, opts.xor_min_length);
-                        tracing::debug!("Multi-byte XOR: decoded {} strings", decoded.len());
                         strings.extend(decoded);
                     }
-                } else {
-                    tracing::debug!("Multi-byte XOR: path not provided, skipping");
                 }
             }
         }
     }
+    
+    tracing::debug!("TIME: XOR key scanning took {:?}", t_xor.elapsed());
 }
 
 /// Check if a string looks like a bundle ID (reverse domain notation).
@@ -955,13 +953,6 @@ fn append_script_deobfuscation(
     opts: &ExtractOptions,
 ) {
     let deob_results = script::deobfuscate_script(data);
-    for result in &deob_results {
-        tracing::debug!(
-            "Script deobfuscation ({}) decoded {} bytes",
-            result.chain_description,
-            result.decoded.len()
-        );
-    }
     for result in deob_results {
         let payload_bytes = result.decoded.as_bytes();
         let mut payload_strings =
@@ -1020,10 +1011,6 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         let has_utf16be_bom = data[0] == 0xFE && data[1] == 0xFF;
 
         if has_utf16le_bom || has_utf16be_bom {
-            tracing::debug!(
-                "Detected UTF-16{} BOM, decoding entire file",
-                if has_utf16le_bom { "LE" } else { "BE" }
-            );
             return extract_from_utf16_file(data, opts, has_utf16le_bom);
         }
     }
@@ -1031,17 +1018,14 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
     if let Ok(object) = Object::parse(data) {
         let t0 = std::time::Instant::now();
         let mut strings = extract_from_object(&object, data, opts);
-        tracing::debug!("TIME: extract_from_object took {:?}", t0.elapsed());
+        tracing::debug!("TIME: Extraction took {:?}", t0.elapsed());
         
         // For text files parsed by goblin (e.g. as Unknown), also run script deobfuscation
         if is_text_file(data) {
             append_script_deobfuscation(&mut strings, data, opts);
         }
         
-        let t0 = std::time::Instant::now();
-        let res = deduplicate_by_offset(strings);
-        tracing::debug!("TIME: deduplicate_by_offset(1) took {:?}", t0.elapsed());
-        res
+        deduplicate_by_offset(strings)
     } else {
         // Unknown format - use r2 if available, plus raw scan
         let mut strings = Vec::new();
@@ -1074,13 +1058,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
             ));
         }
 
-        // XOR string detection
-        let t0 = std::time::Instant::now();
-        apply_xor_scan(&mut strings, data, opts, is_pe);
-        tracing::debug!("TIME: apply_xor_scan took {:?}", t0.elapsed());
-
         // Decode encoded strings (base64, hex, URL-encoding, unicode escapes)
-        let t0 = std::time::Instant::now();
         let mut decoded = Vec::new();
         decoded.extend(decoders::decode_base64_strings(&strings));
         decoded.extend(decoders::extract_embedded_base64(&strings));
@@ -1091,12 +1069,9 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         decoded.extend(decoders::decode_url_strings(&strings));
         decoded.extend(decoders::decode_unicode_escape_strings(&strings));
         strings.extend(decoded);
-        tracing::debug!("TIME: decoders took {:?}", t0.elapsed());
 
         // Decode spaced ASCII strings (common in PE .rsrc, .NET metadata)
-        let t0 = std::time::Instant::now();
         decode_spaced_strings(&mut strings, opts.min_length);
-        tracing::debug!("TIME: decode_spaced_strings took {:?}", t0.elapsed());
 
         // Script deobfuscation for text files that didn't parse as a known binary format
         if is_text_file(data) {
@@ -1104,15 +1079,10 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         }
 
         if opts.filter_garbage {
-            let t0 = std::time::Instant::now();
             strings.retain(passes_garbage_filter);
-            tracing::debug!("TIME: garbage_filter took {:?}", t0.elapsed());
         }
 
-        let t0 = std::time::Instant::now();
-        let res = deduplicate_by_offset(strings);
-        tracing::debug!("TIME: deduplicate_by_offset took {:?}", t0.elapsed());
-        res
+        deduplicate_by_offset(strings)
     }
 }
 
@@ -1259,7 +1229,6 @@ fn extract_from_object(
             }
         }
         Object::Elf(elf) => {
-            let t0 = std::time::Instant::now();
             let segments = collect_elf_segments(elf);
             let section_info = collect_elf_section_info(elf);
 
@@ -1286,9 +1255,7 @@ fn extract_from_object(
                 let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
                 name.contains("rust") || name == ".rustc"
             });
-            tracing::debug!("TIME: ELF preamble took {:?}", t0.elapsed());
 
-            let t0 = std::time::Instant::now();
             if has_go {
                 is_go_binary = true;
                 let extractor = GoStringExtractor::new(min_length);
@@ -1311,10 +1278,6 @@ fn extract_from_object(
                 strings.extend(extractor.extract_elf(elf, scan_data));
             } else {
                 // Unknown ELF (C, C++, assembly, etc.) - use r2 if available + raw scan.
-                // Do NOT use RustStringExtractor here: it only scans .rodata and its
-                // fat-pointer heuristic is meaningless for C binaries, causing it to
-                // silently skip .strtab, .debug_str and other sections that hold key
-                // indicator strings (e.g. Mirai source-file names, build paths).
                 if let Some(r2_strings) = get_r2_strings(opts) {
                     strings.extend(r2_strings);
                 }
@@ -1326,9 +1289,7 @@ fn extract_from_object(
                     &section_info,
                 ));
             }
-            tracing::debug!("TIME: ELF lang extraction took {:?}", t0.elapsed());
 
-            let t0 = std::time::Instant::now();
             // Extract UTF-16LE wide strings (less common in ELF but can occur, especially in malware)
             strings.extend(extract_wide_strings(
                 scan_data,
@@ -1346,16 +1307,10 @@ fn extract_from_object(
                 Some(elf),
                 None,
             ));
-            tracing::debug!("TIME: ELF extra extraction took {:?}", t0.elapsed());
 
 
             if is_go_binary {
                 // For Go binaries, run XOR-pair extraction on the .text section only.
-                // garble-obfuscated Go malware (e.g. BrickStorm) stores sensitive strings
-                // as two non-printable immediate constants on the stack and XORs them at
-                // runtime — the Go string extractor misses these entirely.
-                // We restrict to .text to avoid noise from data sections and only keep
-                // XorStackPair results (regular stack string detection is too noisy in Go).
                 //
                 // Compute image base from the first PT_LOAD segment for VA translation.
                 let image_base = elf
@@ -1377,7 +1332,6 @@ fn extract_from_object(
                     });
                 if let Some((text_start, text_vma, text)) = text_data {
                     // Use the context-aware version to resolve RIP-relative XMM loads
-                    // (garble loads obfuscated data from .rodata via [rip+disp])
                     let mut xor_results = extract_stack_strings_with_context(
                         text, min_length, scan_data, text_vma, image_base,
                     );
@@ -1393,8 +1347,6 @@ fn extract_from_object(
                 }
 
                 // Scan data sections for garble-obfuscated strings (byte array pairs)
-                // Garble stores encrypted data and key as same-length byte arrays.
-                // Check .rodata, .noptrdata, and .data sections.
                 for section_name in [".rodata", ".noptrdata", ".data"] {
                     if let Some((offset, data)) = elf
                         .section_headers
@@ -1411,7 +1363,6 @@ fn extract_from_object(
                     }
                 }
             } else {
-                let t0 = std::time::Instant::now();
                 // Only scan executable sections for stack strings to avoid wasting time on data
                 // Parallelize section scanning using Rayon
                 let results: Vec<ExtractedString> = elf.section_headers.par_iter()
@@ -1431,25 +1382,18 @@ fn extract_from_object(
                     .collect();
                 
                 strings.extend(results);
-                tracing::debug!("TIME: ELF parallel extract_stack_strings took {:?}", t0.elapsed());
             }
             
-            let t0 = std::time::Instant::now();
             merge_imports(&mut strings, extract_elf_imports(elf, min_length));
-            tracing::debug!("TIME: ELF merge_imports took {:?}", t0.elapsed());
 
             // Filter out any strings that fall within the overlay region
             // (they'll be re-extracted with proper section="overlay" marking)
             if let Some(ref overlay) = overlay_info {
-                let t0 = std::time::Instant::now();
                 strings.retain(|s| s.data_offset < overlay.start_offset);
-                tracing::debug!("TIME: ELF strings.retain took {:?}", t0.elapsed());
             }
 
-            let t0 = std::time::Instant::now();
             // Extract overlay/appended data (common malware technique)
             strings.extend(extract_overlay_strings(data, min_length));
-            tracing::debug!("TIME: ELF extract_overlay_strings took {:?}", t0.elapsed());
         }
         Object::PE(pe) => {
             // Collect PE section names and metadata
@@ -1554,8 +1498,9 @@ fn extract_from_object(
         }
     }
 
-    // XOR string detection - skip for Go binaries (they don't use XOR obfuscation)
-    if !is_go_binary {
+    // XOR string detection - only for known binary formats (PE/ELF/Mach-O), not Go
+    let is_known_binary = matches!(object, Object::PE(_) | Object::Elf(_) | Object::Mach(_));
+    if is_known_binary && !is_go_binary {
         let is_pe = matches!(object, Object::PE(_));
         apply_xor_scan(&mut strings, data, opts, is_pe);
     }
@@ -1566,10 +1511,6 @@ fn extract_from_object(
         if let Some(ref path) = opts.path {
             let connect_addrs = r2::extract_connect_addrs(path, data);
             if !connect_addrs.is_empty() {
-                tracing::debug!(
-                    "Found {} IP addresses from connect() calls",
-                    connect_addrs.len()
-                );
                 strings.extend(connect_addrs);
             }
         }
@@ -1602,8 +1543,6 @@ fn extract_from_object(
     }
 
     // Upgrade strings in __LINKEDIT section related to code signatures
-    // __LINKEDIT contains symbol tables AND the code signature blob
-    // This must happen AFTER section enrichment so section names are populated
     for s in &mut strings {
         if let Some(ref section) = s.section {
             if section == "__LINKEDIT" {
@@ -1624,7 +1563,6 @@ fn extract_from_object(
                 }
 
                 // XML/plist strings in __LINKEDIT are part of code signature
-                // (entitlements or code signature metadata like cdhashes)
                 if s.kind.is_none()
                     && (s.value.starts_with("<?xml")
                         || s.value.starts_with("<!DOCTYPE plist")
@@ -1642,9 +1580,6 @@ fn extract_from_object(
                 }
 
                 // Certificate-related strings in __LINKEDIT (X.509 certificate chain)
-                // These are Distinguished Names, dates, CRL URLs, and policy text.
-                // Also covers Base64-classified strings that are actually ASN.1 date
-                // fragments (e.g. "350209214036Z0b1") which are not CD hashes.
                 if (s.kind.is_none() || s.kind == Some(StringKind::Base64))
                     && is_certificate_string(&s.value)
                 {
@@ -1660,7 +1595,7 @@ fn extract_from_object(
     }
 
     // Decode encoded strings (base64, hex, URL-encoding, unicode escapes)
-    // This happens BEFORE garbage filtering so we can decode potentially-garbage-looking encodings
+    let t_dec = std::time::Instant::now();
     let mut decoded = Vec::new();
     decoded.extend(decoders::decode_base64_strings(&strings));
     decoded.extend(decoders::extract_embedded_base64(&strings));
@@ -1675,8 +1610,8 @@ fn extract_from_object(
     strings.extend(decoded);
 
     // Decode spaced ASCII strings (common in PE .rsrc, .NET metadata)
-    // This handles strings like "V a r F i l e I n f o" -> "VarFileInfo"
     decode_spaced_strings(&mut strings, min_length);
+    tracing::debug!("TIME: Classification took {:?}", t_dec.elapsed());
 
     if opts.filter_garbage {
         strings.retain(passes_garbage_filter);

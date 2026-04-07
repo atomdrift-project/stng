@@ -190,7 +190,7 @@ fn test_xor_classification() {
     // (They are osascript commands, which may be classified either way)
     for s in &volume_strings {
         assert!(
-            s.kind == StringKind::ShellCmd || s.kind == StringKind::AppleScript,
+            s.kind == Some(StringKind::ShellCmd) || s.kind == Some(StringKind::AppleScript),
             "Volume string should be classified as ShellCmd or AppleScript, got {:?}: {:?}",
             s.kind,
             s.value
@@ -385,14 +385,14 @@ fn test_c2_url_extraction_from_fixture() {
         }
 
         println!("\nAll URLs extracted:");
-        for s in xor_strings.iter().filter(|s| s.kind == StringKind::Url) {
+        for s in xor_strings.iter().filter(|s| s.kind == Some(StringKind::Url)) {
             println!("  0x{:x}: {:?}", s.data_offset, s.value);
         }
 
         println!("\nAll IPs extracted:");
         for s in xor_strings
             .iter()
-            .filter(|s| matches!(s.kind, StringKind::IP | StringKind::IPPort))
+            .filter(|s| matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort)))
         {
             println!("  0x{:x}: {:?}", s.data_offset, s.value);
         }
