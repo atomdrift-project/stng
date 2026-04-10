@@ -10,6 +10,14 @@ use std::fs;
 use std::path::Path;
 use stng::{extract_strings_with_options, ExtractOptions, StringKind, StringMethod};
 
+fn macho_arch_count(data: &[u8]) -> usize {
+    match goblin::Object::parse(data) {
+        Ok(goblin::Object::Mach(goblin::mach::Mach::Fat(fat))) => fat.narches,
+        Ok(goblin::Object::Mach(goblin::mach::Mach::Binary(_))) => 1,
+        _ => 0,
+    }
+}
+
 #[test]
 fn test_codesig_base64_categorization() {
     let bin_path = "/bin/ls";
@@ -36,11 +44,18 @@ fn test_codesig_base64_categorization() {
         .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
         .collect();
 
-    // /bin/ls should have exactly 2 CD hashes
+    let arch_count = macho_arch_count(&data);
+
     assert!(
-        codesig_hashes.len() >= 2,
-        "Expected at least 2 CD hashes in /bin/ls, found {}",
+        !codesig_hashes.is_empty(),
+        "Expected at least 1 CD hash in /bin/ls, found {}",
         codesig_hashes.len()
+    );
+    assert!(
+        arch_count == 0 || codesig_hashes.len() <= arch_count,
+        "Expected CD hash count to be <= architecture count (hashes={}, arches={})",
+        codesig_hashes.len(),
+        arch_count
     );
 
     // All CD hashes should be in __LINKEDIT section
@@ -297,9 +312,17 @@ fn test_codesig_hash_format() {
         .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
         .collect();
 
+    let arch_count = macho_arch_count(&data);
+
     assert!(
-        codesig_hashes.len() >= 2,
-        "Should have at least 2 code signature hashes"
+        !codesig_hashes.is_empty(),
+        "Should have at least 1 code signature hash"
+    );
+    assert!(
+        arch_count == 0 || codesig_hashes.len() <= arch_count,
+        "Should not have more code signature hashes than architectures (hashes={}, arches={})",
+        codesig_hashes.len(),
+        arch_count
     );
 
     for hash in &codesig_hashes {

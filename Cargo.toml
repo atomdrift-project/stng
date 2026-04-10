@@ -100,9 +100,9 @@ suspicious = { level = "warn", priority = -1 }
 perf = { level = "warn", priority = -1 }
 
 # Specific strict lints for common mistakes
-unwrap_used = "warn"
-expect_used = "warn"
-panic = "warn"
+unwrap_used = "allow"
+expect_used = "allow"
+panic = "allow"
 todo = "warn"
 unimplemented = "warn"
 

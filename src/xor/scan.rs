@@ -329,8 +329,8 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                         // Additional sanity check: reject obvious garbage.
                         // Since single-byte XOR uses ASCII-only run detection, all strings are ASCII;
                         // use fast byte-based counting instead of slow Unicode char iteration.
-                        let alnum = s.bytes().filter(|b| b.is_ascii_alphanumeric()).count();
-                        let alpha = s.bytes().filter(|b| b.is_ascii_alphabetic()).count();
+                        let alnum = s.bytes().filter(u8::is_ascii_alphanumeric).count();
+                        let alpha = s.bytes().filter(u8::is_ascii_alphabetic).count();
 
                         // Reject if < 50% alphanumeric (likely garbage)
                         let char_count = s.len(); // ASCII: len == char count
@@ -1173,7 +1173,7 @@ pub fn extract_incremental_xor_strings(
                         while current_bytes.len() >= min_length {
                             match String::from_utf8(current_bytes.clone()) {
                                 Ok(s) => {
-                                    if s.chars().any(|c| c.is_alphabetic()) {
+                                    if s.chars().any(char::is_alphabetic) {
                                         let kind = classify_xor_string(&s).flatten();
                                         results.push(ExtractedString {
                                             value: s,
@@ -1194,7 +1194,7 @@ pub fn extract_incremental_xor_strings(
                                         let mut valid_bytes = current_bytes.clone();
                                         valid_bytes.truncate(valid_up_to);
                                         if let Ok(s) = String::from_utf8(valid_bytes) {
-                                            if s.chars().any(|c| c.is_alphabetic()) {
+                                                    if s.chars().any(char::is_alphabetic) {
                                                 let kind = classify_xor_string(&s).flatten();
                                                 results.push(ExtractedString {
                                                     value: s,

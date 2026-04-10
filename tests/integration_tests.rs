@@ -676,7 +676,7 @@ mod rust_binary_tests {
         let strings = extract_strings(&data, 4);
 
         // Should have various kinds of strings
-        let has_const = strings.iter().any(|s| s.kind == None);
+        let has_const = strings.iter().any(|s| s.kind.is_none());
         let has_import = strings.iter().any(|s| s.kind == Some(StringKind::Import));
 
         assert!(

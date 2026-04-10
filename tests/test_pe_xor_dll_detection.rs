@@ -17,7 +17,10 @@ use stng::{extract_strings_with_options, ExtractOptions, StringMethod};
 fn test_pe_xor_c6_dll_and_api_detection() {
     let sample_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testdata/rtc.dll");
 
-    let data = std::fs::read(sample_path).expect("Failed to read rtc.dll testdata");
+    let data = match std::fs::read(sample_path) {
+        Ok(data) => data,
+        Err(err) => panic!("Failed to read rtc.dll testdata: {err}"),
+    };
     let opts = ExtractOptions::new(10).with_xor(None);
     let results = extract_strings_with_options(&data, &opts);
 
@@ -74,10 +77,12 @@ fn test_pe_xor_c6_dll_and_api_detection() {
     );
 
     // Verify the key annotation (must be flagged as 0xC6)
-    let bcrypt_dll = results
+    let Some(bcrypt_dll) = results
         .iter()
         .find(|r| r.value.contains("bcrypt.dll") && r.method == StringMethod::XorDecode)
-        .expect("bcrypt.dll XOR string not found");
+    else {
+        panic!("bcrypt.dll XOR string not found");
+    };
     assert!(
         bcrypt_dll
             .source
