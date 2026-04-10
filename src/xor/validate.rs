@@ -328,6 +328,10 @@ fn suspicious_path_automaton() -> &'static AhoCorasick {
                 "programdata",
                 "launchagents",
                 "launchdaemons",
+                // Linux rootkit indicators
+                "/proc/net/",
+                "ld.so.preload",
+                "/proc/self/",
             ])
             .expect("static patterns")
     })
@@ -637,6 +641,8 @@ const KNOWN_PATH_PREFIXES: &[&str] = &[
     "/var/",
     "/tmp/",
     "/dev/",
+    "/proc/",
+    "/sys/",
     "/opt/",
     "/home/",
     "/root/",

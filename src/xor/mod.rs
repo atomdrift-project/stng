@@ -13,8 +13,9 @@ mod validate;
 pub(crate) use self::classify::{
     auto_detect_xor_key, extract_multikey_xor_strings, extract_xor_strings,
 };
-pub(crate) use self::scan::{
-    extract_custom_xor_strings_with_hints, extract_rolling_xor_with_known_plaintext,
+pub use self::scan::{
+    extract_custom_xor_strings_with_hints, extract_incremental_xor_strings,
+    extract_rolling_xor_with_known_plaintext,
 };
 
 // Note: Private functions are re-imported in the tests module below
@@ -24,7 +25,7 @@ pub(crate) const DEFAULT_XOR_MIN_LENGTH: usize = 10;
 
 /// XOR keys to skip because they produce too many false positives.
 /// 0x20 (space) just flips letter case, causing "GOROOT OBJECT" to become "gorootOBJECT".
-pub(super) const SKIP_XOR_KEYS: &[u8] = &[0x20];
+pub const SKIP_XOR_KEYS: &[u8] = &[0x20];
 
 /// Maximum file size for auto-detection of XOR keys (512 KB).
 pub(crate) const MAX_AUTO_DETECT_SIZE: usize = 512 * 1024;
@@ -39,6 +40,7 @@ mod tests {
     use super::scan::{extract_custom_xor_strings, extract_rolling_xor_with_known_plaintext};
     use super::validate::{
         has_known_path_prefix, is_locale_string, is_meaningful_string, is_valid_ip, is_valid_port,
+        is_valid_xor_string,
     };
     use super::*;
     use crate::{ExtractedString, StringKind, StringMethod};
@@ -90,6 +92,13 @@ mod tests {
         assert!(is_meaningful_string("/etc/passwd"));
         assert!(!is_meaningful_string(""));
         assert!(!is_meaningful_string("XYZQWFGH")); // No vowels
+    }
+
+    #[test]
+    fn test_is_valid_xor_string_linux_rootkit() {
+        assert!(is_valid_xor_string("/proc/net/tcp"), "/proc/net/tcp should be valid");
+        assert!(is_valid_xor_string("/proc/net/tcp6"), "/proc/net/tcp6 should be valid");
+        assert!(is_valid_xor_string("ld.so.preload"), "ld.so.preload should be valid");
     }
 
     fn make_xor_test_data(plaintext: &[u8], key: u8, offset: usize) -> Vec<u8> {
@@ -294,7 +303,7 @@ mod tests {
                 .any(|r| r.value == "http://malware.example.com"
                     && r.source
                         .as_ref()
-                        .map(|l| l.contains("key:B"))
+                        .map(|l| l.contains("0x42"))
                         .unwrap_or(false)),
             "Custom single-byte XOR should decode URL. Results: {:?}",
             results

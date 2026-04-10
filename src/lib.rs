@@ -84,7 +84,7 @@ pub use types::{
     StringStruct,
 };
 
-pub use xor::MAX_XOR_SCAN_SIZE;
+pub use xor::{extract_incremental_xor_strings, MAX_XOR_SCAN_SIZE};
 
 // Internal — not part of the stable public API
 pub(crate) use garble::extract_garble_rodata_strings;
@@ -352,7 +352,50 @@ fn apply_xor_scan(
                 false, // Even for auto-detected keys, extract completely for final results
             ));
         } else {
-            strings.extend(xor::extract_xor_strings(data, opts.xor_min_length, is_pe));
+            let xor_results = xor::extract_xor_strings(data, opts.xor_min_length, is_pe);
+
+            // If the pattern scan found 2+ strings encoded with the same single-byte key,
+            // that key is in use throughout the binary. Do a full extraction pass so we
+            // don't miss strings that lack a trigger pattern (e.g. syscall names, log paths).
+            let mut key_counts: HashMap<u8, usize> = HashMap::new();
+            for r in &xor_results {
+                if let Some(src) = &r.source {
+                    if let Some(hex) = src.strip_prefix("xor:0x").and_then(|s| s.get(..2)) {
+                        if let Ok(k) = u8::from_str_radix(hex, 16) {
+                            *key_counts.entry(k).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+            // Track keys that received a full extraction pass — their AC scan results
+            // are a strict subset and can be dropped to avoid redundant deduplication work.
+            let mut fully_extracted_keys: HashSet<u8> = HashSet::new();
+            for (key, count) in key_counts {
+                if count >= 2 && !xor::SKIP_XOR_KEYS.contains(&key) {
+                    let full = xor::extract_custom_xor_strings_with_hints(
+                        data,
+                        &[key],
+                        opts.xor_min_length,
+                        r2_boundaries.as_deref(),
+                        opts.filter_garbage,
+                        false,
+                    );
+                    strings.extend(full);
+                    fully_extracted_keys.insert(key);
+                }
+            }
+
+            // Skip AC-scan results for keys already covered by full extraction above.
+            strings.extend(xor_results.into_iter().filter(|r| {
+                if let Some(src) = &r.source {
+                    if let Some(hex) = src.strip_prefix("xor:0x").and_then(|s| s.get(..2)) {
+                        if let Ok(k) = u8::from_str_radix(hex, 16) {
+                            return !fully_extracted_keys.contains(&k);
+                        }
+                    }
+                }
+                true
+            }));
             if opts.xor_scan_multi {
                 if let Some(ref path) = opts.path {
                     let xor_keys = r2::verify_xor_keys(path, strings);
@@ -364,6 +407,10 @@ fn apply_xor_scan(
                 }
             }
         }
+
+        // Always run incremental XOR detection if enabled - it might complement regular XOR
+        let inc_results = xor::extract_incremental_xor_strings(data, opts.xor_min_length);
+        strings.extend(inc_results);
     }
     
     tracing::debug!("TIME: XOR key scanning took {:?}", t_xor.elapsed());
@@ -1078,6 +1125,8 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
             append_script_deobfuscation(&mut strings, data, opts);
         }
 
+        apply_xor_scan(&mut strings, data, opts, is_pe);
+
         if opts.filter_garbage {
             strings.retain(passes_garbage_filter);
         }
@@ -1498,9 +1547,8 @@ fn extract_from_object(
         }
     }
 
-    // XOR string detection - only for known binary formats (PE/ELF/Mach-O), not Go
-    let is_known_binary = matches!(object, Object::PE(_) | Object::Elf(_) | Object::Mach(_));
-    if is_known_binary && !is_go_binary {
+    // XOR string detection - for all binary formats except Go (rarely XOR'd).
+    if !is_go_binary {
         let is_pe = matches!(object, Object::PE(_));
         apply_xor_scan(&mut strings, data, opts, is_pe);
     }

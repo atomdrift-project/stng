@@ -426,7 +426,6 @@ pub(crate) fn extract_xor_strings(
         let mat: aho_corasick::Match = mat;
         let info = &pattern_info[mat.pattern().as_usize()];
         let pos = mat.start();
-
         if info.is_wide {
             if let Some((decoded, start, _end)) =
                 expand_xor_wide_string(data, pos, info.key, min_length)
@@ -1174,6 +1173,10 @@ const CREDENTIAL_KEYWORDS: &[&str] = &[
 
 /// Well-known suspicious paths that indicate malicious activity.
 const SUSPICIOUS_PATHS: &[&str] = &[
+    // Linux rootkit indicators
+    "/proc/net/",
+    "ld.so.preload",
+    // Credential/key theft targets
     "/Library/Ethereum/keystore",
     "/Library/Application Support/Ethereum",
     "/.ssh/",
@@ -1408,23 +1411,14 @@ pub(crate) fn has_multiple_locales(s: &str) -> bool {
 
 /// Classify an XOR-decoded string. Returns None if it doesn't look interesting.
 pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
-    // EARLY REJECTION: Check for partial/failed XOR decodes before any classification.
-    // These are strings that start like known patterns (e.g., "%USERPROFILE%") but
-    // diverge into garbage (e.g., "%UsERP4NFINE%\"). Must check this BEFORE
-    // is_meaningful_string() which might pass these due to acceptable vowel ratios.
-    if super::validate::is_partial_xor_decode(s) {
-        return None;
-    }
-
-    // FIRST: Check for high-value IOCs that should bypass strict filtering
-    // These are important enough that we want them even if they have unusual chars.
-    // Run case-sensitive checks before allocating a lowercase copy.
+    // FIRST: Check for high-value IOCs that should bypass strict filtering.
+    // These checks must come BEFORE is_partial_xor_decode to avoid false rejections
+    // of legitimate paths like /proc/net/tcp that could superficially resemble
+    // partial decodes of Windows environment variables.
 
     // Check for locale strings (common in malware geofencing)
-    // Standard format: language_COUNTRY or language-COUNTRY (e.g., en_US, ru-RU, zh_CN)
-    // Malware often includes lists like "en_US;fr_FR;de_DE" to check victim's locale
     if has_multiple_locales(s) {
-        return Some(Some(StringKind::SuspiciousPath)); // Classify as suspicious (indicates geofencing)
+        return Some(Some(StringKind::SuspiciousPath));
     }
 
     // Check for well-known suspicious paths (even with garbage around them)
@@ -1432,6 +1426,14 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
         if s.contains(sus_path) {
             return Some(Some(StringKind::SuspiciousPath));
         }
+    }
+
+    // EARLY REJECTION: Check for partial/failed XOR decodes before any classification.
+    // These are strings that start like known patterns (e.g., "%USERPROFILE%") but
+    // diverge into garbage (e.g., "%UsERP4NFINE%\"). Must check this BEFORE
+    // is_meaningful_string() which might pass these due to acceptable vowel ratios.
+    if super::validate::is_partial_xor_decode(s) {
+        return None;
     }
 
     // Defer lowercase allocation until needed for case-insensitive checks.

@@ -8,7 +8,7 @@ use super::classify::{
     classify_xor_string, clean_locale_trailing_garbage, clean_url_trailing_garbage,
     trim_consonant_clusters, trim_trailing_garbage,
 };
-use super::validate::{is_locale_string, is_printable_char};
+use super::validate::is_locale_string;
 use super::SKIP_XOR_KEYS;
 use crate::validation;
 use crate::{ExtractedString, StringKind, StringMethod};
@@ -22,6 +22,7 @@ use std::sync::LazyLock;
 /// These short patterns catch a wide variety of malware indicators:
 /// - `://` catches all URL schemes (http://, https://, ftp://, etc.)
 /// - `/bin` catches Unix shell paths (/bin/sh, /bin/bash)
+/// - `/proc` catches Linux process/network hiding rootkits (/proc/net/tcp, /proc/self/exe)
 /// - `C:\` catches Windows paths
 /// - `Mozilla` catches user agent strings
 /// - `.exe` catches Windows executables (cmd.exe, powershell.exe)
@@ -29,9 +30,11 @@ use std::sync::LazyLock;
 /// - `Library` catches macOS paths (/Library/...)
 /// - `Ethereum` catches crypto wallet paths
 /// - ` %s ` catches format strings (common in C code)
+/// - `ld.so` catches LD_PRELOAD rootkit injection (ld.so.preload)
 pub(super) const XOR_PATTERNS: &[&[u8]] = &[
     b"://",
     b"/bin",
+    b"/proc",
     b"C:\\",
     b"Mozilla",
     b".exe",
@@ -39,6 +42,7 @@ pub(super) const XOR_PATTERNS: &[&[u8]] = &[
     b"Library",
     b"Ethereum",
     b" %s ",
+    b"ld.so",
 ];
 
 /// Metadata for a pattern in the Aho-Corasick automaton.
@@ -107,7 +111,7 @@ pub(super) static AUTOMATON_WITH_WIDE: LazyLock<(AhoCorasick, Vec<PatternInfo>)>
 /// * `enable_early_termination` - If true, stops after finding MAX_STRINGS_BEFORE_EARLY_TERMINATION.
 ///   Should be true for auto-detection (speeds up candidate testing) and false for user-provided
 ///   keys (ensures complete extraction).
-pub(crate) fn extract_custom_xor_strings(
+pub fn extract_custom_xor_strings(
     data: &[u8],
     key: &[u8],
     min_length: usize,
@@ -125,7 +129,7 @@ pub(crate) fn extract_custom_xor_strings(
 
 /// Extract XOR strings with optional radare2 boundary hints.
 /// Hints are tried first, and successful regions are excluded from file-wide scanning.
-pub(crate) fn extract_custom_xor_strings_with_hints(
+pub fn extract_custom_xor_strings_with_hints(
     data: &[u8],
     key: &[u8],
     min_length: usize,
@@ -255,11 +259,16 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
         .map(|(i, &byte)| byte ^ key[i % key.len()])
         .collect();
 
-    // Scan for printable ASCII strings in the decoded data
+    // Scan for printable ASCII strings in the decoded data.
+    // Single-byte XOR keys produce many false-positive "printable" bytes in the 0x80..=0xF7
+    // range from code sections. Restricting to ASCII-only eliminates coincidental UTF-8
+    // sequences that cause O(N) Unicode char iteration on garbage strings.
+    let is_ascii_printable = |b: u8| b.is_ascii_graphic() || b == b' ' || b == b'\t';
+
     let mut start = 0;
     while start < decoded.len() {
         // Find start of printable run
-        while start < decoded.len() && !is_printable_char(decoded[start]) {
+        while start < decoded.len() && !is_ascii_printable(decoded[start]) {
             start += 1;
         }
 
@@ -269,23 +278,27 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
 
         // Find end of printable run
         let mut end = start;
-        while end < decoded.len() && is_printable_char(decoded[end]) {
+        while end < decoded.len() && is_ascii_printable(decoded[end]) {
             end += 1;
         }
 
-        // Extract and validate the string
-        if end - start >= min_length {
+        // Extract and validate the string.
+        // IMPORTANT: advance start before any early-exit to prevent infinite loops —
+        // `continue` inside the inner block would otherwise re-scan the same run.
+        let run_start = start;
+        start = end + 1; // always advance, regardless of what happens below
+
+        if end - run_start >= min_length {
             // Skip strings decoded from null-heavy regions (key reflection artifact)
-            let raw_null_count = data[start..end].iter().filter(|&&b| b == 0).count();
-            if raw_null_count * 2 > (end - start) {
-                start = end + 1;
+            let raw_null_count = data[run_start..end].iter().filter(|&&b| b == 0).count();
+            if raw_null_count * 2 > (end - run_start) {
                 continue;
             }
 
             // Check for double-null in original data (at same positions as decoded range)
             let mut double_null_pos = None;
-            for offset in 0..(end - start).saturating_sub(1) {
-                let raw_pos = start + offset;
+            for offset in 0..(end - run_start).saturating_sub(1) {
+                let raw_pos = run_start + offset;
                 if raw_pos + 1 < data.len() && data[raw_pos] == 0 && data[raw_pos + 1] == 0 {
                     double_null_pos = Some(offset);
                     break;
@@ -294,14 +307,14 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
 
             // Trim at double-null position if found
             let actual_end = if let Some(trim_pos) = double_null_pos {
-                start + trim_pos
+                run_start + trim_pos
             } else {
                 end
             };
 
             // Re-check minimum length after trimming
-            if actual_end - start >= min_length {
-                if let Ok(s) = String::from_utf8(decoded[start..actual_end].to_vec()) {
+            if actual_end - run_start >= min_length {
+                if let Ok(s) = String::from_utf8(decoded[run_start..actual_end].to_vec()) {
                     // Use same filtering as multi-byte XOR: classify + validation::is_garbage() in lib.rs
                     let kind_opt = if apply_filters {
                         classify_xor_string(&s)
@@ -310,21 +323,20 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                     };
 
                     if let Some(kind) = kind_opt {
-                        // Additional sanity check: reject obvious garbage
-                        let alnum = s.chars().filter(|c| c.is_alphanumeric()).count();
-                        let alpha = s.chars().filter(|c| c.is_alphabetic()).count();
+                        // Additional sanity check: reject obvious garbage.
+                        // Since single-byte XOR uses ASCII-only run detection, all strings are ASCII;
+                        // use fast byte-based counting instead of slow Unicode char iteration.
+                        let alnum = s.bytes().filter(|b| b.is_ascii_alphanumeric()).count();
+                        let alpha = s.bytes().filter(|b| b.is_ascii_alphabetic()).count();
 
                         // Reject if < 50% alphanumeric (likely garbage)
-                        // Use character count for proper Unicode support
-                        let char_count = s.chars().count();
+                        let char_count = s.len(); // ASCII: len == char count
                         if char_count > 0 && alnum * 100 < char_count * 50 {
                             continue;
                         }
 
-                        // Reject if has letters but poor vowel ratio (English-specific check)
-                        // Only apply to ASCII text - skip for international text (Russian, Chinese, etc.)
-                        // Also skip for encoded formats (base64, hex, unicode escapes) which don't have
-                        // natural language vowel patterns
+                        // Reject if has letters but poor vowel ratio (English-specific check).
+                        // Skip for encoded formats (base64, hex, etc.) which lack natural vowel patterns.
                         let is_encoded_format = matches!(
                             kind,
                             Some(StringKind::Base64)
@@ -333,32 +345,19 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                                 | Some(StringKind::UrlEncoded)
                         );
                         if !is_encoded_format && alpha >= 3 {
-                            let has_non_ascii = !s.is_ascii();
-                            if !has_non_ascii {
-                                // Only check vowels for ASCII/English text
-                                let vowels = s
-                                    .chars()
-                                    .filter(|c| {
-                                        matches!(
-                                            c.to_ascii_lowercase(),
-                                            'a' | 'e' | 'i' | 'o' | 'u'
-                                        )
-                                    })
-                                    .count();
-                                let vowel_ratio = if alpha > 0 { vowels * 100 / alpha } else { 0 };
-                                if !(10..=70).contains(&vowel_ratio) {
-                                    continue;
-                                }
+                            let vowels = s.bytes().filter(|&b| {
+                                matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u')
+                            }).count();
+                            let vowel_ratio = if alpha > 0 { vowels * 100 / alpha } else { 0 };
+                            if !(10..=70).contains(&vowel_ratio) {
+                                continue;
                             }
                         }
 
-                        let offset = start as u64;
+                        let offset = run_start as u64;
                         if seen.insert((offset, s.clone())) {
-                            let key_preview = if key.len() > 8 {
-                                format!("{}...", String::from_utf8_lossy(&key[..8]))
-                            } else {
-                                String::from_utf8_lossy(key).into_owned()
-                            };
+                            // Use hex format consistent with the AC scan path ("xor:0xNN").
+                            let source_tag = format!("xor:0x{:02X}", key[0]);
 
                             // Clean up URLs by removing trailing garbage
                             let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
@@ -373,7 +372,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                                 section: None,
                                 method: StringMethod::XorDecode,
                                 kind,
-                                source: Some(format!("xor:key:{key_preview}")),
+                                source: Some(source_tag),
                                 fragments: None,
                                 ..Default::default()
                             });
@@ -382,8 +381,6 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                 }
             }
         }
-
-        start = end + 1;
     }
 
     results
@@ -1067,6 +1064,160 @@ pub fn extract_rolling_xor_with_known_plaintext(
 
                 // Jump past the extracted region
                 offset = region_end;
+            }
+        }
+    }
+
+    // Deduplicate by offset + value
+    results.sort_by_key(|s| s.data_offset);
+    results.dedup_by(|a, b| a.data_offset == b.data_offset && a.value == b.value);
+
+    results
+}
+
+/// Extract strings using incremental XOR detection.
+///
+/// This function detects XOR obfuscation where the key increments for each byte:
+/// `decoded[i] = data[i] ^ (seed + i)`.
+///
+/// It uses known plaintext patterns to derive candidate seeds, then validates
+/// by checking if the pattern decodes correctly.
+pub fn extract_incremental_xor_strings(
+    data: &[u8],
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let mut results = Vec::new();
+    let mut covered_ranges: Vec<(usize, usize)> = Vec::new();
+
+    // Scan for patterns to find the seed
+    for pattern in XOR_PATTERNS {
+        if pattern.len() < 4 {
+            continue;
+        }
+        let max_offset = data.len().saturating_sub(pattern.len());
+        
+        for offset in 0..max_offset {
+            // Derive candidate seed: data[offset+i] ^ (seed + i) = pattern[i]
+            // seed + i = data[offset+i] ^ pattern[i]
+            // seed = (data[offset+i] ^ pattern[i]).wrapping_sub(i as u8)
+            let seed = (data[offset] ^ pattern[0]).wrapping_sub(0);
+
+            // Skip trivial seed 0 (already handled by normal extraction)
+            if seed == 0 {
+                continue;
+            }
+
+            // Validate seed with the rest of the pattern
+            let mut valid = true;
+            for i in 1..pattern.len() {
+                let expected_key = seed.wrapping_add(i as u8);
+                if (data[offset + i] ^ expected_key) != pattern[i] {
+                    valid = false;
+                    break;
+                }
+            }
+
+            if valid {
+                // Seed found! Extract strings from the surrounding 8KB region
+                let region_start = offset.saturating_sub(4096);
+                let region_end = (offset + 4096).min(data.len());
+                
+                // Avoid redundant extraction
+                if covered_ranges.iter().any(|&(s, e)| offset >= s && offset < e) {
+                    continue;
+                }
+                covered_ranges.push((region_start, region_end));
+                
+                let mut pos = region_start;
+                while pos < region_end {
+                    // Find start of printable run
+                    while pos < region_end {
+                        let current_key = seed.wrapping_add((pos.wrapping_sub(offset)) as u8);
+                        let decoded = data[pos] ^ current_key;
+                        // Skip if raw byte is 0 (key reflection artifact)
+                        if data[pos] != 0 && is_printable_byte_for_file_xor(decoded) {
+                            break;
+                        }
+                        pos += 1;
+                    }
+
+                    if pos >= region_end {
+                        break;
+                    }
+
+                    // Collect printable run
+                    let start_pos = pos;
+                    let mut decoded_bytes = Vec::new();
+                    while pos < region_end {
+                        let current_key = seed.wrapping_add((pos.wrapping_sub(offset)) as u8);
+                        let decoded = data[pos] ^ current_key;
+                        // Stop if raw byte is 0 (key reflection artifact)
+                        if data[pos] != 0 && is_printable_byte_for_file_xor(decoded) {
+                            decoded_bytes.push(decoded);
+                            pos += 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if decoded_bytes.len() >= min_length {
+                        let mut current_bytes = decoded_bytes;
+                        let mut current_start = start_pos;
+                        
+                        while current_bytes.len() >= min_length {
+                            match String::from_utf8(current_bytes.clone()) {
+                                Ok(s) => {
+                                    if s.chars().any(|c| c.is_alphabetic()) {
+                                        let kind = classify_xor_string(&s).flatten();
+                                        results.push(ExtractedString {
+                                            value: s,
+                                            data_offset: current_start as u64,
+                                            section: None,
+                                            method: StringMethod::XorDecode,
+                                            kind,
+                                            source: Some(format!("xor:incremental:seed0x{:02x}", seed)),
+                                            fragments: None,
+                                            ..Default::default()
+                                        });
+                                    }
+                                    break;
+                                }
+                                Err(e) => {
+                                    let valid_up_to = e.utf8_error().valid_up_to();
+                                    if valid_up_to >= min_length {
+                                        let mut valid_bytes = current_bytes.clone();
+                                        valid_bytes.truncate(valid_up_to);
+                                        if let Ok(s) = String::from_utf8(valid_bytes) {
+                                            if s.chars().any(|c| c.is_alphabetic()) {
+                                                let kind = classify_xor_string(&s).flatten();
+                                                results.push(ExtractedString {
+                                                    value: s,
+                                                    data_offset: current_start as u64,
+                                                    section: None,
+                                                    method: StringMethod::XorDecode,
+                                                    kind,
+                                                    source: Some(format!("xor:incremental:seed0x{:02x}", seed)),
+                                                    fragments: None,
+                                                    ..Default::default()
+                                                });
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Skip the invalid sequence and try again with the rest
+                                    let error_len = e.utf8_error().error_len().unwrap_or(1);
+                                    let skip = valid_up_to + error_len;
+                                    if skip < current_bytes.len() {
+                                        current_bytes = current_bytes[skip..].to_vec();
+                                        current_start += skip;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
