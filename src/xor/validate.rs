@@ -28,6 +28,11 @@ pub(crate) fn is_valid_xor_string(s: &str) -> bool {
     let has_suspicious_path = suspicious_path_automaton().is_match(s)
         || s.contains("/tmp/") && (s.contains(".sh") || s.contains("payload"));
 
+    // Windows API names dynamically resolved via GetProcAddress to evade static analysis.
+    // These have long consonant runs (e.g., "BCryptS..." = 7 consonsants) that would
+    // otherwise fail the is_meaningful_string linguistic check.
+    let has_win_api = win_api_automaton().is_match(s);
+
     let has_suspicious_url = s.contains("://") && !s.contains("apple.com");
 
     // Check for IP addresses (likely C2 infrastructure) - pattern: N.N.N.N
@@ -62,6 +67,7 @@ pub(crate) fn is_valid_xor_string(s: &str) -> bool {
     // This bypass ensures high-value IOCs pass validation even with unusual chars
     if has_shell_command
         || has_suspicious_path
+        || has_win_api
         || has_suspicious_url
         || has_ip
         || has_unicode_escapes
@@ -337,6 +343,35 @@ fn suspicious_path_automaton() -> &'static AhoCorasick {
     })
 }
 
+/// Cached automaton for Windows API names resolved via GetProcAddress (dynamic loading).
+/// These indicate covert capability loading and commonly fail linguistic checks due to
+/// long consonant runs (e.g., "BCryptS..." = 7 consecutive consonants).
+#[allow(clippy::expect_used)]
+fn win_api_automaton() -> &'static AhoCorasick {
+    static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        AhoCorasick::new([
+            // Windows crypto API (AES-CBC decryption capability)
+            "BCrypt",
+            // Windows process injection / execution APIs
+            "CreateProcess",
+            "VirtualAlloc",
+            "WriteProcessMemory",
+            "ReadProcessMemory",
+            "GetProcAddress",
+            "LoadLibrary",
+            "FindWindow",
+            "GetWindow",
+            "ShowWindow",
+            // Registry / persistence APIs
+            "RegOpenKey",
+            "RegSetValue",
+            "RegCreateKey",
+        ])
+        .expect("static patterns")
+    })
+}
+
 /// Cached automaton for common file extensions.
 #[allow(clippy::expect_used)]
 fn file_extension_automaton() -> &'static AhoCorasick {
@@ -356,6 +391,8 @@ fn file_extension_automaton() -> &'static AhoCorasick {
             ".dat",
             ".wallet",
             ".keystore",
+            ".dll",
+            ".exe",
         ])
         .expect("static patterns")
     })
@@ -440,7 +477,8 @@ pub(crate) fn is_meaningful_string(s: &str) -> bool {
     if has_file_extension {
         // File paths are high value - just check basic quality
         // For non-ASCII text (e.g., Russian folder names), vowel count is 0, so skip that check
-        if alpha >= 5 && (vowel > 0 || has_non_ascii) {
+        // For DLL/EXE names like "bcrypt.dll", vowel count can be 0 - accept anyway
+        if alpha >= 3 {
             return true;
         }
     }

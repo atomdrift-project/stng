@@ -26,11 +26,14 @@ use std::sync::LazyLock;
 /// - `C:\` catches Windows paths
 /// - `Mozilla` catches user agent strings
 /// - `.exe` catches Windows executables (cmd.exe, powershell.exe)
+/// - `.dll` catches Windows DLL names (bcrypt.dll, user32.dll) - common in covert dynamic loading
 /// - `passw` catches password/passwd variants
 /// - `Library` catches macOS paths (/Library/...)
 /// - `Ethereum` catches crypto wallet paths
 /// - ` %s ` catches format strings (common in C code)
 /// - `ld.so` catches LD_PRELOAD rootkit injection (ld.so.preload)
+/// - `BCrypt` catches Windows crypto API names (BCryptOpenAlgorithmProvider, etc.)
+/// - `CreateProcess` catches process injection API names
 pub(super) const XOR_PATTERNS: &[&[u8]] = &[
     b"://",
     b"/bin",
@@ -38,11 +41,14 @@ pub(super) const XOR_PATTERNS: &[&[u8]] = &[
     b"C:\\",
     b"Mozilla",
     b".exe",
+    b".dll",
     b"passw",
     b"Library",
     b"Ethereum",
     b" %s ",
     b"ld.so",
+    b"BCrypt",
+    b"CreateProcess",
 ];
 
 /// Metadata for a pattern in the Aho-Corasick automaton.
@@ -315,12 +321,9 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
             // Re-check minimum length after trimming
             if actual_end - run_start >= min_length {
                 if let Ok(s) = String::from_utf8(decoded[run_start..actual_end].to_vec()) {
-                    // Use same filtering as multi-byte XOR: classify + validation::is_garbage() in lib.rs
-                    let kind_opt = if apply_filters {
-                        classify_xor_string(&s)
-                    } else {
-                        Some(None)
-                    };
+                    // Always classify to determine kind — used for vowel ratio bypass below.
+                    // When apply_filters is false, accept all classified strings (no rejection).
+                    let kind_opt = classify_xor_string(&s);
 
                     if let Some(kind) = kind_opt {
                         // Additional sanity check: reject obvious garbage.
@@ -336,13 +339,18 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                         }
 
                         // Reject if has letters but poor vowel ratio (English-specific check).
-                        // Skip for encoded formats (base64, hex, etc.) which lack natural vowel patterns.
+                        // Skip for encoded formats (base64, hex, etc.) and high-value IOCs
+                        // (SuspiciousPath/ShellCmd) which may not follow English vowel patterns.
+                        // DLL names (bcrypt.dll), API names (BCryptDecrypt), and shell commands
+                        // are valid targets even with 0% vowels.
                         let is_encoded_format = matches!(
                             kind,
                             Some(StringKind::Base64)
                                 | Some(StringKind::UnicodeEscaped)
                                 | Some(StringKind::HexEncoded)
                                 | Some(StringKind::UrlEncoded)
+                                | Some(StringKind::SuspiciousPath)
+                                | Some(StringKind::ShellCmd)
                         );
                         if !is_encoded_format && alpha >= 3 {
                             let vowels = s.bytes().filter(|&b| {

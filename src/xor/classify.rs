@@ -878,13 +878,21 @@ pub(crate) fn expand_xor_string(
     let min_start = match_pos.saturating_sub(MAX_EXPAND_DISTANCE);
     let max_end = (match_pos + MAX_EXPAND_DISTANCE).min(data.len());
 
-    // Expand backward, but stop if we hit a low-entropy region (padding artifacts)
+    // For high-byte keys (>0x7F): null bytes in the raw binary decode to the key value itself
+    // (raw=0x00 → decoded=0x00^K=K). These decoded-K values fall in the 0x80-0xF7 range,
+    // which is_printable_char accepts as UTF-8 lead bytes, but they are actually null bytes
+    // (string terminators) and must not be included in the expanded string.
+    // For low-byte keys (<0x80): null bytes decode to printable ASCII (e.g., key=0x77→decoded='w').
+    // These are naturally rejected by is_printable_char when the raw byte is 0x00 (not 'w'),
+    // so no special handling is needed.
+    let stop_on_key_byte = key > 0x7F;
+
     let mut start = match_pos;
     let mut recent_backward: [u8; 8] = [0; 8];
     let mut backward_idx = 0;
     while start > min_start {
         let decoded = data[start - 1] ^ key;
-        if !is_printable_char(decoded) {
+        if !is_printable_char(decoded) || (stop_on_key_byte && decoded == key) {
             break;
         }
         // Track recent chars to detect low-entropy regions
@@ -900,13 +908,13 @@ pub(crate) fn expand_xor_string(
         start -= 1;
     }
 
-    // Expand forward with same low-entropy detection
+    // Expand forward with same logic.
     let mut end = match_pos;
     let mut recent_forward: [u8; 8] = [0; 8];
     let mut forward_idx = 0;
     while end < max_end {
         let decoded = data[end] ^ key;
-        if !is_printable_char(decoded) {
+        if !is_printable_char(decoded) || (stop_on_key_byte && decoded == key) {
             break;
         }
         recent_forward[forward_idx % 8] = decoded;
@@ -937,15 +945,17 @@ pub(crate) fn expand_xor_string(
     let new_start = start + trim_start;
     let trimmed_end = new_start + trimmed.len();
 
-    // Additional validation for XOR strings: reject strings with unusual punctuation
-    if !is_valid_xor_string(&s) || !is_valid_xor_string(trimmed) {
+    // Reject if the original string fails validation (garbage decode).
+    if !is_valid_xor_string(&s) {
         return None;
     }
 
-    if is_meaningful_string(trimmed) {
+    // If the trimmed version passes validation, prefer it (cleaner output).
+    // If trimming produced an invalid fragment (e.g. "bcrypt.d" from "bcrypt.dll"),
+    // fall back to the original rather than rejecting entirely.
+    if is_valid_xor_string(trimmed) && is_meaningful_string(trimmed) {
         Some((trimmed.to_string(), new_start, trimmed_end))
     } else if is_meaningful_string(&s) {
-        // Fallback: try with untrimmed if trimmed fails
         Some((s, start, end))
     } else {
         None
@@ -1424,6 +1434,38 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     // Check for well-known suspicious paths (even with garbage around them)
     for sus_path in SUSPICIOUS_PATHS {
         if s.contains(sus_path) {
+            return Some(Some(StringKind::SuspiciousPath));
+        }
+    }
+
+    // Check for Windows DLL names - covert dynamic loading is a strong malware indicator.
+    // Names like "bcrypt.dll" have no vowels and would fail linguistic checks without this.
+    if s.ends_with(".dll") || s.ends_with(".DLL") {
+        return Some(Some(StringKind::SuspiciousPath));
+    }
+
+    // Check for Windows crypto/process API names - indicate AES decryption or injection.
+    // These are resolved dynamically via GetProcAddress to evade static analysis.
+    let win_api_patterns = [
+        "BCryptOpenAlgorithmProvider",
+        "BCryptGenerateSymmetricKey",
+        "BCryptCloseAlgorithmProvider",
+        "BCryptSetProperty",
+        "BCryptDecrypt",
+        "BCryptDestroyKey",
+        "CreateProcessW",
+        "CreateProcessA",
+        "VirtualAllocEx",
+        "WriteProcessMemory",
+        "GetProcAddress",
+        "LoadLibraryW",
+        "LoadLibraryA",
+        "FindWindowExW",
+        "GetWindowThreadProcessId",
+        "ShowWindow",
+    ];
+    for api in &win_api_patterns {
+        if s.contains(api) {
             return Some(Some(StringKind::SuspiciousPath));
         }
     }
