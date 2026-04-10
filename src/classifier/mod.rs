@@ -820,6 +820,11 @@ mod tests {
         assert!(!is_ipv4("2.1.0.0"));
         assert!(!is_ipv4("4.5.0.0"));
         assert!(!is_ipv4("10.2.0.0"));
+
+        // Pattern: two zero octets (e.g. ProductVersion string like 18.0.0.23)
+        assert!(!is_ipv4("18.0.0.23"));
+        assert!(!is_ipv4("6.0.0.1"));
+        assert!(!is_ipv4("100.0.52.0"));
     }
 
     #[test]

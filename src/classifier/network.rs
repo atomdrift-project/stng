@@ -147,6 +147,12 @@ pub(super) fn is_ipv4(s: &str) -> bool {
         return false;
     }
 
+    // Two or more zero octets is almost always a version number (e.g. 18.0.0.23, ProductVersion)
+    let zero_count = octets.iter().filter(|&&o| o == 0).count();
+    if !is_private_range && zero_count >= 2 {
+        return false;
+    }
+
     // 0.0.0.0 is not a useful IOC
     if octets == [0, 0, 0, 0] {
         return false;

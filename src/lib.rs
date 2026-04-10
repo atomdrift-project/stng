@@ -649,6 +649,43 @@ fn enrich_pe_sections(strings: &mut [ExtractedString], pe: &goblin::pe::PE<'_>) 
         }
     }
 }
+
+/// Clear IP/host classifications for strings that are VS_VERSION_INFO values.
+///
+/// FileVersion and ProductVersion commonly look like IP addresses (e.g. "18.0.0.23").
+/// Goblin parses these fields directly, so we can suppress them precisely.
+fn suppress_version_info_ips(strings: &mut [ExtractedString], pe: &goblin::pe::PE<'_>) {
+    let version_strings: Vec<String> = pe
+        .resource_data
+        .as_ref()
+        .and_then(|r| r.version_info.as_ref())
+        .map(|vi| {
+            [
+                vi.string_info.file_version(),
+                vi.string_info.product_version(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect()
+        })
+        .unwrap_or_default();
+
+    if version_strings.is_empty() {
+        return;
+    }
+
+    for s in strings.iter_mut() {
+        if matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort)) {
+            if version_strings.iter().any(|v| v == &s.value) {
+                tracing::debug!(
+                    "Suppressing version-info false positive IP: {}",
+                    s.value
+                );
+                s.kind = None;
+            }
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub struct ExtractOptions {
     /// Minimum string length to extract
@@ -1586,7 +1623,10 @@ fn extract_from_object(
                 }
             }
         }
-        Object::PE(pe) => enrich_pe_sections(&mut strings, pe),
+        Object::PE(pe) => {
+            enrich_pe_sections(&mut strings, pe);
+            suppress_version_info_ips(&mut strings, pe);
+        }
         _ => {}
     }
 
