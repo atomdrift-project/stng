@@ -461,12 +461,10 @@ fn extract_xor_strings_from_hints(
                     continue;
                 }
 
-                // Classify
-                let kind_opt = if apply_filters {
-                    classify_xor_string(&s)
-                } else {
-                    Some(None)
-                };
+                // Always classify so IOC-aware handling stays consistent between
+                // hint-based extraction and file-wide scanning. In unfiltered mode
+                // we still keep unclassified strings if classify_xor_string accepts them.
+                let kind_opt = classify_xor_string(&s);
 
                 if let Some(kind) = kind_opt {
                     if seen.insert((offset as u64, s.clone())) {
