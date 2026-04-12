@@ -269,8 +269,10 @@ impl<'a> StackStringExtractor<'a> {
             let target_file_offset = target_vma.saturating_sub(self.image_base) as usize;
 
             let read_from = self.full_data.unwrap_or(self.data);
-            if target_file_offset + size <= read_from.len() {
-                return Some(read_from[target_file_offset..target_file_offset + size].to_vec());
+            if let Some(end) = target_file_offset.checked_add(size) {
+                if end <= read_from.len() {
+                    return Some(read_from[target_file_offset..end].to_vec());
+                }
             }
         }
         None
