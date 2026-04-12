@@ -108,9 +108,9 @@ fn rva_to_offset(pe: &PE<'_>, rva: u32) -> Option<usize> {
         let section_size = section.virtual_size.max(section.size_of_raw_data);
         let section_offset = section.pointer_to_raw_data as usize;
 
-        if rva >= section_rva && rva < section_rva + section_size {
+        if rva >= section_rva && rva < section_rva.saturating_add(section_size) {
             let offset_in_section = (rva - section_rva) as usize;
-            return Some(section_offset + offset_in_section);
+            return section_offset.checked_add(offset_in_section);
         }
     }
     None

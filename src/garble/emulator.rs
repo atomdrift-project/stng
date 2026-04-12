@@ -622,13 +622,19 @@ impl Emulator {
                         // Capture the string being converted
                         // Go calling convention: RAX=buf (unused), RBX=ptr, RCX=len (or on stack)
                         let ptr = self.cpu.regs[3]; // RBX
-                        let len = self.cpu.regs[1]; // RCX
-                        let bytes = self.mem.read(ptr, len as usize).unwrap_or_default();
-                        return Ok(ExecResult::HitTarget(bytes, len as usize));
+                        let raw_len = self.cpu.regs[1]; // RCX
+                        // Clamp to a sane maximum to prevent huge allocations from
+                        // crafted register values.
+                        let len = (raw_len as usize).min(1024 * 1024);
+                        let bytes = self.mem.read(ptr, len).unwrap_or_default();
+                        return Ok(ExecResult::HitTarget(bytes, len));
                     }
                 }
 
                 // Normal call - push return address
+                if self.call_stack.len() >= 256 {
+                    return Err("call stack depth exceeded (256)".to_string());
+                }
                 self.cpu.regs[4] -= 8; // RSP
                 self.mem.write_u64(self.cpu.regs[4], next_ip);
                 self.call_stack.push(next_ip);

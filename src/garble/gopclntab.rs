@@ -108,9 +108,11 @@ impl Pclntab {
         let mut by_name = HashMap::new();
 
         // Scan for function name patterns like "package.(*Type).Method"
-        // Look for null-terminated strings that look like Go function names
+        // Look for null-terminated strings that look like Go function names.
+        // Cap at 50,000 functions to prevent unbounded growth on crafted input.
+        const MAX_SCAN_FUNCTIONS: usize = 50_000;
         let mut i = 0;
-        while i < data.len() {
+        while i < data.len() && functions.len() < MAX_SCAN_FUNCTIONS {
             // Skip non-printable bytes
             if !data[i].is_ascii_graphic()
                 && data[i] != b'.'
@@ -203,8 +205,9 @@ impl Pclntab {
 
         // Each functab entry is: (pc, funcoff) where both are ptr_size
         let entry_size = 2 * ps;
+        let max_funcs = (nfunc as usize).min(50_000);
 
-        for i in 0..nfunc as usize {
+        for i in 0..max_funcs {
             let entry_off = functab_off + i * entry_size;
             if entry_off + entry_size > data.len() {
                 break;
@@ -307,8 +310,9 @@ impl Pclntab {
         // In Go 1.18+, functab entries are (uint32 pc_offset, uint32 funcoff)
         // PC is relative to textStart
         let entry_size = 8;
+        let max_funcs = (nfunc as usize).min(50_000);
 
-        for i in 0..nfunc as usize {
+        for i in 0..max_funcs {
             let entry_off = functab_off + i * entry_size;
             if entry_off + entry_size > data.len() {
                 break;

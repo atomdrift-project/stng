@@ -463,8 +463,10 @@ impl<'a> StackStringExtractor<'a> {
                 by_len.entry(blob.bytes.len()).or_default().push(idx);
             }
 
-            for (chunk_size, indices) in by_len {
+            for (chunk_size, mut indices) in by_len {
                 if indices.len() < 2 { continue; }
+                // Cap pairing to avoid O(n^2) blowup on crafted binaries
+                indices.truncate(500);
 
                 struct Pair {
                     decoded: String,
