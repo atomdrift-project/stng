@@ -61,7 +61,10 @@ fn test_macho_import_strings_have_nonempty_values() {
     }
 
     let strings = extract_strings(&data, 4);
-    for s in strings.iter().filter(|s| s.kind == Some(StringKind::Import)) {
+    for s in strings
+        .iter()
+        .filter(|s| s.kind == Some(StringKind::Import))
+    {
         assert!(
             !s.value.is_empty(),
             "Import at offset {} must have a non-empty symbol name",

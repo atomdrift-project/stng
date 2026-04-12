@@ -601,9 +601,7 @@ fn extract_amd64_first_arg_string(
                 continue;
             }
 
-            if let Ok(s) =
-                std::str::from_utf8(&rodata_data[rodata_offset..end])
-            {
+            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
                 if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                     seen.insert(s.to_string());
                     let final_kind = classify_string(s);
@@ -729,9 +727,7 @@ fn extract_amd64_key_string(
                 continue;
             }
 
-            if let Ok(s) =
-                std::str::from_utf8(&rodata_data[rodata_offset..end])
-            {
+            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
                 if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                     seen.insert(s.to_string());
                     // Use content-based classification, but prefer MapKey hint from register position
@@ -872,9 +868,7 @@ fn extract_amd64_value_string(
                 continue;
             }
 
-            if let Ok(s) =
-                std::str::from_utf8(&rodata_data[rodata_offset..end])
-            {
+            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
                 if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                     seen.insert(s.to_string());
                     let final_kind = classify_string(s);
@@ -991,9 +985,7 @@ fn extract_amd64_go_arg1_string(
             continue;
         }
 
-        if let Ok(s) =
-            std::str::from_utf8(&rodata_data[rodata_offset..end])
-        {
+        if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
             if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                 seen.insert(s.to_string());
                 let final_kind = classify_string(s);
@@ -1105,9 +1097,7 @@ fn extract_amd64_go_arg2_string(
             continue;
         }
 
-        if let Ok(s) =
-            std::str::from_utf8(&rodata_data[rodata_offset..end])
-        {
+        if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
             if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                 seen.insert(s.to_string());
                 let final_kind = classify_string(s);
@@ -1251,9 +1241,7 @@ fn extract_amd64_stack_strings(
             if end > rodata_data.len() {
                 continue;
             }
-            if let Ok(s) =
-                std::str::from_utf8(&rodata_data[rodata_offset..end])
-            {
+            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
                 if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                     seen.insert(s.to_string());
                     let final_kind = classify_string(s);
@@ -1642,7 +1630,10 @@ mod tests {
         let rodata_addr = text_addr + text_data.len() as u64 + 0x50 - 7;
         let results =
             extract_inline_strings_amd64(&text_data, text_addr, &rodata_data, rodata_addr, 4);
-        for key in results.iter().filter(|s| s.kind == Some(StringKind::MapKey)) {
+        for key in results
+            .iter()
+            .filter(|s| s.kind == Some(StringKind::MapKey))
+        {
             assert!(!key.value.is_empty());
             assert_eq!(key.method, StringMethod::InstructionPattern);
         }

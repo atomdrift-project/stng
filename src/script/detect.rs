@@ -199,7 +199,9 @@ fn has_shebang(text: &str, interpreters: &[&str]) -> bool {
     };
 
     if command == "/usr/bin/env" {
-        return parts.next().is_some_and(|name| interpreters.contains(&name));
+        return parts
+            .next()
+            .is_some_and(|name| interpreters.contains(&name));
     }
 
     command

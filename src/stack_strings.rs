@@ -120,7 +120,11 @@ impl<'a> StackStringExtractor<'a> {
                         | (OpKind::Register, OpKind::Immediate64)
                         | (OpKind::Register, OpKind::Immediate32to64) => {
                             let reg = instr.op0_register();
-                            let imm_len = if op1_kind == OpKind::Immediate64 { 8 } else { 4 };
+                            let imm_len = if op1_kind == OpKind::Immediate64 {
+                                8
+                            } else {
+                                4
+                            };
                             // Extract immediate bytes directly from the instruction's data if possible,
                             // or use iced's value. Using raw bytes is safer for printable check.
                             let imm_val = if op1_kind == OpKind::Immediate64 {
@@ -217,11 +221,14 @@ impl<'a> StackStringExtractor<'a> {
                 Mnemonic::Xor => {
                     let op1_kind = instr.op1_kind();
                     let imm_val = match op1_kind {
-                        OpKind::Immediate8 | OpKind::Immediate8to16 | OpKind::Immediate8to32 | OpKind::Immediate8to64 => {
-                            Some(vec![instr.immediate8()])
-                        }
+                        OpKind::Immediate8
+                        | OpKind::Immediate8to16
+                        | OpKind::Immediate8to32
+                        | OpKind::Immediate8to64 => Some(vec![instr.immediate8()]),
                         OpKind::Immediate16 => Some(instr.immediate16().to_le_bytes().to_vec()),
-                        OpKind::Immediate32 | OpKind::Immediate32to64 => Some(instr.immediate32().to_le_bytes().to_vec()),
+                        OpKind::Immediate32 | OpKind::Immediate32to64 => {
+                            Some(instr.immediate32().to_le_bytes().to_vec())
+                        }
                         OpKind::Immediate64 => Some(instr.immediate64().to_le_bytes().to_vec()),
                         _ => None,
                     };
@@ -239,11 +246,26 @@ impl<'a> StackStringExtractor<'a> {
                     }
                 }
                 // --- 4. Control Flow (Finalize/Clear) ---
-                Mnemonic::Ret | Mnemonic::Call | Mnemonic::Jmp | Mnemonic::Jrcxz |
-                Mnemonic::Je | Mnemonic::Jne | Mnemonic::Jl | Mnemonic::Jle |
-                Mnemonic::Jg | Mnemonic::Jge | Mnemonic::Jb | Mnemonic::Jbe |
-                Mnemonic::Ja | Mnemonic::Jae | Mnemonic::Js | Mnemonic::Jns |
-                Mnemonic::Jp | Mnemonic::Jnp | Mnemonic::Jo | Mnemonic::Jno => {
+                Mnemonic::Ret
+                | Mnemonic::Call
+                | Mnemonic::Jmp
+                | Mnemonic::Jrcxz
+                | Mnemonic::Je
+                | Mnemonic::Jne
+                | Mnemonic::Jl
+                | Mnemonic::Jle
+                | Mnemonic::Jg
+                | Mnemonic::Jge
+                | Mnemonic::Jb
+                | Mnemonic::Jbe
+                | Mnemonic::Ja
+                | Mnemonic::Jae
+                | Mnemonic::Js
+                | Mnemonic::Jns
+                | Mnemonic::Jp
+                | Mnemonic::Jnp
+                | Mnemonic::Jo
+                | Mnemonic::Jno => {
                     results.extend(self.finalize_writes());
                     self.clear_state();
                 }
@@ -255,7 +277,12 @@ impl<'a> StackStringExtractor<'a> {
         results
     }
 
-    fn read_memory_for_instr(&self, instr: &iced_x86::Instruction, op: u32, size: usize) -> Option<Vec<u8>> {
+    fn read_memory_for_instr(
+        &self,
+        instr: &iced_x86::Instruction,
+        op: u32,
+        size: usize,
+    ) -> Option<Vec<u8>> {
         if instr.op_kind(op) != OpKind::Memory {
             return None;
         }
@@ -393,7 +420,9 @@ impl<'a> StackStringExtractor<'a> {
     }
 
     fn merge_adjacent_fragments(&self, mut strings: Vec<ExtractedString>) -> Vec<ExtractedString> {
-        if strings.is_empty() { return strings; }
+        if strings.is_empty() {
+            return strings;
+        }
 
         let mut merged = Vec::new();
         let mut current_group = vec![strings.remove(0)];
@@ -427,8 +456,12 @@ impl<'a> StackStringExtractor<'a> {
     }
 
     fn merge_group(&self, group: &[ExtractedString]) -> ExtractedString {
-        if group.is_empty() { return Default::default(); }
-        if group.len() == 1 { return group[0].clone(); }
+        if group.is_empty() {
+            return Default::default();
+        }
+        if group.len() == 1 {
+            return group[0].clone();
+        }
 
         let mut merged_value = String::new();
         let first_offset = group[0].data_offset;
@@ -446,7 +479,11 @@ impl<'a> StackStringExtractor<'a> {
             data_offset: first_offset,
             method: StringMethod::StackString,
             kind: Some(StringKind::StackString),
-            fragments: if merged_fragments.is_empty() { None } else { Some(merged_fragments) },
+            fragments: if merged_fragments.is_empty() {
+                None
+            } else {
+                Some(merged_fragments)
+            },
             ..Default::default()
         }
     }
@@ -456,7 +493,9 @@ impl<'a> StackStringExtractor<'a> {
         let mut results = Vec::new();
 
         for (_base, blobs) in raw_blobs {
-            if blobs.len() < 2 { continue; }
+            if blobs.len() < 2 {
+                continue;
+            }
 
             let mut by_len: HashMap<usize, Vec<usize>> = HashMap::new();
             for (idx, blob) in blobs.iter().enumerate() {
@@ -464,7 +503,9 @@ impl<'a> StackStringExtractor<'a> {
             }
 
             for (chunk_size, mut indices) in by_len {
-                if indices.len() < 2 { continue; }
+                if indices.len() < 2 {
+                    continue;
+                }
                 // Cap pairing to avoid O(n^2) blowup on crafted binaries
                 indices.truncate(500);
 
@@ -486,8 +527,12 @@ impl<'a> StackStringExtractor<'a> {
 
                         let mut best: Option<(String, i32)> = None;
                         for op in [GarbleOp::Xor, GarbleOp::Sub, GarbleOp::Add] {
-                            let decoded_bytes: Vec<u8> = a.bytes.iter().zip(b.bytes.iter())
-                                .map(|(&x, &y)| op.apply(x, y)).collect();
+                            let decoded_bytes: Vec<u8> = a
+                                .bytes
+                                .iter()
+                                .zip(b.bytes.iter())
+                                .map(|(&x, &y)| op.apply(x, y))
+                                .collect();
 
                             if let Some(decoded) = check_printable(&decoded_bytes, 1) {
                                 let score = score_decoded_string(&decoded);
@@ -510,7 +555,9 @@ impl<'a> StackStringExtractor<'a> {
                     }
                 }
 
-                if pairs.is_empty() { continue; }
+                if pairs.is_empty() {
+                    continue;
+                }
 
                 let chunk_stride = chunk_size as i64;
                 pairs.sort_unstable_by(|a, b| {
@@ -528,8 +575,12 @@ impl<'a> StackStringExtractor<'a> {
                     let mut j = i + 1;
                     while j < pairs.len() {
                         let p = &pairs[j];
-                        if p.disp_hi - p.disp_lo != key_offset { break; }
-                        if p.disp_lo != pairs[j - 1].disp_lo + chunk_stride { break; }
+                        if p.disp_hi - p.disp_lo != key_offset {
+                            break;
+                        }
+                        if p.disp_lo != pairs[j - 1].disp_lo + chunk_stride {
+                            break;
+                        }
                         value.push_str(&p.decoded);
                         min_off = min_off.min(p.instr_off);
                         j += 1;
@@ -559,21 +610,35 @@ impl<'a> StackStringExtractor<'a> {
             if self.data[i] == 0x66 && self.data[i + 1] == 0xC7 && self.data[i + 2] == 0x00 {
                 let b1 = self.data[i + 3];
                 let b2 = self.data[i + 4];
-                if (b1.is_ascii_graphic() || b1 == b' ') && (b2.is_ascii_graphic() || b2 == b' ' || b2 == 0) {
+                if (b1.is_ascii_graphic() || b1 == b' ')
+                    && (b2.is_ascii_graphic() || b2 == b' ' || b2 == 0)
+                {
                     let start_pos = i;
                     let mut chunk = String::new();
                     chunk.push(b1 as char);
-                    if b2 != 0 { chunk.push(b2 as char); }
+                    if b2 != 0 {
+                        chunk.push(b2 as char);
+                    }
 
                     let mut k = i + 5;
                     while k + 4 < self.data.len() {
-                        if self.data[k] == 0x66 && self.data[k + 1] == 0xC7 && self.data[k + 2] == 0x00 {
+                        if self.data[k] == 0x66
+                            && self.data[k + 1] == 0xC7
+                            && self.data[k + 2] == 0x00
+                        {
                             let b3 = self.data[k + 3];
                             let b4 = self.data[k + 4];
                             chunk.push(b3 as char);
-                            if b4 != 0 { chunk.push(b4 as char); } else { k += 5; break; }
+                            if b4 != 0 {
+                                chunk.push(b4 as char);
+                            } else {
+                                k += 5;
+                                break;
+                            }
                             k += 5;
-                        } else { break; }
+                        } else {
+                            break;
+                        }
                     }
 
                     if chunk.len() >= self.min_length && self.looks_like_real_string(&chunk) {
@@ -595,15 +660,24 @@ impl<'a> StackStringExtractor<'a> {
     }
 
     fn looks_like_real_string(&self, s: &str) -> bool {
-        if s.len() < 4 { return false; }
+        if s.len() < 4 {
+            return false;
+        }
         let special_count = s.chars().filter(|c| !c.is_alphanumeric()).count();
-        if special_count > s.len() / 2 { return false; }
+        if special_count > s.len() / 2 {
+            return false;
+        }
         let mut alphanumeric_runs = 0;
         let mut in_run = false;
         for c in s.chars() {
             if c.is_alphanumeric() {
-                if !in_run { alphanumeric_runs += 1; in_run = true; }
-            } else { in_run = false; }
+                if !in_run {
+                    alphanumeric_runs += 1;
+                    in_run = true;
+                }
+            } else {
+                in_run = false;
+            }
         }
         alphanumeric_runs >= 2
     }

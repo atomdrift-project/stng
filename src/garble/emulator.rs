@@ -623,8 +623,8 @@ impl Emulator {
                         // Go calling convention: RAX=buf (unused), RBX=ptr, RCX=len (or on stack)
                         let ptr = self.cpu.regs[3]; // RBX
                         let raw_len = self.cpu.regs[1]; // RCX
-                        // Clamp to a sane maximum to prevent huge allocations from
-                        // crafted register values.
+                                                        // Clamp to a sane maximum to prevent huge allocations from
+                                                        // crafted register values.
                         let len = (raw_len as usize).min(1024 * 1024);
                         let bytes = self.mem.read(ptr, len).unwrap_or_default();
                         return Ok(ExecResult::HitTarget(bytes, len));

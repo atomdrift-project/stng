@@ -11,8 +11,8 @@
 //!
 //! For inline literals, we also perform instruction pattern analysis.
 
-use super::extraction::{extract_from_structures, find_string_structures};
 use super::classifier::classify_string;
+use super::extraction::{extract_from_structures, find_string_structures};
 use super::instr::{extract_inline_strings_amd64, extract_inline_strings_arm64};
 use super::types::{BinaryInfo, ExtractedString, StringMethod};
 use goblin::elf::Elf;
@@ -1085,7 +1085,10 @@ mod tests {
                 let strings = extractor.extract_elf(&elf, &data);
                 for s in &strings {
                     // Even with 1000 min_length, structure-based strings can be as short as 2
-                    assert!(s.value.len() >= 2, "String shorter than STRUCTURE_MIN_LENGTH");
+                    assert!(
+                        s.value.len() >= 2,
+                        "String shorter than STRUCTURE_MIN_LENGTH"
+                    );
                 }
                 assert!(strings.len() < 50);
             }

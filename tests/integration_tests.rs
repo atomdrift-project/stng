@@ -1637,7 +1637,11 @@ mod wide_string_tests {
 
         // Check URL classification
         if let Some(url) = strings.iter().find(|s| s.value.contains("example.com")) {
-            assert_eq!(url.kind, Some(StringKind::Url), "URL should be classified as Url");
+            assert_eq!(
+                url.kind,
+                Some(StringKind::Url),
+                "URL should be classified as Url"
+            );
         }
 
         // Check path classification
@@ -2935,7 +2939,12 @@ mod severity_tests {
     #[test]
     fn test_info_severity_kinds() {
         // Test None instead of Const
-        assert_eq!(None::<StringKind>.map(|k| k.severity()).unwrap_or(Severity::Info), Severity::Info);
+        assert_eq!(
+            None::<StringKind>
+                .map(|k| k.severity())
+                .unwrap_or(Severity::Info),
+            Severity::Info
+        );
         assert_eq!(StringKind::Ident.severity(), Severity::Info);
     }
 }

@@ -75,9 +75,9 @@ mod fuzzy_base64;
 
 // Public API
 pub use binary::{is_go_binary, is_rust_binary};
+pub use classifier::classify_string;
 pub use detect::{detect_language, is_text_file};
 pub use error::{Result, StngError};
-pub use classifier::classify_string;
 pub use overlay::detect_elf_overlay;
 pub use types::{
     BinaryInfo, ExtractedString, FunctionMetadata, OverlayInfo, Severity, StringKind, StringMethod,
@@ -412,7 +412,7 @@ fn apply_xor_scan(
         let inc_results = xor::extract_incremental_xor_strings(data, opts.xor_min_length);
         strings.extend(inc_results);
     }
-    
+
     tracing::debug!("TIME: XOR key scanning took {:?}", t_xor.elapsed());
 }
 
@@ -517,7 +517,9 @@ fn enrich_elf_sections(strings: &mut [ExtractedString], elf: &goblin::elf::Elf<'
         if s.section.is_none() {
             // Find which section this offset belongs to
             for sh in &elf.section_headers {
-                if s.data_offset >= sh.sh_offset && s.data_offset < sh.sh_offset.saturating_add(sh.sh_size) {
+                if s.data_offset >= sh.sh_offset
+                    && s.data_offset < sh.sh_offset.saturating_add(sh.sh_size)
+                {
                     if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
                         if !name.is_empty() {
                             s.section = Some(name.to_string());
@@ -676,13 +678,11 @@ fn suppress_version_info_ips(strings: &mut [ExtractedString], pe: &goblin::pe::P
 
     for s in strings.iter_mut() {
         if matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort))
-            && version_strings.iter().any(|v| v == &s.value) {
-                tracing::debug!(
-                    "Suppressing version-info false positive IP: {}",
-                    s.value
-                );
-                s.kind = None;
-            }
+            && version_strings.iter().any(|v| v == &s.value)
+        {
+            tracing::debug!("Suppressing version-info false positive IP: {}", s.value);
+            s.kind = None;
+        }
     }
 }
 #[derive(Debug, Clone)]
@@ -937,7 +937,7 @@ fn deduplicate_by_offset(strings: Vec<ExtractedString>) -> Vec<ExtractedString> 
                     .cmp(&priority_a)
                     .then_with(|| b.value.len().cmp(&a.value.len()))
             });
-            
+
             // Take the first one (best candidate)
             result.push(candidates.remove(0));
         }
@@ -1102,12 +1102,12 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         let t0 = std::time::Instant::now();
         let mut strings = extract_from_object(&object, data, opts);
         tracing::debug!("TIME: Extraction took {:?}", t0.elapsed());
-        
+
         // For text files parsed by goblin (e.g. as Unknown), also run script deobfuscation
         if is_text_file(data) {
             append_script_deobfuscation(&mut strings, data, opts);
         }
-        
+
         deduplicate_by_offset(strings)
     } else {
         // Unknown format - use r2 if available, plus raw scan
@@ -1170,7 +1170,6 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         deduplicate_by_offset(strings)
     }
 }
-
 
 /// Extract strings from a pre-parsed binary object.
 ///
@@ -1393,7 +1392,6 @@ fn extract_from_object(
                 None,
             ));
 
-
             if is_go_binary {
                 // For Go binaries, run XOR-pair extraction on the .text section only.
                 //
@@ -1450,8 +1448,12 @@ fn extract_from_object(
             } else {
                 // Only scan executable sections for stack strings to avoid wasting time on data
                 // Parallelize section scanning using Rayon
-                let results: Vec<ExtractedString> = elf.section_headers.par_iter()
-                    .filter(|sh| sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) != 0)
+                let results: Vec<ExtractedString> = elf
+                    .section_headers
+                    .par_iter()
+                    .filter(|sh| {
+                        sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) != 0
+                    })
                     .filter_map(|sh| {
                         let start = sh.sh_offset as usize;
                         let end = start.saturating_add(sh.sh_size as usize);
@@ -1465,10 +1467,10 @@ fn extract_from_object(
                     })
                     .flatten()
                     .collect();
-                
+
                 strings.extend(results);
             }
-            
+
             merge_imports(&mut strings, extract_elf_imports(elf, min_length));
 
             // Filter out any strings that fall within the overlay region

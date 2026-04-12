@@ -385,7 +385,10 @@ fn test_c2_url_extraction_from_fixture() {
         }
 
         println!("\nAll URLs extracted:");
-        for s in xor_strings.iter().filter(|s| s.kind == Some(StringKind::Url)) {
+        for s in xor_strings
+            .iter()
+            .filter(|s| s.kind == Some(StringKind::Url))
+        {
             println!("  0x{:x}: {:?}", s.data_offset, s.value);
         }
 

@@ -165,7 +165,8 @@ pub fn extract_printable_runs(
 
                     // Shebangs at offset 0 are the file's interpreter declaration,
                     // not embedded shell commands.
-                    if start == 0 && kind == Some(StringKind::ShellCmd) && trimmed.starts_with("#!") {
+                    if start == 0 && kind == Some(StringKind::ShellCmd) && trimmed.starts_with("#!")
+                    {
                         kind = None;
                     }
 

@@ -44,12 +44,16 @@ fn test_pe_xor_c6_dll_and_api_detection() {
 
     // BCrypt API names resolved via GetProcAddress - full AES-CBC decryption capability
     assert!(
-        xor_strings.iter().any(|s| s.contains("BCryptOpenAlgorithmProvider")),
+        xor_strings
+            .iter()
+            .any(|s| s.contains("BCryptOpenAlgorithmProvider")),
         "Should detect XOR 0xC6-encoded 'BCryptOpenAlgorithmProvider'. Found: {:?}",
         xor_strings
     );
     assert!(
-        xor_strings.iter().any(|s| s.contains("BCryptGenerateSymmetricKey")),
+        xor_strings
+            .iter()
+            .any(|s| s.contains("BCryptGenerateSymmetricKey")),
         "Should detect XOR 0xC6-encoded 'BCryptGenerateSymmetricKey'. Found: {:?}",
         xor_strings
     );

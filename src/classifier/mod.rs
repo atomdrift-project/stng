@@ -533,10 +533,7 @@ fn classify_prefix(prefix: &str) -> Option<StringKind> {
         }
         // File paths
         b'/' | b'.' => {
-            if prefix.starts_with('/')
-                || prefix.starts_with("./")
-                || prefix.starts_with("../")
-            {
+            if prefix.starts_with('/') || prefix.starts_with("./") || prefix.starts_with("../") {
                 if network::is_suspicious_path(prefix) {
                     return Some(StringKind::SuspiciousPath);
                 }
@@ -625,8 +622,7 @@ mod tests {
             },
         ];
 
-        let strings =
-            extract_from_structures(blob, 0x1000, &structs, Some("test"), |_| None);
+        let strings = extract_from_structures(blob, 0x1000, &structs, Some("test"), |_| None);
 
         assert_eq!(strings.len(), 2);
         assert_eq!(strings[0].value, "Hello");
@@ -660,7 +656,10 @@ mod tests {
         // Whitelisted well-known vars
         assert_eq!(classify_string("GLIBC_TUNABLES"), Some(StringKind::EnvVar));
         assert_eq!(classify_string("LD_PRELOAD"), Some(StringKind::EnvVar));
-        assert_eq!(classify_string("DYLD_INSERT_LIBRARIES"), Some(StringKind::EnvVar));
+        assert_eq!(
+            classify_string("DYLD_INSERT_LIBRARIES"),
+            Some(StringKind::EnvVar)
+        );
         assert_eq!(classify_string("JAVA_HOME"), Some(StringKind::EnvVar));
         assert_eq!(classify_string("HTTP_PROXY"), Some(StringKind::EnvVar));
 
@@ -680,8 +679,14 @@ mod tests {
 
     #[test]
     fn test_classify_string_urls() {
-        assert_eq!(classify_string("https://example.com"), Some(StringKind::Url));
-        assert_eq!(classify_string("http://localhost:8080"), Some(StringKind::Url));
+        assert_eq!(
+            classify_string("https://example.com"),
+            Some(StringKind::Url)
+        );
+        assert_eq!(
+            classify_string("http://localhost:8080"),
+            Some(StringKind::Url)
+        );
         assert_eq!(
             classify_string("postgresql://user:pass@host/db"),
             Some(StringKind::Url)
@@ -696,14 +701,8 @@ mod tests {
 
         // Go runtime metrics should NOT be classified as paths
         assert_eq!(classify_string("/gc/heap/allocs:bytes"), None);
-        assert_eq!(
-            classify_string("/sched/latencies:seconds"),
-            None
-        );
-        assert_eq!(
-            classify_string("/memory/classes/total:bytes"),
-            None
-        );
+        assert_eq!(classify_string("/sched/latencies:seconds"), None);
+        assert_eq!(classify_string("/memory/classes/total:bytes"), None);
         assert_eq!(
             classify_string("/cpu/classes/gc/mark/assist:cpu-seconds"),
             None
@@ -920,22 +919,40 @@ mod tests {
             classify_string("malformed GOMEMLIMIT; see `go doc runtime/debug.SetMemoryLimit`"),
             Some(StringKind::ShellCmd)
         );
-        assert_ne!(classify_string("exec format error"), Some(StringKind::ShellCmd));
+        assert_ne!(
+            classify_string("exec format error"),
+            Some(StringKind::ShellCmd)
+        );
 
         // Non-shell shebangs should NOT be classified as shell commands
-        assert_ne!(classify_string("#!/usr/bin/env ruby"), Some(StringKind::ShellCmd));
+        assert_ne!(
+            classify_string("#!/usr/bin/env ruby"),
+            Some(StringKind::ShellCmd)
+        );
         assert_ne!(
             classify_string("#!/usr/bin/env python3"),
             Some(StringKind::ShellCmd)
         );
-        assert_ne!(classify_string("#!/usr/bin/env node"), Some(StringKind::ShellCmd));
-        assert_ne!(classify_string("#!/usr/bin/env perl"), Some(StringKind::ShellCmd));
+        assert_ne!(
+            classify_string("#!/usr/bin/env node"),
+            Some(StringKind::ShellCmd)
+        );
+        assert_ne!(
+            classify_string("#!/usr/bin/env perl"),
+            Some(StringKind::ShellCmd)
+        );
 
         // Shell shebangs should still be classified as shell commands
         assert_eq!(classify_string("#!/bin/bash"), Some(StringKind::ShellCmd));
         assert_eq!(classify_string("#!/bin/sh"), Some(StringKind::ShellCmd));
-        assert_eq!(classify_string("#!/usr/bin/env bash"), Some(StringKind::ShellCmd));
-        assert_eq!(classify_string("#!/usr/bin/env sh"), Some(StringKind::ShellCmd));
+        assert_eq!(
+            classify_string("#!/usr/bin/env bash"),
+            Some(StringKind::ShellCmd)
+        );
+        assert_eq!(
+            classify_string("#!/usr/bin/env sh"),
+            Some(StringKind::ShellCmd)
+        );
     }
 
     #[test]
@@ -990,7 +1007,10 @@ mod tests {
             classify_string("curl http://example.com"),
             Some(StringKind::AppleScript)
         );
-        assert_ne!(classify_string("cat /etc/passwd"), Some(StringKind::AppleScript));
+        assert_ne!(
+            classify_string("cat /etc/passwd"),
+            Some(StringKind::AppleScript)
+        );
 
         // Passwd entries should NOT be AppleScript (avoid "_assetcache" matching "set ")
         assert_ne!(
@@ -1003,7 +1023,10 @@ mod tests {
         );
 
         // AppleScript "set" must have proper context (variable assignment)
-        assert_eq!(classify_string("set myVar to 10"), Some(StringKind::AppleScript));
+        assert_eq!(
+            classify_string("set myVar to 10"),
+            Some(StringKind::AppleScript)
+        );
         assert_eq!(
             classify_string("set desktopPath = \"/Users/test\""),
             Some(StringKind::AppleScript)
@@ -1241,7 +1264,10 @@ mod tests {
         );
 
         // Should not be URL encoded (too few percent signs)
-        assert_ne!(classify_string("Hello%20World"), Some(StringKind::UrlEncoded));
+        assert_ne!(
+            classify_string("Hello%20World"),
+            Some(StringKind::UrlEncoded)
+        );
     }
 
     #[test]
@@ -1306,7 +1332,10 @@ mod tests {
     #[test]
     fn test_classify_string_base32() {
         // Tor onion address
-        assert_eq!(classify_string("THEHIDDENWIKI3IKNKD7A"), Some(StringKind::Base32));
+        assert_eq!(
+            classify_string("THEHIDDENWIKI3IKNKD7A"),
+            Some(StringKind::Base32)
+        );
 
         // With padding
         assert_eq!(
@@ -1315,7 +1344,10 @@ mod tests {
         );
 
         // Should not be Base32 (has lowercase)
-        assert_ne!(classify_string("JbSwY3DpEbLw64TmMq"), Some(StringKind::Base32));
+        assert_ne!(
+            classify_string("JbSwY3DpEbLw64TmMq"),
+            Some(StringKind::Base32)
+        );
     }
 
     #[test]
@@ -1751,7 +1783,10 @@ mod tests {
         );
 
         // Short echo tag with valid content
-        assert_eq!(classify_string("<?= $variable ?>"), Some(StringKind::PhpCode));
+        assert_eq!(
+            classify_string("<?= $variable ?>"),
+            Some(StringKind::PhpCode)
+        );
 
         // .reloc section garbage starting with <?= must NOT trigger PHP detection
         assert_ne!(classify_string("<?=\">.>|>"), Some(StringKind::PhpCode));

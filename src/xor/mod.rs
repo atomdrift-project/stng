@@ -96,9 +96,18 @@ mod tests {
 
     #[test]
     fn test_is_valid_xor_string_linux_rootkit() {
-        assert!(is_valid_xor_string("/proc/net/tcp"), "/proc/net/tcp should be valid");
-        assert!(is_valid_xor_string("/proc/net/tcp6"), "/proc/net/tcp6 should be valid");
-        assert!(is_valid_xor_string("ld.so.preload"), "ld.so.preload should be valid");
+        assert!(
+            is_valid_xor_string("/proc/net/tcp"),
+            "/proc/net/tcp should be valid"
+        );
+        assert!(
+            is_valid_xor_string("/proc/net/tcp6"),
+            "/proc/net/tcp6 should be valid"
+        );
+        assert!(
+            is_valid_xor_string("ld.so.preload"),
+            "ld.so.preload should be valid"
+        );
     }
 
     fn make_xor_test_data(plaintext: &[u8], key: u8, offset: usize) -> Vec<u8> {
@@ -440,8 +449,10 @@ mod tests {
 
         let results = extract_custom_xor_strings(&xored, key, 10, false);
         assert!(
-            results.iter().any(|r| r.kind == Some(StringKind::SuspiciousPath)
-                && r.value.contains("/Library/Ethereum/keystore")),
+            results
+                .iter()
+                .any(|r| r.kind == Some(StringKind::SuspiciousPath)
+                    && r.value.contains("/Library/Ethereum/keystore")),
             "Should detect Ethereum keystore path. Results: {:?}",
             results
         );
@@ -1060,7 +1071,8 @@ mod tests {
         assert!(
             results1
                 .iter()
-                .any(|r| r.kind == Some(StringKind::Path) || r.kind == Some(StringKind::SuspiciousPath)),
+                .any(|r| r.kind == Some(StringKind::Path)
+                    || r.kind == Some(StringKind::SuspiciousPath)),
             "/usr/bin/bash should be detected as path or suspicious path. Found: {:?}",
             results1
                 .iter()
@@ -1079,7 +1091,8 @@ mod tests {
         assert!(
             results2
                 .iter()
-                .any(|r| r.kind == Some(StringKind::Path) || r.kind == Some(StringKind::SuspiciousPath)),
+                .any(|r| r.kind == Some(StringKind::Path)
+                    || r.kind == Some(StringKind::SuspiciousPath)),
             "/etc/passwd should be detected as path"
         );
 

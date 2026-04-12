@@ -155,7 +155,9 @@ pub fn scan_binary_ips(
         results.retain(|s| {
             // Find which section this offset belongs to
             for sh in &elf.section_headers {
-                if s.data_offset >= sh.sh_offset && s.data_offset < sh.sh_offset.saturating_add(sh.sh_size) {
+                if s.data_offset >= sh.sh_offset
+                    && s.data_offset < sh.sh_offset.saturating_add(sh.sh_size)
+                {
                     if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
                         // Accept if in a data section, reject if in code section
                         return is_data_section_elf(name);

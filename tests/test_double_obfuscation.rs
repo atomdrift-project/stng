@@ -70,7 +70,10 @@ fn test_all_encoding_classifications() {
     assert_eq!(classify_string(base64_str), Some(StringKind::Base64));
     assert_eq!(classify_string(hex_str), Some(StringKind::HexEncoded));
     assert_eq!(classify_string(url_str), Some(StringKind::UrlEncoded));
-    assert_eq!(classify_string(unicode_str), Some(StringKind::UnicodeEscaped));
+    assert_eq!(
+        classify_string(unicode_str),
+        Some(StringKind::UnicodeEscaped)
+    );
 }
 
 #[test]

@@ -24,7 +24,10 @@ fn test_imports_not_marked_as_codesig() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 
@@ -64,7 +67,10 @@ fn test_only_base64_gets_codesig_hash_kind() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 
@@ -126,7 +132,10 @@ fn test_linkedit_const_strings_selective_codesig() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 
@@ -253,7 +262,10 @@ fn test_codesig_method_on_signatures() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 
@@ -367,7 +379,10 @@ fn test_no_base64_kind_in_linkedit() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 
@@ -414,7 +429,10 @@ fn test_cert_strings_not_marked_as_hashes() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 
@@ -456,7 +474,10 @@ fn test_exact_hash_count() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 

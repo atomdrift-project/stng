@@ -260,7 +260,9 @@ fn test_auto_detected_xor_key_in_output() {
 
     // The key must appear as XorKey in the output — this is what the header
     // display in main.rs searches for
-    let xor_key_entry = extracted.iter().find(|s| s.kind == Some(StringKind::XorKey));
+    let xor_key_entry = extracted
+        .iter()
+        .find(|s| s.kind == Some(StringKind::XorKey));
     assert!(
         xor_key_entry.is_some(),
         "Auto-detected XOR key should appear with kind=XorKey in output. \

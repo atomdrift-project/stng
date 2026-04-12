@@ -164,9 +164,9 @@ fn compute_file_hash(path: &str) -> Result<String, std::io::Error> {
     let canon_path = fs::canonicalize(path)?.to_string_lossy().to_string();
 
     {
-        let cache = HASH_CACHE.lock().map_err(|e| {
-            std::io::Error::other(format!("Hash cache lock failed: {e}"))
-        })?;
+        let cache = HASH_CACHE
+            .lock()
+            .map_err(|e| std::io::Error::other(format!("Hash cache lock failed: {e}")))?;
         if let Some(hash) = cache.get(&canon_path) {
             return Ok(hash.clone());
         }

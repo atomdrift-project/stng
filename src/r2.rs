@@ -289,7 +289,10 @@ pub fn extract_function_metadata(
         );
     }
 
-    tracing::debug!("r2::extract_function_metadata: extracted {} functions", metadata_map.len());
+    tracing::debug!(
+        "r2::extract_function_metadata: extracted {} functions",
+        metadata_map.len()
+    );
 
     Some(metadata_map)
 }
@@ -747,48 +750,50 @@ pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKey
     let results: Vec<_> = candidates_with_xor_refs
         .iter()
         .take(20)
-        .filter_map(|(candidate, xref_lines, reference_count, xor_function_refs)| {
-            let mut confidence = XorConfidence::Low;
+        .filter_map(
+            |(candidate, xref_lines, reference_count, xor_function_refs)| {
+                let mut confidence = XorConfidence::Low;
 
-            for xref_line in xref_lines.iter().take(5) {
-                let parts: Vec<&str> = xref_line.split_whitespace().collect();
-                if parts.is_empty() {
-                    continue;
-                }
-                let func_name = parts[0];
-                if let Some(disasm) = func_disasm.get(func_name) {
-                    let has_xor = disasm.contains("eor ") || disasm.contains("xor ");
-                    let has_load_byte = disasm.contains("ldrb ")
-                        || disasm.contains("movzbl ")
-                        || disasm.contains("movzx ");
-                    let has_store_byte = disasm.contains("strb ") || disasm.contains("movb ");
-
-                    if has_xor && has_load_byte && has_store_byte {
-                        confidence = XorConfidence::High;
-                        break;
+                for xref_line in xref_lines.iter().take(5) {
+                    let parts: Vec<&str> = xref_line.split_whitespace().collect();
+                    if parts.is_empty() {
+                        continue;
                     }
+                    let func_name = parts[0];
+                    if let Some(disasm) = func_disasm.get(func_name) {
+                        let has_xor = disasm.contains("eor ") || disasm.contains("xor ");
+                        let has_load_byte = disasm.contains("ldrb ")
+                            || disasm.contains("movzbl ")
+                            || disasm.contains("movzx ");
+                        let has_store_byte = disasm.contains("strb ") || disasm.contains("movb ");
 
-                    if has_xor && confidence == XorConfidence::Low {
+                        if has_xor && has_load_byte && has_store_byte {
+                            confidence = XorConfidence::High;
+                            break;
+                        }
+
+                        if has_xor && confidence == XorConfidence::Low {
+                            confidence = XorConfidence::Medium;
+                        }
+                    }
+                }
+
+                if confidence != XorConfidence::Low || *xor_function_refs >= 2 {
+                    if *xor_function_refs >= 2 && confidence == XorConfidence::Low {
                         confidence = XorConfidence::Medium;
                     }
-                }
-            }
 
-            if confidence != XorConfidence::Low || *xor_function_refs >= 2 {
-                if *xor_function_refs >= 2 && confidence == XorConfidence::Low {
-                    confidence = XorConfidence::Medium;
+                    Some(XorKeyInfo {
+                        key: candidate.value.clone(),
+                        confidence,
+                        reference_count: *reference_count,
+                        offset: candidate.data_offset,
+                    })
+                } else {
+                    None
                 }
-
-                Some(XorKeyInfo {
-                    key: candidate.value.clone(),
-                    confidence,
-                    reference_count: *reference_count,
-                    offset: candidate.data_offset,
-                })
-            } else {
-                None
-            }
-        })
+            },
+        )
         .collect();
 
     tracing::debug!("verify_xor_keys: found {} keys", results.len());
@@ -807,28 +812,52 @@ mod tests {
 
     #[test]
     fn test_classify_r2_symbol() {
-        assert_eq!(classify_r2_symbol("FUNC", "GLOBAL"), Some(StringKind::FuncName));
-        assert_eq!(classify_r2_symbol("FILE", "LOCAL"), Some(StringKind::FilePath));
-        assert_eq!(classify_r2_symbol("OBJECT", "GLOBAL"), Some(StringKind::Ident));
+        assert_eq!(
+            classify_r2_symbol("FUNC", "GLOBAL"),
+            Some(StringKind::FuncName)
+        );
+        assert_eq!(
+            classify_r2_symbol("FILE", "LOCAL"),
+            Some(StringKind::FilePath)
+        );
+        assert_eq!(
+            classify_r2_symbol("OBJECT", "GLOBAL"),
+            Some(StringKind::Ident)
+        );
     }
 
     #[test]
     fn test_classify_r2_symbol_meth() {
-        assert_eq!(classify_r2_symbol("METH", "GLOBAL"), Some(StringKind::FuncName));
-        assert_eq!(classify_r2_symbol("METH", "LOCAL"), Some(StringKind::FuncName));
+        assert_eq!(
+            classify_r2_symbol("METH", "GLOBAL"),
+            Some(StringKind::FuncName)
+        );
+        assert_eq!(
+            classify_r2_symbol("METH", "LOCAL"),
+            Some(StringKind::FuncName)
+        );
     }
 
     #[test]
     fn test_classify_r2_symbol_unknown_type() {
-        assert_eq!(classify_r2_symbol("UNKNOWN", "GLOBAL"), Some(StringKind::Ident));
+        assert_eq!(
+            classify_r2_symbol("UNKNOWN", "GLOBAL"),
+            Some(StringKind::Ident)
+        );
         assert_eq!(classify_r2_symbol("", ""), Some(StringKind::Ident));
-        assert_eq!(classify_r2_symbol("NOTYPE", "LOCAL"), Some(StringKind::Ident));
+        assert_eq!(
+            classify_r2_symbol("NOTYPE", "LOCAL"),
+            Some(StringKind::Ident)
+        );
     }
 
     #[test]
     fn test_classify_r2_symbol_object_local() {
         // OBJECT with LOCAL binding should not be Ident
-        assert_eq!(classify_r2_symbol("OBJECT", "LOCAL"), Some(StringKind::Ident));
+        assert_eq!(
+            classify_r2_symbol("OBJECT", "LOCAL"),
+            Some(StringKind::Ident)
+        );
     }
 
     #[test]

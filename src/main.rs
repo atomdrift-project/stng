@@ -561,7 +561,9 @@ fn main() -> Result<()> {
         let xor_key_display = if let Some(ref key) = custom_xor_key {
             // Custom XOR key from --xor flag
             format!(" · xor:{}", String::from_utf8_lossy(key))
-        } else if let Some(xor_key_str) = strings.iter().find(|s| s.kind == Some(StringKind::XorKey)) {
+        } else if let Some(xor_key_str) =
+            strings.iter().find(|s| s.kind == Some(StringKind::XorKey))
+        {
             // Auto-detected XOR key
             format!(" · xor:{}", xor_key_str.value)
         } else {
@@ -996,7 +998,8 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
     } else if s.method == stng::StringMethod::CodeSignature {
         // All CodeSignature strings get the "codesig" method tag
         ("codesig", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::WideString && s.kind != Some(stng::StringKind::OverlayWide)
+    } else if s.method == stng::StringMethod::WideString
+        && s.kind != Some(stng::StringKind::OverlayWide)
     {
         ("wide", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::SpacedAscii {

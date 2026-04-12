@@ -353,9 +353,15 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                                 | Some(StringKind::ShellCmd)
                         );
                         if !is_encoded_format && alpha >= 3 {
-                            let vowels = s.bytes().filter(|&b| {
-                                matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u')
-                            }).count();
+                            let vowels = s
+                                .bytes()
+                                .filter(|&b| {
+                                    matches!(
+                                        b.to_ascii_lowercase(),
+                                        b'a' | b'e' | b'i' | b'o' | b'u'
+                                    )
+                                })
+                                .count();
                             let vowel_ratio = if alpha > 0 { vowels * 100 / alpha } else { 0 };
                             if !(10..=70).contains(&vowel_ratio) {
                                 continue;
@@ -498,7 +504,10 @@ fn is_high_quality_string(s: &ExtractedString) -> bool {
     // High quality = shell commands, suspicious paths, URLs, crypto terms
     matches!(
         s.kind,
-        Some(StringKind::ShellCmd) | Some(StringKind::SuspiciousPath) | Some(StringKind::Url) | Some(StringKind::IP)
+        Some(StringKind::ShellCmd)
+            | Some(StringKind::SuspiciousPath)
+            | Some(StringKind::Url)
+            | Some(StringKind::IP)
     ) || {
         let vl = s.value.to_ascii_lowercase();
         vl.contains("ethereum") || vl.contains("bitcoin") || vl.contains("osascript")
@@ -795,8 +804,10 @@ fn extract_custom_xor_strings_pattern_based_simple(
             // Skip for network IOCs (URLs, IPs which naturally contain consonant-heavy protocol
             // names like "http" or "ftp"). Always apply for other string types regardless of
             // apply_filters, since vowel ratio is a reliable noise filter even in unfiltered mode.
-            let is_network_ioc =
-                matches!(kind, Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort));
+            let is_network_ioc = matches!(
+                kind,
+                Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort)
+            );
             if !is_network_ioc && alpha >= 3 && !is_locale_string(&trimmed_s) {
                 let has_non_ascii = !trimmed_s.is_ascii();
                 if !has_non_ascii {
@@ -825,7 +836,9 @@ fn extract_custom_xor_strings_pattern_based_simple(
             // Apply category-specific fine-tuning after consonant cluster trimming
             let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
                 clean_url_trailing_garbage(&trimmed_s)
-            } else if matches!(kind, Some(StringKind::SuspiciousPath)) && is_locale_string(&trimmed_s) {
+            } else if matches!(kind, Some(StringKind::SuspiciousPath))
+                && is_locale_string(&trimmed_s)
+            {
                 clean_locale_trailing_garbage(&trimmed_s)
             } else if matches!(kind, Some(StringKind::SuspiciousPath)) {
                 // Trim trailing backtick+letter pattern: XOR misalignment can produce e.g. `R at the end
@@ -1088,10 +1101,7 @@ pub fn extract_rolling_xor_with_known_plaintext(
 ///
 /// It uses known plaintext patterns to derive candidate seeds, then validates
 /// by checking if the pattern decodes correctly.
-pub fn extract_incremental_xor_strings(
-    data: &[u8],
-    min_length: usize,
-) -> Vec<ExtractedString> {
+pub fn extract_incremental_xor_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     let mut results = Vec::new();
     let mut covered_ranges: Vec<(usize, usize)> = Vec::new();
 
@@ -1101,7 +1111,7 @@ pub fn extract_incremental_xor_strings(
             continue;
         }
         let max_offset = data.len().saturating_sub(pattern.len());
-        
+
         for offset in 0..max_offset {
             // Derive candidate seed: data[offset+i] ^ (seed + i) = pattern[i]
             // seed + i = data[offset+i] ^ pattern[i]
@@ -1127,13 +1137,16 @@ pub fn extract_incremental_xor_strings(
                 // Seed found! Extract strings from the surrounding 8KB region
                 let region_start = offset.saturating_sub(4096);
                 let region_end = (offset + 4096).min(data.len());
-                
+
                 // Avoid redundant extraction
-                if covered_ranges.iter().any(|&(s, e)| offset >= s && offset < e) {
+                if covered_ranges
+                    .iter()
+                    .any(|&(s, e)| offset >= s && offset < e)
+                {
                     continue;
                 }
                 covered_ranges.push((region_start, region_end));
-                
+
                 let mut pos = region_start;
                 while pos < region_end {
                     // Find start of printable run
@@ -1169,7 +1182,7 @@ pub fn extract_incremental_xor_strings(
                     if decoded_bytes.len() >= min_length {
                         let mut current_bytes = decoded_bytes;
                         let mut current_start = start_pos;
-                        
+
                         while current_bytes.len() >= min_length {
                             match String::from_utf8(current_bytes.clone()) {
                                 Ok(s) => {
@@ -1181,7 +1194,10 @@ pub fn extract_incremental_xor_strings(
                                             section: None,
                                             method: StringMethod::XorDecode,
                                             kind,
-                                            source: Some(format!("xor:incremental:seed0x{:02x}", seed)),
+                                            source: Some(format!(
+                                                "xor:incremental:seed0x{:02x}",
+                                                seed
+                                            )),
                                             fragments: None,
                                             ..Default::default()
                                         });
@@ -1194,7 +1210,7 @@ pub fn extract_incremental_xor_strings(
                                         let mut valid_bytes = current_bytes.clone();
                                         valid_bytes.truncate(valid_up_to);
                                         if let Ok(s) = String::from_utf8(valid_bytes) {
-                                                    if s.chars().any(char::is_alphabetic) {
+                                            if s.chars().any(char::is_alphabetic) {
                                                 let kind = classify_xor_string(&s).flatten();
                                                 results.push(ExtractedString {
                                                     value: s,
@@ -1202,14 +1218,17 @@ pub fn extract_incremental_xor_strings(
                                                     section: None,
                                                     method: StringMethod::XorDecode,
                                                     kind,
-                                                    source: Some(format!("xor:incremental:seed0x{:02x}", seed)),
+                                                    source: Some(format!(
+                                                        "xor:incremental:seed0x{:02x}",
+                                                        seed
+                                                    )),
                                                     fragments: None,
                                                     ..Default::default()
                                                 });
                                             }
                                         }
                                     }
-                                    
+
                                     // Skip the invalid sequence and try again with the rest
                                     let error_len = e.utf8_error().error_len().unwrap_or(1);
                                     let skip = valid_up_to + error_len;

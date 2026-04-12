@@ -36,8 +36,14 @@ fn test_jwt_rejection() {
 #[test]
 fn test_api_key_detection() {
     // AWS access keys (starts with AKIA, 20+ chars, >90% alphanumeric)
-    assert_eq!(classify_string("AKIAIOSFODNN7EXAMPLE"), Some(StringKind::APIKey));
-    assert_eq!(classify_string("AKIATESTKEYEXAMPLE12"), Some(StringKind::APIKey));
+    assert_eq!(
+        classify_string("AKIAIOSFODNN7EXAMPLE"),
+        Some(StringKind::APIKey)
+    );
+    assert_eq!(
+        classify_string("AKIATESTKEYEXAMPLE12"),
+        Some(StringKind::APIKey)
+    );
 
     // GitHub personal access tokens (ghp_ prefix, 36+ chars, >90% alphanumeric or _)
     assert_eq!(
@@ -136,7 +142,10 @@ fn test_ransom_note_rejection() {
         classify_string("encryption enabled"),
         Some(StringKind::RansomNote)
     );
-    assert_ne!(classify_string("decrypt password"), Some(StringKind::RansomNote));
+    assert_ne!(
+        classify_string("decrypt password"),
+        Some(StringKind::RansomNote)
+    );
 
     // Partial matches shouldn't trigger
     assert_ne!(classify_string("bitcoin"), Some(StringKind::RansomNote));
@@ -147,8 +156,14 @@ fn test_ransom_note_rejection() {
 #[test]
 fn test_sql_injection_detection() {
     // Classic SQL injection patterns (requires ' OR ' or 1'='1 patterns)
-    assert_eq!(classify_string("' OR '1'='1"), Some(StringKind::SQLInjection));
-    assert_eq!(classify_string("' OR 'x'='x"), Some(StringKind::SQLInjection));
+    assert_eq!(
+        classify_string("' OR '1'='1"),
+        Some(StringKind::SQLInjection)
+    );
+    assert_eq!(
+        classify_string("' OR 'x'='x"),
+        Some(StringKind::SQLInjection)
+    );
 
     // admin'-- pattern
     assert_eq!(classify_string("admin'--"), Some(StringKind::SQLInjection));
@@ -172,7 +187,10 @@ fn test_sql_injection_rejection() {
         classify_string("SELECT * FROM users"),
         Some(StringKind::SQLInjection)
     );
-    assert_ne!(classify_string("WHERE id = 1"), Some(StringKind::SQLInjection));
+    assert_ne!(
+        classify_string("WHERE id = 1"),
+        Some(StringKind::SQLInjection)
+    );
 
     // Single quotes alone shouldn't trigger
     assert_ne!(classify_string("it's"), Some(StringKind::SQLInjection));
@@ -253,40 +271,64 @@ fn test_command_injection_detection() {
     );
 
     // Pipe injections (requires "| " + whoami/id/uname)
-    assert_eq!(classify_string("| whoami"), Some(StringKind::CommandInjection));
+    assert_eq!(
+        classify_string("| whoami"),
+        Some(StringKind::CommandInjection)
+    );
     assert_eq!(classify_string("| id"), Some(StringKind::CommandInjection));
-    assert_eq!(classify_string("| uname -a"), Some(StringKind::CommandInjection));
+    assert_eq!(
+        classify_string("| uname -a"),
+        Some(StringKind::CommandInjection)
+    );
 
     // Command substitution
     assert_eq!(
         classify_string("$(cat /etc/hosts)"),
         Some(StringKind::CommandInjection)
     );
-    assert_eq!(classify_string("$(whoami)"), Some(StringKind::CommandInjection));
+    assert_eq!(
+        classify_string("$(whoami)"),
+        Some(StringKind::CommandInjection)
+    );
 
     // Backtick command substitution (requires backticks + content)
     assert_eq!(
         classify_string("`cat /etc/shadow`"),
         Some(StringKind::CommandInjection)
     );
-    assert_eq!(classify_string("`ls -la`"), Some(StringKind::CommandInjection));
+    assert_eq!(
+        classify_string("`ls -la`"),
+        Some(StringKind::CommandInjection)
+    );
     assert_eq!(classify_string("`pwd`"), Some(StringKind::CommandInjection));
-    assert_eq!(classify_string("`echo test`"), Some(StringKind::CommandInjection));
+    assert_eq!(
+        classify_string("`echo test`"),
+        Some(StringKind::CommandInjection)
+    );
 }
 
 /// Test command injection rejection for normal commands
 #[test]
 fn test_command_injection_rejection() {
     // Normal file paths shouldn't trigger
-    assert_ne!(classify_string("/etc/config"), Some(StringKind::CommandInjection));
+    assert_ne!(
+        classify_string("/etc/config"),
+        Some(StringKind::CommandInjection)
+    );
     assert_ne!(
         classify_string("/usr/bin/app"),
         Some(StringKind::CommandInjection)
     );
 
     // Normal shell commands without injection patterns
-    assert_ne!(classify_string("echo hello"), Some(StringKind::CommandInjection));
-    assert_ne!(classify_string("ls -la"), Some(StringKind::CommandInjection));
+    assert_ne!(
+        classify_string("echo hello"),
+        Some(StringKind::CommandInjection)
+    );
+    assert_ne!(
+        classify_string("ls -la"),
+        Some(StringKind::CommandInjection)
+    );
 }
 
 /// Test cryptocurrency mining pool detection
@@ -307,13 +349,22 @@ fn test_mining_pool_detection() {
         classify_string("pool.supportxmr.com"),
         Some(StringKind::MiningPool)
     );
-    assert_eq!(classify_string("pool.minexmr.org"), Some(StringKind::MiningPool));
-    assert_eq!(classify_string("nanopool.org:9999"), Some(StringKind::MiningPool));
+    assert_eq!(
+        classify_string("pool.minexmr.org"),
+        Some(StringKind::MiningPool)
+    );
+    assert_eq!(
+        classify_string("nanopool.org:9999"),
+        Some(StringKind::MiningPool)
+    );
     assert_eq!(
         classify_string("minergate.com:3333"),
         Some(StringKind::MiningPool)
     );
-    assert_eq!(classify_string("pool.example.com"), Some(StringKind::MiningPool));
+    assert_eq!(
+        classify_string("pool.example.com"),
+        Some(StringKind::MiningPool)
+    );
     assert_eq!(
         classify_string("pool.test.org:8080"),
         Some(StringKind::MiningPool)
@@ -334,7 +385,10 @@ fn test_mining_pool_rejection() {
     );
 
     // "pool" in other contexts
-    assert_ne!(classify_string("/var/pool/data"), Some(StringKind::MiningPool));
+    assert_ne!(
+        classify_string("/var/pool/data"),
+        Some(StringKind::MiningPool)
+    );
 }
 
 /// Test GUID detection
@@ -394,8 +448,14 @@ fn test_ctf_flag_detection() {
         classify_string("CTF{this_is_a_flag_12345}"),
         Some(StringKind::CTFFlag)
     );
-    assert_eq!(classify_string("flag{test_flag_here}"), Some(StringKind::CTFFlag));
-    assert_eq!(classify_string("FLAG{UPPERCASE_FLAG}"), Some(StringKind::CTFFlag));
+    assert_eq!(
+        classify_string("flag{test_flag_here}"),
+        Some(StringKind::CTFFlag)
+    );
+    assert_eq!(
+        classify_string("FLAG{UPPERCASE_FLAG}"),
+        Some(StringKind::CTFFlag)
+    );
 
     // Competition-specific formats
     assert_eq!(
@@ -412,10 +472,16 @@ fn test_ctf_flag_detection() {
 #[test]
 fn test_ctf_flag_rejection() {
     // Missing closing brace
-    assert_ne!(classify_string("CTF{incomplete_flag"), Some(StringKind::CTFFlag));
+    assert_ne!(
+        classify_string("CTF{incomplete_flag"),
+        Some(StringKind::CTFFlag)
+    );
 
     // Wrong prefix
-    assert_ne!(classify_string("TEST{not_a_flag}"), Some(StringKind::CTFFlag));
+    assert_ne!(
+        classify_string("TEST{not_a_flag}"),
+        Some(StringKind::CTFFlag)
+    );
 
     // No braces
     assert_ne!(classify_string("CTF_no_braces"), Some(StringKind::CTFFlag));
@@ -426,24 +492,36 @@ fn test_ctf_flag_rejection() {
 fn test_email_edge_cases() {
     // Valid emails
     assert_eq!(classify_string("user@example.com"), Some(StringKind::Email));
-    assert_eq!(classify_string("test.user@domain.co.uk"), Some(StringKind::Email));
+    assert_eq!(
+        classify_string("test.user@domain.co.uk"),
+        Some(StringKind::Email)
+    );
     assert_eq!(
         classify_string("admin@localhost.localdomain"),
         Some(StringKind::Email)
     );
 
     // With numbers
-    assert_eq!(classify_string("user123@example456.com"), Some(StringKind::Email));
+    assert_eq!(
+        classify_string("user123@example456.com"),
+        Some(StringKind::Email)
+    );
 
     // With underscores/dashes
-    assert_eq!(classify_string("test_user@ex-ample.com"), Some(StringKind::Email));
+    assert_eq!(
+        classify_string("test_user@ex-ample.com"),
+        Some(StringKind::Email)
+    );
 }
 
 /// Test email rejection for invalid formats
 #[test]
 fn test_email_rejection() {
     // Multiple @ signs
-    assert_ne!(classify_string("user@@example.com"), Some(StringKind::Email));
+    assert_ne!(
+        classify_string("user@@example.com"),
+        Some(StringKind::Email)
+    );
 
     // No @ sign
     assert_ne!(classify_string("userexample.com"), Some(StringKind::Email));
@@ -493,13 +571,22 @@ fn test_crypto_address_edge_cases() {
 #[test]
 fn test_crypto_rejection() {
     // Too short for Bitcoin
-    assert_ne!(classify_string("1A1zP1eP5Q"), Some(StringKind::CryptoWallet));
+    assert_ne!(
+        classify_string("1A1zP1eP5Q"),
+        Some(StringKind::CryptoWallet)
+    );
 
     // Ethereum but wrong length
-    assert_ne!(classify_string("0x742d35Cc"), Some(StringKind::CryptoWallet));
+    assert_ne!(
+        classify_string("0x742d35Cc"),
+        Some(StringKind::CryptoWallet)
+    );
 
     // Random hex that's not an address
-    assert_ne!(classify_string("0xdeadbeef"), Some(StringKind::CryptoWallet));
+    assert_ne!(
+        classify_string("0xdeadbeef"),
+        Some(StringKind::CryptoWallet)
+    );
 }
 
 /// Test environment variable detection

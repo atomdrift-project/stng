@@ -31,7 +31,10 @@ fn test_codesig_base64_categorization() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 
@@ -254,7 +257,10 @@ fn test_linkedit_section_enrichment() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 
@@ -265,7 +271,8 @@ fn test_linkedit_section_enrichment() {
     let linkedit_hashes: Vec<_> = strings
         .iter()
         .filter(|s| {
-            s.section.as_deref() == Some("__LINKEDIT") && s.kind == Some(StringKind::CodeSignatureHash)
+            s.section.as_deref() == Some("__LINKEDIT")
+                && s.kind == Some(StringKind::CodeSignatureHash)
         })
         .collect();
 
@@ -299,7 +306,10 @@ fn test_codesig_hash_format() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 
@@ -414,7 +424,10 @@ fn test_no_entitlements_in_clean_binaries() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {} is an ELF binary", bin_path);
+        eprintln!(
+            "Skipping Mach-O specific test: {} is an ELF binary",
+            bin_path
+        );
         return;
     }
 

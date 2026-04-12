@@ -109,12 +109,17 @@ fn test_bin_ls_clean() {
     // They should be categorized as CodeSignature method, not generic base64
     let codesig_base64_count = strings
         .iter()
-        .filter(|s| s.kind == Some(StringKind::Base64) && s.method == stng::StringMethod::CodeSignature)
+        .filter(|s| {
+            s.kind == Some(StringKind::Base64) && s.method == stng::StringMethod::CodeSignature
+        })
         .count();
 
     if base64_count > 0 {
         eprintln!("Found {} base64 strings in /bin/ls:", base64_count);
-        for s in strings.iter().filter(|s| s.kind == Some(StringKind::Base64)) {
+        for s in strings
+            .iter()
+            .filter(|s| s.kind == Some(StringKind::Base64))
+        {
             eprintln!(
                 "  offset=0x{:x} method={:?} section={:?} value={:?}",
                 s.data_offset, s.method, s.section, s.value

@@ -345,7 +345,9 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
 pub fn decode_unicode_escape_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .iter()
-        .filter(|s| s.kind == Some(StringKind::UnicodeEscaped) || is_likely_unicode_escaped(&s.value))
+        .filter(|s| {
+            s.kind == Some(StringKind::UnicodeEscaped) || is_likely_unicode_escaped(&s.value)
+        })
         .filter_map(decode_unicode_escape_string)
         .collect()
 }
@@ -1158,8 +1160,10 @@ mod tests {
 
     #[test]
     fn test_base64_whitespace_trimming() {
-        let results =
-            decode_base64_strings(&[make_string("  SGVsbG8gV29ybGQh  ", Some(StringKind::Base64))]);
+        let results = decode_base64_strings(&[make_string(
+            "  SGVsbG8gV29ybGQh  ",
+            Some(StringKind::Base64),
+        )]);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].value, "Hello World!");
     }
@@ -1224,8 +1228,14 @@ mod tests {
     #[test]
     fn test_decode_unicode_escape_strings_batch() {
         let inputs = vec![
-            make_string("\\x48\\x65\\x6c\\x6c\\x6f", Some(StringKind::UnicodeEscaped)),
-            make_string("\\u0054\\u0065\\u0073\\u0074", Some(StringKind::UnicodeEscaped)),
+            make_string(
+                "\\x48\\x65\\x6c\\x6c\\x6f",
+                Some(StringKind::UnicodeEscaped),
+            ),
+            make_string(
+                "\\u0054\\u0065\\u0073\\u0074",
+                Some(StringKind::UnicodeEscaped),
+            ),
             make_string("no_escapes", None),
         ];
         let results = decode_unicode_escape_strings(&inputs);
@@ -1249,7 +1259,9 @@ mod tests {
 
     #[test]
     fn test_base32_too_short() {
-        assert!(decode_base32_strings(&[make_string("JBSWY3DP", Some(StringKind::Base32))]).is_empty());
+        assert!(
+            decode_base32_strings(&[make_string("JBSWY3DP", Some(StringKind::Base32))]).is_empty()
+        );
     }
 
     #[test]
@@ -1319,10 +1331,7 @@ mod tests {
     #[test]
     fn test_extract_embedded_base64_python_style() {
         // Python: exec(base64.b64decode('SGVsbG8gV29ybGQh'))
-        let input = make_string(
-            "exec(base64.b64decode('SGVsbG8gV29ybGQh'))",
-            None,
-        );
+        let input = make_string("exec(base64.b64decode('SGVsbG8gV29ybGQh'))", None);
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1, "Should extract one embedded base64");
         assert_eq!(results[0].value, "Hello World!");
@@ -1333,7 +1342,10 @@ mod tests {
     #[test]
     fn test_extract_embedded_base64_shell_style() {
         // Shell: echo SGVsbG8gV29ybGQh | base64 -d
-        let input = make_string("echo SGVsbG8gV29ybGQh | base64 -d", Some(StringKind::ShellCmd));
+        let input = make_string(
+            "echo SGVsbG8gV29ybGQh | base64 -d",
+            Some(StringKind::ShellCmd),
+        );
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1, "Should extract one embedded base64");
         assert_eq!(results[0].value, "Hello World!");
@@ -1375,10 +1387,7 @@ mod tests {
         // Multiple base64 strings in one line (must be >= 12 chars each to match regex)
         // "Hello World!" = SGVsbG8gV29ybGQh (16 chars)
         // "Test String!" = VGVzdCBTdHJpbmch (16 chars)
-        let input = make_string(
-            "a = 'SGVsbG8gV29ybGQh'; b = 'VGVzdCBTdHJpbmch'",
-            None,
-        );
+        let input = make_string("a = 'SGVsbG8gV29ybGQh'; b = 'VGVzdCBTdHJpbmch'", None);
         let results = extract_embedded_base64(&[input]);
         assert_eq!(
             results.len(),
@@ -1392,10 +1401,7 @@ mod tests {
         // Nested Python code - common in malware
         // Inner: "import os; os.system('whoami')"
         let inner_b64 = "aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ3dob2FtaScp";
-        let input = make_string(
-            &format!("exec(base64.b64decode('{}'))", inner_b64),
-            None,
-        );
+        let input = make_string(&format!("exec(base64.b64decode('{}'))", inner_b64), None);
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1);
         assert!(results[0].value.contains("import os"));

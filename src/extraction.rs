@@ -362,8 +362,7 @@ mod tests {
             },
         ];
 
-        let strings =
-            extract_from_structures(blob, 0x1000, &structs, Some("test"), |_| None);
+        let strings = extract_from_structures(blob, 0x1000, &structs, Some("test"), |_| None);
 
         assert_eq!(strings.len(), 2);
         assert_eq!(strings[0].value, "Hello");
