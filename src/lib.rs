@@ -517,7 +517,7 @@ fn enrich_elf_sections(strings: &mut [ExtractedString], elf: &goblin::elf::Elf<'
         if s.section.is_none() {
             // Find which section this offset belongs to
             for sh in &elf.section_headers {
-                if s.data_offset >= sh.sh_offset && s.data_offset < sh.sh_offset + sh.sh_size {
+                if s.data_offset >= sh.sh_offset && s.data_offset < sh.sh_offset.saturating_add(sh.sh_size) {
                     if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
                         if !name.is_empty() {
                             s.section = Some(name.to_string());
@@ -675,15 +675,14 @@ fn suppress_version_info_ips(strings: &mut [ExtractedString], pe: &goblin::pe::P
     }
 
     for s in strings.iter_mut() {
-        if matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort)) {
-            if version_strings.iter().any(|v| v == &s.value) {
+        if matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort))
+            && version_strings.iter().any(|v| v == &s.value) {
                 tracing::debug!(
                     "Suppressing version-info false positive IP: {}",
                     s.value
                 );
                 s.kind = None;
             }
-        }
     }
 }
 #[derive(Debug, Clone)]

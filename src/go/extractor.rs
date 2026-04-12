@@ -309,7 +309,7 @@ impl GoStringExtractor {
             .find(|sh| elf.shdr_strtab.get_at(sh.sh_name) == Some(".rodata"))?;
 
         let start = rodata_sh.sh_offset as usize;
-        let end = start + rodata_sh.sh_size as usize;
+        let end = start.checked_add(rodata_sh.sh_size as usize)?;
 
         if end <= data.len() {
             Some((rodata_sh.sh_addr, &data[start..end]))
