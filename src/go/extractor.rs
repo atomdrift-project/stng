@@ -156,7 +156,7 @@ impl GoStringExtractor {
             .find(|sh| elf.shdr_strtab.get_at(sh.sh_name) == Some(".text"))
             .and_then(|sh| {
                 let start = sh.sh_offset as usize;
-                let end = start + sh.sh_size as usize;
+                let end = start.checked_add(sh.sh_size as usize)?;
                 if end <= data.len() {
                     Some((sh.sh_addr, &data[start..end]))
                 } else {
@@ -170,7 +170,7 @@ impl GoStringExtractor {
             .iter()
             .filter_map(|sh| {
                 let start = sh.sh_offset as usize;
-                let end = start + sh.sh_size as usize;
+                let end = start.checked_add(sh.sh_size as usize)?;
                 if end <= data.len() && sh.sh_size > 0 {
                     Some((sh.sh_addr, &data[start..end]))
                 } else {

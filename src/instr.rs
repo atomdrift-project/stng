@@ -255,12 +255,13 @@ fn decode_arm64_string(
         return None;
     }
 
-    let rodata_offset = (str_addr - rodata_addr) as usize;
-    if rodata_offset + str_len as usize > rodata_data.len() {
+    let rodata_offset = str_addr.checked_sub(rodata_addr)? as usize;
+    let end = rodata_offset.checked_add(str_len as usize)?;
+    if end > rodata_data.len() {
         return None;
     }
 
-    let bytes = &rodata_data[rodata_offset..rodata_offset + str_len as usize];
+    let bytes = &rodata_data[rodata_offset..end];
     let s = std::str::from_utf8(bytes).ok()?;
 
     if is_valid_utf8_string(s) {
@@ -593,12 +594,15 @@ fn extract_amd64_first_arg_string(
             }
 
             let rodata_offset = (str_addr - rodata_addr) as usize;
-            if rodata_offset + str_len as usize > rodata_data.len() {
+            let Some(end) = rodata_offset.checked_add(str_len as usize) else {
+                continue;
+            };
+            if end > rodata_data.len() {
                 continue;
             }
 
             if let Ok(s) =
-                std::str::from_utf8(&rodata_data[rodata_offset..rodata_offset + str_len as usize])
+                std::str::from_utf8(&rodata_data[rodata_offset..end])
             {
                 if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                     seen.insert(s.to_string());
@@ -718,12 +722,15 @@ fn extract_amd64_key_string(
             }
 
             let rodata_offset = (str_addr - rodata_addr) as usize;
-            if rodata_offset + str_len as usize > rodata_data.len() {
+            let Some(end) = rodata_offset.checked_add(str_len as usize) else {
+                continue;
+            };
+            if end > rodata_data.len() {
                 continue;
             }
 
             if let Ok(s) =
-                std::str::from_utf8(&rodata_data[rodata_offset..rodata_offset + str_len as usize])
+                std::str::from_utf8(&rodata_data[rodata_offset..end])
             {
                 if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                     seen.insert(s.to_string());
@@ -858,12 +865,15 @@ fn extract_amd64_value_string(
             }
 
             let rodata_offset = (str_addr - rodata_addr) as usize;
-            if rodata_offset + str_len as usize > rodata_data.len() {
+            let Some(end) = rodata_offset.checked_add(str_len as usize) else {
+                continue;
+            };
+            if end > rodata_data.len() {
                 continue;
             }
 
             if let Ok(s) =
-                std::str::from_utf8(&rodata_data[rodata_offset..rodata_offset + str_len as usize])
+                std::str::from_utf8(&rodata_data[rodata_offset..end])
             {
                 if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                     seen.insert(s.to_string());
@@ -974,12 +984,15 @@ fn extract_amd64_go_arg1_string(
         }
 
         let rodata_offset = (str_addr - rodata_addr) as usize;
-        if rodata_offset + str_len as usize > rodata_data.len() {
+        let Some(end) = rodata_offset.checked_add(str_len as usize) else {
+            continue;
+        };
+        if end > rodata_data.len() {
             continue;
         }
 
         if let Ok(s) =
-            std::str::from_utf8(&rodata_data[rodata_offset..rodata_offset + str_len as usize])
+            std::str::from_utf8(&rodata_data[rodata_offset..end])
         {
             if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                 seen.insert(s.to_string());
@@ -1085,12 +1098,15 @@ fn extract_amd64_go_arg2_string(
         }
 
         let rodata_offset = (str_addr - rodata_addr) as usize;
-        if rodata_offset + str_len as usize > rodata_data.len() {
+        let Some(end) = rodata_offset.checked_add(str_len as usize) else {
+            continue;
+        };
+        if end > rodata_data.len() {
             continue;
         }
 
         if let Ok(s) =
-            std::str::from_utf8(&rodata_data[rodata_offset..rodata_offset + str_len as usize])
+            std::str::from_utf8(&rodata_data[rodata_offset..end])
         {
             if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                 seen.insert(s.to_string());
@@ -1229,8 +1245,14 @@ fn extract_amd64_stack_strings(
 
         if let Some(str_len) = best_len {
             let rodata_offset = (str_addr - rodata_addr) as usize;
+            let Some(end) = rodata_offset.checked_add(str_len as usize) else {
+                continue;
+            };
+            if end > rodata_data.len() {
+                continue;
+            }
             if let Ok(s) =
-                std::str::from_utf8(&rodata_data[rodata_offset..rodata_offset + str_len as usize])
+                std::str::from_utf8(&rodata_data[rodata_offset..end])
             {
                 if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
                     seen.insert(s.to_string());

@@ -21,7 +21,7 @@ pub fn detect_elf_overlay(data: &[u8]) -> Option<OverlayInfo> {
 
     // Check program headers (segments)
     for ph in &elf.program_headers {
-        let end = ph.p_offset + ph.p_filesz;
+        let end = ph.p_offset.saturating_add(ph.p_filesz);
         if end > max_offset {
             max_offset = end;
         }
@@ -29,7 +29,7 @@ pub fn detect_elf_overlay(data: &[u8]) -> Option<OverlayInfo> {
 
     // Check section headers
     for sh in &elf.section_headers {
-        let end = sh.sh_offset + sh.sh_size;
+        let end = sh.sh_offset.saturating_add(sh.sh_size);
         if end > max_offset {
             max_offset = end;
         }
@@ -37,8 +37,9 @@ pub fn detect_elf_overlay(data: &[u8]) -> Option<OverlayInfo> {
 
     // Also check for section header table position (often at the end of the file)
     if elf.header.e_shoff > 0 {
-        let sh_table_end =
-            elf.header.e_shoff + u64::from(elf.header.e_shnum) * u64::from(elf.header.e_shentsize);
+        let sh_table_end = elf.header.e_shoff.saturating_add(
+            u64::from(elf.header.e_shnum).saturating_mul(u64::from(elf.header.e_shentsize)),
+        );
         if sh_table_end > max_offset {
             max_offset = sh_table_end;
         }

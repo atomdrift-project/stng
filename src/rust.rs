@@ -298,8 +298,10 @@ impl RustStringExtractor {
             if name == section_name {
                 let offset = sh.sh_offset as usize;
                 let size = sh.sh_size as usize;
-                if offset + size <= data.len() {
-                    return Some((sh.sh_addr, &data[offset..offset + size]));
+                if let Some(end) = offset.checked_add(size) {
+                    if end <= data.len() {
+                        return Some((sh.sh_addr, &data[offset..end]));
+                    }
                 }
             }
         }
@@ -342,12 +344,15 @@ impl RustStringExtractor {
 
             let offset = sh.sh_offset as usize;
             let size = sh.sh_size as usize;
+            let Some(end) = offset.checked_add(size) else {
+                continue;
+            };
 
-            if offset + size > data.len() {
+            if end > data.len() {
                 continue;
             }
 
-            let search_data = &data[offset..offset + size];
+            let search_data = &data[offset..end];
             let structs = find_string_structures(
                 search_data,
                 sh.sh_addr,

@@ -20,12 +20,15 @@ pub fn extract_macho_entitlements(
         if let CommandVariant::CodeSignature(ref cs) = cmd.command {
             let offset = cs.dataoff as usize;
             let size = cs.datasize as usize;
+            let Some(end) = offset.checked_add(size) else {
+                continue;
+            };
 
-            if offset + size > data.len() {
+            if end > data.len() {
                 continue;
             }
 
-            let cs_data = &data[offset..offset + size];
+            let cs_data = &data[offset..end];
 
             // Look for XML plist (starts with <?xml)
             if let Some(xml_start) = cs_data.windows(5).position(|w| w == b"<?xml") {
