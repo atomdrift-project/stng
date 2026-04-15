@@ -33,8 +33,8 @@ const COMMON_SUBSTITUTIONS: &[(char, char)] = &[('A', '+'), ('9', '/'), ('_', '/
 
 /// Result of fuzzy base64 extraction
 #[derive(Debug)]
-pub struct FuzzyBase64Result {
-    pub decoded: String,
+pub(crate) struct FuzzyBase64Result {
+    pub(crate) decoded: String,
 }
 
 /// Extract and decode obfuscated base64 strings from extracted strings.
@@ -44,7 +44,7 @@ pub struct FuzzyBase64Result {
 /// 2. Strip string concatenation artifacts
 /// 3. Extract base64 runs from noisy data
 /// 4. Decode with error tolerance
-pub fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+pub(crate) fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     let mut results = Vec::new();
 
     for s in strings {
@@ -272,10 +272,9 @@ fn decode_base64_fuzzy(input: &str) -> Option<FuzzyBase64Result> {
                     decoded: decoded_str,
                 });
             }
-            Ok(decoded_str) => {
+            Ok(_) => {
                 // Valid UTF-8 but not meaningful; try lossy path with the same bytes
                 // (no-op here since it's already valid UTF-8, but fall through)
-                let _ = decoded_str;
             }
             Err(err) => {
                 // Not valid UTF-8; recover bytes and try lossy decoding
@@ -293,9 +292,7 @@ fn decode_base64_fuzzy(input: &str) -> Option<FuzzyBase64Result> {
     // Try with padding adjustments
     for padding in 0..=3 {
         let mut padded = input.to_string();
-        for _ in 0..padding {
-            padded.push('=');
-        }
+        padded.push_str(&"=".repeat(padding));
 
         if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(&padded) {
             let decoded_str = String::from_utf8_lossy(&decoded_bytes).into_owned();

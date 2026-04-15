@@ -19,13 +19,13 @@ static EMBEDDED_B64_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([A-Za-z0-9+/]{12,}={0,2})").expect("static regex"));
 
 /// Minimum length for base64 strings to attempt decoding
-pub const MIN_BASE64_LENGTH: usize = 16;
+pub(crate) const MIN_BASE64_LENGTH: usize = 16;
 
 /// Minimum length for hex-encoded strings to attempt decoding
-pub const MIN_HEX_LENGTH: usize = 16;
+pub(crate) const MIN_HEX_LENGTH: usize = 16;
 
 /// Maximum size for decoded output (to prevent memory exhaustion)
-pub const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024; // 10MB
+pub(crate) const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
 /// Deobfuscate strings that use concatenation patterns.
 ///
@@ -37,7 +37,7 @@ pub const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024; // 10MB
 ///
 /// This function detects these patterns, extracts the quoted segments,
 /// and reassembles them into the original encoded string.
-pub fn deobfuscate_concatenation(s: &str) -> Option<String> {
+pub(crate) fn deobfuscate_concatenation(s: &str) -> Option<String> {
     // Check if the string contains common concatenation patterns
     if !s.contains(" + ") && !s.contains(" . ") && !s.contains(" .. ") {
         return None;
@@ -77,7 +77,7 @@ pub fn deobfuscate_concatenation(s: &str) -> Option<String> {
 ///
 /// Unlike `decode_base64_strings` which decodes entire strings that are base64,
 /// this function extracts base64 substrings from within larger strings.
-pub fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     let mut results = Vec::new();
 
     for s in strings {
@@ -133,7 +133,7 @@ pub fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<ExtractedStri
 ///
 /// Returns a vector of newly decoded strings with `StringMethod::Base64Decode`.
 /// Also attempts to deobfuscate concatenated strings first.
-pub fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     let mut results = Vec::new();
 
     for s in strings {
@@ -232,7 +232,7 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
 /// Decode hex-encoded strings from a list of extracted strings.
 ///
 /// Returns a vector of newly decoded strings with `StringMethod::HexDecode`.
-pub fn decode_hex_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+pub(crate) fn decode_hex_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     let candidates: Vec<_> = strings
         .iter()
         .filter(|s| s.kind == Some(StringKind::HexEncoded) || is_likely_hex(&s.value))
@@ -298,7 +298,7 @@ fn decode_hex_string(s: &ExtractedString) -> Option<ExtractedString> {
 /// Decode URL-encoded strings from a list of extracted strings.
 ///
 /// Returns a vector of newly decoded strings with `StringMethod::UrlDecode`.
-pub fn decode_url_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+pub(crate) fn decode_url_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .iter()
         .filter(|s| s.kind == Some(StringKind::UrlEncoded) || is_likely_url_encoded(&s.value))
@@ -342,11 +342,14 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
 /// Decode unicode escape sequences from a list of extracted strings.
 ///
 /// Returns a vector of newly decoded strings with `StringMethod::UnicodeEscapeDecode`.
-pub fn decode_unicode_escape_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+pub(crate) fn decode_unicode_escape_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .iter()
         .filter(|s| {
-            s.kind == Some(StringKind::UnicodeEscaped) || is_likely_unicode_escaped(&s.value)
+            s.kind == Some(StringKind::UnicodeEscaped)
+                || s.value.contains("\\x")
+                || s.value.contains("\\u")
+                || s.value.contains("\\U")
         })
         .filter_map(decode_unicode_escape_string)
         .collect()
@@ -548,15 +551,10 @@ fn is_likely_url_encoded(s: &str) -> bool {
     percent_count >= 3
 }
 
-/// Check if a string looks like it has unicode escape sequences.
-fn is_likely_unicode_escaped(s: &str) -> bool {
-    s.contains("\\x") || s.contains("\\u") || s.contains("\\U")
-}
-
 /// Decode base32-encoded strings from a list of extracted strings.
 ///
 /// Returns a vector of newly decoded strings with `StringMethod::Base32Decode`.
-pub fn decode_base32_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+pub(crate) fn decode_base32_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .iter()
         .filter(|s| s.kind == Some(StringKind::Base32) || is_likely_base32(&s.value))
@@ -622,7 +620,7 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
 /// Decode base85-encoded strings from a list of extracted strings.
 ///
 /// Returns a vector of newly decoded strings with `StringMethod::Base85Decode`.
-pub fn decode_base85_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+pub(crate) fn decode_base85_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .iter()
         .filter(|s| s.kind == Some(StringKind::Base85) || is_likely_base85(&s.value))
@@ -684,7 +682,7 @@ fn decode_base85_string(s: &ExtractedString) -> Option<ExtractedString> {
 
 /// Try to decode ASCII85 encoded data. Public for validation purposes.
 /// Returns None if decoding fails.
-pub fn try_decode_ascii85(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn try_decode_ascii85(s: &str) -> Option<Vec<u8>> {
     decode_ascii85(s)
 }
 
@@ -819,7 +817,7 @@ fn string_quality_score(s: &str) -> u32 {
     };
 
     // Quality = weighted combination of printability and vowel ratio
-    ((printable_ratio * 7 + vowel_ratio * 3) / 10) as u32
+    u32::try_from((printable_ratio * 7 + vowel_ratio * 3) / 10).unwrap_or(0)
 }
 
 fn is_likely_base85(s: &str) -> bool {

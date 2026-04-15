@@ -5,7 +5,7 @@ use goblin::mach::MachO;
 /// Convert a PE section name ([u8; 8]) to a String, trimming NUL bytes.
 /// Avoids the allocation overhead of `String::from_utf8_lossy` for ASCII section names.
 #[inline]
-pub fn pe_section_name(name: &[u8; 8]) -> String {
+pub(crate) fn pe_section_name(name: &[u8; 8]) -> String {
     let end = name.iter().position(|&b| b == 0).unwrap_or(8);
     // PE section names are ASCII; use from_utf8 with lossy fallback for malformed binaries
     match std::str::from_utf8(&name[..end]) {
@@ -24,7 +24,8 @@ pub struct SectionInfo {
 }
 
 /// Collect segment and section names from a Mach-O binary.
-pub fn collect_macho_segments(macho: &MachO<'_>) -> Vec<String> {
+#[must_use]
+pub(crate) fn collect_macho_segments(macho: &MachO<'_>) -> Vec<String> {
     let mut segments = Vec::new();
     for seg in &macho.segments {
         if let Ok(name) = seg.name() {
@@ -42,6 +43,7 @@ pub fn collect_macho_segments(macho: &MachO<'_>) -> Vec<String> {
 }
 
 /// Collect section metadata from a Mach-O binary.
+#[must_use]
 pub fn collect_macho_section_info(
     macho: &MachO<'_>,
 ) -> std::collections::HashMap<String, SectionInfo> {
@@ -72,7 +74,8 @@ pub fn collect_macho_section_info(
 }
 
 /// Collect section names from an ELF binary.
-pub fn collect_elf_segments(elf: &goblin::elf::Elf<'_>) -> Vec<String> {
+#[must_use]
+pub(crate) fn collect_elf_segments(elf: &goblin::elf::Elf<'_>) -> Vec<String> {
     elf.section_headers
         .iter()
         .filter_map(|sh| {
@@ -84,6 +87,7 @@ pub fn collect_elf_segments(elf: &goblin::elf::Elf<'_>) -> Vec<String> {
 }
 
 /// Collect section metadata from an ELF binary.
+#[must_use]
 pub fn collect_elf_section_info(
     elf: &goblin::elf::Elf<'_>,
 ) -> std::collections::HashMap<String, SectionInfo> {
@@ -110,6 +114,7 @@ pub fn collect_elf_section_info(
 }
 
 /// Collect section metadata from a PE binary.
+#[must_use]
 pub fn collect_pe_section_info(
     pe: &goblin::pe::PE<'_>,
 ) -> std::collections::HashMap<String, SectionInfo> {
@@ -136,7 +141,8 @@ pub fn collect_pe_section_info(
 }
 
 /// Helper to check if a Mach-O binary has Go sections.
-pub fn macho_has_go_sections(macho: &MachO<'_>) -> bool {
+#[must_use]
+pub(crate) fn macho_has_go_sections(macho: &MachO<'_>) -> bool {
     macho.segments.iter().any(|seg| {
         seg.sections().is_ok_and(|secs| {
             secs.iter().any(|(sec, _)| {
@@ -148,6 +154,7 @@ pub fn macho_has_go_sections(macho: &MachO<'_>) -> bool {
 }
 
 /// Check if a binary is a Go binary by looking for Go-specific sections.
+#[must_use]
 pub fn is_go_binary(data: &[u8]) -> bool {
     use goblin::Object;
     match Object::parse(data) {
@@ -162,6 +169,7 @@ pub fn is_go_binary(data: &[u8]) -> bool {
 }
 
 /// Check if a binary is a Rust binary.
+#[must_use]
 pub fn is_rust_binary(data: &[u8]) -> bool {
     use goblin::Object;
     match Object::parse(data) {
@@ -175,7 +183,8 @@ pub fn is_rust_binary(data: &[u8]) -> bool {
 }
 
 /// Check if a Mach-O binary appears to be a Rust binary.
-pub fn macho_is_rust(macho: &MachO<'_>) -> bool {
+#[must_use]
+pub(crate) fn macho_is_rust(macho: &MachO<'_>) -> bool {
     macho.segments.iter().any(|seg| {
         seg.sections().is_ok_and(|secs| {
             secs.iter().any(|(sec, _)| {
@@ -187,7 +196,8 @@ pub fn macho_is_rust(macho: &MachO<'_>) -> bool {
 }
 
 /// Find the section name containing an address in a Mach-O binary.
-pub fn find_macho_section(macho: &MachO<'_>, addr: u64) -> Option<String> {
+#[must_use]
+pub(crate) fn find_macho_section(macho: &MachO<'_>, addr: u64) -> Option<String> {
     for seg in &macho.segments {
         for (sec, _) in &seg.sections().ok()? {
             let start = sec.addr;
@@ -201,7 +211,8 @@ pub fn find_macho_section(macho: &MachO<'_>, addr: u64) -> Option<String> {
 }
 
 /// Convert virtual address to file offset for Mach-O binaries.
-pub fn macho_vaddr_to_file_offset(macho: &MachO<'_>, vaddr: u64) -> u64 {
+#[must_use]
+pub(crate) fn macho_vaddr_to_file_offset(macho: &MachO<'_>, vaddr: u64) -> u64 {
     for seg in &macho.segments {
         let vm_start = seg.vmaddr;
         let vm_end = vm_start + seg.vmsize;

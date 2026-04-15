@@ -8,19 +8,59 @@
 //! Tracks register state and memory offsets to correctly reconstruct
 //! strings that are built out-of-order or with overlaps.
 
-use crate::garble::{check_printable, score_decoded_string, GarbleOp};
+// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::types::{ExtractedString, StringFragment, StringKind, StringMethod};
 use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
 use std::collections::{HashMap, HashSet};
 
+/// Check if bytes are printable ASCII and meet minimum length.
+fn check_printable(bytes: &[u8], min_length: usize) -> Option<String> {
+    let mut trimmed = bytes;
+    while let Some((last, rest)) = trimmed.split_last() {
+        if *last == 0 {
+            trimmed = rest;
+        } else {
+            break;
+        }
+    }
+    if trimmed.len() < min_length {
+        return None;
+    }
+    if trimmed.iter().all(|&b| b.is_ascii_graphic() || b == b' ') {
+        return String::from_utf8(trimmed.to_vec()).ok();
+    }
+    None
+}
+
+/// Score a decoded string for likelihood of being valid text.
+fn score_decoded_string(s: &str) -> i32 {
+    let mut score = 0i32;
+    for c in s.chars() {
+        if c.is_ascii_alphabetic() {
+            score += 3;
+        } else if c.is_ascii_digit() {
+            score += 1;
+        } else if matches!(c, '_' | '-' | '.' | '/' | ':' | ' ') {
+            score += 2;
+        } else if c.is_ascii_punctuation() {
+            // neutral
+        } else {
+            score -= 1;
+        }
+    }
+    score
+}
+
 /// Extract strings constructed on the stack.
-pub fn extract_stack_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
+pub(crate) fn extract_stack_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     let extractor = StackStringExtractor::new(data, min_length, None, 0, 0);
     extractor.extract()
 }
 
 /// Extract strings with full file context for resolving RIP-relative addresses.
-pub fn extract_stack_strings_with_context(
+pub(crate) fn extract_stack_strings_with_context(
     section_data: &[u8],
     min_length: usize,
     full_data: &[u8],
@@ -267,7 +307,9 @@ impl<'a> StackStringExtractor<'a> {
                 | Mnemonic::Jo
                 | Mnemonic::Jno => {
                     results.extend(self.finalize_writes());
-                    self.clear_state();
+                    self.regs.clear();
+                    self.raw_regs.clear();
+                    self.xmm_regs.clear();
                 }
                 _ => {}
             }
@@ -322,12 +364,6 @@ impl<'a> StackStringExtractor<'a> {
         });
     }
 
-    fn clear_state(&mut self) {
-        self.regs.clear();
-        self.raw_regs.clear();
-        self.xmm_regs.clear();
-    }
-
     fn finalize_writes(&mut self) -> Vec<ExtractedString> {
         let mut results = Vec::new();
         let writes_map = std::mem::take(&mut self.writes);
@@ -379,8 +415,8 @@ impl<'a> StackStringExtractor<'a> {
                     } else {
                         // Overlap
                         let overlap = current_end_disp - w.disp;
-                        if overlap < w.string.len() as i64 {
-                            let new_part = &w.string[overlap as usize..];
+                        if overlap >= 0 && overlap < w.string.len() as i64 {
+                            let new_part = &w.string[usize::try_from(overlap).unwrap_or(0)..];
                             current.value.push_str(new_part);
                             if let Some(frags) = &mut current.fragments {
                                 frags.push(StringFragment {
@@ -518,20 +554,24 @@ impl<'a> StackStringExtractor<'a> {
                 let mut pair_seen: HashSet<(i64, i64, u8)> = HashSet::new();
                 let mut pairs: Vec<Pair> = Vec::new();
 
-                for i in 0..indices.len() {
-                    for j in (i + 1)..indices.len() {
-                        let a = &blobs[indices[i]];
-                        let b = &blobs[indices[j]];
+                for (i, &idx_i) in indices.iter().enumerate() {
+                    let a = &blobs[idx_i];
+                    for &idx_j in &indices[i + 1..] {
+                        let b = &blobs[idx_j];
                         let disp_lo = a.disp.min(b.disp);
                         let disp_hi = a.disp.max(b.disp);
 
                         let mut best: Option<(String, i32)> = None;
-                        for op in [GarbleOp::Xor, GarbleOp::Sub, GarbleOp::Add] {
+                        for op in [
+                            (|x: u8, y: u8| x ^ y) as fn(u8, u8) -> u8,
+                            |x, y| x.wrapping_sub(y),
+                            |x, y| x.wrapping_add(y),
+                        ] {
                             let decoded_bytes: Vec<u8> = a
                                 .bytes
                                 .iter()
                                 .zip(b.bytes.iter())
-                                .map(|(&x, &y)| op.apply(x, y))
+                                .map(|(&x, &y)| op(x, y))
                                 .collect();
 
                             if let Some(decoded) = check_printable(&decoded_bytes, 1) {

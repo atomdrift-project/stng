@@ -6,9 +6,21 @@
 use aho_corasick::AhoCorasick;
 use std::sync::LazyLock;
 
-use crate::validation_thresholds::*;
+use crate::validation_thresholds::{
+    MAX_AVG_RUN_LENGTH_CHAOS, MAX_CLASS_DOMINANCE_RATIO, MAX_HASH_LENGTH, MAX_NON_ASCII_RATIO,
+    MAX_SHORT_ESCAPE_LENGTH, MAX_SPECIAL_RATIO_FOR_DOMAINS, MAX_SPECIAL_RATIO_FOR_PATHS,
+    MAX_TRANSITION_RATIO, MAX_WHITESPACE_RATIO, MIN_ALPHANUMERIC_RATIO, MIN_BASE64_LENGTH,
+    MIN_BASE64_RATIO_FOR_KEYS, MIN_CHAOTIC_PATTERN_LENGTH, MIN_EMAIL_VALID_CHAR_RATIO,
+    MIN_FAST_PATH_ALPHABETIC_RATIO, MIN_FAST_PATH_VALID_LENGTH, MIN_HASH_LENGTH,
+    MIN_HEX_RATIO_FOR_HASH, MIN_LOWERCASE_RATIO_FOR_PATHS, MIN_NON_ASCII_ALPHABETIC_RATIO,
+    MIN_NON_ASCII_COUNT_SHORT, MIN_SEGMENT_COUNT, MIN_TRANSITIONS_FOR_CHAOS,
+    MIN_WALLET_ALPHANUMERIC_RATIO, MIN_WALLET_LENGTH, MAX_WALLET_LENGTH,
+    MIXED_CASE_DIGIT_MAX_LEN, MIXED_CASE_DIGIT_MIN_LEN, SHORT_IDENTIFIER_MAX_LEN,
+    SHORT_IDENTIFIER_MIN_LEN, SHORT_NON_ASCII_CHECK_LEN,
+};
 
 /// Patterns that immediately identify miner IOC strings (pure OR match).
+#[allow(clippy::expect_used)]
 static MINER_PURE_OR: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         "stratum+tcp://",
@@ -28,11 +40,13 @@ static MINER_PURE_OR: LazyLock<AhoCorasick> = LazyLock::new(|| {
 });
 
 /// Pool-type indicators (combined with a network indicator to confirm miner IOC).
+#[allow(clippy::expect_used)]
 static MINER_POOL: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new(["pool.", "nanopool", "minergate"]).expect("valid pool patterns")
 });
 
 /// Code/script patterns that immediately mark a string as non-garbage (pure OR match).
+#[allow(clippy::expect_used)]
 static CODE_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         "__attribute__",
@@ -1473,6 +1487,7 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
 /// - Strings with very low alphanumeric ratio
 /// - Strings that are mostly whitespace padding
 /// - Strings with embedded null or control characters
+#[must_use]
 pub fn is_garbage(s: &str) -> bool {
     let trimmed = s.trim();
     let len = trimmed.len();

@@ -53,9 +53,6 @@ mod overlay;
 mod raw;
 mod stack_strings;
 
-// Garble deobfuscation
-pub mod garble;
-
 // Script deobfuscation
 pub mod script;
 
@@ -87,7 +84,6 @@ pub use types::{
 pub use xor::{extract_incremental_xor_strings, MAX_XOR_SCAN_SIZE};
 
 // Internal — not part of the stable public API
-pub(crate) use garble::extract_garble_rodata_strings;
 pub(crate) use go::GoStringExtractor;
 pub use overlay::extract_overlay_strings;
 pub(crate) use rust::RustStringExtractor;
@@ -175,100 +171,6 @@ fn apply_entitlements(
         }
     }
     strings.extend(entitlements);
-}
-
-/// Extract custom (non-stdlib) function names from Mach-O gopclntab.
-///
-/// Parses the Go program counter line table to find function names that don't
-/// belong to the Go standard library. Custom function names reveal the binary's
-/// internal module structure, which is critical for malware analysis.
-fn extract_pclntab_func_names_macho(
-    macho: &MachO<'_>,
-    data: &[u8],
-    min_length: usize,
-) -> Vec<ExtractedString> {
-    // Find __gopclntab section
-    let Some((pclntab_offset, pclntab_data)) = find_macho_section(macho, "__gopclntab", data)
-    else {
-        return Vec::new();
-    };
-
-    let Some(pclntab) = garble::Pclntab::parse(pclntab_data, 0) else {
-        return Vec::new();
-    };
-
-    pclntab
-        .extract_custom_func_names(min_length)
-        .into_iter()
-        .enumerate()
-        .map(|(i, name)| ExtractedString {
-            value: name,
-            data_offset: pclntab_offset + i as u64,
-            section: Some("__gopclntab".to_string()),
-            method: StringMethod::PclntabSymbol,
-            kind: Some(StringKind::FuncName),
-            ..Default::default()
-        })
-        .collect()
-}
-
-/// Extract custom (non-stdlib) function names from ELF gopclntab.
-fn extract_pclntab_func_names_elf(
-    elf: &goblin::elf::Elf<'_>,
-    data: &[u8],
-    min_length: usize,
-) -> Vec<ExtractedString> {
-    // Find .gopclntab section
-    let Some((pclntab_offset, pclntab_data)) = elf
-        .section_headers
-        .iter()
-        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("") == ".gopclntab")
-        .and_then(|sh| {
-            let start = sh.sh_offset as usize;
-            let end = start.saturating_add(sh.sh_size as usize);
-            let section_data = data.get(start..end)?;
-            Some((start as u64, section_data))
-        })
-    else {
-        return Vec::new();
-    };
-
-    let Some(pclntab) = garble::Pclntab::parse(pclntab_data, 0) else {
-        return Vec::new();
-    };
-
-    pclntab
-        .extract_custom_func_names(min_length)
-        .into_iter()
-        .enumerate()
-        .map(|(i, name)| ExtractedString {
-            value: name,
-            data_offset: pclntab_offset + i as u64,
-            section: Some(".gopclntab".to_string()),
-            method: StringMethod::PclntabSymbol,
-            kind: Some(StringKind::FuncName),
-            ..Default::default()
-        })
-        .collect()
-}
-
-/// Find a named section in a Mach-O binary, returning (file_offset, data).
-fn find_macho_section<'a>(
-    macho: &MachO<'_>,
-    name: &str,
-    data: &'a [u8],
-) -> Option<(u64, &'a [u8])> {
-    for seg in &macho.segments {
-        for (sect, _) in seg.sections().unwrap_or_default() {
-            if sect.name().unwrap_or("") == name {
-                let offset = sect.offset as usize;
-                let size = sect.size as usize;
-                let section_data = data.get(offset..offset + size)?;
-                return Some((offset as u64, section_data));
-            }
-        }
-    }
-    None
 }
 
 /// Run XOR scanning and extend `strings` with any decoded results.
@@ -532,19 +434,6 @@ fn enrich_elf_sections(strings: &mut [ExtractedString], elf: &goblin::elf::Elf<'
     }
 }
 
-/// Convert Mach-O cputype to architecture string
-fn cputype_to_arch_string(cputype: u32) -> &'static str {
-    match cputype {
-        CPU_TYPE_X86_64 => "x86_64",
-        CPU_TYPE_ARM64 => "arm64",
-        CPU_TYPE_X86 => "x86",
-        CPU_TYPE_ARM => "arm",
-        CPU_TYPE_POWERPC => "ppc",
-        CPU_TYPE_POWERPC64 => "ppc64",
-        _ => "unknown",
-    }
-}
-
 /// Enrich strings with section information based on their file offsets (Mach-O)
 ///
 /// `base_offset` is the file offset where this architecture starts (0 for regular binaries,
@@ -554,7 +443,15 @@ fn enrich_macho_sections(
     macho: &goblin::mach::MachO<'_>,
     base_offset: u64,
 ) {
-    let arch_name = cputype_to_arch_string(macho.header.cputype);
+    let arch_name = match macho.header.cputype {
+        CPU_TYPE_X86_64 => "x86_64",
+        CPU_TYPE_ARM64 => "arm64",
+        CPU_TYPE_X86 => "x86",
+        CPU_TYPE_ARM => "arm",
+        CPU_TYPE_POWERPC => "ppc",
+        CPU_TYPE_POWERPC64 => "ppc64",
+        _ => "unknown",
+    };
     // Calculate Mach-O header regions (relative to architecture start)
     // Header is 32 bytes for 64-bit, 28 bytes for 32-bit
     let header_size: u64 = if macho.is_64 { 32 } else { 28 };
@@ -716,6 +613,7 @@ impl Default for ExtractOptions {
 }
 
 impl ExtractOptions {
+    #[must_use]
     pub fn new(min_length: usize) -> Self {
         Self {
             min_length,
@@ -827,43 +725,6 @@ pub fn extract_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     extract_strings_with_options(data, &ExtractOptions::new(min_length))
 }
 
-fn method_priority(m: StringMethod) -> u8 {
-    match m {
-        // Highest priority: language-aware extraction and obfuscated decoded content
-        StringMethod::Structure
-        | StringMethod::StackString
-        | StringMethod::XorStackPair
-        | StringMethod::GarbleRodata
-        | StringMethod::GarbleEmulated
-        | StringMethod::InstructionPattern
-        | StringMethod::XorDecode
-        | StringMethod::Base64ObfuscatedDecode
-        | StringMethod::Base64Decode
-        | StringMethod::Base32Decode
-        | StringMethod::Base85Decode
-        | StringMethod::HexDecode
-        | StringMethod::UrlDecode
-        | StringMethod::UnicodeEscapeDecode
-        | StringMethod::Utf16LeDecode
-        | StringMethod::Utf16BeDecode
-        | StringMethod::ScriptDecode => 3,
-
-        // High priority: decoded/extracted content
-        StringMethod::R2String
-        | StringMethod::R2Symbol
-        | StringMethod::WideString
-        | StringMethod::SpacedAscii
-        | StringMethod::CodeSignature
-        | StringMethod::PclntabSymbol => 2,
-
-        // Medium priority: heuristics
-        StringMethod::Heuristic => 1,
-
-        // Lowest priority: raw scanning
-        StringMethod::RawScan => 0,
-    }
-}
-
 /// Decode spaced ASCII strings in place.
 ///
 /// This handles strings like "V a r F i l e I n f o" -> "VarFileInfo"
@@ -929,8 +790,8 @@ fn deduplicate_by_offset(strings: Vec<ExtractedString>) -> Vec<ExtractedString> 
         } else {
             // Multiple strings at same offset - prefer decoded strings, then longest
             candidates.sort_by(|a, b| {
-                let priority_a = method_priority(a.method);
-                let priority_b = method_priority(b.method);
+                let priority_a = a.method.dedup_priority();
+                let priority_b = b.method.dedup_priority();
 
                 // Sort descending: Higher priority first, then longer string first
                 priority_b
@@ -1196,27 +1057,6 @@ fn extract_from_object(
                 let extractor = GoStringExtractor::new(min_length);
                 strings.extend(extractor.extract_macho(macho, data));
 
-                // Scan rodata sections for garble-obfuscated strings (byte array pairs)
-                for seg in &macho.segments {
-                    for (sect, _) in seg.sections().unwrap_or_default() {
-                        let sectname = sect.name().unwrap_or("");
-                        if sectname.contains("rodata") || sectname == "__const" {
-                            let offset = sect.offset as usize;
-                            let size = sect.size as usize;
-                            if let Some(section_data) = data.get(offset..offset + size) {
-                                strings.extend(extract_garble_rodata_strings(
-                                    section_data,
-                                    offset as u64,
-                                    min_length,
-                                ));
-                            }
-                        }
-                    }
-                }
-
-                // Extract custom function names from gopclntab
-                strings.extend(extract_pclntab_func_names_macho(macho, data, min_length));
-
                 // Raw scan fallback for Go shared libraries / cgo binaries
                 let known: HashSet<String> = strings.iter().map(|s| s.value.clone()).collect();
                 for s in extract_raw_strings(data, min_length, None, &segments, &section_info) {
@@ -1269,7 +1109,6 @@ fn extract_from_object(
                         is_go_binary = true;
                         let extractor = GoStringExtractor::new(min_length);
                         strings.extend(extractor.extract_macho(&macho, data));
-                        strings.extend(extract_pclntab_func_names_macho(&macho, data, min_length));
 
                         // Raw scan fallback for Go shared libraries / cgo binaries
                         let known: HashSet<String> =
@@ -1344,7 +1183,6 @@ fn extract_from_object(
                 is_go_binary = true;
                 let extractor = GoStringExtractor::new(min_length);
                 strings.extend(extractor.extract_elf(elf, scan_data));
-                strings.extend(extract_pclntab_func_names_elf(elf, scan_data, min_length));
 
                 // Raw scan fallback: Go shared libraries (cgo) store many strings
                 // in .noptrdata, .strtab, .symtab etc. that the structure-based
@@ -1408,7 +1246,10 @@ fn extract_from_object(
                     .iter()
                     .find(|sh| elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("") == ".text")
                     .and_then(|sh| {
+                        // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only)
+                        #[allow(clippy::cast_possible_truncation)]
                         let start = sh.sh_offset as usize;
+                        #[allow(clippy::cast_possible_truncation)]
                         let end = start.saturating_add(sh.sh_size as usize);
                         let text = scan_data.get(start..end)?;
                         Some((start, sh.sh_addr, text))
@@ -1429,22 +1270,6 @@ fn extract_from_object(
                     );
                 }
 
-                // Scan data sections for garble-obfuscated strings (byte array pairs)
-                for section_name in [".rodata", ".noptrdata", ".data"] {
-                    if let Some((offset, data)) = elf
-                        .section_headers
-                        .iter()
-                        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("") == section_name)
-                        .and_then(|sh| {
-                            let start = sh.sh_offset as usize;
-                            let end = start.saturating_add(sh.sh_size as usize);
-                            let data = scan_data.get(start..end)?;
-                            Some((start as u64, data))
-                        })
-                    {
-                        strings.extend(extract_garble_rodata_strings(data, offset, min_length));
-                    }
-                }
             } else {
                 // Only scan executable sections for stack strings to avoid wasting time on data
                 // Parallelize section scanning using Rayon
@@ -1455,7 +1280,10 @@ fn extract_from_object(
                         sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) != 0
                     })
                     .filter_map(|sh| {
+                        // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only)
+                        #[allow(clippy::cast_possible_truncation)]
                         let start = sh.sh_offset as usize;
+                        #[allow(clippy::cast_possible_truncation)]
                         let end = start.saturating_add(sh.sh_size as usize);
                         scan_data.get(start..end).map(|text| {
                             let mut results = extract_stack_strings(text, min_length);

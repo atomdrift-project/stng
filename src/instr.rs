@@ -4,6 +4,9 @@
 //! pointer+length structures. Instead, compilers pass string addresses and lengths
 //! through registers. We extract these by pattern matching instruction sequences.
 
+// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
+#![allow(clippy::cast_possible_truncation)]
+
 use super::classifier::classify_string;
 use super::types::{ExtractedString, StringKind, StringMethod};
 use std::collections::HashSet;
@@ -12,7 +15,7 @@ use std::collections::HashSet;
 ///
 /// Scans for BL (branch with link) instructions and looks backwards for
 /// ADRP+ADD patterns (string address) and MOV/ORR patterns (string length).
-pub fn extract_inline_strings_arm64(
+pub(crate) fn extract_inline_strings_arm64(
     text_data: &[u8],
     text_addr: u64,
     rodata_data: &[u8],
@@ -241,7 +244,7 @@ fn decode_arm64_string(
 
     // Decode ADD: extract immediate
     let add_imm = (inst2 >> 10) & 0xFFF;
-    let str_addr = (page_addr as u64).wrapping_add(u64::from(add_imm));
+    let str_addr = u64::try_from(page_addr).unwrap_or(u64::MAX).wrapping_add(u64::from(add_imm));
 
     // Decode MOV/ORR: extract length
     let str_len = decode_arm_mov_immediate(inst3)?;
@@ -359,7 +362,7 @@ fn decode_arm_bitmask_immediate(inst: u32) -> Option<u64> {
 ///
 /// Scans for CALL instructions and looks for LEAQ addr(RIP) patterns
 /// (string address) and MOVL/MOVQ patterns (string length).
-pub fn extract_inline_strings_amd64(
+pub(crate) fn extract_inline_strings_amd64(
     text_data: &[u8],
     text_addr: u64,
     rodata_data: &[u8],
@@ -543,7 +546,7 @@ fn extract_amd64_first_arg_string(
                 text_data[pos + 6],
             ]);
             let rip_addr = text_addr + (pos + 7) as u64;
-            let str_addr = (rip_addr as i64 + i64::from(offset)) as u64;
+            let str_addr = rip_addr.wrapping_add_signed(i64::from(offset));
 
             // Look for MOVL/MOVQ $len, RSI
             let mut str_len = 0u64;
@@ -687,7 +690,7 @@ fn extract_amd64_key_string(
                 text_data[pos + 6],
             ]);
             let rip_addr = text_addr + (pos + 7) as u64;
-            let str_addr = (rip_addr as i64 + i64::from(offset)) as u64;
+            let str_addr = rip_addr.wrapping_add_signed(i64::from(offset));
 
             // Find MOVL $len, EDX (BA xx xx xx xx)
             let mut str_len = 0u64;
@@ -853,8 +856,8 @@ fn extract_amd64_value_string(
                 continue;
             };
             let rip_addr = text_addr + (call_pos + offset + 7) as u64;
-            // Use wrapping_add for RIP-relative address calculation (x86-64 semantics)
-            let str_addr = (rip_addr as i64).wrapping_add(i64::from(rip_offset)) as u64;
+            // Use wrapping_add_signed for RIP-relative address calculation (x86-64 semantics)
+            let str_addr = rip_addr.wrapping_add_signed(i64::from(rip_offset));
 
             if str_addr < rodata_addr || str_addr >= rodata_end {
                 continue;
@@ -929,7 +932,7 @@ fn extract_amd64_go_arg1_string(
             text_data[pos + 6],
         ]);
         let rip_addr = text_addr + (pos + 7) as u64;
-        let str_addr = (rip_addr as i64 + i64::from(offset)) as u64;
+        let str_addr = rip_addr.wrapping_add_signed(i64::from(offset));
 
         // Look for MOVL $imm32, EBX (BB xx xx xx xx) within next 20 bytes
         let mut str_len = 0u64;
@@ -1041,7 +1044,7 @@ fn extract_amd64_go_arg2_string(
             text_data[pos + 6],
         ]);
         let rip_addr = text_addr + (pos + 7) as u64;
-        let str_addr = (rip_addr as i64 + i64::from(offset)) as u64;
+        let str_addr = rip_addr.wrapping_add_signed(i64::from(offset));
 
         // Look for MOVL $imm32, EDI (BF xx xx xx xx) within next 20 bytes
         let mut str_len = 0u64;
@@ -1167,7 +1170,7 @@ fn extract_amd64_stack_strings(
             text_data[pos + 6],
         ]);
         let rip_addr = text_addr + (pos + 7) as u64;
-        let str_addr = (rip_addr as i64 + i64::from(offset)) as u64;
+        let str_addr = rip_addr.wrapping_add_signed(i64::from(offset));
 
         // Must point into rodata
         if str_addr < rodata_addr || str_addr >= rodata_end {

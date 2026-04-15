@@ -91,7 +91,7 @@ static B64DECODE_VAR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"\.b64decode\s*\(\s*(\w+)\s*\)"#).expect("static regex"));
 
 /// Extract all obfuscated payloads from a Python script.
-pub fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {
+pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {
     let mut results = Vec::new();
 
     // Try direct patterns first (most common, simplest)

@@ -98,13 +98,11 @@ pub(super) fn is_good_xor_key_candidate(s: &str, entropy: f64) -> bool {
     }
 
     // Reject sequential patterns (like "abcdefghijklmnopqrstuvwxyz")
-    let mut sequential_count = 0;
     let bytes = s.as_bytes();
-    for i in 0..bytes.len().saturating_sub(2) {
-        if bytes[i] + 1 == bytes[i + 1] && bytes[i + 1] + 1 == bytes[i + 2] {
-            sequential_count += 1;
-        }
-    }
+    let sequential_count = bytes
+        .windows(3)
+        .filter(|w| w[0].wrapping_add(1) == w[1] && w[1].wrapping_add(1) == w[2])
+        .count();
     // Reject if more than 20% sequential
     if sequential_count * 5 > bytes.len() {
         return false;

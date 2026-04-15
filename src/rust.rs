@@ -8,6 +8,9 @@
 //! 1. No dedicated sections like .gopclntab
 //! 2. More aggressive inlining and optimization
 //! 3. String data may be in .rodata or .data.rel.ro
+
+// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
+#![allow(clippy::cast_possible_truncation)]
 //!
 //! For inline literals, we also perform instruction pattern analysis.
 
@@ -50,12 +53,12 @@ static RE_DOMAIN: LazyLock<Regex> =
 const STRUCTURE_MIN_LENGTH: usize = 2;
 
 /// Extracts strings from Rust binaries using structure analysis.
-pub struct RustStringExtractor {
+pub(crate) struct RustStringExtractor {
     min_length: usize,
 }
 
 impl RustStringExtractor {
-    pub fn new(min_length: usize) -> Self {
+    pub(crate) fn new(min_length: usize) -> Self {
         Self { min_length }
     }
 
@@ -68,7 +71,7 @@ impl RustStringExtractor {
     ///
     /// Rust stores &str slice structures (ptr+len) in `__DATA_CONST`,
     /// while the actual string data is in `__TEXT,__const` or `__cstring`.
-    pub fn extract_macho(&self, macho: &MachO<'_>, _data: &[u8]) -> Vec<ExtractedString> {
+    pub(crate) fn extract_macho(&self, macho: &MachO<'_>, _data: &[u8]) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         let info = BinaryInfo::from_macho(macho.is_64);
 
@@ -145,7 +148,7 @@ impl RustStringExtractor {
 
         // PHASE 2: Raw extraction from __cstring (null-terminated strings)
         if let Some((_, cstring_data)) = cstring_info {
-            let raw = self.extract_raw_strings(cstring_data, Some("__cstring".to_string()));
+            let raw = self.extract_raw_strings(cstring_data, Some("__cstring"));
             let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
             let new_strings: Vec<_> = raw
                 .into_iter()
@@ -162,7 +165,7 @@ impl RustStringExtractor {
         const MAX_HEURISTIC_SECTION_SIZE: usize = 1024 * 1024;
         if let Some((text_const_addr, text_const_data)) = text_const_info {
             let heuristic = if text_const_data.len() <= MAX_HEURISTIC_SECTION_SIZE {
-                self.extract_packed_strings(text_const_data, Some("__TEXT,__const".to_string()))
+                self.extract_packed_strings(text_const_data, Some("__TEXT,__const"))
             } else {
                 Vec::new()
             };
@@ -230,7 +233,7 @@ impl RustStringExtractor {
     }
 
     /// Extract strings from an ELF binary.
-    pub fn extract_elf(&self, elf: &Elf<'_>, data: &[u8]) -> Vec<ExtractedString> {
+    pub(crate) fn extract_elf(&self, elf: &Elf<'_>, data: &[u8]) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         // Use actual endianness from ELF header
         let info = BinaryInfo::from_elf(elf.is_64, elf.little_endian);
@@ -387,7 +390,7 @@ impl RustStringExtractor {
     fn extract_raw_strings(
         &self,
         data: &[u8],
-        section_name: Option<String>,
+        section_name: Option<&str>,
     ) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
@@ -404,7 +407,7 @@ impl RustStringExtractor {
                             strings.push(ExtractedString {
                                 value: trimmed.to_string(),
                                 data_offset: start_offset as u64,
-                                section: section_name.clone(),
+                                section: section_name.map(str::to_string),
                                 method: StringMethod::RawScan,
                                 kind: classify_string(trimmed),
                                 ..Default::default()
@@ -434,7 +437,7 @@ impl RustStringExtractor {
     fn extract_packed_strings(
         &self,
         data: &[u8],
-        section_name: Option<String>,
+        section_name: Option<&str>,
     ) -> Vec<ExtractedString> {
         // Convert bytes to text, marking non-printable bytes
         let mut text = String::with_capacity(data.len());
@@ -474,7 +477,7 @@ impl RustStringExtractor {
                 self.extract_patterns_from_segment(
                     segment,
                     *segment_base,
-                    &section_name,
+                    section_name,
                     &mut strings,
                     &mut seen,
                 );
@@ -499,7 +502,7 @@ impl RustStringExtractor {
         &self,
         segment: &str,
         segment_base: u64,
-        section_name: &Option<String>,
+        section_name: Option<&str>,
         strings: &mut Vec<ExtractedString>,
         seen: &mut HashSet<String>,
     ) {
@@ -601,7 +604,7 @@ impl RustStringExtractor {
         &self,
         s: &str,
         data_offset: u64,
-        section_name: &Option<String>,
+        section_name: Option<&str>,
         strings: &mut Vec<ExtractedString>,
         seen: &mut HashSet<String>,
     ) {
@@ -630,7 +633,7 @@ impl RustStringExtractor {
         strings.push(ExtractedString {
             value: trimmed.to_string(),
             data_offset,
-            section: section_name.clone(),
+            section: section_name.map(str::to_string),
             method: StringMethod::Heuristic,
             kind: classify_string(trimmed),
             ..Default::default()
@@ -663,7 +666,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"Hello\0World\0foo\0";
 
-        let strings = extractor.extract_raw_strings(data, Some(".rodata".to_string()));
+        let strings = extractor.extract_raw_strings(data, Some(".rodata"));
 
         assert_eq!(strings.len(), 2); // "Hello" and "World", "foo" is < 4 chars
         assert!(strings.iter().any(|s| s.value == "Hello"));
@@ -720,7 +723,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"https://example.com/path?query=value";
 
-        let strings = extractor.extract_packed_strings(data, Some("test".to_string()));
+        let strings = extractor.extract_packed_strings(data, Some("test"));
 
         assert!(strings.iter().any(|s| s.value.contains("example.com")));
     }
@@ -794,7 +797,7 @@ mod tests {
         let mut strings = Vec::new();
         let mut seen = HashSet::new();
 
-        extractor.add_if_valid("short", 0, &None, &mut strings, &mut seen);
+        extractor.add_if_valid("short", 0, None, &mut strings, &mut seen);
 
         assert!(strings.is_empty());
     }
@@ -806,7 +809,7 @@ mod tests {
         let mut seen = HashSet::new();
 
         seen.insert("hello".to_string());
-        extractor.add_if_valid("hello", 0, &None, &mut strings, &mut seen);
+        extractor.add_if_valid("hello", 0, None, &mut strings, &mut seen);
 
         assert!(strings.is_empty());
     }
@@ -818,7 +821,7 @@ mod tests {
         let mut seen = HashSet::new();
 
         // More than 70% digits should be rejected
-        extractor.add_if_valid("12345678ab", 0, &None, &mut strings, &mut seen);
+        extractor.add_if_valid("12345678ab", 0, None, &mut strings, &mut seen);
 
         assert!(strings.is_empty());
     }
@@ -830,7 +833,7 @@ mod tests {
         let mut seen = HashSet::new();
 
         // Short hex patterns should be rejected
-        extractor.add_if_valid("deadbeef", 0, &None, &mut strings, &mut seen);
+        extractor.add_if_valid("deadbeef", 0, None, &mut strings, &mut seen);
 
         assert!(strings.is_empty());
     }
@@ -844,7 +847,7 @@ mod tests {
         extractor.add_if_valid(
             "hello_world",
             0,
-            &Some(".rodata".to_string()),
+            Some(".rodata"),
             &mut strings,
             &mut seen,
         );
@@ -858,11 +861,10 @@ mod tests {
     fn test_extract_patterns_from_segment_complex() {
         let extractor = RustStringExtractor::new(4);
         let segment = "https://example.com/path /usr/bin/test MY_ENV_VAR=value snake_case_ident";
-        let section = Some(".rodata".to_string());
         let mut strings = Vec::new();
         let mut seen = HashSet::new();
 
-        extractor.extract_patterns_from_segment(segment, 0, &section, &mut strings, &mut seen);
+        extractor.extract_patterns_from_segment(segment, 0, Some(".rodata"), &mut strings, &mut seen);
 
         // Should extract URLs, paths, env vars, and identifiers
         assert!(!strings.is_empty());
@@ -876,7 +878,7 @@ mod tests {
         let mut strings = Vec::new();
         let mut seen = HashSet::new();
 
-        extractor.extract_patterns_from_segment(segment, 0, &None, &mut strings, &mut seen);
+        extractor.extract_patterns_from_segment(segment, 0, None, &mut strings, &mut seen);
 
         // Should handle case transitions
         assert!(!strings.is_empty());

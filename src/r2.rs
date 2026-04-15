@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 static TOOL: OnceLock<Option<&'static str>> = OnceLock::new();
 
 /// Check if rizin or radare2 is available, preferring rizin.
+#[must_use]
 pub fn is_available() -> bool {
     get_tool().is_some()
 }
@@ -57,6 +58,7 @@ fn get_tool() -> Option<&'static str> {
 ///
 /// Uses `izzj` (whole binary scan) for files ≤10MB.
 /// For large files (>10MB), returns None to avoid slow scan.
+#[must_use]
 pub fn extract_string_boundaries(path: &str) -> Option<Vec<StringBoundary>> {
     let tool = get_tool()?;
 
@@ -175,7 +177,7 @@ pub fn extract_strings(
                     continue;
                 }
                 if s.name.len() >= min_length && seen.insert(s.name.clone()) {
-                    let kind = classify_r2_symbol(&s.r#type, &s.bind);
+                    let kind = Some(classify_r2_symbol(&s.r#type, &s.bind));
 
                     // Look up function metadata if this is a function
                     let func_meta = if s.r#type == "FUNC" || s.r#type == "METH" {
@@ -328,7 +330,9 @@ fn run_tool_command_with_cache(
         // Store in cache for next time
         if use_cache {
             if let Ok(cache) = R2Cache::new() {
-                let _ = cache.set(path, cmd, &result);
+                if let Err(e) = cache.set(path, cmd, &result) {
+                    tracing::debug!("r2 cache write failed: {e}");
+                }
             }
         }
 
@@ -374,6 +378,7 @@ struct R2Symbol {
 ///
 /// Returns Some(decoded) if the string follows the space-padded pattern.
 /// Returns None if not a spaced string pattern.
+#[must_use]
 pub fn decode_spaced_ascii(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
 
@@ -456,12 +461,12 @@ pub fn decode_spaced_ascii(s: &str) -> Option<String> {
     }
 }
 
-fn classify_r2_symbol(type_str: &str, bind: &str) -> Option<StringKind> {
+fn classify_r2_symbol(type_str: &str, bind: &str) -> StringKind {
     match type_str {
-        "FUNC" | "METH" => Some(StringKind::FuncName),
-        "FILE" => Some(StringKind::FilePath),
-        "OBJECT" if bind == "GLOBAL" => Some(StringKind::Ident),
-        _ => Some(StringKind::Ident),
+        "FUNC" | "METH" => StringKind::FuncName,
+        "FILE" => StringKind::FilePath,
+        "OBJECT" if bind == "GLOBAL" => StringKind::Ident,
+        _ => StringKind::Ident,
     }
 }
 
@@ -812,52 +817,28 @@ mod tests {
 
     #[test]
     fn test_classify_r2_symbol() {
-        assert_eq!(
-            classify_r2_symbol("FUNC", "GLOBAL"),
-            Some(StringKind::FuncName)
-        );
-        assert_eq!(
-            classify_r2_symbol("FILE", "LOCAL"),
-            Some(StringKind::FilePath)
-        );
-        assert_eq!(
-            classify_r2_symbol("OBJECT", "GLOBAL"),
-            Some(StringKind::Ident)
-        );
+        assert_eq!(classify_r2_symbol("FUNC", "GLOBAL"), StringKind::FuncName);
+        assert_eq!(classify_r2_symbol("FILE", "LOCAL"), StringKind::FilePath);
+        assert_eq!(classify_r2_symbol("OBJECT", "GLOBAL"), StringKind::Ident);
     }
 
     #[test]
     fn test_classify_r2_symbol_meth() {
-        assert_eq!(
-            classify_r2_symbol("METH", "GLOBAL"),
-            Some(StringKind::FuncName)
-        );
-        assert_eq!(
-            classify_r2_symbol("METH", "LOCAL"),
-            Some(StringKind::FuncName)
-        );
+        assert_eq!(classify_r2_symbol("METH", "GLOBAL"), StringKind::FuncName);
+        assert_eq!(classify_r2_symbol("METH", "LOCAL"), StringKind::FuncName);
     }
 
     #[test]
     fn test_classify_r2_symbol_unknown_type() {
-        assert_eq!(
-            classify_r2_symbol("UNKNOWN", "GLOBAL"),
-            Some(StringKind::Ident)
-        );
-        assert_eq!(classify_r2_symbol("", ""), Some(StringKind::Ident));
-        assert_eq!(
-            classify_r2_symbol("NOTYPE", "LOCAL"),
-            Some(StringKind::Ident)
-        );
+        assert_eq!(classify_r2_symbol("UNKNOWN", "GLOBAL"), StringKind::Ident);
+        assert_eq!(classify_r2_symbol("", ""), StringKind::Ident);
+        assert_eq!(classify_r2_symbol("NOTYPE", "LOCAL"), StringKind::Ident);
     }
 
     #[test]
     fn test_classify_r2_symbol_object_local() {
         // OBJECT with LOCAL binding should not be Ident
-        assert_eq!(
-            classify_r2_symbol("OBJECT", "LOCAL"),
-            Some(StringKind::Ident)
-        );
+        assert_eq!(classify_r2_symbol("OBJECT", "LOCAL"), StringKind::Ident);
     }
 
     #[test]
@@ -1019,6 +1000,7 @@ mod tests {
 /// built in-line (common in embedded malware). Returns IP:port strings.
 ///
 /// For large files (>10MB), skips R2 analysis (very slow) and only scans binary directly.
+#[must_use]
 pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
     let Some(tool) = get_tool() else {
         return Vec::new();

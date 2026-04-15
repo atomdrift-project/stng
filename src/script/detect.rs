@@ -13,6 +13,7 @@ pub enum ScriptLanguage {
 }
 
 impl ScriptLanguage {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Python => "python",
@@ -27,12 +28,13 @@ impl ScriptLanguage {
 ///
 /// Examines the first ~8KB for language-specific markers. Returns `None`
 /// for plain text, config files, data files, etc.
+#[must_use]
 pub fn detect_script_language(data: &[u8]) -> Option<ScriptLanguage> {
     let sample_size = data.len().min(8192);
     let text = std::str::from_utf8(&data[..sample_size]).ok()?;
 
     // PHP is very distinctive — check first
-    if is_php(text) {
+    if text.contains("<?php") || text.contains("<?=") {
         return Some(ScriptLanguage::Php);
     }
 
@@ -56,15 +58,14 @@ pub fn detect_script_language(data: &[u8]) -> Option<ScriptLanguage> {
     if py_score >= 1 && has_python_obfuscation(text) {
         return Some(ScriptLanguage::Python);
     }
-    if js_score >= 1 && has_javascript_obfuscation(text) {
+    if js_score >= 1
+        && (text.contains("eval(") || text.contains("Function("))
+        && (text.contains("atob(") || text.contains("Buffer.from") || text.contains("fromCharCode"))
+    {
         return Some(ScriptLanguage::JavaScript);
     }
 
     None
-}
-
-fn is_php(text: &str) -> bool {
-    text.contains("<?php") || text.contains("<?=")
 }
 
 fn is_powershell(text: &str) -> bool {
@@ -176,11 +177,6 @@ fn has_python_obfuscation(text: &str) -> bool {
             || text.contains("codecs")
             || text.contains("marshal")
             || text.contains("zlib"))
-}
-
-fn has_javascript_obfuscation(text: &str) -> bool {
-    (text.contains("eval(") || text.contains("Function("))
-        && (text.contains("atob(") || text.contains("Buffer.from") || text.contains("fromCharCode"))
 }
 
 fn has_shebang(text: &str, interpreters: &[&str]) -> bool {

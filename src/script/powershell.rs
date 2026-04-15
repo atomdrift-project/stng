@@ -67,7 +67,7 @@ static IEX_ENCODING_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Extract all obfuscated payloads from a PowerShell script.
-pub fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {
+pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {
     let mut results = Vec::new();
 
     results.extend(try_encoded_command(source));

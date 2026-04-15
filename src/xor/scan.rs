@@ -4,6 +4,9 @@
 //! rolling/index-based XOR detection for Windows environment variables,
 //! and all `extract_custom_xor_strings` variants.
 
+// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
+#![allow(clippy::cast_possible_truncation)]
+
 use super::classify::{
     classify_xor_string, clean_locale_trailing_garbage, clean_url_trailing_garbage,
     trim_consonant_clusters, trim_trailing_garbage,
@@ -117,7 +120,7 @@ pub(super) static AUTOMATON_WITH_WIDE: LazyLock<(AhoCorasick, Vec<PatternInfo>)>
 /// * `enable_early_termination` - If true, stops after finding MAX_STRINGS_BEFORE_EARLY_TERMINATION.
 ///   Should be true for auto-detection (speeds up candidate testing) and false for user-provided
 ///   keys (ensures complete extraction).
-pub fn extract_custom_xor_strings(
+pub(crate) fn extract_custom_xor_strings(
     data: &[u8],
     key: &[u8],
     min_length: usize,
@@ -135,7 +138,7 @@ pub fn extract_custom_xor_strings(
 
 /// Extract XOR strings with optional radare2 boundary hints.
 /// Hints are tried first, and successful regions are excluded from file-wide scanning.
-pub fn extract_custom_xor_strings_with_hints(
+pub(crate) fn extract_custom_xor_strings_with_hints(
     data: &[u8],
     key: &[u8],
     min_length: usize,
@@ -171,7 +174,7 @@ pub fn extract_custom_xor_strings_with_hints(
         key,
         min_length,
         apply_filters,
-        excluded_ranges,
+        &excluded_ranges,
         hint_results,
         enable_early_termination,
     )
@@ -182,7 +185,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
     key: &[u8],
     min_length: usize,
     apply_filters: bool,
-    excluded_ranges: Vec<(usize, usize)>,
+    excluded_ranges: &[(usize, usize)],
     hint_results: Vec<ExtractedString>,
     enable_early_termination: bool,
 ) -> Vec<ExtractedString> {
@@ -199,7 +202,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
             key,
             min_length,
             apply_filters,
-            &excluded_ranges,
+            excluded_ranges,
             enable_early_termination,
         );
 
@@ -529,7 +532,7 @@ fn is_xor_key_artifact(s: &str, key: &[u8]) -> bool {
     // (happens when XORing the key with itself or null bytes)
     if s.len() >= key.len() {
         // Count how many characters match the key pattern
-        let mut matches = 0;
+        let mut matches = 0usize;
         for (i, c) in s.chars().enumerate() {
             let key_char = key[i % key.len()] as char;
             if c == key_char {
@@ -538,7 +541,7 @@ fn is_xor_key_artifact(s: &str, key: &[u8]) -> bool {
         }
 
         // If >70% of the string matches the key pattern, it's likely an artifact
-        if (matches as u64 * 100) / s.len() as u64 > 70 {
+        if (matches * 100) / s.len() > 70 {
             return true;
         }
     }
@@ -935,7 +938,7 @@ const ROLLING_XOR_PATTERNS: &[&[u8]] = &[
 ///
 /// This is common in .NET malware like Redline Stealer which XORs configuration
 /// strings with short cycling keys.
-pub fn extract_rolling_xor_with_known_plaintext(
+pub(crate) fn extract_rolling_xor_with_known_plaintext(
     data: &[u8],
     min_length: usize,
 ) -> Vec<ExtractedString> {
@@ -964,9 +967,11 @@ pub fn extract_rolling_xor_with_known_plaintext(
 
                 // Derive candidate key on the stack (max 4 bytes)
                 let mut candidate_key = [0u8; 4];
-                for i in 0..key_len {
-                    candidate_key[i] = data[offset + i] ^ pattern[i];
-                }
+                candidate_key[..key_len]
+                    .iter_mut()
+                    .zip(&data[offset..])
+                    .zip(pattern.iter())
+                    .for_each(|((slot, &d), &p)| *slot = d ^ p);
 
                 // Skip keys that are all zeros
                 if candidate_key[..key_len].iter().all(|&b| b == 0) {
@@ -1004,19 +1009,14 @@ pub fn extract_rolling_xor_with_known_plaintext(
                         (offset + 2048).min(data.len().saturating_sub(other_pattern.len()));
 
                     // Inline byte-wise XOR comparison — no allocation
-                    let mut found = false;
-                    for check_offset in search_start..search_end {
-                        let matches = (0..other_pattern.len()).all(|i| {
+                    if (search_start..search_end).any(|check_offset| {
+                        (0..other_pattern.len()).all(|i| {
                             (data[check_offset + i] ^ candidate_key[i % key_len])
                                 == other_pattern[i]
-                        });
-                        if matches {
-                            pattern_matches += 1;
-                            found = true;
-                            break;
-                        }
+                        })
+                    }) {
+                        pattern_matches += 1;
                     }
-                    let _ = found;
                 }
 
                 if pattern_matches < 2 {

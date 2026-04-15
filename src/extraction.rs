@@ -22,7 +22,7 @@ use rayon::prelude::*;
 /// # Returns
 ///
 /// A vector of string structures found, each representing a potential string reference.
-pub fn find_string_structures(
+pub(crate) fn find_string_structures(
     section_data: &[u8],
     section_addr: u64,
     blob_addr: u64,
@@ -203,7 +203,7 @@ fn find_string_structures_generic(
 /// # Returns
 ///
 /// A vector of extracted strings with metadata.
-pub fn extract_from_structures<F>(
+pub(crate) fn extract_from_structures<F>(
     blob: &[u8],
     blob_addr: u64,
     structs: &[StringStruct],

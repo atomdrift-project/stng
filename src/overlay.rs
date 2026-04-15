@@ -1,5 +1,8 @@
 //! Detection and extraction of overlay/appended data after binary boundaries.
 
+// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::classifier::classify_string;
 use crate::raw::{extract_printable_runs, extract_wide_strings};
 use crate::types::{ExtractedString, OverlayInfo, StringKind};
@@ -9,6 +12,7 @@ use std::collections::HashSet;
 ///
 /// Malware often appends encrypted payloads or configuration after the ELF structure.
 /// This function identifies data beyond the normal ELF boundaries.
+#[must_use]
 pub fn detect_elf_overlay(data: &[u8]) -> Option<OverlayInfo> {
     let Ok(elf) = goblin::elf::Elf::parse(data) else {
         return None;
@@ -63,6 +67,7 @@ pub fn detect_elf_overlay(data: &[u8]) -> Option<OverlayInfo> {
 ///
 /// Malware often hides encrypted payloads or configuration in overlay data.
 /// This function extracts both ASCII and wide (UTF-16LE) strings from overlay regions.
+#[must_use]
 pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     let mut strings = Vec::new();
 
@@ -75,13 +80,12 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
             let overlay_data = &data[start..];
 
             // Extract ASCII strings
-            let section = Some("overlay".to_string());
             let mut seen = HashSet::new();
             let initial_count = strings.len();
             extract_printable_runs(
                 overlay_data,
                 min_length,
-                section.as_ref(),
+                Some("overlay"),
                 &HashSet::new(),
                 &std::collections::HashMap::new(),
                 &mut strings,
@@ -125,7 +129,7 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
             let wide_strings = extract_wide_strings(
                 overlay_data,
                 min_length,
-                Some("overlay".to_string()),
+                Some("overlay"),
                 &[],
                 &std::collections::HashMap::new(),
             );

@@ -10,4 +10,4 @@
 mod extractor;
 
 // Re-export the main extractor
-pub use extractor::GoStringExtractor;
+pub(crate) use extractor::GoStringExtractor;

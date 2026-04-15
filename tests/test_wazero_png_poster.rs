@@ -2,11 +2,10 @@
 //! Integration tests for the wazero-png-poster malware sample.
 //!
 //! This sample is a Go 1.26 x86_64 Mach-O binary that uses the wazero WebAssembly
-//! runtime. It exercises three key extraction capabilities:
+//! runtime. It exercises two key extraction capabilities:
 //!
 //! 1. Go register ABI instruction patterns (LEA rax/rcx + MOV ebx/edi)
-//! 2. Garble rodata false positive filtering
-//! 3. Pclntab function name extraction for Go 1.20+ format
+//! 2. Pclntab function name extraction for Go 1.20+ format
 
 use std::collections::HashSet;
 
@@ -87,55 +86,6 @@ fn test_taskrt_strings_extracted() {
         "missing [taskrt] strings:\n{}",
         missing.join("\n")
     );
-}
-
-/// GarbleRodata should not produce excessive false positives on non-garbled binaries.
-/// The wazero binary is NOT garble-obfuscated but has large rodata with non-printable
-/// data (wasm bytecode tables) that can trigger false XOR/ADD/SUB pair matches.
-#[test]
-fn test_garble_rodata_false_positives_reduced() {
-    let strings = extract_strings();
-    if skip_if_missing(&strings) {
-        return;
-    }
-
-    let garble_count = strings
-        .iter()
-        .filter(|s| s.method == stng::StringMethod::GarbleRodata)
-        .count();
-
-    // Before the fix: 6007 garbage strings. After filtering improvements, significantly fewer.
-    // Without garbage filter, GarbleRodata may produce more results, but meaningfulness
-    // filtering in the garble rodata scanner itself should keep it under control.
-    assert!(
-        garble_count < 30_000,
-        "too many GarbleRodata strings ({garble_count}), expected <30000 for non-garbled binary"
-    );
-}
-
-/// Garble rodata results should not contain obvious garbage patterns like
-/// all-uppercase no-vowel strings or repetitive patterns.
-#[test]
-fn test_garble_rodata_no_obvious_garbage() {
-    let strings = extract_strings();
-    if skip_if_missing(&strings) {
-        return;
-    }
-
-    let garble: Vec<&str> = strings
-        .iter()
-        .filter(|s| s.method == stng::StringMethod::GarbleRodata)
-        .map(|s| s.value.as_str())
-        .collect();
-
-    // These specific patterns were false positives before the fix
-    let garbage_patterns = ["HHGQ", "JQJQJ", "OQOQO", "GQGQG", "AQAQA", "RQRQR"];
-    for pattern in &garbage_patterns {
-        assert!(
-            !garble.contains(pattern),
-            "garble rodata should not contain obvious garbage: {pattern}"
-        );
-    }
 }
 
 /// Pclntab extraction should find custom (non-stdlib) function names from

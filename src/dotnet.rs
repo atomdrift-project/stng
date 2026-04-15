@@ -26,7 +26,7 @@ const METADATA_SIGNATURE: &[u8] = b"BSJB";
 ///
 /// Returns extracted strings from the #US heap if this is a .NET assembly.
 /// Returns empty vector for native PE or if parsing fails.
-pub fn extract_us_heap_strings(
+pub(crate) fn extract_us_heap_strings(
     pe: &PE<'_>,
     data: &[u8],
     min_length: usize,

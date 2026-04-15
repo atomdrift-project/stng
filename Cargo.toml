@@ -87,10 +87,17 @@ unsafe_code = "forbid"
 
 # Deny these - they catch real bugs
 unused_must_use = "deny"
-rust_2018_idioms = { level = "warn", priority = -1 }
+unused_imports = "deny"
+unused_mut = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+# Catch silent no-ops and dead code
+noop_method_call = "warn"
+dead_code = "warn"
+unreachable_pub = "warn"
 
 [lints.clippy]
-# Correctness - these catch real bugs (deny by default in clippy, but explicit is good)
+# Correctness - these catch real bugs
 correctness = { level = "deny", priority = -1 }
 
 # Suspicious patterns - likely bugs
@@ -99,29 +106,51 @@ suspicious = { level = "warn", priority = -1 }
 # Performance - real performance issues
 perf = { level = "warn", priority = -1 }
 
-# Specific strict lints for common mistakes
-unwrap_used = "allow"
-expect_used = "allow"
-panic = "allow"
+# Style and complexity (inherited from cleave/litmus)
+style = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+
+# Panic/unwrap — warn so authors must justify; static LazyLock inits get #[allow]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
 todo = "warn"
 unimplemented = "warn"
+unreachable = "warn"
+
+# Error handling — silence is a bug
+map_err_ignore = "warn"      # .map_err(|_| ..) silently drops error context
+result_unit_err = "deny"     # Result<T, ()> is always a design mistake
+result_large_err = "deny"    # large error types bloat Result on the happy path
+
+# Production hygiene
+dbg_macro = "deny"           # dbg!() is never intentional in production
 
 # Memory/Resource issues
 large_stack_arrays = "warn"
 large_types_passed_by_value = "warn"
+large_futures = "warn"
 
 # Logic errors
 debug_assert_with_mut_call = "deny"
 exit = "warn"
 
-# API design (for library code)
-missing_errors_doc = "allow"  # Too noisy for internal APIs
-missing_panics_doc = "allow"  # Too noisy for internal APIs
+# Cast safety — inherited from litmus; catch silent data loss on narrowing/sign-changing casts
+cast_possible_truncation = "warn"   # e.g. u64 as u32 may silently drop high bits
+cast_sign_loss = "warn"             # e.g. -1i64 as usize wraps to usize::MAX
 
-# Style - pragmatic picks from pedantic, not the whole group
-use_self = "warn"                        # use Self in impl blocks instead of repeating the type name
+# API design
+missing_errors_doc = "allow"        # Too noisy for internal APIs
+missing_panics_doc = "allow"        # Too noisy for internal APIs
+must_use_candidate = "warn"         # functions returning values callers should not ignore
+unnecessary_wraps = "warn"          # fn that always returns Ok/Some should not wrap
+needless_pass_by_value = "warn"     # take &T not T when ownership isn't needed
+wildcard_imports = "warn"           # explicit imports prevent name-collision surprises
+
+# Style - pragmatic picks from pedantic
+use_self = "warn"                        # use Self in impl blocks
 redundant_closure_for_method_calls = "warn"  # |x| x.foo() → Type::foo
-manual_let_else = "warn"                 # match/if-let that returns/continues/breaks → let-else
+manual_let_else = "warn"                 # match/if-let that diverges → let-else
 match_same_arms = "warn"                 # merge identical match arms
 
 [dev-dependencies]

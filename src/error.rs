@@ -60,6 +60,7 @@ pub enum StngError {
 
 impl StngError {
     /// Create an error for input that's too large.
+    #[must_use]
     pub fn input_too_large(size: usize, max: usize) -> Self {
         Self::InputTooLarge { size, max }
     }
@@ -78,6 +79,7 @@ impl StngError {
     }
 
     /// Create an error for an out-of-bounds offset.
+    #[must_use]
     pub fn offset_out_of_bounds(offset: usize, size: usize) -> Self {
         Self::OffsetOutOfBounds { offset, size }
     }

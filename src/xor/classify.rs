@@ -576,7 +576,12 @@ pub(crate) fn expand_multikey_xor_string(
     }
 
     // Determine which key byte corresponds to data[match_pos]
-    let offset_in_key = (shift_to_offset(shift, match_pos, key.len())) % key.len();
+    let pos_mod = match_pos % key.len();
+    let offset_in_key = (if shift >= pos_mod {
+        shift - pos_mod
+    } else {
+        shift + key.len() - pos_mod
+    }) % key.len();
 
     let min_start = match_pos.saturating_sub(MAX_EXPAND_DISTANCE);
     let max_end = (match_pos + MAX_EXPAND_DISTANCE).min(data.len());
@@ -632,15 +637,6 @@ pub(crate) fn expand_multikey_xor_string(
         Some((s, start, end))
     } else {
         None
-    }
-}
-
-fn shift_to_offset(shift: usize, pos: usize, key_len: usize) -> usize {
-    let pos_mod = pos % key_len;
-    if shift >= pos_mod {
-        shift - pos_mod
-    } else {
-        shift + key_len - pos_mod
     }
 }
 

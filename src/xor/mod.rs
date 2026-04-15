@@ -13,9 +13,9 @@ mod validate;
 pub(crate) use self::classify::{
     auto_detect_xor_key, extract_multikey_xor_strings, extract_xor_strings,
 };
-pub use self::scan::{
-    extract_custom_xor_strings_with_hints, extract_incremental_xor_strings,
-    extract_rolling_xor_with_known_plaintext,
+pub use self::scan::extract_incremental_xor_strings;
+pub(crate) use self::scan::{
+    extract_custom_xor_strings_with_hints, extract_rolling_xor_with_known_plaintext,
 };
 
 // Note: Private functions are re-imported in the tests module below
@@ -25,7 +25,7 @@ pub(crate) const DEFAULT_XOR_MIN_LENGTH: usize = 10;
 
 /// XOR keys to skip because they produce too many false positives.
 /// 0x20 (space) just flips letter case, causing "GOROOT OBJECT" to become "gorootOBJECT".
-pub const SKIP_XOR_KEYS: &[u8] = &[0x20];
+pub(crate) const SKIP_XOR_KEYS: &[u8] = &[0x20];
 
 /// Maximum file size for auto-detection of XOR keys (512 KB).
 pub(crate) const MAX_AUTO_DETECT_SIZE: usize = 512 * 1024;

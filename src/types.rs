@@ -114,6 +114,7 @@ impl Default for ExtractedString {
 
 impl ExtractedString {
     /// Get formatted section metadata if this is a section string
+    #[must_use]
     pub fn section_metadata_str(&self) -> Option<String> {
         if self.kind != Some(StringKind::Section) {
             return None;
@@ -192,14 +193,82 @@ pub enum StringMethod {
     Utf16BeDecode,
     /// Found via XOR of two stack-placed non-printable immediate constants (e.g. BrickStorm/garble style)
     XorStackPair,
-    /// Found via garble rodata byte array pairing (XOR/ADD/SUB of same-length blobs in .rodata)
-    GarbleRodata,
-    /// Found via x86-64 emulation of garble Decrypt functions
-    GarbleEmulated,
     /// Found via script deobfuscation (decoded payload from obfuscated Python/JS/PHP/PowerShell)
     ScriptDecode,
     /// Found via Go pclntab (program counter line table) symbol extraction
     PclntabSymbol,
+}
+
+impl StringMethod {
+    /// Priority for deduplication: when two strings share an offset, the higher-priority
+    /// method wins. Decoded and language-aware results beat raw scanning.
+    #[must_use]
+    pub fn dedup_priority(self) -> u8 {
+        match self {
+            // Highest: language-aware and decoded content — most trustworthy
+            Self::Structure
+            | Self::StackString
+            | Self::XorStackPair
+            | Self::InstructionPattern
+            | Self::XorDecode
+            | Self::Base64Decode
+            | Self::Base32Decode
+            | Self::Base85Decode
+            | Self::HexDecode
+            | Self::UrlDecode
+            | Self::UnicodeEscapeDecode
+            | Self::Utf16LeDecode
+            | Self::Utf16BeDecode
+            | Self::ScriptDecode => 3,
+
+            // High: rich metadata sources
+            Self::R2String
+            | Self::R2Symbol
+            | Self::WideString
+            | Self::SpacedAscii
+            | Self::CodeSignature
+            | Self::PclntabSymbol => 2,
+
+            Self::Heuristic => 1,
+            Self::RawScan | Self::Base64ObfuscatedDecode => 0,
+        }
+    }
+
+    /// Priority for display ordering: higher-value findings appear first.
+    /// Differs from dedup_priority: structure/stack strings beat decoded payloads
+    /// since they carry richer metadata.
+    #[must_use]
+    #[allow(clippy::match_same_arms)]
+    pub fn display_priority(self) -> u8 {
+        match self {
+            // Highest: language-aware extraction and obfuscated decoding
+            Self::Structure
+            | Self::StackString
+            | Self::XorStackPair
+            | Self::InstructionPattern
+            | Self::Base64ObfuscatedDecode => 3,
+
+            // High: decoded content and rich sources
+            Self::R2String
+            | Self::R2Symbol
+            | Self::WideString
+            | Self::XorDecode
+            | Self::Base64Decode
+            | Self::Base32Decode
+            | Self::Base85Decode
+            | Self::HexDecode
+            | Self::UrlDecode
+            | Self::UnicodeEscapeDecode
+            | Self::CodeSignature
+            | Self::Utf16LeDecode
+            | Self::Utf16BeDecode
+            | Self::ScriptDecode
+            | Self::PclntabSymbol => 2,
+
+            Self::Heuristic => 1,
+            Self::RawScan | Self::SpacedAscii => 0,
+        }
+    }
 }
 
 /// Semantic kind of the extracted string.
@@ -338,6 +407,7 @@ pub enum Severity {
 
 impl StringKind {
     /// Get the severity level for this kind
+    #[must_use]
     pub fn severity(&self) -> Severity {
         match self {
             Self::IP
@@ -391,6 +461,7 @@ impl StringKind {
     }
 
     /// Get short display name for the kind
+    #[must_use]
     pub fn short_name(&self) -> &'static str {
         match self {
             Self::FuncName => "func",
@@ -460,6 +531,7 @@ pub struct BinaryInfo {
 
 impl BinaryInfo {
     /// Create `BinaryInfo` from ELF header information
+    #[must_use]
     pub fn from_elf(is_64bit: bool, is_little_endian: bool) -> Self {
         Self {
             is_64bit,
@@ -469,6 +541,7 @@ impl BinaryInfo {
     }
 
     /// Create `BinaryInfo` from Mach-O (always little-endian on modern systems)
+    #[must_use]
     pub fn from_macho(is_64bit: bool) -> Self {
         Self {
             is_64bit,
@@ -478,6 +551,7 @@ impl BinaryInfo {
     }
 
     /// Create `BinaryInfo` from PE (always little-endian)
+    #[must_use]
     pub fn from_pe(is_64bit: bool) -> Self {
         Self {
             is_64bit,

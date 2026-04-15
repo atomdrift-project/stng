@@ -26,15 +26,6 @@ fn is_data_section_elf(section: &str) -> bool {
     )
 }
 
-/// Checks if a PE section name indicates a data section
-/// Real hardcoded C2 IPs should be in data sections like .data or .rdata, not .text (code)
-fn is_data_section_pe(section: &str) -> bool {
-    matches!(
-        section,
-        ".data" | ".rdata" | ".bss" | ".idata" | ".edata" | ".rsrc"
-    )
-}
-
 /// Check if this is a Go binary by examining section names or embedded strings.
 /// Go binaries have .gopclntab/.go.buildinfo (ELF) or gopclntab/go.buildinfo (PE).
 /// Also checks for "Go build ID:" string which is present even in stripped binaries.
@@ -117,7 +108,7 @@ fn is_dotnet_binary(pe_opt: Option<&crate::goblin::pe::PE<'_>>, data: &[u8]) -> 
 /// For other architectures, restricts results to data sections to avoid code section false positives.
 ///
 /// Does NOT scan for random 4-byte sequences to avoid false positives.
-pub fn scan_binary_ips(
+pub(crate) fn scan_binary_ips(
     data: &[u8],
     min_length: usize,
     e_machine: u16,
@@ -179,8 +170,10 @@ pub fn scan_binary_ips(
                 let section_end = section_start + u64::from(section.size_of_raw_data);
                 if s.data_offset >= section_start && s.data_offset < section_end {
                     let name = crate::binary::pe_section_name(&section.name);
-                    // Accept if in a data section, reject if in code section
-                    return is_data_section_pe(&name);
+                    return matches!(
+                        name.as_str(),
+                        ".data" | ".rdata" | ".bss" | ".idata" | ".edata" | ".rsrc"
+                    );
                 }
             }
             // If section can't be determined, reject to be safe

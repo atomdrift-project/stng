@@ -63,6 +63,7 @@ impl R2Cache {
 
     /// Get cached r2 command output.
     /// Returns None if cache miss or cache disabled.
+    #[must_use]
     pub fn get(&self, file_path: &str, command: &str) -> Option<String> {
         if !self.enabled {
             return None;
@@ -177,9 +178,12 @@ fn compute_file_hash(path: &str) -> Result<String, std::io::Error> {
     let hash = Sha256::digest(&data);
     let hash_hex = format!("{:x}", hash);
 
-    // Update cache
-    if let Ok(mut cache) = HASH_CACHE.lock() {
-        cache.insert(canon_path, hash_hex.clone());
+    // Update cache (skip on mutex poison — next call will recompute the hash)
+    match HASH_CACHE.lock() {
+        Ok(mut cache) => {
+            cache.insert(canon_path, hash_hex.clone());
+        }
+        Err(e) => tracing::warn!("Hash cache mutex poisoned, skipping update: {e}"),
     }
 
     Ok(hash_hex)

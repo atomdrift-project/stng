@@ -34,6 +34,7 @@ pub struct DeobfuscationResult {
 ///
 /// For nested obfuscation (decoded payload is itself obfuscated), re-runs
 /// detection up to `MAX_DECODE_DEPTH` times.
+#[must_use]
 pub fn deobfuscate_script(data: &[u8]) -> Vec<DeobfuscationResult> {
     let Ok(text) = std::str::from_utf8(data) else {
         return Vec::new();

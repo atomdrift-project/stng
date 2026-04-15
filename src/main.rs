@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::Path;
-use stng::{Severity, StringKind, StringMethod};
+use stng::{Severity, StringKind};
 
 #[derive(Parser, Debug)]
 #[command(name = "stng")]
@@ -277,44 +277,6 @@ fn decode_url_encoding(s: &str) -> Vec<u8> {
     result
 }
 
-/// Get priority for a string extraction method (higher = better)
-#[allow(clippy::match_same_arms)]
-fn method_priority(m: StringMethod) -> u8 {
-    match m {
-        // Highest priority: language-aware extraction and decoded content
-        StringMethod::Structure
-        | StringMethod::StackString
-        | StringMethod::XorStackPair
-        | StringMethod::InstructionPattern
-        | StringMethod::Base64ObfuscatedDecode => 3,
-
-        // High priority: decoded/extracted content
-        StringMethod::R2String
-        | StringMethod::R2Symbol
-        | StringMethod::WideString
-        | StringMethod::XorDecode
-        | StringMethod::Base64Decode
-        | StringMethod::Base32Decode
-        | StringMethod::Base85Decode
-        | StringMethod::HexDecode
-        | StringMethod::UrlDecode
-        | StringMethod::UnicodeEscapeDecode
-        | StringMethod::CodeSignature
-        | StringMethod::Utf16LeDecode
-        | StringMethod::Utf16BeDecode
-        | StringMethod::ScriptDecode
-        | StringMethod::PclntabSymbol => 2,
-
-        // Medium priority: heuristics
-        StringMethod::Heuristic => 1,
-
-        // Lowest priority: raw scanning
-        StringMethod::RawScan => 0,
-
-        _ => 0, // Catchall for any future methods
-    }
-}
-
 fn main() -> Result<()> {
     let t_total = std::time::Instant::now();
     let cli = Cli::parse();
@@ -488,8 +450,8 @@ fn main() -> Result<()> {
             let best_idx = indices
                 .iter()
                 .max_by(|&&a, &&b| {
-                    let method_a = method_priority(strings[a].method);
-                    let method_b = method_priority(strings[b].method);
+                    let method_a = strings[a].method.display_priority();
+                    let method_b = strings[b].method.display_priority();
 
                     // Higher priority method first
                     method_a

@@ -2,6 +2,9 @@
 //!
 //! Extracts strings from Go binaries using structure analysis and instruction patterns.
 
+// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::extraction::{extract_from_structures, find_string_structures};
 use crate::instr::{extract_inline_strings_amd64, extract_inline_strings_arm64};
 use crate::types::{BinaryInfo, ExtractedString, StringStruct};
@@ -21,17 +24,18 @@ use crate::classifier::classify_string;
 const STRUCTURE_MIN_LENGTH: usize = 2;
 
 /// Extracts strings from Go binaries using structure analysis.
-pub struct GoStringExtractor {
+pub(crate) struct GoStringExtractor {
     min_length: usize,
 }
 
 impl GoStringExtractor {
-    pub fn new(min_length: usize) -> Self {
+    pub(crate) fn new(min_length: usize) -> Self {
         Self { min_length }
     }
 
     /// Extract strings from a Mach-O binary.
-    pub fn extract_macho(&self, macho: &MachO<'_>, _data: &[u8]) -> Vec<ExtractedString> {
+    #[must_use]
+    pub(crate) fn extract_macho(&self, macho: &MachO<'_>, _data: &[u8]) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         // Mach-O is always little-endian on modern systems (x86_64, ARM64)
         let info = BinaryInfo::from_macho(macho.is_64);
@@ -139,7 +143,8 @@ impl GoStringExtractor {
     }
 
     /// Extract strings from an ELF binary.
-    pub fn extract_elf(&self, elf: &Elf<'_>, data: &[u8]) -> Vec<ExtractedString> {
+    #[must_use]
+    pub(crate) fn extract_elf(&self, elf: &Elf<'_>, data: &[u8]) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         let info = BinaryInfo::from_elf(elf.is_64, elf.little_endian);
 
@@ -241,7 +246,8 @@ impl GoStringExtractor {
     }
 
     /// Extract strings from a PE binary.
-    pub fn extract_pe(&self, pe: &PE<'_>, data: &[u8]) -> Vec<ExtractedString> {
+    #[must_use]
+    pub(crate) fn extract_pe(&self, pe: &PE<'_>, data: &[u8]) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         let info = BinaryInfo::from_pe(pe.is_64);
 

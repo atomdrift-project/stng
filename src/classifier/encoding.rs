@@ -231,8 +231,8 @@ fn text_quality_score(bytes: &[u8]) -> (u32, u32) {
     let vowel_ratio = if alpha > 0 { (vowel * 100) / alpha } else { 0 };
 
     // Weighted combination: printability matters most, vowel ratio indicates natural language
-    let quality = ((printable_ratio * 7 + vowel_ratio * 3) / 10) as u32;
-    (quality, vowel_ratio as u32)
+    let quality = u32::try_from((printable_ratio * 7 + vowel_ratio * 3) / 10).unwrap_or(0);
+    (quality, u32::try_from(vowel_ratio).unwrap_or(0))
 }
 
 /// Check if a string looks like hex-encoded ASCII data
@@ -653,7 +653,7 @@ pub(super) fn string_quality_score(s: &str) -> u32 {
 
     // Quality = weighted combination of printability and vowel ratio
     // Good English text has ~40% vowels, ~90%+ printable
-    ((printable_ratio * 7 + vowel_ratio * 3) / 10) as u32
+    u32::try_from((printable_ratio * 7 + vowel_ratio * 3) / 10).unwrap_or(0)
 }
 
 /// Check if a string looks like Base85-encoded data (ASCII85 or Z85)

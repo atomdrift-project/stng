@@ -2,6 +2,7 @@
 
 use crate::binary::{is_go_binary, is_rust_binary};
 
+#[must_use]
 pub fn detect_language(data: &[u8]) -> &'static str {
     if is_go_binary(data) {
         "go"
@@ -20,6 +21,7 @@ pub fn detect_language(data: &[u8]) -> &'static str {
 /// - Must be valid UTF-8 (or mostly ASCII)
 /// - High ratio of printable characters
 /// - No binary magic numbers at the start
+#[must_use]
 pub fn is_text_file(data: &[u8]) -> bool {
     if data.is_empty() {
         return false;

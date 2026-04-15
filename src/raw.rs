@@ -6,10 +6,10 @@ use memchr::memchr_iter;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-pub fn extract_raw_strings(
+pub(crate) fn extract_raw_strings(
     data: &[u8],
     min_length: usize,
-    section: Option<String>,
+    section: Option<&str>,
     segment_names: &[String],
     section_info: &HashMap<String, crate::binary::SectionInfo>,
 ) -> Vec<ExtractedString> {
@@ -79,7 +79,7 @@ pub fn extract_raw_strings(
                     return Some(ExtractedString {
                         value: trimmed.to_string(),
                         data_offset: start as u64,
-                        section: section.clone(),
+                        section: section.map(str::to_string),
                         method: StringMethod::RawScan,
                         kind,
                         fragments: None,
@@ -105,7 +105,7 @@ pub fn extract_raw_strings(
     extract_printable_runs(
         data,
         min_length,
-        section.as_ref(),
+        section,
         &segment_names_set,
         section_info,
         &mut strings,
@@ -117,10 +117,10 @@ pub fn extract_raw_strings(
 
 /// Extract strings by scanning for runs of printable ASCII characters.
 /// This mimics the behavior of the traditional `strings` command.
-pub fn extract_printable_runs(
+pub(crate) fn extract_printable_runs(
     data: &[u8],
     min_length: usize,
-    section: Option<&String>,
+    section: Option<&str>,
     segment_names_set: &HashSet<&str>,
     section_info: &HashMap<String, crate::binary::SectionInfo>,
     strings: &mut Vec<ExtractedString>,
@@ -188,7 +188,7 @@ pub fn extract_printable_runs(
                     return Some(ExtractedString {
                         value: trimmed.to_string(),
                         data_offset: start as u64,
-                        section: section.cloned(),
+                        section: section.map(str::to_string),
                         method: StringMethod::RawScan,
                         kind,
                         fragments: None,
@@ -215,10 +215,10 @@ pub fn extract_printable_runs(
 /// Windows binaries commonly use UTF-16LE for strings (file paths, registry keys,
 /// .NET strings, resource data). This scans for the characteristic pattern of
 /// ASCII bytes alternating with null bytes.
-pub fn extract_wide_strings(
+pub(crate) fn extract_wide_strings(
     data: &[u8],
     min_length: usize,
-    section: Option<String>,
+    section: Option<&str>,
     segment_names: &[String],
     section_info: &HashMap<String, crate::binary::SectionInfo>,
 ) -> Vec<ExtractedString> {
@@ -294,7 +294,7 @@ pub fn extract_wide_strings(
                     strings.push(ExtractedString {
                         value: trimmed.to_string(),
                         data_offset: start as u64,
-                        section: section.clone(),
+                        section: section.map(str::to_string),
                         method: StringMethod::WideString,
                         kind,
                         fragments: None,

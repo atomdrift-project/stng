@@ -51,7 +51,7 @@ static EVAL_ROT13_SINGLE_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Extract all obfuscated payloads from a PHP source.
-pub fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {
+pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {
     let mut results = Vec::new();
 
     results.extend(try_eval_gzinflate_b64(source));
