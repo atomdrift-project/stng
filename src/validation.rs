@@ -3,7 +3,63 @@
 //! Functions for validating and filtering string candidates to remove garbage
 //! and low-quality strings.
 
+use aho_corasick::AhoCorasick;
+use std::sync::LazyLock;
+
 use crate::validation_thresholds::*;
+
+/// Patterns that immediately identify miner IOC strings (pure OR match).
+static MINER_PURE_OR: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        "stratum+tcp://",
+        "stratum+ssl://",
+        "xmrig",
+        "xmr-stak",
+        "cpuminer",
+        "ccminer",
+        "ethminer",
+        "phoenixminer",
+        "t-rex",
+        "--donate-level",
+        "--algo=",
+        "--cuda-devices",
+    ])
+    .expect("valid miner patterns")
+});
+
+/// Pool-type indicators (combined with a network indicator to confirm miner IOC).
+static MINER_POOL: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new(["pool.", "nanopool", "minergate"]).expect("valid pool patterns")
+});
+
+/// Code/script patterns that immediately mark a string as non-garbage (pure OR match).
+static CODE_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        "__attribute__",
+        "#define",
+        "#include",
+        "eval(",
+        "base64_decode(",
+        "$_GET",
+        "$_POST",
+        "$_SERVER",
+        "$_COOKIE",
+        "$GLOBALS",
+        "preg_replace(",
+        "pack(",
+        "$ARGV",
+        "${IFS}",
+        "schtasks",
+        "net user",
+        "reg add",
+        "powershell",
+        "certutil",
+        "mshta",
+        "IEX(",
+        "DownloadString",
+    ])
+    .expect("valid code patterns")
+});
 
 fn is_crypto_wallet_address(s: &str, len: usize) -> bool {
     if !(MIN_WALLET_LENGTH..=MAX_WALLET_LENGTH).contains(&len) {
@@ -23,25 +79,17 @@ fn is_crypto_wallet_address(s: &str, len: usize) -> bool {
 }
 
 fn is_miner_ioc(s: &str) -> bool {
-    if s.contains("stratum+tcp://") || s.contains("stratum+ssl://") {
+    if MINER_PURE_OR.is_match(s) {
         return true;
     }
-    if (s.contains("pool.") || s.contains("nanopool") || s.contains("minergate"))
-        && (s.contains(".com") || s.contains(".org") || s.contains(':'))
+    if MINER_POOL.is_match(s)
+        && (s.contains(".com")
+            || s.contains(".org")
+            || memchr::memchr(b':', s.as_bytes()).is_some())
     {
         return true;
     }
-    s.contains("xmrig")
-        || s.contains("xmr-stak")
-        || s.contains("cpuminer")
-        || s.contains("ccminer")
-        || s.contains("ethminer")
-        || s.contains("phoenixminer")
-        || s.contains("t-rex")
-        || s.contains("--donate-level")
-        || s.contains("--algo=")
-        || s.contains("--cuda-devices")
-        || (s.contains("-o ") && s.contains("-u "))
+    s.contains("-o ") && s.contains("-u ")
 }
 
 fn is_ctf_or_guid(s: &str, len: usize) -> bool {
@@ -126,55 +174,27 @@ fn is_api_key_pattern(s: &str, len: usize) -> bool {
 }
 
 fn is_code_pattern(s: &str) -> bool {
-    // C/C++ patterns
-    if s.contains("__attribute__")
-        || s.contains("#define")
-        || s.contains("#include")
-        || (s.contains("char *") && s.contains("0x"))
+    if CODE_PATTERNS.is_match(s) {
+        return true;
+    }
+    // C/C++ compound patterns
+    if (s.contains("char *") && s.contains("0x"))
         || (s.contains("((") && s.contains("))") && s.contains("0x"))
     {
         return true;
     }
-    // PHP patterns
-    if s.contains("eval(")
-        || s.contains("base64_decode(")
-        || s.contains("$_GET")
-        || s.contains("$_POST")
-        || s.contains("$_SERVER")
-        || s.contains("$_COOKIE")
-        || s.contains("$GLOBALS")
-        || s.contains("preg_replace(")
-        || (s.starts_with("${") && s.contains('}'))
-    {
-        return true;
-    }
-    // Perl patterns
-    if s.contains("pack(") || s.contains("$ARGV") || (s.contains("open(") && s.contains('|')) {
-        return true;
-    }
-    // Shell patterns
-    if s.contains("${IFS}")
+    // PHP/shell compound patterns
+    if (s.starts_with("${") && s.contains('}'))
+        || (s.contains("open(") && s.contains('|'))
         || (s.contains("$(") && s.contains(')'))
         || (s.contains("eval") && (s.contains("base64") || s.contains("echo")))
     {
         return true;
     }
-    // Command injection patterns
+    // Command injection
     if (s.contains("; ") && (s.contains("cat") || s.contains("wget") || s.contains("curl")))
         || (s.contains("| ") && (s.contains("whoami") || s.contains("id") || s.contains("uname")))
         || (s.starts_with('`') && s.ends_with('`'))
-    {
-        return true;
-    }
-    // Windows malware commands
-    if s.contains("schtasks")
-        || s.contains("net user")
-        || s.contains("reg add")
-        || s.contains("powershell")
-        || s.contains("certutil")
-        || s.contains("mshta")
-        || s.contains("IEX(")
-        || s.contains("DownloadString")
     {
         return true;
     }
@@ -192,10 +212,9 @@ fn is_obfuscated_js(s: &str) -> bool {
     // Check for JS obfuscation patterns like _0x1234 or 0x1234
     // Must be followed by hex digits to avoid false positives from binary garbage
     let has_0x_pattern = s.contains("_0x")
-        || s.chars()
-            .zip(s.chars().skip(1))
-            .zip(s.chars().skip(2))
-            .any(|((a, b), c)| a == '0' && b == 'x' && c.is_ascii_hexdigit());
+        || s.as_bytes()
+            .windows(3)
+            .any(|w| w[0] == b'0' && w[1] == b'x' && w[2].is_ascii_hexdigit());
 
     if !has_0x_pattern || s.len() < 10 {
         return false;
@@ -318,22 +337,20 @@ fn is_locale_code(s: &str, len: usize) -> bool {
     if len != 5 && len != 6 {
         return false;
     }
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() < 5 {
-        return false;
-    }
-    (chars[0].is_ascii_lowercase()
-        && chars[1].is_ascii_lowercase()
-        && chars[2] == '_'
-        && chars[3].is_ascii_uppercase()
-        && chars[4].is_ascii_uppercase())
-        || (chars.len() == 6
-            && chars[0].is_ascii_lowercase()
-            && chars[1].is_ascii_lowercase()
-            && chars[2].is_ascii_lowercase()
-            && chars[3] == '_'
-            && chars[4].is_ascii_uppercase()
-            && chars[5].is_ascii_uppercase())
+    // Locale codes are always ASCII (e.g. "en_US", "zh_CN", "eng_US")
+    let b = s.as_bytes();
+    (b[0].is_ascii_lowercase()
+        && b[1].is_ascii_lowercase()
+        && b[2] == b'_'
+        && b[3].is_ascii_uppercase()
+        && b[4].is_ascii_uppercase())
+        || (len == 6
+            && b[0].is_ascii_lowercase()
+            && b[1].is_ascii_lowercase()
+            && b[2].is_ascii_lowercase()
+            && b[3] == b'_'
+            && b[4].is_ascii_uppercase()
+            && b[5].is_ascii_uppercase())
 }
 
 struct CharStats {
@@ -596,20 +613,16 @@ fn is_reloc_table_pattern(s: &str, len: usize) -> bool {
         return false;
     }
 
-    let chars: Vec<char> = s.chars().collect();
-    let char_count = chars.len();
-    if char_count < 6 {
-        return false;
-    }
-
     // Count frequency of each lowercase letter
     let mut letter_counts = [0u32; 26];
-    let mut non_ascii_count = 0;
-    let mut special_count = 0;
-    let mut uppercase_count = 0;
-    let mut digit_count = 0;
+    let mut non_ascii_count = 0usize;
+    let mut special_count = 0usize;
+    let mut uppercase_count = 0usize;
+    let mut digit_count = 0usize;
+    let mut char_count = 0usize;
 
-    for &c in &chars {
+    for c in s.chars() {
+        char_count += 1;
         if c.is_ascii_lowercase() {
             letter_counts[(c as u8 - b'a') as usize] += 1;
         } else if !c.is_ascii() {
@@ -621,6 +634,10 @@ fn is_reloc_table_pattern(s: &str, len: usize) -> bool {
         } else if !c.is_alphanumeric() {
             special_count += 1;
         }
+    }
+
+    if char_count < 6 {
+        return false;
     }
 
     // Find the most frequent lowercase letter
@@ -909,54 +926,57 @@ fn is_fast_path_valid(s: &str, len: usize) -> bool {
         let first = bytes[0];
         // Quick check for all-same-character strings (garbage)
         if bytes.iter().all(|&b| b == first) {
-            return false; // Not valid - it's garbage
+            return false;
         }
-        // If it starts with a letter and has mostly alphanumeric + common punctuation, it's valid
+        // If it starts with a letter and has mostly alphanumeric + common punctuation, it's valid.
+        // Single pass: collect everything needed for the ratio check and reloc rejection.
         if first.is_ascii_alphabetic() {
-            let simple_chars = bytes
-                .iter()
-                .filter(|&&b| {
-                    b.is_ascii_alphanumeric()
-                        || b == b' '
-                        || b == b'_'
-                        || b == b'-'
-                        || b == b'.'
-                        || b == b'/'
-                })
-                .count();
-            if simple_chars * 100 / bytes.len() >= MIN_FAST_PATH_ALPHABETIC_RATIO {
-                // Additional check: reject reloc-like patterns where a single letter dominates
-                // Count frequency of each lowercase letter
-                let mut letter_counts = [0u32; 26];
-                for &b in bytes {
-                    if b.is_ascii_lowercase() {
-                        letter_counts[(b - b'a') as usize] += 1;
-                    }
-                }
-                let max_letter = letter_counts.iter().max().copied().unwrap_or(0) as usize;
-                let char_count = s.chars().count();
+            let mut simple_count = 0usize;
+            let mut letter_counts = [0u32; 26];
+            let mut has_non_ascii = false;
+            let mut uppercase = 0usize;
+            let mut digit = 0usize;
+            let mut special = 0usize;
 
-                let has_non_ascii = bytes.iter().any(|&b| !b.is_ascii());
+            for &b in bytes {
+                if b.is_ascii_alphanumeric() || matches!(b, b' ' | b'_' | b'-' | b'.' | b'/') {
+                    simple_count += 1;
+                }
+                if b.is_ascii_lowercase() {
+                    letter_counts[(b - b'a') as usize] += 1;
+                } else if !b.is_ascii() {
+                    has_non_ascii = true;
+                } else if b.is_ascii_uppercase() {
+                    uppercase += 1;
+                } else if b.is_ascii_digit() {
+                    digit += 1;
+                } else if b != b' ' {
+                    // ASCII, not alphanumeric, not space
+                    special += 1;
+                }
+            }
+
+            if simple_count * 100 / len >= MIN_FAST_PATH_ALPHABETIC_RATIO {
+                let max_letter = letter_counts.iter().max().copied().unwrap_or(0) as usize;
+                // For pure-ASCII strings char_count == len, avoiding an extra O(n) scan.
+                let char_count = if has_non_ascii {
+                    s.chars().count()
+                } else {
+                    len
+                };
+
                 if has_non_ascii {
-                    // If one letter appears in >30% of chars with non-ASCII, it's a reloc pattern
+                    // Reloc pattern: one letter dominates with non-ASCII noise
                     if char_count > 0 && max_letter * 100 / char_count > 30 {
                         return false;
                     }
                 } else if char_count <= 25 && max_letter >= 3 {
-                    // All-ASCII reloc patterns: short strings with dominant letter
-                    // and mix of uppercase + (digits or special)
-                    let ratio = max_letter * 100 / char_count;
-                    if ratio >= 35 {
-                        let uppercase = bytes.iter().filter(|b| b.is_ascii_uppercase()).count();
-                        let digit = bytes.iter().filter(|b| b.is_ascii_digit()).count();
-                        let special = bytes
-                            .iter()
-                            .filter(|&&b| b.is_ascii() && !b.is_ascii_alphanumeric() && b != b' ')
-                            .count();
-                        // Must have uppercase and either digits or special chars
-                        if uppercase >= 2 && (digit >= 1 || special >= 2) {
-                            return false;
-                        }
+                    // All-ASCII reloc pattern: dominant letter + mixed uppercase/digits/special
+                    if max_letter * 100 / char_count >= 35
+                        && uppercase >= 2
+                        && (digit >= 1 || special >= 2)
+                    {
+                        return false;
                     }
                 }
                 return true;
