@@ -169,22 +169,24 @@ impl RustStringExtractor {
             } else {
                 Vec::new()
             };
-            let existing: HashSet<String> = strings
-                .iter()
-                .map(|s: &ExtractedString| s.value.clone())
-                .collect();
-            for s in heuristic {
-                if s.value.len() >= self.min_length && !existing.contains(&s.value) {
-                    strings.push(ExtractedString {
+            let new_heuristic: Vec<_> = {
+                let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+                heuristic
+                    .into_iter()
+                    .filter(|s| {
+                        s.value.len() >= self.min_length && !existing.contains(s.value.as_str())
+                    })
+                    .map(|s| ExtractedString {
                         value: s.value,
                         data_offset: text_const_addr + s.data_offset,
                         section: s.section,
                         method: StringMethod::Heuristic,
                         kind: s.kind,
                         ..Default::default()
-                    });
-                }
-            }
+                    })
+                    .collect()
+            };
+            strings.extend(new_heuristic);
         }
 
         // PHASE 4: Instruction pattern analysis
@@ -216,16 +218,19 @@ impl RustStringExtractor {
                     _ => Vec::new(),
                 };
 
-                let existing: HashSet<String> = strings
-                    .iter()
-                    .map(|s: &ExtractedString| s.value.clone())
-                    .collect();
-                for mut s in inline_strings {
-                    if !existing.contains(&s.value) {
-                        s.section = Some(section_name.to_string());
-                        strings.push(s);
-                    }
-                }
+                let new_inline: Vec<_> = {
+                    let existing: HashSet<&str> =
+                        strings.iter().map(|s| s.value.as_str()).collect();
+                    inline_strings
+                        .into_iter()
+                        .filter(|s| !existing.contains(s.value.as_str()))
+                        .map(|mut s| {
+                            s.section = Some(section_name.to_string());
+                            s
+                        })
+                        .collect()
+                };
+                strings.extend(new_inline);
             }
         }
 

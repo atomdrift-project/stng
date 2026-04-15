@@ -1058,12 +1058,15 @@ fn extract_from_object(
                 strings.extend(extractor.extract_macho(macho, data));
 
                 // Raw scan fallback for Go shared libraries / cgo binaries
-                let known: HashSet<String> = strings.iter().map(|s| s.value.clone()).collect();
-                for s in extract_raw_strings(data, min_length, None, &segments, &section_info) {
-                    if !known.contains(&s.value) {
-                        strings.push(s);
-                    }
-                }
+                let new_raw: Vec<_> = {
+                    let known: HashSet<&str> =
+                        strings.iter().map(|s| s.value.as_str()).collect();
+                    extract_raw_strings(data, min_length, None, &segments, &section_info)
+                        .into_iter()
+                        .filter(|s| !known.contains(s.value.as_str()))
+                        .collect()
+                };
+                strings.extend(new_raw);
             } else if binary::macho_is_rust(macho) {
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_macho(macho, data));
@@ -1111,15 +1114,15 @@ fn extract_from_object(
                         strings.extend(extractor.extract_macho(&macho, data));
 
                         // Raw scan fallback for Go shared libraries / cgo binaries
-                        let known: HashSet<String> =
-                            strings.iter().map(|s| s.value.clone()).collect();
-                        for s in
+                        let new_raw: Vec<_> = {
+                            let known: HashSet<&str> =
+                                strings.iter().map(|s| s.value.as_str()).collect();
                             extract_raw_strings(data, min_length, None, &segments, &section_info)
-                        {
-                            if !known.contains(&s.value) {
-                                strings.push(s);
-                            }
-                        }
+                                .into_iter()
+                                .filter(|s| !known.contains(s.value.as_str()))
+                                .collect()
+                        };
+                        strings.extend(new_raw);
                     } else if binary::macho_is_rust(&macho) {
                         is_rust = true;
                         let extractor = RustStringExtractor::new(min_length);
