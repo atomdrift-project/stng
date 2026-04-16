@@ -36,7 +36,6 @@ MEMORY_*.md
 
 # Profiling and performance analysis data
 dhat-*.json
-*.svg
 flamegraph.*
 *.trace/
 analyze_*.py
