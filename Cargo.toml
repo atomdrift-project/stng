@@ -18,7 +18,7 @@ goblin = "0.10"
 regex = "1.12"
 
 # Parallelism
-rayon = "1.11"
+rayon = "1.12"
 
 # Fast byte scanning
 memchr = "2.8"
