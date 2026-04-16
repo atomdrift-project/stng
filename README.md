@@ -1,4 +1,6 @@
-![stng](media/logo-small.png)
+<p align="center">
+  <img src="media/logo.svg" alt="stng" width="240">
+</p>
 
 **stng** — modern string extraction for binary analysis. All of the good stuff, none of the garbage.
 
