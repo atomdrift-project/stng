@@ -18,6 +18,15 @@ pub(super) fn is_python_code(s: &str) -> bool {
         return false;
     }
 
+    // Reject Go symbol-table strings up-front: Go's pclntab embeds type
+    // metadata like `sync/atomic.(*Pointer[go.shape.struct { os.mu sync.Mutex;
+    // os.class uint32 }]).Swap` which trips the `class ` + `os.` Python
+    // heuristic below. Go's symbol syntax `.(*` (pointer method), `go.shape.`,
+    // and `syscall.Handle` never appear in Python source.
+    if s.contains(".(*") || s.contains("go.shape.") || s.contains("syscall.Handle") {
+        return false;
+    }
+
     let mut matches = 0;
 
     // Strong Python indicators (word boundaries matter)
