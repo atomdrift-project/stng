@@ -941,10 +941,13 @@ const ROLLING_XOR_PATTERNS: &[&[u8]] = &[
 pub(crate) fn extract_rolling_xor_with_known_plaintext(
     data: &[u8],
     min_length: usize,
+    excluded_ranges: &[(usize, usize)],
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();
-    // Track regions already extracted to skip redundant work
-    let mut covered_ranges: Vec<(usize, usize)> = Vec::new();
+    // Pre-seed covered_ranges with excluded_ranges (code sections). The
+    // while-loop below already skips offsets inside any covered range, so
+    // code segments are never inspected.
+    let mut covered_ranges: Vec<(usize, usize)> = excluded_ranges.to_vec();
 
     // Try key lengths from 1 to 4 bytes
     for key_len in 1..=4usize {
@@ -1101,9 +1104,16 @@ pub(crate) fn extract_rolling_xor_with_known_plaintext(
 ///
 /// It uses known plaintext patterns to derive candidate seeds, then validates
 /// by checking if the pattern decodes correctly.
-pub fn extract_incremental_xor_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
+pub fn extract_incremental_xor_strings(
+    data: &[u8],
+    min_length: usize,
+    excluded_ranges: &[(usize, usize)],
+) -> Vec<ExtractedString> {
     let mut results = Vec::new();
-    let mut covered_ranges: Vec<(usize, usize)> = Vec::new();
+    // Pre-seed covered_ranges with excluded_ranges (code sections). The
+    // per-offset loop below skips offsets inside any covered range, so code
+    // segments are never inspected.
+    let mut covered_ranges: Vec<(usize, usize)> = excluded_ranges.to_vec();
 
     // Scan for patterns to find the seed
     for pattern in XOR_PATTERNS {
@@ -1113,6 +1123,17 @@ pub fn extract_incremental_xor_strings(data: &[u8], min_length: usize) -> Vec<Ex
         let max_offset = data.len().saturating_sub(pattern.len());
 
         for offset in 0..max_offset {
+            // Skip offsets that fall inside a covered range (either an
+            // already-extracted region or a caller-provided exclusion such
+            // as a `.text` code section). Checking up front avoids the
+            // per-pattern validation loop on bytes we know we'll throw out.
+            if covered_ranges
+                .iter()
+                .any(|&(s, e)| offset >= s && offset < e)
+            {
+                continue;
+            }
+
             // Derive candidate seed: data[offset+i] ^ (seed + i) = pattern[i]
             // seed + i = data[offset+i] ^ pattern[i]
             // seed = (data[offset+i] ^ pattern[i]).wrapping_sub(i as u8)

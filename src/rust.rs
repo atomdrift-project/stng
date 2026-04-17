@@ -392,11 +392,7 @@ impl RustStringExtractor {
     }
 
     /// Extract raw strings as fallback.
-    fn extract_raw_strings(
-        &self,
-        data: &[u8],
-        section_name: Option<&str>,
-    ) -> Vec<ExtractedString> {
+    fn extract_raw_strings(&self, data: &[u8], section_name: Option<&str>) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         let mut current = Vec::new();
@@ -849,13 +845,7 @@ mod tests {
         let mut strings = Vec::new();
         let mut seen = HashSet::new();
 
-        extractor.add_if_valid(
-            "hello_world",
-            0,
-            Some(".rodata"),
-            &mut strings,
-            &mut seen,
-        );
+        extractor.add_if_valid("hello_world", 0, Some(".rodata"), &mut strings, &mut seen);
 
         assert_eq!(strings.len(), 1);
         assert_eq!(strings[0].value, "hello_world");
@@ -869,7 +859,13 @@ mod tests {
         let mut strings = Vec::new();
         let mut seen = HashSet::new();
 
-        extractor.extract_patterns_from_segment(segment, 0, Some(".rodata"), &mut strings, &mut seen);
+        extractor.extract_patterns_from_segment(
+            segment,
+            0,
+            Some(".rodata"),
+            &mut strings,
+            &mut seen,
+        );
 
         // Should extract URLs, paths, env vars, and identifiers
         assert!(!strings.is_empty());

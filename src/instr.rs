@@ -244,7 +244,9 @@ fn decode_arm64_string(
 
     // Decode ADD: extract immediate
     let add_imm = (inst2 >> 10) & 0xFFF;
-    let str_addr = u64::try_from(page_addr).unwrap_or(u64::MAX).wrapping_add(u64::from(add_imm));
+    let str_addr = u64::try_from(page_addr)
+        .unwrap_or(u64::MAX)
+        .wrapping_add(u64::from(add_imm));
 
     // Decode MOV/ORR: extract length
     let str_len = decode_arm_mov_immediate(inst3)?;

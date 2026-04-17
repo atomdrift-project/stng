@@ -1198,7 +1198,7 @@ mod tests {
             data[80 + i] = b ^ key[0];
         }
 
-        let results = extract_rolling_xor_with_known_plaintext(&data, 8);
+        let results = extract_rolling_xor_with_known_plaintext(&data, 8, &[]);
 
         // Should find the patterns
         let found_userprofile = results.iter().any(|r| r.value.contains("USERPROFILE"));
@@ -1215,7 +1215,7 @@ mod tests {
     fn test_rolling_xor_no_false_positives() {
         // Random data should not produce false positives
         let data: Vec<u8> = (0..500).map(|i| ((i * 17 + 31) % 256) as u8).collect();
-        let results = extract_rolling_xor_with_known_plaintext(&data, 8);
+        let results = extract_rolling_xor_with_known_plaintext(&data, 8, &[]);
 
         // Should have few or no results on random data
         assert!(
