@@ -1344,10 +1344,18 @@ fn extract_from_object(
                 .collect();
             let section_info = collect_pe_section_info(pe);
 
-            // Check for Go by looking for go.buildinfo section specifically
+            // Check for Go. Stripped Go PE builds merge `go.buildinfo` /
+            // `gopclntab` into `.rdata`, so also accept `.symtab` — Go is the
+            // only common PE toolchain that retains that exact section name
+            // (MSVC/GCC/Clang PEs don't emit a section literally named `.symtab`).
+            // Without this, stripped Go PEs skip the Go-aware code path and
+            // hit the speculative XOR scanner, which decodes random pclntab
+            // bytes into garbled "payloads".
             let has_go = pe.sections.iter().any(|sec| {
                 let name = binary::pe_section_name(&sec.name);
-                name.contains("go.buildinfo") || name.contains("gopclntab")
+                name.contains("go.buildinfo")
+                    || name.contains("gopclntab")
+                    || name == ".symtab"
             });
 
             if has_go {
