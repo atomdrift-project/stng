@@ -206,7 +206,9 @@ mod tests {
 
     #[test]
     fn test_no_false_positives_on_random() {
-        let data: Vec<u8> = (0..1000).map(|i| ((i * 7 + 13) % 256) as u8).collect();
+        let data: Vec<u8> = (0..1000u32)
+            .map(|i| u8::try_from((i * 7 + 13) % 256).unwrap_or(0))
+            .collect();
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.len() < 10,
@@ -889,9 +891,9 @@ mod tests {
         // Check for overlapping strings (same data region decoded multiple times)
         for i in 0..results.len() {
             for j in (i + 1)..results.len() {
-                let start1 = results[i].data_offset as usize;
+                let start1 = usize::try_from(results[i].data_offset).unwrap_or(usize::MAX);
                 let end1 = start1 + results[i].value.len();
-                let start2 = results[j].data_offset as usize;
+                let start2 = usize::try_from(results[j].data_offset).unwrap_or(usize::MAX);
                 let end2 = start2 + results[j].value.len();
 
                 // Check if ranges overlap
@@ -1214,7 +1216,9 @@ mod tests {
     #[test]
     fn test_rolling_xor_no_false_positives() {
         // Random data should not produce false positives
-        let data: Vec<u8> = (0..500).map(|i| ((i * 17 + 31) % 256) as u8).collect();
+        let data: Vec<u8> = (0..500u32)
+            .map(|i| u8::try_from((i * 17 + 31) % 256).unwrap_or(0))
+            .collect();
         let results = extract_rolling_xor_with_known_plaintext(&data, 8, &[]);
 
         // Should have few or no results on random data

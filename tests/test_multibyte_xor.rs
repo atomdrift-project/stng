@@ -196,7 +196,7 @@ fn test_multibyte_xor_offsets() {
     let found_offset = xor_strings
         .iter()
         .find(|s| s.value.contains("firstline"))
-        .map(|s| s.data_offset as usize);
+        .map(|s| usize::try_from(s.data_offset).unwrap());
     assert!(
         found_offset.is_some()
             && (found_offset.unwrap() >= start_offset && found_offset.unwrap() <= start_offset + 4),

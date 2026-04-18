@@ -113,7 +113,7 @@ fn test_xor_no_byte_range_overlaps() {
 
     // Check for byte-range overlaps
     for (i, s1) in xor_strings.iter().enumerate() {
-        let s1_start = s1.data_offset as usize;
+        let s1_start = usize::try_from(s1.data_offset).unwrap();
         let s1_end = s1_start + s1.value.len();
 
         for (j, s2) in xor_strings.iter().enumerate() {
@@ -121,7 +121,7 @@ fn test_xor_no_byte_range_overlaps() {
                 continue;
             }
 
-            let s2_start = s2.data_offset as usize;
+            let s2_start = usize::try_from(s2.data_offset).unwrap();
             let s2_end = s2_start + s2.value.len();
 
             let overlaps = !(s1_end <= s2_start || s1_start >= s2_end);

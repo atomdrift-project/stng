@@ -268,7 +268,20 @@ pub(super) fn is_hex_encoded(s: &str) -> bool {
         .count();
 
     // At least 70% printable
-    printable * 10 > decoded.len() * 7
+    if printable * 10 <= decoded.len() * 7 {
+        return false;
+    }
+
+    // Reject sentinel/poison patterns: strings whose decoded bytes are all
+    // identical (e.g. `4444...` → `DDDDDDDD`, a Go runtime memory poison) or
+    // which use fewer than 3 distinct byte values. Real hex-encoded text or
+    // code has more variety than that.
+    let mut distinct = [false; 256];
+    for &b in &decoded {
+        distinct[b as usize] = true;
+    }
+    let distinct_count = distinct.iter().filter(|&&b| b).count();
+    distinct_count >= 3
 }
 
 /// Check if a string looks like Unicode-escaped data (\xXX or \uXXXX format)

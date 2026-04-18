@@ -95,15 +95,46 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
                     return None; // Skip - local part has no alphanumeric
                 }
 
+                // Local part may only contain the RFC-5321 atext subset we care about.
+                // Reject slashes (common in Go module paths like "pkg/sub@v1.0.0/file.go")
+                // and other symbols that are not legal in email addresses.
+                if !local
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '%'))
+                {
+                    return None; // Skip - local part contains non-email chars
+                }
+
                 // Domain must have a dot (not @domain or @.domain)
                 if !domain.contains('.') || domain.starts_with('.') {
                     return None; // Skip - invalid domain structure
+                }
+
+                // Domain may only contain hostname-legal characters (letters, digits,
+                // dots, hyphens). Reject slashes — `logr@v1.4.1/logr.go` is a Go
+                // module path, not an email.
+                if !domain
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+                {
+                    return None; // Skip - domain contains non-hostname chars
                 }
 
                 // Domain must have at least one letter (not just numbers/symbols like @0.x)
                 let domain_has_letter = domain.chars().any(|c| c.is_ascii_alphabetic());
                 if !domain_has_letter {
                     return None; // Skip - domain has no letters
+                }
+
+                // Reject domains whose first label is a bare version token like
+                // "v1" or "v2" — these come from Go module paths (`pkg@v1.4.1`).
+                if let Some(first_label) = domain.split('.').next() {
+                    let is_version_token = first_label.len() >= 2
+                        && first_label.starts_with('v')
+                        && first_label[1..].chars().all(|c| c.is_ascii_digit());
+                    if is_version_token {
+                        return None; // Skip - Go module version, not email domain
+                    }
                 }
 
                 // Extract TLD (everything after last dot)
@@ -145,17 +176,25 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
         return Some(StringKind::TorAddress);
     }
 
-    // JWT tokens (3 base64 parts separated by dots)
-    if s.matches('.').count() == 2 && len >= 50 {
-        let parts: Vec<&str> = s.split('.').collect();
-        if parts.len() == 3 && parts.iter().all(|p| !p.is_empty()) {
-            let base64_chars = s
-                .chars()
-                .filter(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '='))
-                .count();
-            if base64_chars * 100 / len >= 95 {
-                return Some(StringKind::JWT);
-            }
+    // JWT tokens: three base64url segments separated by dots. Every real JWT
+    // header decodes from `{"alg":...}`, which in base64url always starts with
+    // `eyJ`. Requiring that prefix plus strict base64url chars in every
+    // segment rules out arbitrary `foo/bar.Type.method` Go symbols.
+    if s.matches('.').count() == 2 && len >= 50 && s.starts_with("eyJ") {
+        let parts: [&str; 3] = {
+            let mut it = s.split('.');
+            let header = it.next().unwrap_or("");
+            let payload = it.next().unwrap_or("");
+            let sig = it.next().unwrap_or("");
+            [header, payload, sig]
+        };
+        let is_base64url = |p: &str| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '='))
+        };
+        if parts.iter().all(|p| is_base64url(p)) {
+            return Some(StringKind::JWT);
         }
     }
 

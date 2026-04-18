@@ -1088,11 +1088,32 @@ pub(crate) fn extract_ip_at_dot(
     let decoded: Vec<u8> = data[start..end].iter().map(|b| b ^ key).collect();
     let ip_str = String::from_utf8(decoded).ok()?;
 
-    if is_valid_ip(&ip_str) {
-        Some((ip_str, start, end))
-    } else {
-        None
+    if !is_valid_ip(&ip_str) {
+        return None;
     }
+
+    // Reject when the raw bytes are already a plausible structured plaintext
+    // of the form "digits-separator-digits..." — e.g. Go's embedded timezone
+    // data `10-11-12-08-09+13` XORs under key 0x03 to `23.22.21.3;.3:.20...`,
+    // producing a spurious IP. If the raw bytes are entirely digits plus a
+    // single punctuation separator (and contain that separator), the original
+    // data is already meaningful and the XOR match is a coincidence.
+    let raw = &data[start..end];
+    if !raw.is_empty() && raw.iter().all(|&b| b.is_ascii_digit() || is_numeric_sep(b)) {
+        let seps: std::collections::BTreeSet<u8> =
+            raw.iter().copied().filter(|b| is_numeric_sep(*b)).collect();
+        if seps.len() == 1 {
+            return None;
+        }
+    }
+
+    Some((ip_str, start, end))
+}
+
+/// ASCII punctuation bytes that commonly separate numeric fields in
+/// legitimate plaintext (timezone offsets, dates, versions, CSV, ranges).
+fn is_numeric_sep(b: u8) -> bool {
+    matches!(b, b'-' | b'+' | b':' | b'/' | b'.' | b',' | b';' | b'_')
 }
 
 /// Try to extract IP:port starting from a dot position in the IP.

@@ -54,7 +54,7 @@ fn test_no_overlapping_xor_strings() {
     // Check for overlapping byte ranges with same content (bad overlaps)
     // Different strings can overlap in byte range if they have different content
     for (i, s1) in xor_strings.iter().enumerate() {
-        let s1_start = s1.data_offset as usize;
+        let s1_start = usize::try_from(s1.data_offset).unwrap();
         let s1_end = s1_start + s1.value.len();
 
         for (j, s2) in xor_strings.iter().enumerate() {
@@ -62,7 +62,7 @@ fn test_no_overlapping_xor_strings() {
                 continue;
             }
 
-            let s2_start = s2.data_offset as usize;
+            let s2_start = usize::try_from(s2.data_offset).unwrap();
             let s2_end = s2_start + s2.value.len();
 
             // Check if ranges overlap
@@ -158,7 +158,7 @@ fn test_brew_agent_no_overlaps() {
 
     // Check for overlaps
     for (i, s1) in xor_strings.iter().enumerate() {
-        let s1_start = s1.data_offset as usize;
+        let s1_start = usize::try_from(s1.data_offset).unwrap();
         let s1_end = s1_start + s1.value.len();
 
         for (j, s2) in xor_strings.iter().enumerate() {
@@ -166,7 +166,7 @@ fn test_brew_agent_no_overlaps() {
                 continue;
             }
 
-            let s2_start = s2.data_offset as usize;
+            let s2_start = usize::try_from(s2.data_offset).unwrap();
             let s2_end = s2_start + s2.value.len();
 
             let overlaps = !(s1_end <= s2_start || s1_start >= s2_end);

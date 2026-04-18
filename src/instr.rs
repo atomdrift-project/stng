@@ -1660,7 +1660,9 @@ mod tests {
     #[test]
     fn test_large_code_section_arm64() {
         use std::time::Instant;
-        let text_data: Vec<u8> = (0..65536).map(|i| (i % 256) as u8).collect();
+        let text_data: Vec<u8> = (0..65536u32)
+            .map(|i| u8::try_from(i % 256).unwrap_or(0))
+            .collect();
         let rodata_data = vec![0u8; 4096];
         let start = Instant::now();
         let _ = extract_inline_strings_arm64(&text_data, 0x100000, &rodata_data, 0x110000, 4);

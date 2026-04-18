@@ -89,10 +89,15 @@ pub struct SectionInfo {
 
 impl SectionInfo {
     /// `[start, end)` file-offset range covered by this section.
+    ///
+    /// On 32-bit targets, a file offset or size beyond `usize::MAX` is
+    /// saturated — this can only happen for inputs larger than 4 GiB, which
+    /// we don't support for loading into memory.
     #[must_use]
     pub fn range(&self) -> (usize, usize) {
-        let start = self.file_offset as usize;
-        let end = start.saturating_add(self.size as usize);
+        let start = usize::try_from(self.file_offset).unwrap_or(usize::MAX);
+        let size = usize::try_from(self.size).unwrap_or(usize::MAX);
+        let end = start.saturating_add(size);
         (start, end)
     }
 }

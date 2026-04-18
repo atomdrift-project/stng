@@ -162,8 +162,11 @@ fn test_extract_strings_caching() {
 #[test]
 fn test_extract_function_metadata_large_file() {
     // Files > 2MB should be skipped
-    let file_size = (3 * 1024 * 1024) as u64;
-    let temp_path = create_temp_file("r2_func_large", &vec![0u8; file_size as usize]);
+    let file_size: u64 = 3 * 1024 * 1024;
+    let temp_path = create_temp_file(
+        "r2_func_large",
+        &vec![0u8; usize::try_from(file_size).unwrap()],
+    );
     let file_path = temp_path.to_str().unwrap();
 
     let result = stng::r2::extract_function_metadata(file_path, file_size, false);

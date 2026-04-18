@@ -1207,21 +1207,26 @@ pub fn extract_incremental_xor_strings(
                         while current_bytes.len() >= min_length {
                             match String::from_utf8(current_bytes.clone()) {
                                 Ok(s) => {
+                                    // Incremental XOR is high-FP: a single 4-byte anchor
+                                    // match triggers 4KB of speculative decoding. Only keep
+                                    // strings that the classifier affirms are meaningful
+                                    // — unclassified "any-alpha-char" noise should be dropped.
                                     if s.chars().any(char::is_alphabetic) {
-                                        let kind = classify_xor_string(&s).flatten();
-                                        results.push(ExtractedString {
-                                            value: s,
-                                            data_offset: current_start as u64,
-                                            section: None,
-                                            method: StringMethod::XorDecode,
-                                            kind,
-                                            source: Some(format!(
-                                                "xor:incremental:seed0x{:02x}",
-                                                seed
-                                            )),
-                                            fragments: None,
-                                            ..Default::default()
-                                        });
+                                        if let Some(Some(kind)) = classify_xor_string(&s) {
+                                            results.push(ExtractedString {
+                                                value: s,
+                                                data_offset: current_start as u64,
+                                                section: None,
+                                                method: StringMethod::XorDecode,
+                                                kind: Some(kind),
+                                                source: Some(format!(
+                                                    "xor:incremental:seed0x{:02x}",
+                                                    seed
+                                                )),
+                                                fragments: None,
+                                                ..Default::default()
+                                            });
+                                        }
                                     }
                                     break;
                                 }
@@ -1232,20 +1237,21 @@ pub fn extract_incremental_xor_strings(
                                         valid_bytes.truncate(valid_up_to);
                                         if let Ok(s) = String::from_utf8(valid_bytes) {
                                             if s.chars().any(char::is_alphabetic) {
-                                                let kind = classify_xor_string(&s).flatten();
-                                                results.push(ExtractedString {
-                                                    value: s,
-                                                    data_offset: current_start as u64,
-                                                    section: None,
-                                                    method: StringMethod::XorDecode,
-                                                    kind,
-                                                    source: Some(format!(
-                                                        "xor:incremental:seed0x{:02x}",
-                                                        seed
-                                                    )),
-                                                    fragments: None,
-                                                    ..Default::default()
-                                                });
+                                                if let Some(Some(kind)) = classify_xor_string(&s) {
+                                                    results.push(ExtractedString {
+                                                        value: s,
+                                                        data_offset: current_start as u64,
+                                                        section: None,
+                                                        method: StringMethod::XorDecode,
+                                                        kind: Some(kind),
+                                                        source: Some(format!(
+                                                            "xor:incremental:seed0x{:02x}",
+                                                            seed
+                                                        )),
+                                                        fragments: None,
+                                                        ..Default::default()
+                                                    });
+                                                }
                                             }
                                         }
                                     }

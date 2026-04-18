@@ -59,11 +59,13 @@ fn test_overlay_size_and_start_offset_accurate() {
     let info = detect_elf_overlay(&data).expect("Overlay should be detected");
 
     assert_eq!(
-        info.size as usize, payload_len,
+        usize::try_from(info.size).unwrap(),
+        payload_len,
         "Reported overlay size should exactly match the appended payload length"
     );
     assert_eq!(
-        info.start_offset as usize, original_size,
+        usize::try_from(info.start_offset).unwrap(),
+        original_size,
         "Overlay start offset should be at the original file boundary"
     );
 }

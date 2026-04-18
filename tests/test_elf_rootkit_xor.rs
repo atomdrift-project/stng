@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use stng::{extract_strings_with_options, ExtractOptions, StringMethod};
 
 /// Integration test against a real LD_PRELOAD Linux rootkit ELF.

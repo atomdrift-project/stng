@@ -474,7 +474,7 @@ fn test_entitlements_offset_accuracy() {
     let ent = entitlements[0];
 
     // Verify the offset points to actual XML content
-    let offset = ent.data_offset as usize;
+    let offset = usize::try_from(ent.data_offset).unwrap();
     assert!(
         offset < data.len(),
         "Offset 0x{:x} should be within file bounds ({})",

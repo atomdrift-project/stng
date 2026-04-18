@@ -575,6 +575,7 @@ pub struct OverlayInfo {
 
 #[cfg(test)]
 impl BinaryInfo {
+    #[must_use]
     pub fn new_64bit_le() -> Self {
         Self {
             is_64bit: true,
@@ -582,6 +583,7 @@ impl BinaryInfo {
             ptr_size: 8,
         }
     }
+    #[must_use]
     pub fn new_32bit_le() -> Self {
         Self {
             is_64bit: false,
@@ -589,6 +591,7 @@ impl BinaryInfo {
             ptr_size: 4,
         }
     }
+    #[must_use]
     pub fn new_64bit_be() -> Self {
         Self {
             is_64bit: true,
@@ -596,6 +599,7 @@ impl BinaryInfo {
             ptr_size: 8,
         }
     }
+    #[must_use]
     pub fn new_32bit_be() -> Self {
         Self {
             is_64bit: false,

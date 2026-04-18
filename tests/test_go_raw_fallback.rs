@@ -77,11 +77,11 @@ fn build_elf_with_sections(sections: &[(&str, u64, u64, &[u8], u32)]) -> Vec<u8>
     // e_phnum = 1
     data[56..58].copy_from_slice(&1u16.to_le_bytes());
     // e_shentsize = 64
-    data[58..60].copy_from_slice(&(shdr_entry_size as u16).to_le_bytes());
+    data[58..60].copy_from_slice(&u16::try_from(shdr_entry_size).unwrap().to_le_bytes());
     // e_shnum
-    data[60..62].copy_from_slice(&(num_sections as u16).to_le_bytes());
+    data[60..62].copy_from_slice(&u16::try_from(num_sections).unwrap().to_le_bytes());
     // e_shstrndx = last section index
-    data[62..64].copy_from_slice(&((num_sections - 1) as u16).to_le_bytes());
+    data[62..64].copy_from_slice(&u16::try_from(num_sections - 1).unwrap().to_le_bytes());
 
     // --- Program header (single PT_LOAD at offset 0x40) ---
     let phdr_off = 0x40usize;
@@ -104,7 +104,7 @@ fn build_elf_with_sections(sections: &[(&str, u64, u64, &[u8], u32)]) -> Vec<u8>
 
     // --- Place section data ---
     for (_, file_offset, _, section_data, _) in sections {
-        let off = *file_offset as usize;
+        let off = usize::try_from(*file_offset).unwrap();
         let end = off + section_data.len();
         assert!(
             end <= shstrtab_offset,
@@ -122,11 +122,11 @@ fn build_elf_with_sections(sections: &[(&str, u64, u64, &[u8], u32)]) -> Vec<u8>
     for (i, (_, file_offset, vaddr, section_data, flags)) in sections.iter().enumerate() {
         let off = shdr_offset + (i + 1) * shdr_entry_size;
         // sh_name
-        data[off..off + 4].copy_from_slice(&(name_offsets[i] as u32).to_le_bytes());
+        data[off..off + 4].copy_from_slice(&u32::try_from(name_offsets[i]).unwrap().to_le_bytes());
         // sh_type = SHT_PROGBITS (1)
         data[off + 4..off + 8].copy_from_slice(&1u32.to_le_bytes());
         // sh_flags
-        data[off + 8..off + 16].copy_from_slice(&(*flags as u64).to_le_bytes());
+        data[off + 8..off + 16].copy_from_slice(&u64::from(*flags).to_le_bytes());
         // sh_addr (virtual address)
         data[off + 16..off + 24].copy_from_slice(&vaddr.to_le_bytes());
         // sh_offset (file offset)
@@ -144,7 +144,8 @@ fn build_elf_with_sections(sections: &[(&str, u64, u64, &[u8], u32)]) -> Vec<u8>
         let idx = num_sections - 1;
         let off = shdr_offset + idx * shdr_entry_size;
         // sh_name
-        data[off..off + 4].copy_from_slice(&(shstrtab_name_offset as u32).to_le_bytes());
+        data[off..off + 4]
+            .copy_from_slice(&u32::try_from(shstrtab_name_offset).unwrap().to_le_bytes());
         // sh_type = SHT_STRTAB (3)
         data[off + 4..off + 8].copy_from_slice(&3u32.to_le_bytes());
         // sh_flags = 0

@@ -2204,7 +2204,8 @@ mod extract_from_tests {
         // Verify offsets are absolute file offsets, not relative to overlay start
         let s = test_aaa.expect("Should find OVERLAY_TEST_AAA string");
         assert_eq!(
-            s.data_offset as usize, first_string_offset,
+            usize::try_from(s.data_offset).unwrap(),
+            first_string_offset,
             "First overlay string offset should be absolute file offset 0x{:x}, not relative to overlay",
             first_string_offset
         );
@@ -2216,7 +2217,8 @@ mod extract_from_tests {
 
         let s = test_bbb.expect("Should find OVERLAY_TEST_BBB string");
         assert_eq!(
-            s.data_offset as usize, second_string_offset,
+            usize::try_from(s.data_offset).unwrap(),
+            second_string_offset,
             "Second overlay string offset should be absolute file offset 0x{:x}, not relative to overlay",
             second_string_offset
         );
