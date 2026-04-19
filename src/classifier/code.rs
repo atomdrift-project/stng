@@ -2,6 +2,53 @@
 //!
 //! Detects Python, JavaScript, PHP, AppleScript, and shell command patterns.
 
+use aho_corasick::AhoCorasick;
+use std::sync::LazyLock;
+
+/// Error-message patterns used to reject format-string placeholders that look
+/// like shell commands (e.g. "Error: could not {0} the {1}").
+#[allow(clippy::expect_used)]
+static SHELL_ERROR_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        "Error",
+        "error",
+        "Failed",
+        "Could not",
+        "Unable to",
+        "Cannot",
+        "Invalid",
+        "Unsupported",
+        "not supported",
+        "not found",
+        "access",
+        "service",
+        "[Click",
+        "prompt",
+    ])
+    .expect("valid error patterns")
+});
+
+/// Comparison operators that indicate programming expressions, not shell commands.
+#[allow(clippy::expect_used)]
+static SHELL_COMPARISON_OPS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new(["!=", "==", "<=", ">="]).expect("valid comparison patterns")
+});
+
+/// Shell redirection patterns that are strong shell indicators.
+#[allow(clippy::expect_used)]
+static SHELL_REDIRECTS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([">/dev/null", "2>/dev/null", "2>&1"]).expect("valid redirect patterns")
+});
+
+/// Shell command keywords that confirm a pipe `|` is part of a real pipeline.
+#[allow(clippy::expect_used)]
+static SHELL_PIPE_COMMANDS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        "grep", "awk", "sed", "sort", "uniq", "head", "tail", "cat ", "xargs", "wc ", "cut ", "tr ",
+    ])
+    .expect("valid pipe-command patterns")
+});
+
 /// Check if a string looks like Python code
 pub(super) fn is_python_code(s: &str) -> bool {
     let len = s.len();
@@ -306,20 +353,7 @@ pub(super) fn is_shell_command(s: &str) -> bool {
     // Format string placeholders, error codes, UI text markers
     if s.contains("{0}") || s.contains("{1}") || s.contains("%s") || s.contains("%d") {
         // Check if it looks like an error message or UI string
-        let is_error_message = s.contains("Error")
-            || s.contains("error")
-            || s.contains("Failed")
-            || s.contains("Could not")
-            || s.contains("Unable to")
-            || s.contains("Cannot")
-            || s.contains("Invalid")
-            || s.contains("Unsupported")
-            || s.contains("not supported")
-            || s.contains("not found")
-            || s.contains("access")
-            || s.contains("service")
-            || s.contains("[Click")
-            || s.contains("prompt");
+        let is_error_message = SHELL_ERROR_PATTERNS.is_match(s);
         if is_error_message {
             return false;
         }
@@ -370,32 +404,21 @@ pub(super) fn is_shell_command(s: &str) -> bool {
 
     // Skip strings that look like code/programming expressions
     // These contain comparison operators that wouldn't appear in shell commands
-    if s.contains("!=") || s.contains("==") || s.contains("<=") || s.contains(">=") {
+    if SHELL_COMPARISON_OPS.is_match(s) {
         return false;
     }
 
     // Shell operators and redirects
     // Note: " | " alone is not enough - UI strings often use | as a separator
     // e.g., "Click here | Don't show again" - must have actual shell context
-    if s.contains(">/dev/null") || s.contains("2>/dev/null") || s.contains("2>&1") {
+    if SHELL_REDIRECTS.is_match(s) {
         return true;
     }
 
     // Pipe requires additional shell context (command-like words around it)
     if s.contains(" | ") {
         // Check if it looks like a shell pipeline (has command-like patterns)
-        let has_shell_context = s.contains("grep")
-            || s.contains("awk")
-            || s.contains("sed")
-            || s.contains("sort")
-            || s.contains("uniq")
-            || s.contains("head")
-            || s.contains("tail")
-            || s.contains("cat ")
-            || s.contains("xargs")
-            || s.contains("wc ")
-            || s.contains("cut ")
-            || s.contains("tr ")
+        let has_shell_context = SHELL_PIPE_COMMANDS.is_match(s)
             || s.starts_with("ls ")
             || s.starts_with("find ")
             || s.starts_with("ps ");
