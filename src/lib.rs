@@ -1614,10 +1614,9 @@ fn extract_from_object(
                                                 // sections — `.rdata` / `.rsrc`
                                                 // / other non-code PE sections
                                                 // would waste iced-x86 cycles.
-                                                let exec_ranges =
-                                                    binary::code_ranges_from_sections(
-                                                        &section_info,
-                                                    );
+                                                let exec_ranges = binary::code_ranges_from_sections(
+                                                    &section_info,
+                                                );
                                                 extract_stack_strings_from_ranges(
                                                     data,
                                                     min_length,
