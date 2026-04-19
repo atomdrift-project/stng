@@ -294,7 +294,7 @@ fn apply_xor_scan(
 
     // For PE binaries, also try rolling XOR with known plaintext patterns
     // This catches .NET malware like Redline that uses short cycling keys
-    if is_pe && data.len() <= xor::MAX_XOR_SCAN_SIZE {
+    if is_pe && (opts.xor_scan || opts.xor_key.is_some()) && data.len() <= xor::MAX_XOR_SCAN_SIZE {
         let rolling_results = xor::extract_rolling_xor_with_known_plaintext(
             data,
             opts.xor_min_length,

@@ -2,6 +2,14 @@
 //!
 //! Detects Base64, Base32, Base58, Base85, hex, Unicode escape, URL encoding, and cryptographic hashes.
 
+/// Case-insensitive ASCII substring search without allocation.
+#[inline]
+fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle))
+}
+
 /// Check if a string looks like a cryptographic hash (MD5, SHA1, SHA256, SHA512).
 ///
 /// Returns true for hex strings of length 32/40/64/128 that decode to mostly non-printable bytes.
@@ -104,11 +112,12 @@ pub(super) fn is_base64(s: &str) -> bool {
 
     // 2. Go-specific package/type name patterns (http2, grpc, proto keywords)
     // These are distinctive and unlikely in random base64
-    if s.len() < 40 {
-        let lower = s.to_lowercase();
-        if lower.contains("http2") || lower.contains("grpc") || lower.contains("proto") {
-            return false;
-        }
+    if s.len() < 40
+        && (contains_ignore_ascii_case(bytes, b"http2")
+            || contains_ignore_ascii_case(bytes, b"grpc")
+            || contains_ignore_ascii_case(bytes, b"proto"))
+    {
+        return false;
     }
 
     // 3. Reject lowerCamelCase identifiers
@@ -616,11 +625,12 @@ pub(super) fn is_base58(s: &str) -> bool {
 
     // 4. Go package/type names (common patterns)
     //    These start lowercase but contain distinctive keywords
-    if s.len() < 40 {
-        let lower = s.to_lowercase();
-        if lower.contains("http2") || lower.contains("grpc") || lower.contains("proto") {
-            return false;
-        }
+    if s.len() < 40
+        && (contains_ignore_ascii_case(s.as_bytes(), b"http2")
+            || contains_ignore_ascii_case(s.as_bytes(), b"grpc")
+            || contains_ignore_ascii_case(s.as_bytes(), b"proto"))
+    {
+        return false;
     }
 
     // 5. Reject readable identifiers: if input is more text-like than it would be as base58
@@ -684,22 +694,33 @@ pub(super) fn is_base85(s: &str) -> bool {
         return validate_base85_by_decoding(s);
     }
 
-    // Single pass validation
-    // ASCII85 uses '!' (33) to 'u' (117), plus 'z' for zero bytes
+    // Quick rejection: check start/end characters before scanning
+    let first = s.as_bytes()[0];
+    if matches!(first, b'@' | b'/' | b'+' | b' ') {
+        return false;
+    }
+    if s.as_bytes()[s.len() - 1] == b'=' {
+        return false;
+    }
+
+    // Single pass: validate base85 charset AND collect rejection signals.
+    // This avoids separate .contains() scans over the same string data.
     let bytes = s.as_bytes();
-    let mut valid_count = 0;
+    let mut valid_count = 0u32;
     let mut has_lowercase = false;
     let mut has_punctuation = false;
     let mut is_env_var_like = true;
-    let mut unique_char_count = 0;
-    let mut seen_chars = 0u128; // Bitmap for tracking up to 128 unique chars efficiently
+    let mut unique_char_count = 0u32;
+    let mut seen_chars = 0u128;
+    let mut punct_count = 0u32;
+    let mut dot_count = 0u32;
+    let mut colon_count = 0u32;
+    let mut has_plus = false;
+    let mut has_slash = false;
 
     for &b in bytes {
-        // Check if valid ASCII85 character
         if matches!(b, b'!'..=b'u' | b'z') {
             valid_count += 1;
-
-            // Track character diversity without allocation
             let bit_pos = b as u32;
             if bit_pos < 128 && (seen_chars & (1u128 << bit_pos)) == 0 {
                 seen_chars |= 1u128 << bit_pos;
@@ -707,77 +728,78 @@ pub(super) fn is_base85(s: &str) -> bool {
             }
         }
 
-        // Track character types for filtering false positives
         match b {
             b'a'..=b'z' => has_lowercase = true,
             b'!'..=b'/' | b':'..=b'@' | b'['..=b'`' | b'{'..=b'~' => has_punctuation = true,
             _ => {}
         }
 
-        // Check if it could be an environment variable
+        if b.is_ascii_punctuation() {
+            punct_count += 1;
+        }
+        match b {
+            b'.' => dot_count += 1,
+            b':' => colon_count += 1,
+            b'+' => has_plus = true,
+            b'/' => has_slash = true,
+            _ => {}
+        }
+
         if !matches!(b, b'A'..=b'Z' | b'_' | b'0'..=b'9') {
             is_env_var_like = false;
         }
     }
 
-    // Reject environment variable patterns
     if is_env_var_like {
         return false;
     }
 
-    // Reject strings that look like URLs, paths, function names, or normal text
-    if s.contains("://")
-        || s.contains("http")
-        || s.starts_with('@')
-        || s.starts_with('/')
-        || s.contains("apple")
-        || s.contains("Apple")
+    // Reject URLs, paths, common identifiers — using signals from the single pass
+    if (has_slash && colon_count > 0 && contains_ignore_ascii_case(bytes, b"://"))
+        || contains_ignore_ascii_case(bytes, b"http")
+        || contains_ignore_ascii_case(bytes, b"apple")
         || s.contains("Authority")
         || s.contains("plist")
         || s.contains("version")
-        || s.contains('.') && s.split('.').count() > 2
-        || s.starts_with('+')
-        || s.starts_with(' ')
+        || (dot_count > 2)
     {
         return false;
     }
 
-    // Reject passwd-style entries: username:*:uid:gid:comment:home:shell
+    // Reject passwd-style entries
     if s.contains(":*:")
-        || (s.matches(':').count() >= 6
+        || (colon_count >= 6
             && (s.contains("/usr/bin/") || s.contains("/bin/") || s.contains("/var/")))
     {
         return false;
     }
 
-    // Reject strings that look like character sets or pure punctuation
-    let punct_count = s.bytes().filter(u8::is_ascii_punctuation).count();
-    if punct_count * 2 > s.len() {
+    if punct_count as usize * 2 > s.len() {
         return false;
     }
 
-    // Reject strings that look like base64 (end with = padding, contain + or /)
-    // Real ASCII85 uses z for compression, not = for padding
-    if s.ends_with('=') || s.contains('+') && s.contains('/') {
+    // Reject base64-like strings
+    if has_plus && has_slash {
         return false;
     }
 
-    // Must have lowercase or punctuation (not just uppercase)
     if !has_lowercase && !has_punctuation {
         return false;
     }
 
     // For longer strings (>= 50), be very strict to reduce false positives
+    #[allow(clippy::cast_possible_truncation)]
+    let len = s.len() as u32;
     if s.len() >= 50 {
         // Require 98% valid chars AND good character distribution
-        if valid_count * 100 < s.len() * 98 || unique_char_count < 15 {
+        if valid_count * 100 < len * 98 || unique_char_count < 15 {
             return false;
         }
         // Still need to validate by decoding - fall through
     }
 
     // For shorter strings, use moderate threshold
-    if valid_count * 10 < s.len() * 9 {
+    if valid_count * 10 < len * 9 {
         return false;
     }
 

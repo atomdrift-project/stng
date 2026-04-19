@@ -231,88 +231,108 @@ pub(crate) fn extract_wide_strings(
         return strings;
     }
 
+    // Reusable buffer to avoid per-string allocation
+    let mut code_units: Vec<u16> = Vec::with_capacity(256);
+
+    // Use memchr to jump to zero bytes — UTF-16LE ASCII is [char, 0x00],
+    // so every valid wide char has a zero at an odd offset.  Scanning for
+    // zeros and checking the preceding byte is much faster than inspecting
+    // every byte pair sequentially.
     let mut i = 0;
-    while i + 1 < data.len() {
-        // Look for start of UTF-16LE sequence: printable ASCII followed by 0x00
-        let lo = data[i];
-        let hi = data[i + 1];
-
-        if (lo.is_ascii_graphic() || matches!(lo, b' ' | b'\t' | b'\n' | b'\r')) && hi == 0 {
-            // Found potential start of wide string
-            let start = i;
-            let mut code_units: Vec<u16> = Vec::new();
-
-            // Collect UTF-16LE code units
-            while i + 1 < data.len() {
-                let lo = data[i];
-                let hi = data[i + 1];
-                let code_unit = u16::from_le_bytes([lo, hi]);
-
-                // Check for null terminator
-                if code_unit == 0 {
-                    break;
-                }
-
-                // For BMP characters, check if it's a printable character
-                // Allow ASCII printable range and common Unicode ranges
-                if is_valid_wide_char(code_unit) {
-                    code_units.push(code_unit);
-                    i += 2;
-                } else {
-                    break;
-                }
-            }
-
-            // Decode and validate the string
-            if code_units.len() >= min_length {
-                let decoded = String::from_utf16_lossy(&code_units);
-                let trimmed = decoded.trim();
-
-                if trimmed.len() >= min_length && !trimmed.is_empty() && !seen.contains(trimmed) {
-                    let kind = if segment_names_set.contains(trimmed) {
-                        Some(StringKind::Section)
-                    } else {
-                        classifier::classify_string(trimmed)
-                    };
-
-                    // Get section metadata if this is a section
-                    let (sec_size, sec_exec, sec_write) = if kind == Some(StringKind::Section) {
-                        section_info
-                            .get(trimmed)
-                            .map_or((None, None, None), |info| {
-                                (
-                                    Some(info.size),
-                                    Some(info.is_executable),
-                                    Some(info.is_writable),
-                                )
-                            })
-                    } else {
-                        (None, None, None)
-                    };
-
-                    seen.insert(trimmed.to_string());
-                    strings.push(ExtractedString {
-                        value: trimmed.to_string(),
-                        data_offset: start as u64,
-                        section: section.map(str::to_string),
-                        method: StringMethod::WideString,
-                        kind,
-                        fragments: None,
-                        section_size: sec_size,
-                        section_executable: sec_exec,
-                        section_writable: sec_write,
-                        ..Default::default()
-                    });
-                }
-            }
-
-            // Skip the null terminator if present
-            if i + 1 < data.len() && data[i] == 0 && data[i + 1] == 0 {
-                i += 2;
-            }
-        } else {
-            i += 1;
+    for zero_pos in memchr_iter(0, data) {
+        // We need the zero at an odd offset (hi byte of a UTF-16LE pair)
+        if zero_pos == 0 || zero_pos % 2 == 0 {
+            continue;
         }
+        // Skip positions we've already consumed
+        if zero_pos < i + 1 {
+            continue;
+        }
+
+        let lo = data[zero_pos - 1];
+        if !(lo.is_ascii_graphic() || matches!(lo, b' ' | b'\t' | b'\n' | b'\r')) {
+            continue;
+        }
+
+        // Walk backward to find the true start of this wide string run,
+        // but never before the last consumed position.
+        let mut start = zero_pos - 1;
+        let floor = if i > 0 { i } else { 0 };
+        while start >= floor + 2 {
+            let prev_lo = data[start - 2];
+            let prev_hi = data[start - 1];
+            if prev_hi == 0 && is_valid_wide_char(u16::from(prev_lo)) {
+                start -= 2;
+            } else {
+                break;
+            }
+        }
+
+        // Collect UTF-16LE code units from start
+        code_units.clear();
+        let mut j = start;
+        while j + 1 < data.len() {
+            let code_unit = u16::from_le_bytes([data[j], data[j + 1]]);
+            if code_unit == 0 {
+                break;
+            }
+            if is_valid_wide_char(code_unit) {
+                code_units.push(code_unit);
+                j += 2;
+            } else {
+                break;
+            }
+        }
+        // Advance past this run (and null terminator if present)
+        i = j;
+        if j + 1 < data.len() && data[j] == 0 && data[j + 1] == 0 {
+            i = j + 2;
+        }
+
+        if code_units.len() < min_length {
+            continue;
+        }
+
+        let decoded = String::from_utf16_lossy(&code_units);
+        let trimmed = decoded.trim();
+
+        if trimmed.len() < min_length || trimmed.is_empty() || seen.contains(trimmed) {
+            continue;
+        }
+
+        let kind = if segment_names_set.contains(trimmed) {
+            Some(StringKind::Section)
+        } else {
+            classifier::classify_string(trimmed)
+        };
+
+        let (sec_size, sec_exec, sec_write) = if kind == Some(StringKind::Section) {
+            section_info
+                .get(trimmed)
+                .map_or((None, None, None), |info| {
+                    (
+                        Some(info.size),
+                        Some(info.is_executable),
+                        Some(info.is_writable),
+                    )
+                })
+        } else {
+            (None, None, None)
+        };
+
+        seen.insert(trimmed.to_string());
+        strings.push(ExtractedString {
+            value: trimmed.to_string(),
+            data_offset: start as u64,
+            section: section.map(str::to_string),
+            method: StringMethod::WideString,
+            kind,
+            fragments: None,
+            section_size: sec_size,
+            section_executable: sec_exec,
+            section_writable: sec_write,
+            ..Default::default()
+        });
     }
 
     strings

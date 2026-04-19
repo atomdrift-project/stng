@@ -159,3 +159,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "classify"
 harness = false
+
+[[bench]]
+name = "extract"
+harness = false
