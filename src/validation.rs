@@ -45,6 +45,56 @@ static MINER_POOL: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new(["pool.", "nanopool", "minergate"]).expect("valid pool patterns")
 });
 
+/// IOC substring patterns batched into one Aho-Corasick automaton.
+///
+/// `is_recognized_ioc` historically did ~11 independent `s.contains(...)`
+/// scans (one per needle).  For long strings that is O(11 × len).  A single
+/// AC find is O(len).  The index of the matched pattern is mapped back to
+/// the per-needle constraint via [`ioc_substring_match`].
+#[allow(clippy::expect_used)]
+static IOC_SUBSTRING: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new(IOC_SUBSTRING_PATTERNS).expect("valid IOC substring patterns")
+});
+
+/// Pattern strings for [`IOC_SUBSTRING`] — order matters (the index of a
+/// matched pattern is consumed by [`ioc_substring_match`] for per-pattern
+/// length constraints).  Only patterns that are "match = IOC, unconditional"
+/// belong here.  Compound checks (`CN=` + `DC=`) and validated checks
+/// (`2>&1` requires alnum/ASCII-ratio gate) stay as explicit checks.
+const IOC_SUBSTRING_PATTERNS: &[&str] = &[
+    ".onion",
+    "HKLM\\",
+    "HKCU\\",
+    "HKEY_",
+    "LDAP://",
+    "-----BEGIN",
+    "-----END",
+];
+
+/// Length-constrained IOC-substring match.
+///
+/// Returns `true` if any pattern in [`IOC_SUBSTRING`] matches `s` AND the
+/// per-pattern length constraint is satisfied.  Skips patterns whose
+/// constraint is not met (e.g. `.onion` requires `len >= 10` so `a.onion`
+/// does not count).
+fn ioc_substring_match(s: &str, len: usize) -> bool {
+    // `find_iter` yields all matches up to the first that satisfies its
+    // constraint.  Most patterns have no length constraint, so the first
+    // match short-circuits immediately.
+    for m in IOC_SUBSTRING.find_iter(s) {
+        match m.pattern().as_usize() {
+            0 => {
+                // `.onion` requires host+TLD, so total length >= 10
+                if len >= 10 {
+                    return true;
+                }
+            }
+            _ => return true,
+        }
+    }
+    false
+}
+
 /// Code/script patterns that immediately mark a string as non-garbage (pure OR match).
 #[allow(clippy::expect_used)]
 static CODE_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
@@ -934,7 +984,11 @@ fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
 /// Fast path: Check if long strings with normal patterns are obviously valid.
 ///
 /// This avoids expensive analysis for the common case.
-fn is_fast_path_valid(s: &str, len: usize) -> bool {
+fn is_fast_path_valid_with_kind(
+    s: &str,
+    len: usize,
+    kind: Option<crate::types::StringKind>,
+) -> bool {
     if len >= MIN_FAST_PATH_VALID_LENGTH {
         let bytes = s.as_bytes();
         let first = bytes[0];
@@ -998,13 +1052,20 @@ fn is_fast_path_valid(s: &str, len: usize) -> bool {
         }
     }
 
-    // If classify_string recognizes this as a meaningful type, it is not garbage.
-    // This covers emails, URLs, IPs, crypto wallets, JWTs, API keys, shell commands,
-    // SQL injection, registry paths, and all other classified string kinds.
-    // Restricted to ASCII strings: non-ASCII content requires full heuristic analysis
-    // because the classifier doesn't account for non-ASCII garbage from misaligned reads.
-    if s.is_ascii() && crate::classifier::classify_string(s).is_some() {
-        return true;
+    // If the extractor already classified this string (or classify_string
+    // recognises it now), it is not garbage.  When a classifier-produced
+    // `kind` hint is passed in we avoid the second `classify_string` call —
+    // it was the single largest hotspot on the garbage-filter path (the
+    // classifier was being run twice per string).  Extractor-only labels
+    // (`Overlay`, `Section`, `Import`, …) fall through to the real
+    // classifier because those labels don't imply content recognition.
+    if s.is_ascii() {
+        if kind.is_some_and(|k| k.is_classifier_output()) {
+            return true;
+        }
+        if crate::classifier::classify_string(s).is_some() {
+            return true;
+        }
     }
 
     false
@@ -1080,7 +1141,10 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
     if is_miner_ioc(s) {
         return true;
     }
-    if s.contains(".onion") && len >= 10 {
+    // Batched substring sweep: `.onion`, `HKLM\`, `HKCU\`, `HKEY_`, `LDAP://`,
+    // `-----BEGIN`, `-----END`, `2>&1`, `<<`.  One AC find replaces the
+    // eight-plus individual `s.contains(...)` scans these checks used to do.
+    if ioc_substring_match(s, len) {
         return true;
     }
 
@@ -1098,16 +1162,8 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
         return true;
     }
 
-    // System paths and registries
-    if s.contains("HKLM\\") || s.contains("HKCU\\") || s.contains("HKEY_") {
-        return true;
-    }
-    if s.contains("LDAP://") || (s.contains("CN=") && s.contains("DC=")) {
-        return true;
-    }
-
-    // Cryptographic materials
-    if s.contains("-----BEGIN") || s.contains("-----END") {
+    // `CN=` + `DC=` is compound (both must be present), so it stays separate.
+    if s.contains("CN=") && s.contains("DC=") {
         return true;
     }
 
@@ -1489,17 +1545,46 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
 /// - Strings with embedded null or control characters
 #[must_use]
 pub fn is_garbage(s: &str) -> bool {
+    is_garbage_with_kind(s, None)
+}
+
+/// Like [`is_garbage`], but takes a `kind` hint produced by the extractor.
+///
+/// When `kind` is `Some(_)`, the string was already recognised by the
+/// classifier (or labelled by a format-specific extractor — imports, stack
+/// strings, etc.) and we can skip the two most expensive steps:
+///
+/// 1. The `classify_string` re-call inside `is_fast_path_valid` (was ~9 % of
+///    stng wall time on a real profile — the classifier was being run twice
+///    per string on the garbage-filter path).
+/// 2. The `is_recognized_ioc` sweep (20+ `contains`/`starts_with` scans, was
+///    8.14 % of stng wall time).
+///
+/// The reloc/statistical checks still run, so a classified string whose bytes
+/// happen to look like a misaligned binary read can still be filtered.
+#[must_use]
+pub fn is_garbage_with_kind(s: &str, kind: Option<crate::types::StringKind>) -> bool {
     let trimmed = s.trim();
     let len = trimmed.len();
 
-    // Fast path: obvious valid strings
-    if is_fast_path_valid(trimmed, len) {
+    // Fast path: obvious valid strings (kind-aware: skips classify_string re-call)
+    if is_fast_path_valid_with_kind(trimmed, len, kind) {
         return false;
     }
 
     // Fast path: obvious garbage
     if is_fast_path_garbage(trimmed, s, len) {
         return true;
+    }
+
+    // Classifier-produced kinds (URL, Path, Email, …) skip the 20+ IOC
+    // pattern sweep — the classifier has already recognised the string as a
+    // specific pattern.  Extractor-only labels (Overlay, Section, Import,
+    // StackString, …) still run through `is_recognized_ioc` and the
+    // statistical checks because those labels don't imply content
+    // recognition — they indicate *provenance*.
+    if kind.is_some_and(|k| k.is_classifier_output()) {
+        return false;
     }
 
     // Known IOC patterns (malware indicators, crypto, auth tokens, etc.)

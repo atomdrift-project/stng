@@ -406,6 +406,54 @@ pub enum Severity {
 }
 
 impl StringKind {
+    /// Returns `true` if this kind is produced by `classifier::classify_string`
+    /// (content-pattern recognition), as opposed to an extractor-assigned label
+    /// like `Overlay`, `Section`, `Import`, or `StackString`.
+    ///
+    /// Used by the garbage-filter fast path to skip a redundant
+    /// `classify_string` call: if the extractor already labelled a string with
+    /// one of these kinds, the classifier would also label it — so
+    /// re-validation is pure waste.  Extractor-only labels fall through to
+    /// the original classifier check because the filter uses classifier
+    /// recognition to decide "meaningful".
+    #[must_use]
+    pub fn is_classifier_output(&self) -> bool {
+        matches!(
+            self,
+            Self::Url
+                | Self::Path
+                | Self::FilePath
+                | Self::Email
+                | Self::IP
+                | Self::IPPort
+                | Self::Hash
+                | Self::GUID
+                | Self::JWT
+                | Self::APIKey
+                | Self::Registry
+                | Self::CryptoWallet
+                | Self::MiningPool
+                | Self::TorAddress
+                | Self::ShellCmd
+                | Self::SuspiciousPath
+                | Self::CTFFlag
+                | Self::Mutex
+                | Self::LDAPPath
+                | Self::HexEncoded
+                | Self::UnicodeEscaped
+                | Self::UrlEncoded
+                | Self::AppleScript
+                | Self::PythonCode
+                | Self::JavaScriptCode
+                | Self::PhpCode
+                | Self::SQLInjection
+                | Self::XSSPayload
+                | Self::CommandInjection
+                | Self::RansomNote
+                | Self::EnvVar
+        )
+    }
+
     /// Get the severity level for this kind
     #[must_use]
     pub fn severity(&self) -> Severity {

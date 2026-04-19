@@ -14,10 +14,16 @@ use std::collections::HashSet;
 /// This function identifies data beyond the normal ELF boundaries.
 #[must_use]
 pub fn detect_elf_overlay(data: &[u8]) -> Option<OverlayInfo> {
-    let Ok(elf) = goblin::elf::Elf::parse(data) else {
-        return None;
-    };
+    let elf = goblin::elf::Elf::parse(data).ok()?;
+    detect_elf_overlay_from_elf(&elf, data)
+}
 
+/// Detect overlay/appended data using a caller-supplied parsed ELF.
+///
+/// Prefer this over `detect_elf_overlay` when you already have an `Elf`
+/// object — it skips the redundant `goblin::elf::Elf::parse` call.
+#[must_use]
+pub fn detect_elf_overlay_from_elf(elf: &goblin::elf::Elf<'_>, data: &[u8]) -> Option<OverlayInfo> {
     // Find the highest file offset used by any program or section header
     // Start with the ELF header size as minimum (64 bytes for 64-bit, 52 for 32-bit)
     let header_size = if elf.is_64 { 64u64 } else { 52u64 };

@@ -75,7 +75,7 @@ pub use binary::{is_go_binary, is_rust_binary};
 pub use classifier::classify_string;
 pub use detect::{detect_language, is_text_file};
 pub use error::{Result, StngError};
-pub use overlay::detect_elf_overlay;
+pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
 pub use types::{
     BinaryInfo, ExtractedString, FunctionMetadata, OverlayInfo, Severity, StringKind, StringMethod,
     StringStruct,
@@ -88,7 +88,7 @@ pub(crate) use go::GoStringExtractor;
 pub use overlay::extract_overlay_strings;
 pub(crate) use rust::RustStringExtractor;
 pub(crate) use stack_strings::{extract_stack_strings, extract_stack_strings_with_context};
-pub use validation::is_garbage;
+pub use validation::{is_garbage, is_garbage_with_kind};
 
 // Re-export goblin so library clients can parse binaries themselves
 pub use goblin;
@@ -100,6 +100,8 @@ use goblin::mach::MachO;
 use goblin::Object;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 
 // Import internal modules for use in this file
 use binary::{
@@ -110,8 +112,83 @@ use binary_net::scan_binary_ips;
 use imports::{extract_elf_imports, extract_macho_imports};
 use raw::{extract_raw_strings, extract_wide_strings};
 
+/// Extract stack strings from every executable section whose byte range is
+/// given by `exec_ranges`.  Section ranges are parsed by
+/// `binary::collect_*_section_info` and filtered to the executable ones.
+///
+/// This avoids feeding the entire file to iced-x86 — for a typical PE or
+/// Mach-O only a small fraction is code, and disassembling `.rdata` /
+/// `__LINKEDIT` as x86 is pure waste.  ELF already did this filtering
+/// inline; this helper generalises the pattern so PE and Mach-O get the
+/// same win.
+fn extract_stack_strings_from_ranges(
+    data: &[u8],
+    min_length: usize,
+    exec_ranges: &[(usize, usize)],
+) -> Vec<ExtractedString> {
+    if exec_ranges.is_empty() {
+        return Vec::new();
+    }
+    exec_ranges
+        .par_iter()
+        .filter_map(|&(start, end)| {
+            let end = end.min(data.len());
+            if start >= end {
+                return None;
+            }
+            let section_data = data.get(start..end)?;
+            let mut results = extract_stack_strings(section_data, min_length);
+            for r in &mut results {
+                r.data_offset += start as u64;
+            }
+            Some(results)
+        })
+        .flatten()
+        .collect()
+}
+
+/// Shared 1-thread rayon pool used when the caller opts out of parallelism
+/// (`ExtractOptions::parallel == Some(false)`) or when stng detects it is
+/// running inside another rayon worker.  Built lazily — callers that never
+/// nest stng inside their own pool pay no cost.
+#[allow(clippy::expect_used)]
+static SERIAL_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .thread_name(|_| "stng-serial".to_string())
+        .build()
+        .expect("stng: failed to build serial rayon pool")
+});
+
+/// Run `f` with stng's internal rayon work routed through the appropriate pool.
+///
+/// When `opts.parallel == Some(false)`, or when `opts.parallel` is `None`
+/// *and* we detect we are already inside a rayon worker thread, `f` is
+/// installed on a shared 1-thread pool so nested `par_iter` calls don't
+/// oversubscribe the caller's pool.  Otherwise `f` runs directly.
+fn with_pool<F, R>(opts: &ExtractOptions, f: F) -> R
+where
+    F: FnOnce() -> R + Send,
+    R: Send,
+{
+    let serial = match opts.parallel {
+        Some(false) => true,
+        Some(true) => false,
+        None => rayon::current_thread_index().is_some(),
+    };
+    if serial {
+        SERIAL_POOL.install(f)
+    } else {
+        f()
+    }
+}
+
 /// Returns `true` if a string should be kept when garbage filtering is enabled.
 /// Encoded strings and special kinds are always kept regardless of content.
+///
+/// Runs `is_garbage_with_kind` — passing `s.kind` so the validator can skip
+/// the classify-string re-call and the IOC-pattern sweep for strings the
+/// extractor has already classified (top hotspot on the hot path).
 fn passes_garbage_filter(s: &ExtractedString) -> bool {
     matches!(
         s.kind,
@@ -124,7 +201,7 @@ fn passes_garbage_filter(s: &ExtractedString) -> bool {
             | Some(StringKind::UrlEncoded)
             | Some(StringKind::UnicodeEscaped)
             | Some(StringKind::XorKey)
-    ) || !validation::is_garbage(&s.value)
+    ) || !validation::is_garbage_with_kind(&s.value, s.kind)
 }
 
 /// Merge a set of imports into the strings list.
@@ -187,7 +264,18 @@ fn apply_xor_scan(
     is_pe: bool,
     excluded_ranges: &[(usize, usize)],
 ) {
-    if data.is_empty() {
+    if data.is_empty() || opts.is_cancelled() {
+        return;
+    }
+
+    // Text / script input: XOR obfuscation in source code is vanishingly rare,
+    // and the scanner produces noise on long runs of printable bytes.  Only
+    // skip on an *explicit* `FormatHint::Text` — auto-detection via
+    // `is_text_file` would false-positive on mostly-printable XOR payloads
+    // and regress test fixtures that use such shapes.  Callers with an
+    // explicit xor_key bypass this — they know better.
+    if opts.xor_key.is_none() && opts.format_hint == FormatHint::Text {
+        tracing::debug!("Skipping XOR scan: text/script input (explicit hint)");
         return;
     }
 
@@ -604,6 +692,23 @@ fn suppress_version_info_ips(strings: &mut [ExtractedString], pe: &goblin::pe::P
         }
     }
 }
+/// Hint about the input shape so stng can skip pointless work.
+///
+/// `Auto` (default) lets stng decide from the bytes.  Callers that already know
+/// the file type can pass `Binary` or `Text` to skip the text-probe and to
+/// suppress expensive analyses (XOR scan, stack strings) that produce nothing
+/// on text input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FormatHint {
+    /// Let stng detect.
+    #[default]
+    Auto,
+    /// Binary (ELF / PE / Mach-O / unknown binary) — run every analysis.
+    Binary,
+    /// Text / script — skip XOR scan and binary-only analyses.
+    Text,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExtractOptions {
     /// Minimum string length to extract
@@ -626,6 +731,21 @@ pub struct ExtractOptions {
     pub xor_scan_multi: bool,
     /// Use r2 result caching (default: true). Disable with --no-cache flag.
     pub use_cache: bool,
+    /// Whether stng is allowed to use the ambient rayon pool.
+    ///
+    /// `None` (default) means auto-detect: when the caller is already running
+    /// inside a rayon worker thread, stng pins its internal work to a shared
+    /// 1-thread pool to avoid oversubscribing the caller's pool.  `Some(true)`
+    /// forces the ambient pool regardless.  `Some(false)` forces the 1-thread
+    /// pool regardless.
+    pub parallel: Option<bool>,
+    /// Cancellation flag checked at phase boundaries (start of extraction,
+    /// before XOR scan, between decoder passes).  When the flag becomes
+    /// `true`, extraction returns whatever it has so far.
+    pub cancel: Option<Arc<AtomicBool>>,
+    /// Hint about the input so stng can skip analyses that will produce
+    /// nothing on that shape of input.  See `FormatHint` for the semantics.
+    pub format_hint: FormatHint,
 }
 
 impl Default for ExtractOptions {
@@ -648,6 +768,9 @@ impl ExtractOptions {
             xor_min_length: xor::DEFAULT_XOR_MIN_LENGTH,
             xor_scan_multi: false,
             use_cache: true,
+            parallel: None,
+            cancel: None,
+            format_hint: FormatHint::Auto,
         }
     }
 
@@ -711,6 +834,48 @@ impl ExtractOptions {
     pub fn with_cache(mut self, use_cache: bool) -> Self {
         self.use_cache = use_cache;
         self
+    }
+
+    /// Control whether stng uses the ambient rayon pool.
+    ///
+    /// See [`ExtractOptions::parallel`] for semantics.  Library callers that
+    /// already own a saturated rayon pool (e.g. iterating a directory with
+    /// `par_iter`) should pass `false` to pin stng's work to an internal
+    /// 1-thread pool and avoid oversubscription.
+    #[must_use]
+    pub fn with_parallelism(mut self, enabled: bool) -> Self {
+        self.parallel = Some(enabled);
+        self
+    }
+
+    /// Install a cancellation flag.
+    ///
+    /// stng checks the flag at phase boundaries (start of extraction, before
+    /// XOR scan, between decoder passes).  When the flag flips to `true`,
+    /// extraction returns whatever has been produced so far.
+    #[must_use]
+    pub fn with_cancellation(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Supply a hint about the input shape.
+    ///
+    /// `FormatHint::Text` skips the XOR scan and other binary-only analyses,
+    /// which is a large win for callers that run stng over directories of
+    /// scripts / minified JS / office documents.
+    #[must_use]
+    pub fn with_format_hint(mut self, hint: FormatHint) -> Self {
+        self.format_hint = hint;
+        self
+    }
+
+    /// Returns true if a cancellation flag was installed and has flipped.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Relaxed))
     }
 }
 
@@ -789,45 +954,32 @@ fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_length: usize) 
 }
 
 /// Deduplicate strings by keeping only the best string at each offset.
-/// Uses in-place sort-based deduplication to avoid allocating a large HashMap.
-/// When multiple strings exist at the same offset, keeps the one with:
-/// 1. Highest method priority (decoded > raw scan)
-/// 2. Longest value (if same priority)
-fn deduplicate_by_offset(strings: Vec<ExtractedString>) -> Vec<ExtractedString> {
-    if strings.is_empty() {
+///
+/// Uses a single in-place sort + `dedup_by_key` pass — no HashMap allocation.
+/// The sort key is `(offset asc, priority desc, length desc)` so the first
+/// entry at each offset is the best candidate and `dedup_by_key(data_offset)`
+/// keeps it.  Best candidate = highest `StringMethod::dedup_priority`, tied
+/// with longer `value`.
+fn deduplicate_by_offset(mut strings: Vec<ExtractedString>) -> Vec<ExtractedString> {
+    if strings.len() < 2 {
         return strings;
     }
 
-    let mut offset_map: HashMap<u64, Vec<ExtractedString>> = HashMap::new();
-    for s in strings {
-        offset_map.entry(s.data_offset).or_default().push(s);
-    }
+    strings.sort_unstable_by(|a, b| {
+        a.data_offset
+            .cmp(&b.data_offset)
+            .then_with(|| {
+                // Descending priority: higher priority first.
+                b.method.dedup_priority().cmp(&a.method.dedup_priority())
+            })
+            .then_with(|| {
+                // Descending length: longer first.
+                b.value.len().cmp(&a.value.len())
+            })
+    });
 
-    let mut result = Vec::new();
-    for (_offset, mut candidates) in offset_map {
-        if candidates.len() == 1 {
-            if let Some(s) = candidates.pop() {
-                result.push(s);
-            }
-        } else {
-            // Multiple strings at same offset - prefer decoded strings, then longest
-            candidates.sort_by(|a, b| {
-                let priority_a = a.method.dedup_priority();
-                let priority_b = b.method.dedup_priority();
-
-                // Sort descending: Higher priority first, then longer string first
-                priority_b
-                    .cmp(&priority_a)
-                    .then_with(|| b.value.len().cmp(&a.value.len()))
-            });
-
-            // Take the first one (best candidate)
-            result.push(candidates.remove(0));
-        }
-    }
-
-    result.sort_by_key(|s| s.data_offset);
-    result
+    strings.dedup_by_key(|s| s.data_offset);
+    strings
 }
 
 /// Extract strings from a UTF-16 encoded file (detected by BOM).
@@ -970,6 +1122,15 @@ fn append_script_deobfuscation(
 /// ```
 #[must_use]
 pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
+    with_pool(opts, || extract_strings_inner(data, opts))
+}
+
+fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
+    // Fast-fail on already-cancelled callers.
+    if opts.is_cancelled() {
+        return Vec::new();
+    }
+
     // Check for UTF-16 BOM first, before trying to parse as a binary format
     // This ensures text files with UTF-16 encoding are handled correctly
     if data.len() >= 2 {
@@ -1024,16 +1185,24 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
             ));
         }
 
-        // Decode encoded strings (base64, hex, URL-encoding, unicode escapes)
+        // Decode encoded strings (base64, hex, URL-encoding, unicode escapes).
+        // Check cancellation between passes so a large script/unknown blob
+        // can be interrupted without running every decoder to completion.
         let mut decoded = Vec::new();
-        decoded.extend(decoders::decode_base64_strings(&strings));
-        decoded.extend(decoders::extract_embedded_base64(&strings));
-        decoded.extend(fuzzy_base64::extract_fuzzy_base64(&strings));
-        decoded.extend(decoders::decode_base32_strings(&strings));
-        decoded.extend(decoders::decode_base85_strings(&strings));
-        decoded.extend(decoders::decode_hex_strings(&strings));
-        decoded.extend(decoders::decode_url_strings(&strings));
-        decoded.extend(decoders::decode_unicode_escape_strings(&strings));
+        if !opts.is_cancelled() {
+            decoded.extend(decoders::decode_base64_strings(&strings));
+            decoded.extend(decoders::extract_embedded_base64(&strings));
+            decoded.extend(fuzzy_base64::extract_fuzzy_base64(&strings));
+        }
+        if !opts.is_cancelled() {
+            decoded.extend(decoders::decode_base32_strings(&strings));
+            decoded.extend(decoders::decode_base85_strings(&strings));
+            decoded.extend(decoders::decode_hex_strings(&strings));
+        }
+        if !opts.is_cancelled() {
+            decoded.extend(decoders::decode_url_strings(&strings));
+            decoded.extend(decoders::decode_unicode_escape_strings(&strings));
+        }
         strings.extend(decoded);
 
         // Decode spaced ASCII strings (common in PE .rsrc, .NET metadata)
@@ -1054,6 +1223,34 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
 
         deduplicate_by_offset(strings)
     }
+}
+
+/// Extract strings from binary data using a caller-supplied parsed goblin object.
+///
+/// Library callers (e.g. cleave) that have already called `goblin::Object::parse`
+/// for their own analysis can pass the result here to avoid stng re-parsing.
+///
+/// The function routes through the same internal pipeline as
+/// `extract_strings_with_options`, honouring parallelism / cancellation /
+/// format-hint options.  For text / unknown inputs callers should use
+/// `extract_strings_with_options` instead — this entry point assumes the
+/// caller has a valid `Object`.
+#[must_use]
+pub fn extract_strings_from_object(
+    object: &Object<'_>,
+    data: &[u8],
+    opts: &ExtractOptions,
+) -> Vec<ExtractedString> {
+    with_pool(opts, || {
+        if opts.is_cancelled() {
+            return Vec::new();
+        }
+        let mut strings = extract_from_object(object, data, opts);
+        if is_text_file(data) {
+            append_script_deobfuscation(&mut strings, data, opts);
+        }
+        deduplicate_by_offset(strings)
+    })
 }
 
 /// Extract strings from a pre-parsed binary object.
@@ -1114,7 +1311,15 @@ fn extract_from_object(
                 }
             }
             if !is_go_binary {
-                strings.extend(extract_stack_strings(data, min_length));
+                // Only disassemble executable sections — feeding the whole
+                // Mach-O to iced-x86 wastes cycles on __LINKEDIT and
+                // non-code segments.
+                let exec_ranges = binary::code_ranges_from_sections(&section_info);
+                strings.extend(extract_stack_strings_from_ranges(
+                    data,
+                    min_length,
+                    &exec_ranges,
+                ));
             }
             merge_imports(&mut strings, extract_macho_imports(macho, min_length));
             apply_entitlements(&mut strings, macho, data, min_length);
@@ -1170,7 +1375,12 @@ fn extract_from_object(
                 ));
             }
             if !is_go_binary {
-                strings.extend(extract_stack_strings(data, min_length));
+                let exec_ranges = binary::code_ranges_from_sections(&section_info);
+                strings.extend(extract_stack_strings_from_ranges(
+                    data,
+                    min_length,
+                    &exec_ranges,
+                ));
             }
             if let Some(ref macho) = first_macho {
                 merge_imports(&mut strings, extract_macho_imports(macho, min_length));
@@ -1181,8 +1391,9 @@ fn extract_from_object(
             let segments = collect_elf_segments(elf);
             let section_info = collect_elf_section_info(elf);
 
-            // Detect overlay first to avoid scanning it during normal extraction
-            let overlay_info = detect_elf_overlay(data);
+            // Detect overlay first to avoid scanning it during normal extraction.
+            // Reuse the already-parsed ELF — detect_elf_overlay(data) would re-parse.
+            let overlay_info = detect_elf_overlay_from_elf(elf, data);
             let scan_data = if let Some(ref overlay) = overlay_info {
                 // Only scan up to overlay start (safe cast: min with data.len())
                 let end = usize::try_from(overlay.start_offset)
@@ -1353,9 +1564,7 @@ fn extract_from_object(
             // bytes into garbled "payloads".
             let has_go = pe.sections.iter().any(|sec| {
                 let name = binary::pe_section_name(&sec.name);
-                name.contains("go.buildinfo")
-                    || name.contains("gopclntab")
-                    || name == ".symtab"
+                name.contains("go.buildinfo") || name.contains("gopclntab") || name == ".symtab"
             });
 
             if has_go {
@@ -1401,7 +1610,19 @@ fn extract_from_object(
                                         },
                                         || {
                                             if !is_go_binary {
-                                                extract_stack_strings(data, min_length)
+                                                // Only disassemble executable
+                                                // sections — `.rdata` / `.rsrc`
+                                                // / other non-code PE sections
+                                                // would waste iced-x86 cycles.
+                                                let exec_ranges =
+                                                    binary::code_ranges_from_sections(
+                                                        &section_info,
+                                                    );
+                                                extract_stack_strings_from_ranges(
+                                                    data,
+                                                    min_length,
+                                                    &exec_ranges,
+                                                )
                                             } else {
                                                 Vec::new()
                                             }
@@ -1552,17 +1773,25 @@ fn extract_from_object(
         }
     }
 
-    // Decode encoded strings (base64, hex, URL-encoding, unicode escapes)
+    // Decode encoded strings (base64, hex, URL-encoding, unicode escapes).
+    // Check cancellation between passes so a user-interrupted scan can bail
+    // out without finishing every decoder on a multi-megabyte string set.
     let t_dec = std::time::Instant::now();
     let mut decoded = Vec::new();
-    decoded.extend(decoders::decode_base64_strings(&strings));
-    decoded.extend(decoders::extract_embedded_base64(&strings));
-    decoded.extend(fuzzy_base64::extract_fuzzy_base64(&strings));
-    decoded.extend(decoders::decode_base32_strings(&strings));
-    decoded.extend(decoders::decode_base85_strings(&strings));
-    decoded.extend(decoders::decode_hex_strings(&strings));
-    decoded.extend(decoders::decode_url_strings(&strings));
-    decoded.extend(decoders::decode_unicode_escape_strings(&strings));
+    if !opts.is_cancelled() {
+        decoded.extend(decoders::decode_base64_strings(&strings));
+        decoded.extend(decoders::extract_embedded_base64(&strings));
+        decoded.extend(fuzzy_base64::extract_fuzzy_base64(&strings));
+    }
+    if !opts.is_cancelled() {
+        decoded.extend(decoders::decode_base32_strings(&strings));
+        decoded.extend(decoders::decode_base85_strings(&strings));
+        decoded.extend(decoders::decode_hex_strings(&strings));
+    }
+    if !opts.is_cancelled() {
+        decoded.extend(decoders::decode_url_strings(&strings));
+        decoded.extend(decoders::decode_unicode_escape_strings(&strings));
+    }
 
     // Add decoded strings to the main list
     strings.extend(decoded);
