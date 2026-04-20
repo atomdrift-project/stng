@@ -101,7 +101,7 @@ use goblin::Object;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 // Import internal modules for use in this file
 use binary::{
@@ -145,42 +145,6 @@ fn extract_stack_strings_from_ranges(
         })
         .flatten()
         .collect()
-}
-
-/// Shared 1-thread rayon pool used when the caller opts out of parallelism
-/// (`ExtractOptions::parallel == Some(false)`) or when stng detects it is
-/// running inside another rayon worker.  Built lazily — callers that never
-/// nest stng inside their own pool pay no cost.
-#[allow(clippy::expect_used)]
-static SERIAL_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(1)
-        .thread_name(|_| "stng-serial".to_string())
-        .build()
-        .expect("stng: failed to build serial rayon pool")
-});
-
-/// Run `f` with stng's internal rayon work routed through the appropriate pool.
-///
-/// When `opts.parallel == Some(false)`, or when `opts.parallel` is `None`
-/// *and* we detect we are already inside a rayon worker thread, `f` is
-/// installed on a shared 1-thread pool so nested `par_iter` calls don't
-/// oversubscribe the caller's pool.  Otherwise `f` runs directly.
-fn with_pool<F, R>(opts: &ExtractOptions, f: F) -> R
-where
-    F: FnOnce() -> R + Send,
-    R: Send,
-{
-    let serial = match opts.parallel {
-        Some(false) => true,
-        Some(true) => false,
-        None => rayon::current_thread_index().is_some(),
-    };
-    if serial {
-        SERIAL_POOL.install(f)
-    } else {
-        f()
-    }
 }
 
 /// Returns `true` if a string should be kept when garbage filtering is enabled.
@@ -731,14 +695,6 @@ pub struct ExtractOptions {
     pub xor_scan_multi: bool,
     /// Use r2 result caching (default: true). Disable with --no-cache flag.
     pub use_cache: bool,
-    /// Whether stng is allowed to use the ambient rayon pool.
-    ///
-    /// `None` (default) means auto-detect: when the caller is already running
-    /// inside a rayon worker thread, stng pins its internal work to a shared
-    /// 1-thread pool to avoid oversubscribing the caller's pool.  `Some(true)`
-    /// forces the ambient pool regardless.  `Some(false)` forces the 1-thread
-    /// pool regardless.
-    pub parallel: Option<bool>,
     /// Cancellation flag checked at phase boundaries (start of extraction,
     /// before XOR scan, between decoder passes).  When the flag becomes
     /// `true`, extraction returns whatever it has so far.
@@ -768,7 +724,6 @@ impl ExtractOptions {
             xor_min_length: xor::DEFAULT_XOR_MIN_LENGTH,
             xor_scan_multi: false,
             use_cache: true,
-            parallel: None,
             cancel: None,
             format_hint: FormatHint::Auto,
         }
@@ -833,18 +788,6 @@ impl ExtractOptions {
     #[must_use]
     pub fn with_cache(mut self, use_cache: bool) -> Self {
         self.use_cache = use_cache;
-        self
-    }
-
-    /// Control whether stng uses the ambient rayon pool.
-    ///
-    /// See [`ExtractOptions::parallel`] for semantics.  Library callers that
-    /// already own a saturated rayon pool (e.g. iterating a directory with
-    /// `par_iter`) should pass `false` to pin stng's work to an internal
-    /// 1-thread pool and avoid oversubscription.
-    #[must_use]
-    pub fn with_parallelism(mut self, enabled: bool) -> Self {
-        self.parallel = Some(enabled);
         self
     }
 
@@ -1122,7 +1065,7 @@ fn append_script_deobfuscation(
 /// ```
 #[must_use]
 pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
-    with_pool(opts, || extract_strings_inner(data, opts))
+    extract_strings_inner(data, opts)
 }
 
 fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
@@ -1231,8 +1174,8 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
 /// for their own analysis can pass the result here to avoid stng re-parsing.
 ///
 /// The function routes through the same internal pipeline as
-/// `extract_strings_with_options`, honouring parallelism / cancellation /
-/// format-hint options.  For text / unknown inputs callers should use
+/// `extract_strings_with_options`, honouring cancellation and format-hint
+/// options.  For text / unknown inputs callers should use
 /// `extract_strings_with_options` instead — this entry point assumes the
 /// caller has a valid `Object`.
 #[must_use]
@@ -1241,16 +1184,14 @@ pub fn extract_strings_from_object(
     data: &[u8],
     opts: &ExtractOptions,
 ) -> Vec<ExtractedString> {
-    with_pool(opts, || {
-        if opts.is_cancelled() {
-            return Vec::new();
-        }
-        let mut strings = extract_from_object(object, data, opts);
-        if is_text_file(data) {
-            append_script_deobfuscation(&mut strings, data, opts);
-        }
-        deduplicate_by_offset(strings)
-    })
+    if opts.is_cancelled() {
+        return Vec::new();
+    }
+    let mut strings = extract_from_object(object, data, opts);
+    if is_text_file(data) {
+        append_script_deobfuscation(&mut strings, data, opts);
+    }
+    deduplicate_by_offset(strings)
 }
 
 /// Extract strings from a pre-parsed binary object.
