@@ -82,6 +82,7 @@ fn extract_section(
     let mut memory: HashMap<i64, Vec<u8>> = HashMap::new();
     let mut sink_results = Vec::new();
     let mut decoded_arg_starts = HashSet::new();
+    let mut decoded_blob_state: HashMap<i64, (usize, usize, u64)> = HashMap::new();
     let mut recovered_pads: Vec<Vec<u8>> = Vec::new();
     let mut seen_values = HashSet::new();
 
@@ -145,12 +146,13 @@ fn extract_section(
                     regs.remove(&mem.rt);
                 }
             } else if let Some(bytes) = reg_bytes(&regs, mem.rt, mem.size) {
-                memory.insert(disp, bytes.clone());
+                memory.insert(disp, bytes);
                 if !recovered_pads.is_empty() {
                     let decoded = decode_recent_stack_blobs_with_pads(
                         &memory,
                         disp,
                         &recovered_pads,
+                        &mut decoded_blob_state,
                         section_file_offset + instr_off,
                         section_name,
                         min_length,
@@ -372,6 +374,7 @@ fn decode_recent_stack_blobs_with_pads(
     memory: &HashMap<i64, Vec<u8>>,
     write_start: i64,
     pads: &[Vec<u8>],
+    decoded_blob_state: &mut HashMap<i64, (usize, usize, u64)>,
     instr_off: u64,
     section_name: Option<&str>,
     min_length: usize,
@@ -394,8 +397,20 @@ fn decode_recent_stack_blobs_with_pads(
         if cipher.len() < min_length {
             continue;
         }
+        let cipher_hash = fast_hash(&cipher);
+        let (prev_len, prev_pad_count, prev_hash) =
+            decoded_blob_state.get(&start).copied().unwrap_or((0, 0, 0));
+        if prev_len >= cipher.len() && prev_pad_count >= pads.len() && prev_hash == cipher_hash {
+            continue;
+        }
+        let pad_start = if prev_len >= cipher.len() && prev_hash == cipher_hash {
+            prev_pad_count
+        } else {
+            0
+        };
+        decoded_blob_state.insert(start, (cipher.len(), pads.len(), cipher_hash));
 
-        for pad in pads {
+        for pad in &pads[pad_start..] {
             if pad.is_empty() {
                 continue;
             }
@@ -406,6 +421,9 @@ fn decode_recent_stack_blobs_with_pads(
                 .collect();
 
             for raw_value in printable_runs(&decoded, min_length) {
+                if !might_contain_useful_decoded_marker(&raw_value) {
+                    continue;
+                }
                 let Some(value) = normalize_decoded_value(&raw_value, min_length) else {
                     continue;
                 };
@@ -426,6 +444,50 @@ fn decode_recent_stack_blobs_with_pads(
     }
 
     results
+}
+
+fn might_contain_useful_decoded_marker(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    [
+        "osascript",
+        "dscl",
+        "/users/",
+        "/library/",
+        "library/",
+        "application support",
+        "bravesoftware/",
+        "google/",
+        "chrome",
+        "chromium",
+        "cookies",
+        "login data",
+        "accounts-metadata/",
+        ".electrum",
+        ".walletwasabi",
+        "monero/",
+        "bitcoin",
+        "wallet.dat",
+        "ledger",
+        "ledger-wallet",
+        "exodus",
+        "atomic",
+        "killall",
+        "terminal",
+        "keychain",
+        "wallet",
+        "wallets",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn fast_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn printable_runs(decoded: &[u8], min_length: usize) -> Vec<String> {

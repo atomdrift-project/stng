@@ -6,6 +6,7 @@
 //!
 //! Run all:        cargo bench --bench extract
 //! Profile one:    cargo bench --bench extract -- "go_garble_3mb"
+//! Profile ARM64:  cargo bench --bench extract -- "dynamichub_arm64_stack_xor"
 //! With flamegraph: cargo flamegraph --bench extract -- --bench "go_garble_3mb"
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
@@ -34,6 +35,10 @@ fn bench_extract(c: &mut Criterion) {
             "testdata/malware/wizardnet_downloader.dll",
         ),
         ("go_vget_1.7mb", "testdata/malware/vget_sample"),
+        (
+            "dynamichub_arm64_stack_xor",
+            "testdata/malware/dynamichub/DynamicHub",
+        ),
         ("elf_stealer_8.5mb", "testdata/malware/sample-stealer"),
         (
             "script_kworker_23kb",
