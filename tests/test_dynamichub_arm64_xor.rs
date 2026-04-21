@@ -39,4 +39,27 @@ fn test_dynamichub_arm64_stack_xor_system_arg() {
         "0xff19765d94e37e6e85ec4f5b1a3ad577734d3269b8c8ab49b9e771fc8e769ee4"
     );
     assert_eq!(xor_key.method, StringMethod::XorStackPair);
+
+    for expected in [
+        "dscl . -auth",
+        "Library/Keychains/login.keychain",
+        "BraveSoftware/Brave-Browser",
+        "Cookies",
+        "Login Data",
+        ".electrum/wallets",
+        "Exodus",
+        "Atomic",
+        "Monero/wallets",
+        "wallet.dat",
+        "Ledger Live",
+        "ledger-wallet",
+        "osascript -e 'display dialog \"",
+    ] {
+        assert!(
+            results
+                .iter()
+                .any(|s| s.value == expected && s.method == StringMethod::XorStackPair),
+            "missing broadened ARM64 stack-XOR decoded string: {expected}"
+        );
+    }
 }
