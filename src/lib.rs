@@ -43,6 +43,7 @@ mod validation;
 mod validation_thresholds;
 
 // Binary format modules
+mod arm64_stack_xor;
 pub mod binary;
 mod binary_net;
 mod detect;
@@ -1261,6 +1262,9 @@ fn extract_from_object(
                     min_length,
                     &exec_ranges,
                 ));
+                strings.extend(arm64_stack_xor::extract_arm64_stack_xor_strings(
+                    macho, data, 0, min_length,
+                ));
             }
             merge_imports(&mut strings, extract_macho_imports(macho, min_length));
             apply_entitlements(&mut strings, macho, data, min_length);
@@ -1322,6 +1326,27 @@ fn extract_from_object(
                     min_length,
                     &exec_ranges,
                 ));
+                if let Ok(arches) = fat.arches() {
+                    for (idx, arch) in arches.iter().enumerate() {
+                        let Ok(goblin::mach::SingleArch::MachO(macho)) = fat.get(idx) else {
+                            continue;
+                        };
+                        let arch_start = arch.offset as usize;
+                        let arch_size = arch.size as usize;
+                        let Some(arch_end) = arch_start.checked_add(arch_size) else {
+                            continue;
+                        };
+                        let Some(arch_data) = data.get(arch_start..arch_end) else {
+                            continue;
+                        };
+                        strings.extend(arm64_stack_xor::extract_arm64_stack_xor_strings(
+                            &macho,
+                            arch_data,
+                            u64::from(arch.offset),
+                            min_length,
+                        ));
+                    }
+                }
             }
             if let Some(ref macho) = first_macho {
                 merge_imports(&mut strings, extract_macho_imports(macho, min_length));

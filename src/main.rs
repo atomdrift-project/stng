@@ -738,7 +738,9 @@ fn main() -> Result<()> {
             print_string_line(s, use_color);
 
             // Collect all high-severity items (we'll sort and truncate later)
-            if s.kind.map_or(Severity::Info, |k| k.severity()) == Severity::High {
+            if s.kind.map_or(Severity::Info, |k| k.severity()) == Severity::High
+                && s.kind != Some(stng::StringKind::XorKey)
+            {
                 notable.push(s);
             }
         }
@@ -904,10 +906,13 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
 
     // Special handling for multi-line decoded strings (XOR or obfuscated base64)
     if (s.method == stng::StringMethod::XorDecode
+        || s.method == stng::StringMethod::XorStackPair
         || s.method == stng::StringMethod::Base64ObfuscatedDecode)
         && s.value.contains('\n')
     {
-        let (method, classification) = if s.method == stng::StringMethod::XorDecode {
+        let (method, classification) = if s.method == stng::StringMethod::XorDecode
+            || s.method == stng::StringMethod::XorStackPair
+        {
             ("xor", s.kind.map_or("-", |k| k.short_name()))
         } else {
             ("b64+obf", s.kind.map_or("-", |k| k.short_name()))
@@ -941,7 +946,9 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
     }
 
     // Split method/encoding from classification for separate columns
-    let (method, classification) = if s.method == stng::StringMethod::XorDecode {
+    let (method, classification) = if s.method == stng::StringMethod::XorDecode
+        || s.method == stng::StringMethod::XorStackPair
+    {
         ("xor", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::Base64ObfuscatedDecode {
         ("b64+obf", s.kind.map_or("-", |k| k.short_name()))
@@ -976,6 +983,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
     let (color, kind_color) = if use_color {
         // XOR-decoded and obfuscated base64 content uses bright yellow to stand out
         if s.method == stng::StringMethod::XorDecode
+            || s.method == stng::StringMethod::XorStackPair
             || s.method == stng::StringMethod::Base64ObfuscatedDecode
             || s.method == stng::StringMethod::ScriptDecode
         {
