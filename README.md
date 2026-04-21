@@ -28,12 +28,13 @@ stng --json malware.bin       # Machine-readable output with encoding metadata
 
 ## Features
 
-- **Garbage filtering**: Filters out unusable garbage by default (supports `--unfiltered`)
-- **Language-aware extraction**: Go/Rust `{ptr, len}`, DWARF stack strings
-- **XOR obfuscation**: Single/multi-byte keys with entropy analysis, double-layer (encoding+XOR)
-- **Encoding detection**: Base64, Base32, Base85, hex, URL-encoding, Unicode escapes
-- **IOC classification**: IPs, URLs, shell commands, paths, credentials, hardcoded socket structures
-- **Wide strings**: UTF-16LE in Windows PE binaries
+- **Garbage filtering**: Filters unusable noise by default (`--unfiltered` to disable)
+- **Language-aware extraction**: Go/Rust `{ptr, len}`, Go pclntab symbols, stack-string reconstruction (x86 and arm64)
+- **XOR obfuscation**: Single/multi-byte keys, entropy analysis, arm64 stack-XOR, double-layer (encoding+XOR)
+- **Script deobfuscation**: Decodes obfuscated Python/JS/PHP/PowerShell payloads and re-scans them
+- **Encoding detection**: Base64, Base32, Base85, hex, URL-encoding, Unicode escapes, UTF-16LE wide strings
+- **IOC classification**: IPs, URLs, hostnames, shell commands, suspicious paths, crypto wallets, Tor addresses, JWTs, API keys, mining pools, ransom notes
+- **Mach-O specifics**: Code signatures, entitlements, fat/universal binaries
 - **Format support**: ELF, PE, Mach-O, raw binaries, overlays
 
 Useful for initial triage, C2 enumeration, credential extraction, and YARA signature development.
