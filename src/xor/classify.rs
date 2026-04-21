@@ -1107,6 +1107,10 @@ pub(crate) fn extract_ip_at_dot(
         }
     }
 
+    if looks_like_data_table(data, start, end) {
+        return None;
+    }
+
     Some((ip_str, start, end))
 }
 
@@ -1114,6 +1118,27 @@ pub(crate) fn extract_ip_at_dot(
 /// legitimate plaintext (timezone offsets, dates, versions, CSV, ranges).
 fn is_numeric_sep(b: u8) -> bool {
     matches!(b, b'-' | b'+' | b':' | b'/' | b'.' | b',' | b';' | b'_')
+}
+
+/// Returns true when the bytes in a window around `[start..end]` are dominated
+/// by control-range values (< 0x20), indicating the match sits inside a
+/// structured binary data table (VDBE opcodes, B-tree index pages, resource
+/// tables) rather than XOR ciphertext. Real XOR-encoded strings in rodata
+/// have varied byte values in their neighborhood because the plaintext spans
+/// mixed characters; a slice of a small-integer table does not.
+fn looks_like_data_table(data: &[u8], start: usize, end: usize) -> bool {
+    const RADIUS: usize = 32;
+    const THRESHOLD_PERCENT: usize = 85;
+    const MIN_WINDOW: usize = 24;
+
+    let lo = start.saturating_sub(RADIUS);
+    let hi = end.saturating_add(RADIUS).min(data.len());
+    let window = &data[lo..hi];
+    if window.len() < MIN_WINDOW {
+        return false;
+    }
+    let low = window.iter().filter(|&&b| b < 0x20).count();
+    low * 100 >= window.len() * THRESHOLD_PERCENT
 }
 
 /// Try to extract IP:port starting from a dot position in the IP.
@@ -1170,7 +1195,7 @@ pub(crate) fn extract_ip_port_at_pos(
 
     // Validate IP:port format
     if let Some((ip, port)) = ip_port_str.rsplit_once(':') {
-        if is_valid_ip(ip) && is_valid_port(port) {
+        if is_valid_ip(ip) && is_valid_port(port) && !looks_like_data_table(data, start, end) {
             return Some((ip_port_str, start, end));
         }
     }
@@ -1788,5 +1813,85 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
 
             Some(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_ip_at_dot, looks_like_data_table};
+
+    // Place the 9 raw bytes that XOR-decode to "32.93.2.3" under key 0x33
+    // (0x00 0x01 0x1d 0x0a 0x00 0x1d 0x01 0x1d 0x00) inside a window filled
+    // with other small integers — the shape of sqlite3's VDBE opcode or
+    // B-tree index tables. The extracted "IP" passes is_valid_ip but the
+    // surrounding region is clearly a data table, not ciphertext.
+    fn low_byte_table_with_ip_pattern() -> (Vec<u8>, usize) {
+        let mut data = vec![
+            0x02, 0x00, 0x0c, 0x04, 0x00, 0x05, 0x01, 0x0a, 0x00, 0x08, 0x00, 0x03, 0x07, 0x01,
+            0x0f, 0x00, 0x02, 0x00, 0x0c, 0x04, 0x00, 0x05, 0x01, 0x0a, 0x00, 0x08, 0x00, 0x03,
+            0x07, 0x01, 0x0f, 0x00,
+        ];
+        let ip_offset = data.len();
+        data.extend_from_slice(&[0x00, 0x01, 0x1d, 0x0a, 0x00, 0x1d, 0x01, 0x1d, 0x00]);
+        data.extend_from_slice(&[
+            0x02, 0x00, 0x0c, 0x04, 0x00, 0x05, 0x01, 0x0a, 0x00, 0x08, 0x00, 0x03, 0x07, 0x01,
+            0x0f, 0x00, 0x02, 0x00, 0x0c, 0x04, 0x00, 0x05, 0x01, 0x0a, 0x00, 0x08, 0x00, 0x03,
+            0x07, 0x01, 0x0f, 0x00,
+        ]);
+        // The first '.' in the decoded IP sits two bytes in (index ip_offset + 2).
+        (data, ip_offset + 2)
+    }
+
+    #[test]
+    fn data_table_context_rejects_spurious_ip() {
+        let (data, dot_pos) = low_byte_table_with_ip_pattern();
+        assert!(
+            extract_ip_at_dot(&data, dot_pos, 0x33).is_none(),
+            "IP-shaped match inside a low-byte data table must be rejected"
+        );
+    }
+
+    #[test]
+    fn varied_context_preserves_real_ip() {
+        // Same 9-byte raw pattern under key 0x33, but embedded in .rodata-like
+        // bytes (printable strings, pointers): the neighborhood is varied, so
+        // the match survives. This guards against the new filter over-rejecting.
+        // Boundary byte 0x13 flanks the IP so the walk terminates cleanly
+        // (0x13 ^ 0x33 = 0x20 space, not a digit/dot).
+        let mut data: Vec<u8> = b"GET /index.html HTTP/1.1 Host example com ".to_vec();
+        data.push(0x13);
+        let ip_offset = data.len();
+        data.extend_from_slice(&[0x00, 0x01, 0x1d, 0x0a, 0x00, 0x1d, 0x01, 0x1d, 0x00]);
+        data.push(0x13);
+        data.extend_from_slice(b" User-Agent Mozilla 5.0 Windows NT 10.0 trailing");
+        let dot_pos = ip_offset + 2;
+        let extracted = extract_ip_at_dot(&data, dot_pos, 0x33);
+        assert_eq!(
+            extracted.map(|(ip, _, _)| ip),
+            Some("32.93.2.3".to_string()),
+            "real XOR-encoded IP in varied context should still be extracted"
+        );
+    }
+
+    #[test]
+    fn looks_like_data_table_thresholds() {
+        // All-low-byte window: structured table.
+        let low = vec![0x03u8; 64];
+        assert!(looks_like_data_table(&low, 20, 29));
+
+        // All-high-byte window: definitely not a table.
+        let high = vec![0x80u8; 64];
+        assert!(!looks_like_data_table(&high, 20, 29));
+
+        // Mixed window (~12% low): random-looking ciphertext.
+        let mut mixed = vec![0x55u8; 64];
+        for i in (0..64).step_by(8) {
+            mixed[i] = 0x03;
+        }
+        assert!(!looks_like_data_table(&mixed, 20, 29));
+
+        // Tiny buffer: can't judge, don't reject.
+        let tiny = vec![0x00u8; 8];
+        assert!(!looks_like_data_table(&tiny, 0, 8));
     }
 }
