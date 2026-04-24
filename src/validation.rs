@@ -203,11 +203,71 @@ fn is_jwt_token(s: &str, len: usize) -> bool {
     if parts.len() != 3 || !parts.iter().all(|p| !p.is_empty()) {
         return false;
     }
+    // Every real JWT header is `{"alg":...}` → base64url `eyJ`. The prefix
+    // keeps arbitrary `foo.bar.baz`-shaped identifiers out.
+    if !s.starts_with("eyJ") {
+        return false;
+    }
     let base64_chars = s
         .chars()
         .filter(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '='))
         .count();
     base64_chars * 100 / len >= 95
+}
+
+/// Telegram bot API token: `<bot_id>:<auth_token>`.
+///
+/// Official shape (docs + observed rotations): bot_id is 8–16 ASCII digits,
+/// auth_token is 30–48 chars drawn from the base64url alphabet
+/// (`[A-Za-z0-9_-]`). The chaos filter otherwise drops these because digits
+/// → `:` → upper → lower → `-` flips character class on almost every byte.
+fn is_telegram_bot_token(s: &str, len: usize) -> bool {
+    if !(40..=80).contains(&len) {
+        return false;
+    }
+    let Some(colon) = memchr::memchr(b':', s.as_bytes()) else {
+        return false;
+    };
+    let (id, rest) = s.split_at(colon);
+    let body = &rest[1..];
+    if !(8..=16).contains(&id.len()) || !id.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    if !(30..=64).contains(&body.len()) {
+        return false;
+    }
+    body.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+}
+
+/// Swift mangled symbol name.
+///
+/// Covers the stable ABI prefixes seen in Mach-O `__TEXT` sections:
+///   * `_Tt*` — Swift 1–3 type metadata (`_TtC…`, `_TtP…`, `_TtV…`, `_TtO…`)
+///   * `_T0*` — Swift 4
+///   * `_$s*` / `$s*` — Swift 5 stable ABI
+///   * `_$S*` / `$S*` — Swift 4.2 transitional ABI
+///
+/// The mangling alphabet is alphanumerics plus `_` and `$`, so we gate on
+/// prefix + near-pure alphabet to avoid matching random `_T`-prefixed text.
+fn is_swift_mangled_symbol(s: &str, len: usize) -> bool {
+    if len < 8 {
+        return false;
+    }
+    let has_prefix = s.starts_with("_Tt")
+        || s.starts_with("_T0")
+        || s.starts_with("_$s")
+        || s.starts_with("_$S")
+        || s.starts_with("$s")
+        || s.starts_with("$S");
+    if !has_prefix {
+        return false;
+    }
+    // Swift's mangling alphabet is strictly [A-Za-z0-9_$]. Any other byte
+    // means the string isn't a mangled symbol (likely a path fragment or
+    // identifier that happens to share the prefix).
+    s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'))
 }
 
 fn is_attack_payload(s: &str) -> bool {
@@ -1159,6 +1219,12 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
         return true;
     }
     if is_api_key_pattern(s, len) {
+        return true;
+    }
+    if is_telegram_bot_token(s, len) {
+        return true;
+    }
+    if is_swift_mangled_symbol(s, len) {
         return true;
     }
 
@@ -2220,6 +2286,135 @@ mod tests {
                 s
             );
         }
+    }
+
+    // ===== Telegram bot token predicate =====
+
+    #[test]
+    fn test_is_telegram_bot_token_positive() {
+        // DPRK Teams (2026.04) sample.
+        let t = "8520232238:AAF6xeNiv-OKpAPrnRmv7AsjmJAmkRjf0I4";
+        assert!(is_telegram_bot_token(t, t.len()));
+
+        // Canonical bot token from Telegram docs.
+        let t = "110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+        assert!(is_telegram_bot_token(t, t.len()));
+
+        // Underscores in body.
+        let t = "6789012345:ABC_def123GHI_jklMNO-pqrSTU_vwxYZ01";
+        assert!(is_telegram_bot_token(t, t.len()));
+
+        // Whole token kept out of the chaos filter.
+        assert!(!is_garbage(
+            "8520232238:AAF6xeNiv-OKpAPrnRmv7AsjmJAmkRjf0I4"
+        ));
+    }
+
+    #[test]
+    fn test_is_telegram_bot_token_negative() {
+        // No colon.
+        let t = "8520232238AAF6xeNivOKpAPrnRmv7AsjmJAmkRjf0I4";
+        assert!(!is_telegram_bot_token(t, t.len()));
+
+        // bot_id too short (7 digits).
+        let t = "1234567:AAF6xeNiv-OKpAPrnRmv7AsjmJAmkRjf0I4";
+        assert!(!is_telegram_bot_token(t, t.len()));
+
+        // bot_id contains letters.
+        let t = "bot1234567:AAF6xeNiv-OKpAPrnRmv7AsjmJAmkRjf0I4";
+        assert!(!is_telegram_bot_token(t, t.len()));
+
+        // body too short.
+        let t = "8520232238:short";
+        assert!(!is_telegram_bot_token(t, t.len()));
+
+        // body contains invalid chars (dot, slash).
+        let t = "8520232238:AAF6xeNiv.OKpAPrnRmv7AsjmJAmkRjf0I4";
+        assert!(!is_telegram_bot_token(t, t.len()));
+        let t = "8520232238:AAF6xeNiv/OKpAPrnRmv7AsjmJAmkRjf0I4";
+        assert!(!is_telegram_bot_token(t, t.len()));
+    }
+
+    // ===== Swift mangled symbol predicate =====
+
+    #[test]
+    fn test_is_swift_mangled_symbol_positive() {
+        // _TtC class metadata (the DPRK Teams sample).
+        let s = "_TtC7TeamAppP33_464D6157E8D96D7B7ECE5C61C5669F7019ResourceBundleClass";
+        assert!(is_swift_mangled_symbol(s, s.len()));
+
+        // _$s Swift 5 stable ABI.
+        let s = "_$sSo17OS_dispatch_queueC8DispatchE4mainABvgZ";
+        assert!(is_swift_mangled_symbol(s, s.len()));
+
+        // $s prefix (no leading underscore).
+        let s = "$s10Foundation4DataV5bytesAC10ByteBufferVyXlSgvg";
+        assert!(is_swift_mangled_symbol(s, s.len()));
+
+        // _T0 Swift 4 ABI.
+        let s = "_T010Foundation4DataVMa";
+        assert!(is_swift_mangled_symbol(s, s.len()));
+
+        // _TtP protocol metadata.
+        let s = "_TtP10Foundation10CodingKey_";
+        assert!(is_swift_mangled_symbol(s, s.len()));
+
+        // Full filter check: chaos heuristic no longer drops these.
+        assert!(!is_garbage(
+            "_TtC7TeamAppP33_464D6157E8D96D7B7ECE5C61C5669F7019ResourceBundleClass"
+        ));
+    }
+
+    #[test]
+    fn test_is_swift_mangled_symbol_negative() {
+        // Too short.
+        assert!(!is_swift_mangled_symbol("_Tt", 3));
+
+        // Non-Swift prefix, even if content is alphanumeric.
+        let s = "_Temporary_Internet_Files";
+        assert!(!is_swift_mangled_symbol(s, s.len()));
+
+        // Body has path separator.
+        let s = "_TtC7TeamApp/GeneratedAssetSymbols";
+        assert!(!is_swift_mangled_symbol(s, s.len()));
+
+        // Prefix OK but body loaded with special chars.
+        let s = "_$s!!!@@@###$$$%%%^^^&&&***((()))";
+        assert!(!is_swift_mangled_symbol(s, s.len()));
+    }
+
+    // ===== JWT predicate =====
+
+    #[test]
+    fn test_is_jwt_token_positive() {
+        // Canonical HS256 JWT (from RFC 7519 example, with SflKxwRJSMe... sig).
+        let s = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+        assert!(is_jwt_token(s, s.len()));
+        assert!(!is_garbage(s));
+
+        // RS256 with longer signature.
+        let s = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2V4YW1wbGUuYXV0aDAuY29tLyIsInN1YiI6ImF1dGgwfDEyMzQ1Njc4OTAiLCJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbS8iLCJleHAiOjE2NDE2NzgwMDB9.abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        assert!(is_jwt_token(s, s.len()));
+    }
+
+    #[test]
+    fn test_is_jwt_token_negative() {
+        // Right shape (3 dot-parts, base64url chars) but no eyJ header prefix.
+        // This is the pattern Go symbols land in (e.g. `pkg.sub.Module`).
+        let s = "foo.bar.baz0123456789abcdef0123456789abcdef01234567890AB";
+        assert!(!is_jwt_token(s, s.len()));
+
+        // Only 2 parts.
+        let s = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0";
+        assert!(!is_jwt_token(s, s.len()));
+
+        // Too short.
+        let s = "eyJx.eyJx.eyJx";
+        assert!(!is_jwt_token(s, s.len()));
+
+        // Empty segment.
+        let s = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+        assert!(!is_jwt_token(s, s.len()));
     }
 }
 

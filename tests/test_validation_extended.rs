@@ -756,11 +756,106 @@ fn test_pem_headers() {
 
 #[test]
 fn test_jwt_tokens() {
+    // Standalone header (base64url, not a full JWT) — kept by the base64 classifier.
     assert!(
         !is_garbage("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"),
         "JWT header"
     );
+
+    // RFC 7519 example: HS256 "Joe" token.
+    assert!(
+        !is_garbage("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"),
+        "full HS256 JWT"
+    );
+
+    // RS256 JWT (longer signature segment, all base64url).
+    assert!(
+        !is_garbage("eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2V4YW1wbGUuYXV0aDAuY29tLyIsInN1YiI6ImF1dGgwfDEyMzQ1Njc4OTAiLCJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbS8iLCJleHAiOjE2NDE2NzgwMDB9.abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+        "RS256 JWT"
+    );
+
+    // Hyphens and underscores (base64url without padding).
+    assert!(
+        !is_garbage("eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiYWxpY2UtYm9iX3VzZXIifQ.xK-n_2aBcDeFgHiJkLmNoPqRsTuVwXyZ01234abc"),
+        "JWT with base64url dashes/underscores"
+    );
+
+    // Negatives: three-dot identifiers that are NOT JWTs must still classify.
+    // (These may be kept or dropped, but they must not be mis-labelled as JWTs —
+    // we assert no crash and some determinate behaviour.)
+    let _ = is_garbage("foo.bar.baz");
+    let _ = is_garbage("pkg.sub.Module");
 }
+
+// ===== Telegram Bot Tokens =====
+
+#[test]
+fn test_telegram_bot_tokens() {
+    // Real shape observed in DPRK Teams sample (2026-04).
+    assert!(
+        !is_garbage("8520232238:AAF6xeNiv-OKpAPrnRmv7AsjmJAmkRjf0I4"),
+        "DPRK Teams Telegram bot token"
+    );
+
+    // Classic 10-digit bot_id + 35-char body (docs example shape).
+    assert!(
+        !is_garbage("110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"),
+        "canonical Telegram bot token"
+    );
+
+    // With underscores in body.
+    assert!(
+        !is_garbage("6789012345:ABC_def123GHI_jklMNO-pqrSTU_vwxYZ01"),
+        "Telegram token with underscores"
+    );
+
+    // Short bot_id (8 digits) — still in spec.
+    assert!(
+        !is_garbage("12345678:AAF6xeNiv-OKpAPrnRmv7AsjmJAmkRjf0I4"),
+        "Telegram token with 8-digit bot id"
+    );
+}
+
+// Predicate-level negatives (malformed tokens the Telegram rule must not
+// whitelist) live in src/validation.rs — is_telegram_bot_token is private,
+// and is_garbage can still pass these via unrelated rules
+// (path/url/domain shape), so asserting on is_garbage here would be noise.
+
+// ===== Swift Mangled Symbols =====
+
+#[test]
+fn test_swift_mangled_symbols() {
+    // _Tt-prefix (Swift 1-3 class metadata) — the kind that was dropped before.
+    assert!(
+        !is_garbage("_TtC7TeamAppP33_464D6157E8D96D7B7ECE5C61C5669F7019ResourceBundleClass"),
+        "Swift _TtC class mangling (DPRK Teams sample)"
+    );
+    assert!(
+        !is_garbage("_TtP10Foundation10CodingKey_"),
+        "Swift _TtP protocol mangling"
+    );
+
+    // Swift 5 stable ABI ($s / _$s prefix).
+    assert!(
+        !is_garbage("_$sSo17OS_dispatch_queueC8DispatchE4mainABvgZ"),
+        "Swift 5 _$s dispatch queue accessor"
+    );
+    assert!(
+        !is_garbage("$s10Foundation4DataV5bytesAC10ByteBufferVyXlSgvg"),
+        "Swift 5 $s mangled accessor"
+    );
+
+    // Swift 4 ABI (_T0).
+    assert!(
+        !is_garbage("_T010Foundation4DataVMa"),
+        "Swift 4 _T0 mangling"
+    );
+}
+
+// Predicate-level negatives (non-Swift `_T…` ids, `_TtC` with a path
+// separator, etc.) live in src/validation.rs — is_swift_mangled_symbol is
+// private, and is_garbage can still pass these via path/identifier rules,
+// so the whole-pipeline assertion would be meaningless.
 
 // ===== Ransom Note Patterns =====
 
