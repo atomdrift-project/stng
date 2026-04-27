@@ -114,12 +114,33 @@ fn is_powershell(text: &str) -> bool {
 fn python_score(text: &str) -> u32 {
     let mut score = 0u32;
 
+    // Java/Kotlin/Android markers - if these are present, it's very likely NOT Python
+    if text.contains("package ")
+        || text.contains("public class ")
+        || text.contains("public enum ")
+        || text.contains("private ")
+        || text.contains("android.os.")
+        || text.contains("java.util.")
+    {
+        return 0;
+    }
+
     // Strong indicators
     if text.contains("import ") || text.contains("from ") {
-        score += 1;
+        // Python imports don't end with semicolon
+        if !text.contains("import ") || !text.contains(';') {
+            score += 1;
+        }
     }
     if text.contains("def ") || text.contains("class ") {
-        score += 1;
+        // 'class ' can be in Java too, but 'def ' is very Python
+        if text.contains("def ") {
+            score += 1;
+        } else if text.contains("class ") && !text.contains("public ") && !text.contains("private ")
+        {
+            // Python classes are just 'class Name:', not 'public class Name'
+            score += 1;
+        }
     }
     if text.contains("__import__") {
         score += 2;
@@ -313,6 +334,21 @@ mod tests {
         assert_eq!(
             detect_script_language(src.as_bytes()),
             Some(ScriptLanguage::JavaScript)
+        );
+    }
+
+    #[test]
+    fn test_detect_not_python_java_kotlin() {
+        let src = "package com.example;\nimport java.util.List;\npublic class MyClass {\n    private List<String> items;\n}\n";
+        assert_ne!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::Python)
+        );
+
+        let lottie = "package com.airbnb.lottie;\nimport android.os.Build;\npublic enum LottieFeatureFlag {\n    MergePathsApi19(Build.VERSION_CODES.KITKAT);\n}\n";
+        assert_ne!(
+            detect_script_language(lottie.as_bytes()),
+            Some(ScriptLanguage::Python)
         );
     }
 }

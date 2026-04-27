@@ -74,6 +74,23 @@ pub(super) fn is_python_code(s: &str) -> bool {
         return false;
     }
 
+    // Reject Java/Kotlin/Android imports and package patterns
+    if (s.contains("import ") || s.contains("package "))
+        && (s.contains("android.")
+            || s.contains("java.")
+            || s.contains("javax.")
+            || s.contains("kotlin.")
+            || s.contains("com.google.")
+            || s.contains("org.apache."))
+    {
+        return false;
+    }
+
+    // Java/Kotlin imports often end with semicolon
+    if s.starts_with("import ") && s.ends_with(';') {
+        return false;
+    }
+
     let mut matches = 0;
 
     // Strong Python indicators (word boundaries matter)
@@ -98,7 +115,14 @@ pub(super) fn is_python_code(s: &str) -> bool {
     if s.contains("sys.") {
         matches += 1;
     }
-    if s.contains("os.") {
+    // Refine 'os.' to avoid matching 'android.os' or 'ios'
+    if s.contains("os.path")
+        || s.contains("os.system")
+        || s.contains("os.environ")
+        || s.contains("os.name")
+        || s.contains("os.getcwd")
+        || (s.contains("os.") && (s.contains("import os") || s.contains("from os")))
+    {
         matches += 1;
     }
     if s.contains("__name__") && s.contains("__main__") {

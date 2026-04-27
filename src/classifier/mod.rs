@@ -1830,4 +1830,25 @@ mod tests {
         // .reloc section garbage starting with <?= must NOT trigger PHP detection
         assert_ne!(classify_string("<?=\">.>|>"), Some(StringKind::PhpCode));
     }
+
+    #[test]
+    fn test_python_rejection_java_kotlin() {
+        // Java/Kotlin/Android imports should NOT be classified as Python
+        assert_ne!(
+            classify_string("import android.os.Build;"),
+            Some(StringKind::PythonCode)
+        );
+        assert_ne!(
+            classify_string("import android.os.Build"),
+            Some(StringKind::PythonCode)
+        );
+        assert_ne!(
+            classify_string("package com.airbnb.lottie;"),
+            Some(StringKind::PythonCode)
+        );
+        assert_ne!(
+            classify_string("import java.util.List;"),
+            Some(StringKind::PythonCode)
+        );
+    }
 }
