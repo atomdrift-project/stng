@@ -94,6 +94,7 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
                 Some("overlay"),
                 &HashSet::new(),
                 &std::collections::HashMap::new(),
+                &[],
                 &mut strings,
                 &mut seen,
             );
@@ -138,6 +139,7 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
                 Some("overlay"),
                 &[],
                 &std::collections::HashMap::new(),
+                &[],
             );
             for mut s in wide_strings {
                 // Classify wide overlay strings - keep highly specific classifications

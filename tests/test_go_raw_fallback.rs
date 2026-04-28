@@ -476,6 +476,66 @@ fn test_no_value_duplicates_across_methods() {
     }
 }
 
+/// Regression: Go's compiler packs `.rodata` strings back-to-back without null
+/// terminators. The raw printable-run scanner used to emit the entire blob as
+/// one merged garbage string (e.g.
+/// `"getrandom statessigaction failed0123456789ABCDEFinvalid host: %w..."`).
+/// The structure-based extractor already covers `.rodata` with correct
+/// boundaries, so the raw scan must skip that section for Go binaries.
+#[test]
+fn test_rodata_blob_not_emitted_as_merged_string() {
+    // Pack adjacent strings without nulls — this is exactly how Go lays out
+    // its string blob.
+    let parts = [
+        "getrandom states",
+        "sigaction failed",
+        "0123456789ABCDEF",
+        "invalid host: %w",
+    ];
+    let merged: String = parts.concat();
+
+    let elf = build_go_elf_with_noptrdata(&parts, &[]);
+
+    // Sanity: the merged byte sequence is actually present in the file.
+    assert!(
+        elf.windows(merged.len()).any(|w| w == merged.as_bytes()),
+        "test setup: packed rodata should contain the merged byte sequence"
+    );
+
+    let opts = ExtractOptions::new(4);
+    let strings = extract_strings_with_options(&elf, &opts);
+    let values: Vec<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+
+    // Each individually-referenced string survives via structure extraction.
+    for s in &parts {
+        assert!(
+            values.contains(s),
+            "structure-referenced string {s:?} must still be extracted"
+        );
+    }
+
+    // The merged form must NOT appear: this is the bug we're guarding against.
+    assert!(
+        !values.iter().any(|v| *v == merged.as_str()),
+        "raw scan must not emit the merged rodata blob as a single string"
+    );
+
+    // No emitted string should contain a strict superstring of two adjacent
+    // parts joined together — that would indicate the raw scanner is still
+    // walking past structure boundaries inside the blob.
+    let pairs = [
+        format!("{}{}", parts[0], parts[1]),
+        format!("{}{}", parts[1], parts[2]),
+        format!("{}{}", parts[2], parts[3]),
+    ];
+    for pair in &pairs {
+        assert!(
+            !values.iter().any(|v| v.contains(pair.as_str())),
+            "no extracted string should contain two adjacent rodata strings concatenated ({pair:?})"
+        );
+    }
+}
+
 /// Test with the real libnpc.so if available.
 #[test]
 fn test_real_go_shared_library() {

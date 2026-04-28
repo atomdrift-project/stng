@@ -175,7 +175,7 @@ fn extract_arm64_string_pattern(
         }
 
         // Decode and extract the string
-        if let Some(s) = decode_arm64_string(
+        if let Some((s, str_addr)) = decode_arm64_string(
             inst1,
             inst2,
             inst3,
@@ -195,8 +195,8 @@ fn extract_arm64_string_pattern(
                 };
                 strings.push(ExtractedString {
                     value: s,
-                    data_offset: rodata_addr,
-                    section: Some("__rodata".to_string()),
+                    data_offset: str_addr,
+                    section: Some(".rodata".to_string()),
                     method: StringMethod::InstructionPattern,
                     kind: final_kind,
                     ..Default::default()
@@ -219,6 +219,11 @@ fn looks_like_key(s: &str) -> bool {
 }
 
 /// Decode ARM64 ADRP+ADD instructions to extract string address and length.
+///
+/// Returns the decoded string along with its absolute virtual address so callers
+/// can record a unique `data_offset` per inline string (rather than collapsing
+/// every inline string at the section base, which dedup-by-offset would prune
+/// down to a single survivor).
 #[allow(clippy::too_many_arguments)]
 fn decode_arm64_string(
     inst1: u32,
@@ -229,7 +234,7 @@ fn decode_arm64_string(
     rodata_data: &[u8],
     rodata_addr: u64,
     rodata_end: u64,
-) -> Option<String> {
+) -> Option<(String, u64)> {
     // Decode ADRP: extract page address
     let immlo = (inst1 >> 29) & 0x3;
     let immhi = (inst1 >> 5) & 0x7FFFF;
@@ -270,7 +275,7 @@ fn decode_arm64_string(
     let s = std::str::from_utf8(bytes).ok()?;
 
     if is_valid_utf8_string(s) {
-        Some(s.to_string())
+        Some((s.to_string(), str_addr))
     } else {
         None
     }

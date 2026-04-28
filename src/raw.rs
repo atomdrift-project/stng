@@ -5,6 +5,18 @@ use crate::types::{ExtractedString, StringKind, StringMethod};
 use memchr::memchr_iter;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ops::Range;
+
+/// Returns true if `offset` falls inside any skip range.
+///
+/// Used to suppress raw scanning over regions whose strings are extracted by a
+/// higher-fidelity method (Go's structure-based + inline-pattern extractors
+/// cover .rodata; raw scanning that region produces merged garbage because
+/// Go packs strings back-to-back without null terminators).
+#[inline]
+fn in_skip_range(offset: usize, skip_ranges: &[Range<usize>]) -> bool {
+    skip_ranges.iter().any(|r| r.contains(&offset))
+}
 
 pub(crate) fn extract_raw_strings(
     data: &[u8],
@@ -12,6 +24,7 @@ pub(crate) fn extract_raw_strings(
     section: Option<&str>,
     segment_names: &[String],
     section_info: &HashMap<String, crate::binary::SectionInfo>,
+    skip_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
     // Build a set of known segment/section names for quick lookup
     let segment_names_set: HashSet<&str> = segment_names.iter().map(String::as_str).collect();
@@ -44,7 +57,11 @@ pub(crate) fn extract_raw_strings(
 
         if run_len >= min_length {
             let start = chunk.len() - run_len;
-            strat1_runs.push((chunk_start + start, &chunk[start..]));
+            let abs_start = chunk_start + start;
+            if in_skip_range(abs_start, skip_ranges) {
+                continue;
+            }
+            strat1_runs.push((abs_start, &chunk[start..]));
         }
     }
 
@@ -108,6 +125,7 @@ pub(crate) fn extract_raw_strings(
         section,
         &segment_names_set,
         section_info,
+        skip_ranges,
         &mut strings,
         &mut seen,
     );
@@ -123,6 +141,7 @@ pub(crate) fn extract_printable_runs(
     section: Option<&str>,
     segment_names_set: &HashSet<&str>,
     section_info: &HashMap<String, crate::binary::SectionInfo>,
+    skip_ranges: &[Range<usize>],
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
@@ -137,7 +156,7 @@ pub(crate) fn extract_printable_runs(
                 run_start = Some(i);
             }
         } else if let Some(start) = run_start {
-            if i - start >= min_length {
+            if i - start >= min_length && !in_skip_range(start, skip_ranges) {
                 runs.push((start, &data[start..i]));
             }
             run_start = None;
@@ -145,7 +164,7 @@ pub(crate) fn extract_printable_runs(
     }
 
     if let Some(start) = run_start {
-        if data.len() - start >= min_length {
+        if data.len() - start >= min_length && !in_skip_range(start, skip_ranges) {
             runs.push((start, &data[start..]));
         }
     }
@@ -221,6 +240,7 @@ pub(crate) fn extract_wide_strings(
     section: Option<&str>,
     segment_names: &[String],
     section_info: &HashMap<String, crate::binary::SectionInfo>,
+    skip_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
     let segment_names_set: HashSet<&str> = segment_names.iter().map(String::as_str).collect();
     let mut strings = Vec::new();
@@ -266,6 +286,10 @@ pub(crate) fn extract_wide_strings(
             } else {
                 break;
             }
+        }
+
+        if in_skip_range(start, skip_ranges) {
+            continue;
         }
 
         // Collect UTF-16LE code units from start

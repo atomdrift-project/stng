@@ -222,6 +222,96 @@ pub fn collect_pe_section_info(
     sections
 }
 
+/// File-offset ranges in a Go ELF that hold packed string blobs the raw
+/// scanner must skip.
+///
+/// Go's compiler concatenates string contents back-to-back without null
+/// terminators, relying on `{ptr, len}` headers for boundaries. A naive
+/// printable-byte run scanner thus emits the entire blob as one merged
+/// garbage string. The structure-based and inline-pattern extractors already
+/// extract these strings with correct boundaries, so the raw scanner should
+/// stay out of these regions.
+#[must_use]
+pub(crate) fn elf_go_skip_ranges(
+    elf: &goblin::elf::Elf<'_>,
+    data_len: usize,
+) -> Vec<std::ops::Range<usize>> {
+    elf.section_headers
+        .iter()
+        .filter_map(|sh| {
+            let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
+            if !matches!(name, ".rodata" | ".gopclntab") {
+                return None;
+            }
+            let start = usize::try_from(sh.sh_offset).ok()?;
+            let size = usize::try_from(sh.sh_size).ok()?;
+            let end = start.checked_add(size)?.min(data_len);
+            if start >= end {
+                return None;
+            }
+            Some(start..end)
+        })
+        .collect()
+}
+
+/// File-offset ranges in a Go Mach-O binary the raw scanner must skip.
+/// See [`elf_go_skip_ranges`] for the rationale.
+#[must_use]
+pub(crate) fn macho_go_skip_ranges(macho: &MachO<'_>) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    for seg in &macho.segments {
+        let Ok(sections) = seg.sections() else {
+            continue;
+        };
+        for (sec, _) in &sections {
+            let name = sec.name().unwrap_or("");
+            if !matches!(name, "__rodata" | "__gopclntab") {
+                continue;
+            }
+            let Ok(start) = usize::try_from(sec.offset) else {
+                continue;
+            };
+            let Ok(size) = usize::try_from(sec.size) else {
+                continue;
+            };
+            let Some(end) = start.checked_add(size) else {
+                continue;
+            };
+            if start < end {
+                ranges.push(start..end);
+            }
+        }
+    }
+    ranges
+}
+
+/// File-offset ranges in a Go PE binary the raw scanner must skip.
+/// See [`elf_go_skip_ranges`] for the rationale.
+#[must_use]
+pub(crate) fn pe_go_skip_ranges(
+    pe: &goblin::pe::PE<'_>,
+    data_len: usize,
+) -> Vec<std::ops::Range<usize>> {
+    pe.sections
+        .iter()
+        .filter_map(|sec| {
+            let name = pe_section_name(&sec.name);
+            // Stripped Go PE builds fold gopclntab and the string blob into
+            // .rdata; cover both names for robustness.
+            if !matches!(name.as_str(), ".rodata" | ".rdata" | ".gopclntab") {
+                return None;
+            }
+            let start = usize::try_from(sec.pointer_to_raw_data).ok()?;
+            let size = usize::try_from(sec.size_of_raw_data).ok()?;
+            let end = start.checked_add(size)?.min(data_len);
+            if start >= end {
+                return None;
+            }
+            Some(start..end)
+        })
+        .collect()
+}
+
 /// Helper to check if a Mach-O binary has Go sections.
 #[must_use]
 pub(crate) fn macho_has_go_sections(macho: &MachO<'_>) -> bool {

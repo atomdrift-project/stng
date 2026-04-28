@@ -107,7 +107,8 @@ use std::sync::Arc;
 // Import internal modules for use in this file
 use binary::{
     collect_elf_section_info, collect_elf_segments, collect_macho_section_info,
-    collect_macho_segments, collect_pe_section_info, macho_has_go_sections,
+    collect_macho_segments, collect_pe_section_info, elf_go_skip_ranges, macho_go_skip_ranges,
+    macho_has_go_sections, pe_go_skip_ranges,
 };
 use binary_net::scan_binary_ips;
 use imports::{extract_elf_imports, extract_macho_imports};
@@ -972,7 +973,7 @@ fn extract_from_utf16_file(
 
     // Extract strings from the decoded UTF-8 content
     let mut raw_strings =
-        extract_raw_strings(decoded_bytes, opts.min_length, None, &[], &HashMap::new());
+        extract_raw_strings(decoded_bytes, opts.min_length, None, &[], &HashMap::new(), &[]);
 
     // Apply decoders (base64, hex, URL-encoding, etc.) to the extracted strings
     // This allows us to find base64-encoded PowerShell, hex-encoded URLs, etc.
@@ -1018,7 +1019,7 @@ fn append_script_deobfuscation(
     for result in deob_results {
         let payload_bytes = result.decoded.as_bytes();
         let mut payload_strings =
-            extract_raw_strings(payload_bytes, opts.min_length, None, &[], &HashMap::new());
+            extract_raw_strings(payload_bytes, opts.min_length, None, &[], &HashMap::new(), &[]);
 
         // Run decoders on the extracted payload strings
         let mut payload_decoded = Vec::new();
@@ -1115,6 +1116,7 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
                 None,
                 &[],
                 &HashMap::new(),
+                &[],
             ));
         }
 
@@ -1126,6 +1128,7 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
                 None,
                 &[],
                 &HashMap::new(),
+                &[],
             ));
         }
 
@@ -1220,10 +1223,16 @@ fn extract_from_object(
                 let extractor = GoStringExtractor::new(min_length);
                 strings.extend(extractor.extract_macho(macho, data));
 
-                // Raw scan fallback for Go shared libraries / cgo binaries
+                // Raw scan fallback for Go shared libraries / cgo binaries.
+                // Skip raw-scanning the Go string-blob sections — strings there
+                // are packed back-to-back without null terminators, so a raw
+                // scan emits the entire blob as one merged garbage string. The
+                // structure-based + inline-pattern extractors already cover
+                // these regions with correct boundaries.
+                let skip = macho_go_skip_ranges(macho);
                 let new_raw: Vec<_> = {
                     let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-                    extract_raw_strings(data, min_length, None, &segments, &section_info)
+                    extract_raw_strings(data, min_length, None, &segments, &section_info, &skip)
                         .into_iter()
                         .filter(|s| !known.contains(s.value.as_str()))
                         .collect()
@@ -1247,6 +1256,7 @@ fn extract_from_object(
                         None,
                         &segments,
                         &section_info,
+                        &[],
                     ));
                 } else {
                     strings.extend(rust_strings);
@@ -1286,14 +1296,23 @@ fn extract_from_object(
                         let extractor = GoStringExtractor::new(min_length);
                         strings.extend(extractor.extract_macho(&macho, data));
 
-                        // Raw scan fallback for Go shared libraries / cgo binaries
+                        // See macho_has_go_sections branch above for why we
+                        // skip-scan the Go string-blob sections.
+                        let skip = macho_go_skip_ranges(&macho);
                         let new_raw: Vec<_> = {
                             let known: HashSet<&str> =
                                 strings.iter().map(|s| s.value.as_str()).collect();
-                            extract_raw_strings(data, min_length, None, &segments, &section_info)
-                                .into_iter()
-                                .filter(|s| !known.contains(s.value.as_str()))
-                                .collect()
+                            extract_raw_strings(
+                                data,
+                                min_length,
+                                None,
+                                &segments,
+                                &section_info,
+                                &skip,
+                            )
+                            .into_iter()
+                            .filter(|s| !known.contains(s.value.as_str()))
+                            .collect()
                         };
                         strings.extend(new_raw);
                     } else if binary::macho_is_rust(&macho) {
@@ -1317,6 +1336,7 @@ fn extract_from_object(
                     None,
                     &segments,
                     &section_info,
+                    &[],
                 ));
             }
             if !is_go_binary {
@@ -1391,8 +1411,16 @@ fn extract_from_object(
                 // in .noptrdata, .strtab, .symtab etc. that the structure-based
                 // extractor misses because it only targets .rodata.  Run a raw
                 // scan and merge strings not already found by structure analysis.
+                //
+                // Skip raw-scanning .rodata and .gopclntab themselves: Go packs
+                // strings back-to-back without null terminators, so a raw scan
+                // would emit the entire blob as one merged garbage string. The
+                // structure-based + inline-pattern extractors already cover
+                // those regions with correct boundaries.
+                let skip = elf_go_skip_ranges(elf, scan_data.len());
                 let known: HashSet<String> = strings.iter().map(|s| s.value.clone()).collect();
-                for s in extract_raw_strings(scan_data, min_length, None, &segments, &section_info)
+                for s in
+                    extract_raw_strings(scan_data, min_length, None, &segments, &section_info, &skip)
                 {
                     if !known.contains(&s.value) {
                         strings.push(s);
@@ -1412,16 +1440,24 @@ fn extract_from_object(
                     None,
                     &segments,
                     &section_info,
+                    &[],
                 ));
             }
 
             // Extract UTF-16LE wide strings (less common in ELF but can occur, especially in malware)
+            // For Go binaries, skip the same regions to avoid spurious wide-string hits in packed rodata.
+            let wide_skip: Vec<std::ops::Range<usize>> = if is_go_binary {
+                elf_go_skip_ranges(elf, scan_data.len())
+            } else {
+                Vec::new()
+            };
             strings.extend(extract_wide_strings(
                 scan_data,
                 min_length,
                 None,
                 &segments,
                 &section_info,
+                &wide_skip,
             ));
 
             // Extract binary network data (IPs and ports in network byte order)
@@ -1539,6 +1575,14 @@ fn extract_from_object(
                 strings.extend(extractor.extract_pe(pe, data));
             }
 
+            // Skip raw-scanning Go's packed string sections to avoid emitting
+            // the entire blob as one merged garbage string.
+            let pe_skip: Vec<std::ops::Range<usize>> = if is_go_binary {
+                pe_go_skip_ranges(pe, data.len())
+            } else {
+                Vec::new()
+            };
+
             let (
                 (us_strings, r2_strings),
                 (wide_strings, (net_strings, (raw_strings, stack_strings))),
@@ -1551,7 +1595,16 @@ fn extract_from_object(
                 },
                 || {
                     rayon::join(
-                        || extract_wide_strings(data, min_length, None, &segments, &section_info),
+                        || {
+                            extract_wide_strings(
+                                data,
+                                min_length,
+                                None,
+                                &segments,
+                                &section_info,
+                                &pe_skip,
+                            )
+                        },
                         || {
                             rayon::join(
                                 || {
@@ -1572,6 +1625,7 @@ fn extract_from_object(
                                                 None,
                                                 &segments,
                                                 &section_info,
+                                                &pe_skip,
                                             )
                                         },
                                         || {
@@ -1623,6 +1677,7 @@ fn extract_from_object(
                     None,
                     &[],
                     &HashMap::new(),
+                    &[],
                 ));
             }
             // Extract binary network data (IPs and ports in network byte order)
