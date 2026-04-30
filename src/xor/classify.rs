@@ -97,9 +97,9 @@ pub(crate) fn clean_url_trailing_garbage(url: &str) -> String {
             let mut ip_end = 0;
             let mut dots = 0;
 
-            for (i, c) in after_proto.chars().enumerate() {
+            for (i, c) in after_proto.char_indices() {
                 if c.is_ascii_digit() {
-                    ip_end = i + 1;
+                    ip_end = i + c.len_utf8();
                 } else if c == '.' {
                     dots += 1;
                     if dots > 3 {
@@ -107,7 +107,7 @@ pub(crate) fn clean_url_trailing_garbage(url: &str) -> String {
                     }
                 } else if c == ':' && dots == 3 {
                     // Port number after IP - find end of port
-                    let port_start = i + 1;
+                    let port_start = i + c.len_utf8();
                     if let Some(port_end_offset) =
                         after_proto[port_start..].find(|c: char| !c.is_ascii_digit())
                     {
@@ -137,11 +137,11 @@ pub(crate) fn clean_url_trailing_garbage(url: &str) -> String {
                     c.is_alphanumeric()
                         || matches!(c, '/' | '.' | '-' | '_' | '?' | '=' | '&' | '%' | '#' | '+')
                 })
-                .map(|(i, _)| i)
+                .map(|(i, c)| i + c.len_utf8())
                 .collect();
 
             if let Some(&last_valid) = valid_url_chars.last() {
-                let clean_len = proto_end + 3 + last_valid + 1;
+                let clean_len = proto_end + 3 + last_valid;
                 if clean_len < url.len() {
                     return url[..clean_len].to_string();
                 }
@@ -492,15 +492,73 @@ pub(crate) fn extract_multikey_xor_strings(
     let mut results = Vec::new();
     let mut seen: HashSet<(u64, String)> = HashSet::new();
 
-    // Only use top 3 high-confidence keys for decryption attempts
+    // Only use top high-confidence keys for decryption attempts
     for key_info in keys
         .iter()
         .filter(|k| matches!(k.confidence, XorConfidence::High))
-        .take(3)
+        .take(100) // Increased to catch targeted binary keys that might be further down the list
     {
-        let key_bytes = key_info.key.as_bytes();
+        let key_bytes_owned = if let Some(ref k) = key_info.key {
+            k.clone()
+        } else {
+            let start = key_info.offset as usize;
+            let end = (key_info.offset as usize + key_info.length).min(data.len());
+            if start >= end {
+                continue;
+            }
+            data[start..end].to_vec()
+        };
+        let key_bytes = &key_bytes_owned;
+
         if key_bytes.is_empty() {
             continue;
+        }
+
+        // Blind Decode Fallback: For HIGH confidence keys, try all shifts of the key
+        // to find short or split strings (which won't match Aho-Corasick patterns).
+        for shift in 0..key_bytes.len() {
+            let decoded_full: Vec<u8> = data.iter().enumerate()
+                .map(|(i, &b)| b ^ key_bytes[(i + shift) % key_bytes.len()])
+                .collect();
+            
+            // Use a much lower min_length for high-confidence blind decodes
+            let blind_min_len = 6.min(min_length);
+            
+            let mut i = 0;
+            while i < decoded_full.len() {
+                if is_printable_char(decoded_full[i]) {
+                    let start = i;
+                    while i < decoded_full.len() && is_printable_char(decoded_full[i]) {
+                        i += 1;
+                    }
+                    let len = i - start;
+                    if len >= blind_min_len {
+                        let s = String::from_utf8_lossy(&decoded_full[start..i]).to_string();
+                        if let Some(kind) = classify_xor_string(&s) {
+                            if seen.insert((start as u64, s.clone())) {
+
+                                 let key_str = String::from_utf8_lossy(key_bytes);
+                                 let key_preview = if key_str.chars().count() > 8 {
+                                     key_str.chars().take(8).collect::<String>()
+                                 } else {
+                                     key_str.into_owned()
+                                 };
+                                results.push(ExtractedString {
+                                    value: s,
+                                    data_offset: start as u64,
+                                    section: None,
+                                    method: StringMethod::XorDecode,
+                                    kind,
+                                    source: Some(format!("xor:blind:key:{key_preview}:s{shift}")),
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    i += 1;
+                }
+            }
         }
 
         // Build Aho-Corasick for all possible alignments of our patterns with this key.
@@ -538,12 +596,12 @@ pub(crate) fn extract_multikey_xor_strings(
                 if let Some(kind) = classify_xor_string(&decoded) {
                     let offset = start as u64;
                     if seen.insert((offset, decoded.clone())) {
-                        let key_preview = if key_info.key.len() > 8 {
-                            format!("{}...", &key_info.key[..8])
+                        let key_str = String::from_utf8_lossy(key_bytes);
+                        let key_preview = if key_str.chars().count() > 8 {
+                            key_str.chars().take(8).collect::<String>()
                         } else {
-                            key_info.key.clone()
+                            key_str.into_owned()
                         };
-
                         results.push(ExtractedString {
                             value: decoded,
                             data_offset: offset,
@@ -1818,7 +1876,31 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_ip_at_dot, looks_like_data_table};
+    use super::{clean_url_trailing_garbage, extract_ip_at_dot, looks_like_data_table};
+
+    #[test]
+    fn clean_url_trailing_garbage_handles_multibyte_domain_url() {
+        assert_eq!(
+            clean_url_trailing_garbage("http://hackers.Tv/indexяhph,l1Ĉ"),
+            "http://hackers.Tv/indexяhph,l1Ĉ"
+        );
+    }
+
+    #[test]
+    fn clean_url_trailing_garbage_trims_after_multibyte_domain_url() {
+        assert_eq!(
+            clean_url_trailing_garbage("http://hackers.Tv/indexяhph,l1Ĉ!@"),
+            "http://hackers.Tv/indexяhph,l1Ĉ"
+        );
+    }
+
+    #[test]
+    fn clean_url_trailing_garbage_handles_ip_port_before_multibyte_suffix() {
+        assert_eq!(
+            clean_url_trailing_garbage("http://46.30.191.141:8080Ĉgarbage"),
+            "http://46.30.191.141:8080"
+        );
+    }
 
     // Place the 9 raw bytes that XOR-decode to "32.93.2.3" under key 0x33
     // (0x00 0x01 0x1d 0x0a 0x00 0x1d 0x01 0x1d 0x00) inside a window filled

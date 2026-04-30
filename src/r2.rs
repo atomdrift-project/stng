@@ -1,1328 +1,302 @@
 //! Optional rizin/radare2 integration for smarter string extraction.
-//!
-//! Prefers rizin when available, falls back to radare2.
-//! Provides better differentiation between true strings and symbols.
-
 pub mod cache;
-
 use crate::classifier::classify_string;
 use crate::{ExtractedString, FunctionMetadata, StringKind, StringMethod};
 use cache::R2Cache;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::process::Command;
 use std::sync::OnceLock;
 
-/// Which tool is available (cached after first check)
 static TOOL: OnceLock<Option<&'static str>> = OnceLock::new();
-
-/// Check if rizin or radare2 is available, preferring rizin.
-#[must_use]
-pub fn is_available() -> bool {
-    get_tool().is_some()
-}
-
-/// Flush cached r2 results for a specific file.
-pub fn flush_cache(file_path: &str) -> Result<(), std::io::Error> {
-    let cache = R2Cache::new()?;
-    cache.clear(file_path)
-}
-
-/// Get the available tool name (rizin preferred, then radare2)
+pub fn is_available() -> bool { get_tool().is_some() }
+pub fn flush_cache(file_path: &str) -> Result<(), std::io::Error> { R2Cache::new()?.clear(file_path) }
 fn get_tool() -> Option<&'static str> {
     *TOOL.get_or_init(|| {
-        if Command::new("rizin")
-            .arg("-v")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            tracing::debug!("r2::get_tool: using rizin");
-            Some("rizin")
-        } else if Command::new("r2")
-            .arg("-v")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            tracing::debug!("r2::get_tool: using r2");
-            Some("r2")
-        } else {
-            None
-        }
+        if Command::new("rizin").arg("-v").output().map(|o| o.status.success()).unwrap_or(false) { Some("rizin") }
+        else if Command::new("r2").arg("-v").output().map(|o| o.status.success()).unwrap_or(false) { Some("r2") }
+        else { None }
     })
 }
 
-/// Extract string boundaries from radare2/rizin.
-/// Returns offset and length of each string found by r2.
-/// These can be used as hints for XOR string extraction.
-///
-/// Uses `izzj` (whole binary scan) for files ≤10MB.
-/// For large files (>10MB), returns None to avoid slow scan.
-#[must_use]
 pub fn extract_string_boundaries(path: &str) -> Option<Vec<StringBoundary>> {
     let tool = get_tool()?;
-
-    // Check file size - skip for large files (izzj is too slow)
     let file_size = std::fs::metadata(path).ok()?.len();
-    if file_size > 10 * 1024 * 1024 {
-        return None;
-    }
-
-    // Use izzj for whole binary scan (better than izj for data sections only)
+    if file_size > 10 * 1024 * 1024 { return None; }
     let data_strings = run_tool_command(tool, path, "izzj")?;
-
     if let Ok(json) = serde_json::from_str::<Vec<R2String>>(&data_strings) {
-        let boundaries: Vec<StringBoundary> = json
-            .iter()
-            .map(|s| StringBoundary {
-                offset: s.paddr,
-                length: if s.length > 0 {
-                    s.length
-                } else {
-                    s.string.len()
-                },
-            })
-            .collect();
-
-        Some(boundaries)
-    } else {
-        None
-    }
-}
-
-/// Extract strings using rizin or radare2.
-///
-/// Uses `izz` (whole binary scan) for strings and `is` for symbols.
-/// For large files (>10MB), only extracts symbols/imports (fast mode) to avoid
-/// the very slow whole-binary string scan.
-/// Returns strings with R2String/R2Symbol methods for clear identification.
-pub fn extract_strings(
-    path: &str,
-    min_length: usize,
-    use_cache: bool,
-) -> Option<Vec<ExtractedString>> {
-    let tool = get_tool()?;
-
-    // Get file size to filter out symbols with invalid offsets
-    let file_size = std::fs::metadata(path).ok()?.len();
-    let is_large_file = file_size > 10 * 1024 * 1024; // >10MB
-
-    // For large files: only extract symbols (fast), skip slow string scan
-    // For small files: extract both strings and symbols
-    let path_owned = path.to_string();
-    let (data_result, symbols_result) = if is_large_file {
-        (
-            None,
-            run_tool_command_with_cache(tool, &path_owned, "isj", use_cache),
-        )
-    } else {
-        rayon::join(
-            || run_tool_command_with_cache(tool, &path_owned, "izzj", use_cache),
-            || run_tool_command_with_cache(tool, &path_owned, "isj", use_cache),
-        )
-    };
-
-    let mut strings = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-
-    // Process strings from all sections (whole binary scan)
-    if let Some(data_strings) = data_result {
-        if let Ok(json) = serde_json::from_str::<Vec<R2String>>(&data_strings) {
-            for s in json {
-                // Skip strings with invalid file offsets
-                if s.paddr > file_size {
-                    continue;
-                }
-
-                if s.string.len() >= min_length && seen.insert(s.string.clone()) {
-                    // Check if this is a wide string (UTF-16LE rendered as ASCII)
-                    if let Some(decoded) = decode_spaced_ascii(&s.string) {
-                        if decoded.len() >= min_length && seen.insert(decoded.clone()) {
-                            let kind = classify_string(&decoded);
-                            strings.push(ExtractedString {
-                                value: decoded,
-                                data_offset: s.paddr,
-                                section: Some(s.section.clone()),
-                                method: StringMethod::SpacedAscii,
-                                kind,
-                                raw: Some(s.string.clone()),
-                                ..Default::default()
-                            });
-                        }
-                    } else {
-                        let kind = classify_string(&s.string);
-                        strings.push(ExtractedString {
-                            value: s.string,
-                            data_offset: s.paddr,
-                            section: Some(s.section),
-                            method: StringMethod::R2String,
-                            kind,
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    // Extract function metadata (for files < 2MB)
-    let function_metadata = extract_function_metadata(path, file_size, use_cache);
-
-    // Process symbols
-    if let Some(symbols) = symbols_result {
-        if let Ok(json) = serde_json::from_str::<Vec<R2Symbol>>(&symbols) {
-            for s in json {
-                // Skip symbols with invalid file offsets
-                if s.paddr > file_size {
-                    continue;
-                }
-                if s.name.len() >= min_length && seen.insert(s.name.clone()) {
-                    let kind = Some(classify_r2_symbol(&s.r#type, &s.bind));
-
-                    // Look up function metadata if this is a function
-                    let func_meta = if s.r#type == "FUNC" || s.r#type == "METH" {
-                        function_metadata.as_ref().and_then(
-                            |map: &std::collections::HashMap<String, FunctionMetadata>| {
-                                // Try exact match first
-                                map.get(&s.name)
-                                    .cloned()
-                                    // Try without sym. prefix
-                                    .or_else(|| {
-                                        let clean_name = s
-                                            .name
-                                            .strip_prefix("sym.")
-                                            .or_else(|| s.name.strip_prefix("sym.imp."))
-                                            .unwrap_or(&s.name);
-                                        map.get(clean_name).cloned()
-                                    })
-                            },
-                        )
-                    } else {
-                        None
-                    };
-
-                    strings.push(ExtractedString {
-                        value: s.name,
-                        data_offset: s.paddr,
-                        section: s.section,
-                        method: StringMethod::R2Symbol,
-                        kind,
-                        raw: None,
-                        source: None,
-                        fragments: None,
-                        section_size: None,
-                        section_executable: None,
-                        section_writable: None,
-                        architecture: None,
-                        function_meta: func_meta,
-                    });
-                }
-            }
-        }
-    }
-
-    tracing::debug!("r2::extract_strings: extracted {} strings", strings.len());
-
-    if strings.is_empty() {
-        None
-    } else {
-        Some(strings)
-    }
-}
-
-/// Extract function metadata using radare2/rizin analysis.
-/// Only runs for files < 2MB to avoid performance issues.
-/// Returns HashMap of function name -> metadata.
-pub fn extract_function_metadata(
-    path: &str,
-    file_size: u64,
-    use_cache: bool,
-) -> Option<std::collections::HashMap<String, FunctionMetadata>> {
-    // Only analyze functions for files < 2MB
-    if file_size > 2 * 1024 * 1024 {
-        return None;
-    }
-
-    let tool = get_tool()?;
-
-    // Run analysis and get function list as JSON
-    // aa = analyze all, aflj = list functions as JSON
-    let functions_json = run_tool_command_with_cache(tool, path, "aa; aflj", use_cache)?;
-
-    #[derive(serde::Deserialize)]
-    struct R2Function {
-        name: String,
-        #[serde(default)]
-        size: u64,
-        #[serde(default)]
-        nbbs: u64, // number of basic blocks
-        #[serde(default)]
-        edges: u64, // number of branches
-        #[serde(default)]
-        ninstrs: u64, // number of instructions
-        #[serde(default)]
-        signature: Option<String>,
-        #[serde(default)]
-        noreturn: bool,
-    }
-
-    let functions: Vec<R2Function> = serde_json::from_str(&functions_json).ok()?;
-
-    let mut metadata_map = std::collections::HashMap::new();
-    for func in functions {
-        // Clean up function name (remove sym. prefix if present)
-        let clean_name = func
-            .name
-            .strip_prefix("sym.")
-            .or_else(|| func.name.strip_prefix("sym.imp."))
-            .unwrap_or(&func.name)
-            .to_string();
-
-        metadata_map.insert(
-            clean_name,
-            FunctionMetadata {
-                size: func.size,
-                basic_blocks: func.nbbs,
-                branches: func.edges,
-                instructions: func.ninstrs,
-                signature: func.signature,
-                noreturn: if func.noreturn { Some(true) } else { None },
-            },
-        );
-    }
-
-    tracing::debug!(
-        "r2::extract_function_metadata: extracted {} functions",
-        metadata_map.len()
-    );
-
-    Some(metadata_map)
-}
-
-fn run_tool_command(tool: &str, path: &str, cmd: &str) -> Option<String> {
-    run_tool_command_with_cache(tool, path, cmd, true)
-}
-
-fn run_tool_command_with_cache(
-    tool: &str,
-    path: &str,
-    cmd: &str,
-    use_cache: bool,
-) -> Option<String> {
-    // Try cache first if enabled
-    if use_cache {
-        if let Ok(cache) = R2Cache::new() {
-            if let Some(cached) = cache.get(path, cmd) {
-                return Some(cached);
-            }
-        }
-    }
-
-    // Cache miss or disabled - run command
-    let output = Command::new(tool)
-        .args(["-q", "-c", cmd, path])
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        let result = String::from_utf8(output.stdout).ok()?;
-
-        // Store in cache for next time
-        if use_cache {
-            if let Ok(cache) = R2Cache::new() {
-                if let Err(e) = cache.set(path, cmd, &result) {
-                    tracing::debug!("r2 cache write failed: {e}");
-                }
-            }
-        }
-
-        Some(result)
-    } else {
-        None
-    }
+        Some(json.iter().map(|s| StringBoundary { offset: s.paddr, length: if s.length > 0 { s.length } else { s.string.len() } }).collect())
+    } else { None }
 }
 
 #[derive(serde::Deserialize, Clone)]
-struct R2String {
-    paddr: u64,
-    string: String,
-    section: String,
-    #[serde(default)]
-    length: usize,
-}
-
-/// String boundary hint from radare2
+struct R2String { paddr: u64, string: String, section: String, #[serde(default)] length: usize }
 #[derive(Debug, Clone)]
-pub struct StringBoundary {
-    pub offset: u64,
-    pub length: usize,
-}
-
+pub struct StringBoundary { pub offset: u64, pub length: usize }
 #[derive(serde::Deserialize)]
-struct R2Symbol {
-    paddr: u64,
-    name: String,
-    #[serde(default)]
-    section: Option<String>,
-    #[serde(default)]
-    r#type: String,
-    #[serde(default)]
-    bind: String,
-}
+struct R2Symbol { paddr: u64, name: String, #[serde(default)] section: Option<String>, #[serde(default)] r#type: String, #[serde(default)] bind: String }
 
-/// Detect and decode a "spaced" string (space-padded ASCII).
-///
-/// This handles the pattern common in .NET PE files where ASCII text has 0x20 (space)
-/// bytes between each character, appearing as "H e l l o" instead of "Hello".
-/// This is NOT standard UTF-16LE (which uses 0x00), but a .NET metadata format.
-///
-/// Returns Some(decoded) if the string follows the space-padded pattern.
-/// Returns None if not a spaced string pattern.
-#[must_use]
-pub fn decode_spaced_ascii(s: &str) -> Option<String> {
-    let bytes = s.as_bytes();
+pub fn extract_strings(path: &str, min_length: usize, use_cache: bool) -> Option<Vec<ExtractedString>> {
+    let tool = get_tool()?;
+    let file_size = std::fs::metadata(path).ok()?.len();
+    let is_large_file = file_size > 10 * 1024 * 1024;
+    let path_owned = path.to_string();
+    let (data_result, symbols_result) = if is_large_file { (None, run_tool_command_with_cache(tool, &path_owned, "isj", use_cache)) }
+    else { rayon::join(|| run_tool_command_with_cache(tool, &path_owned, "izzj", use_cache), || run_tool_command_with_cache(tool, &path_owned, "isj", use_cache)) };
 
-    // Need at least 6 bytes for a meaningful wide string (3 chars)
-    if bytes.len() < 6 {
-        return None;
-    }
-
-    // Count how many byte pairs follow the wide string pattern
-    // Pattern: [printable][0x00 or 0x20]
-    let mut wide_pairs = 0;
-    let mut total_pairs = 0;
-    let mut i = 0;
-
-    while i + 1 < bytes.len() {
-        let b = bytes[i];
-        let next = bytes[i + 1];
-        total_pairs += 1;
-
-        // Check if this looks like a wide char: printable followed by null/space
-        let is_printable = b.is_ascii_graphic() || b == b' ' || b == b'\t';
-        let is_separator = next == 0 || next == b' ';
-
-        if is_printable && is_separator {
-            wide_pairs += 1;
-        }
-        i += 2;
-    }
-
-    // Require at least 70% of pairs to follow wide pattern, and at least 4 pairs
-    if total_pairs < 4 || wide_pairs * 100 / total_pairs < 70 {
-        return None;
-    }
-
-    // Now decode the string, being more lenient about occasional noise
-    let mut decoded = Vec::with_capacity(bytes.len() / 2);
-    i = 0;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-
-        // Printable character - add to output
-        if b.is_ascii_graphic() || b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
-            decoded.push(b);
-
-            // Skip separator if present
-            if i + 1 < bytes.len() {
-                let next = bytes[i + 1];
-                if next == 0 || next == b' ' {
-                    i += 2;
-                    continue;
+    let mut strings = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(data_strings) = data_result {
+        if let Ok(json) = serde_json::from_str::<Vec<R2String>>(&data_strings) {
+            for s in json {
+                if s.paddr > file_size { continue; }
+                if s.string.len() >= min_length && seen.insert(s.string.clone()) {
+                    if let Some(decoded) = decode_spaced_ascii(&s.string) {
+                        if decoded.len() >= min_length && seen.insert(decoded.clone()) {
+                            let kind = classify_string(&decoded);
+                            strings.push(ExtractedString { value: decoded, data_offset: s.paddr, section: Some(s.section.clone()), method: StringMethod::SpacedAscii, kind, raw: Some(s.string.clone()), ..Default::default() });
+                        }
+                    } else {
+                        let kind = classify_string(&s.string);
+                        strings.push(ExtractedString { value: s.string, data_offset: s.paddr, section: Some(s.section), method: StringMethod::R2String, kind, ..Default::default() });
+                    }
                 }
             }
-            i += 1;
-        } else if b == 0 {
-            // Skip null bytes
-            i += 1;
-        } else if b < 0x20 {
-            // Control character - might be a length prefix, skip it
-            // But add a space to mark the boundary
-            if !decoded.is_empty() && decoded.last() != Some(&b' ') {
-                decoded.push(b' ');
-            }
-            i += 1;
-        } else {
-            // Other non-printable - skip
-            i += 1;
         }
     }
+    let function_metadata = extract_function_metadata(path, file_size, use_cache);
+    if let Some(symbols) = symbols_result {
+        if let Ok(json) = serde_json::from_str::<Vec<R2Symbol>>(&symbols) {
+            for s in json {
+                if s.paddr > file_size { continue; }
+                if s.name.len() >= min_length && seen.insert(s.name.clone()) {
+                    let kind = Some(classify_r2_symbol(&s.r#type, &s.bind));
+                    let func_meta = if s.r#type == "FUNC" || s.r#type == "METH" {
+                        function_metadata.as_ref().and_then(|map| map.get(&s.name).cloned().or_else(|| {
+                            let clean = s.name.strip_prefix("sym.").or_else(|| s.name.strip_prefix("sym.imp.")).unwrap_or(&s.name);
+                            map.get(clean).cloned()
+                        }))
+                    } else { None };
+                    strings.push(ExtractedString { value: s.name, data_offset: s.paddr, section: s.section, method: StringMethod::R2Symbol, kind, function_meta: func_meta, ..Default::default() });
+                }
+            }
+        }
+    }
+    if strings.is_empty() { None } else { Some(strings) }
+}
 
-    // Trim and validate result
+pub fn extract_function_metadata(path: &str, file_size: u64, use_cache: bool) -> Option<std::collections::HashMap<String, FunctionMetadata>> {
+    if file_size > 2 * 1024 * 1024 { return None; }
+    let tool = get_tool()?;
+    let functions_json = run_tool_command_with_cache(tool, path, "aa; aflj", use_cache)?;
+    #[derive(serde::Deserialize)]
+    struct R2Function { name: String, #[serde(default)] size: u64, #[serde(default)] nbbs: u64, #[serde(default)] edges: u64, #[serde(default)] ninstrs: u64, #[serde(default)] signature: Option<String>, #[serde(default)] noreturn: bool }
+    let functions: Vec<R2Function> = serde_json::from_str(&functions_json).ok()?;
+    let mut metadata_map = std::collections::HashMap::new();
+    for func in functions {
+        let clean = func.name.strip_prefix("sym.").or_else(|| func.name.strip_prefix("sym.imp.")).unwrap_or(&func.name).to_string();
+        metadata_map.insert(clean, FunctionMetadata { size: func.size, basic_blocks: func.nbbs, branches: func.edges, instructions: func.ninstrs, signature: func.signature, noreturn: if func.noreturn { Some(true) } else { None } });
+    }
+    Some(metadata_map)
+}
+
+fn run_tool_command(tool: &str, path: &str, cmd: &str) -> Option<String> { run_tool_command_with_cache(tool, path, cmd, true) }
+fn run_tool_command_with_cache(tool: &str, path: &str, cmd: &str, use_cache: bool) -> Option<String> {
+    if use_cache { if let Ok(cache) = R2Cache::new() { if let Some(cached) = cache.get(path, cmd) { return Some(cached); } } }
+    let output = Command::new(tool).args(["-q", "-c", cmd, path]).output().ok()?;
+    if output.status.success() {
+        let result = String::from_utf8(output.stdout).ok()?;
+        if use_cache { if let Ok(cache) = R2Cache::new() { let _ = cache.set(path, cmd, &result); } }
+        Some(result)
+    } else { None }
+}
+
+pub fn decode_spaced_ascii(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 6 { return None; }
+    let mut wide_pairs = 0;
+    let mut total_pairs = 0;
+    for i in (0..bytes.len()-1).step_by(2) {
+        total_pairs += 1;
+        if (bytes[i].is_ascii_graphic() || bytes[i] == b' ') && (bytes[i+1] == 0 || bytes[i+1] == b' ') { wide_pairs += 1; }
+    }
+    if total_pairs < 4 || wide_pairs * 100 / total_pairs < 70 { return None; }
+    let mut decoded = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_graphic() || bytes[i] == b' ' {
+            decoded.push(bytes[i]);
+            if i + 1 < bytes.len() && (bytes[i+1] == 0 || bytes[i+1] == b' ') { i += 2; continue; }
+            i += 1;
+        } else { i += 1; }
+    }
     let result = String::from_utf8(decoded).ok()?;
-    let trimmed = result.trim();
-
-    // Must have decoded at least 4 characters
-    if trimmed.len() >= 4 {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
+    if result.trim().len() >= 4 { Some(result.trim().to_string()) } else { None }
 }
 
-fn classify_r2_symbol(type_str: &str, bind: &str) -> StringKind {
-    match type_str {
-        "FUNC" | "METH" => StringKind::FuncName,
-        "FILE" => StringKind::FilePath,
-        "OBJECT" if bind == "GLOBAL" => StringKind::Ident,
-        _ => StringKind::Ident,
-    }
-}
+fn classify_r2_symbol(type_str: &str, _bind: &str) -> StringKind { match type_str { "FUNC" | "METH" => StringKind::FuncName, "FILE" => StringKind::FilePath, _ => StringKind::Ident } }
 
-/// Confidence level for XOR key detection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum XorConfidence {
-    High,   // Verified XOR loop pattern in disassembly
-    Medium, // Referenced in executable code
-    Low,    // String characteristics suggest XOR key
-}
-
-/// Information about a detected XOR key
+pub enum XorConfidence { High, Medium, Low }
 #[derive(Debug, Clone)]
-pub struct XorKeyInfo {
-    pub key: String,
-    pub confidence: XorConfidence,
-    pub reference_count: usize,
-    pub offset: u64,
-}
+pub struct XorKeyInfo { pub key: Option<Vec<u8>>, pub length: usize, pub confidence: XorConfidence, pub reference_count: usize, pub offset: u64, pub source: String }
 
-/// Analyze candidates by XOR loop patterns without requiring xrefs.
-/// Used as a fallback when reference-based filtering finds too few candidates.
-fn analyze_candidates_by_patterns(
-    tool: &str,
-    path: &str,
-    candidates: &[&ExtractedString],
-) -> Vec<XorKeyInfo> {
-    // Get all function names (run aa first to ensure analysis is done)
-    let functions_cmd = "aa; afl";
-    let Some(functions) = run_tool_command(tool, path, functions_cmd) else {
-        return vec![];
-    };
-
-    let function_lines: Vec<&str> = functions.lines().collect();
-    if function_lines.is_empty() {
-        return vec![];
-    }
-
-    let mut results = vec![];
-
-    // Check first 300 functions for XOR loops (more thorough search)
-    let max_funcs = 300.min(function_lines.len());
-
-    // Build a single compound command to disassemble all functions at once
-    // This avoids running 'aaa' 300 times which is prohibitively slow
-    let mut cmd_parts = vec!["aa".to_string(), "e scr.color=0".to_string()];
-    let mut func_addrs = vec![];
-
-    for func_line in function_lines.iter().take(max_funcs) {
-        let parts: Vec<&str> = func_line.split_whitespace().collect();
-        if parts.is_empty() {
-            continue;
-        }
-        let func_addr = parts[0];
-        func_addrs.push(func_addr.to_string());
-        cmd_parts.push(format!("pdf @ {func_addr}"));
-        cmd_parts.push(format!("echo ===FUNC_SEPARATOR_{func_addr}==="));
-    }
-
-    let compound_cmd = cmd_parts.join("; ");
-
-    let Some(all_output) = run_tool_command(tool, path, &compound_cmd) else {
-        return vec![];
-    };
-
-    // Parse the combined output by splitting on function separators
-    // Split by generic separator pattern, then match with function addresses
-    let separator_parts: Vec<&str> = all_output.split("===FUNC_SEPARATOR_").collect();
-
-    for (func_idx, _func_addr) in func_addrs.iter().enumerate() {
-        // Get the disassembly chunk for this function
-        // Index is func_idx because first split is before any separator
-        let disasm = if func_idx + 1 < separator_parts.len() {
-            // Take the part before this function's separator
-            separator_parts[func_idx]
-        } else {
-            continue;
-        };
-
-        // Look for XOR loop patterns
-        let has_xor_loop = disasm.contains("eor ") || disasm.contains("xor ");
-        if !has_xor_loop {
-            continue;
-        }
-
-        // Check if any candidate addresses appear in this XOR function
-        for candidate in candidates {
-            let addr_str = format!("0x{:x}", candidate.data_offset);
-
-            // Also try virtual address format (add base address)
-            let vaddr_str = format!("0x{:x}", candidate.data_offset + 0x100000000);
-
-            if disasm.contains(&addr_str) || disasm.contains(&vaddr_str) {
-                results.push(XorKeyInfo {
-                    key: candidate.value.clone(),
-                    confidence: XorConfidence::High,
-                    reference_count: 1,
-                    offset: candidate.data_offset,
-                });
-            }
-        }
-    }
-
-    results
-}
-
-/// Calculate Shannon entropy of a string.
-fn calculate_entropy(s: &str) -> f64 {
-    if s.is_empty() {
-        return 0.0;
-    }
+fn calculate_entropy(data: &[u8]) -> f64 {
+    if data.is_empty() { return 0.0; }
     let mut counts = [0usize; 256];
-    for &b in s.as_bytes() {
-        counts[b as usize] += 1;
-    }
+    for &b in data { counts[b as usize] += 1; }
     let mut entropy = 0.0;
-    let len = s.len() as f64;
-    for &count in &counts {
-        if count > 0 {
-            let p = count as f64 / len;
-            entropy -= p * p.log2();
-        }
-    }
+    let len = data.len() as f64;
+    for &count in &counts { if count > 0 { let p = count as f64 / len; entropy -= p * p.log2(); } }
     entropy
 }
 
-/// Verify if strings are likely used as XOR keys by analyzing their usage.
-///
-/// This function:
-/// 1. Finds cross-references to each string
-/// 2. Disassembles functions that reference the string
-/// 3. Looks for XOR loop patterns (load byte, XOR, store byte)
-/// 4. Returns high-confidence keys for decryption attempts
-pub fn verify_xor_keys(path: &str, candidates: &[ExtractedString]) -> Vec<XorKeyInfo> {
-    let Some(tool) = get_tool() else {
-        return Vec::new();
-    };
+#[derive(serde::Deserialize, Default)]
+struct R2Section { #[serde(default)] name: String, #[serde(default)] paddr: u64, #[serde(default)] vaddr: u64, #[serde(default)] vsize: u64, #[serde(default)] size: u64, #[serde(default)] perm: String }
+fn get_sections(tool: &str, path: &str) -> Vec<R2Section> { if let Some(output) = run_tool_command(tool, path, "iSj") { serde_json::from_str::<Vec<R2Section>>(&output).unwrap_or_default() } else { Vec::new() } }
+fn vaddr_to_paddr(vaddr: u64, sections: &[R2Section]) -> Option<u64> {
+    for s in sections { if s.vsize > 0 && vaddr >= s.vaddr && vaddr < s.vaddr + s.vsize { return Some(s.paddr + (vaddr - s.vaddr)); } }
+    if vaddr >= 0x140000000 { Some(vaddr - 0x140000000) } else { None }
+}
 
-    tracing::debug!("verify_xor_keys: analyzing {} candidates", candidates.len());
-
-    // Filter candidates to reasonable XOR key lengths (8-64 chars)
-    // AND apply a quick heuristic to pick the most likely candidates first.
-    let mut candidates: Vec<_> = candidates
-        .iter()
-        .filter(|s| s.value.len() >= 8 && s.value.len() <= 64)
-        .map(|s| {
-            let entropy = calculate_entropy(&s.value);
-            // Heuristic score: entropy + bonus for non-alphanumeric (suspicious)
-            let mut score = entropy;
-            if s.value.chars().any(|c| !c.is_alphanumeric()) {
-                score += 1.0;
-            }
-            // Bonus for common key lengths (powers of 2)
-            if [8, 16, 32, 64].contains(&s.value.len()) {
-                score += 0.5;
-            }
-            (s, score)
-        })
-        .collect();
-
-    // Sort by score descending
-    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Take top 100 candidates for analysis
-    let candidates_to_check: Vec<_> = candidates.iter().take(100).map(|(s, _)| *s).collect();
-
-    // Batch all axt commands into a single session to avoid process launch overhead
-    // and ensure all xrefs are found in one analysis pass.
-    let mut axt_batch_cmd = vec!["aa".to_string(), "e scr.color=0".to_string()];
-    for c in &candidates_to_check {
-        let vaddr = c.data_offset;
-        axt_batch_cmd.push(format!("echo XREF_MARKER_0x{vaddr:x}"));
-        axt_batch_cmd.push(format!("axt 0x{vaddr:x}"));
-    }
-
-    let axt_compound_cmd = axt_batch_cmd.join("; ");
-    let Some(all_xrefs_output) = run_tool_command(tool, path, &axt_compound_cmd) else {
-        return Vec::new();
-    };
-
-    // Parse batched xref output
-    let mut candidates_with_refs = Vec::new();
-    let xref_chunks: Vec<&str> = all_xrefs_output.split("XREF_MARKER_").collect();
-
-    for chunk in xref_chunks {
-        if chunk.is_empty() {
-            continue;
-        }
-
-        let mut lines = chunk.lines();
-        let header = lines.next().unwrap_or("");
-        if !header.starts_with("0x") {
-            continue;
-        }
-
-        let addr_str = header;
-        let xref_lines: Vec<String> = lines.map(std::string::ToString::to_string).collect();
-
-        if !xref_lines.is_empty() {
-            // Find the candidate this address belongs to
-            if let Ok(vaddr) = u64::from_str_radix(addr_str.trim_start_matches("0x"), 16) {
-                if let Some(candidate) = candidates_to_check.iter().find(|c| c.data_offset == vaddr)
-                {
-                    candidates_with_refs.push((*candidate, xref_lines));
+pub fn extract_binary_xor_candidates(path: &str, data: &[u8]) -> Vec<ExtractedString> {
+    let tool = get_tool().unwrap_or("rizin");
+    let sections = get_sections(tool, path);
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    for section in sections {
+        if section.perm.contains('x') || section.size == 0 { continue; }
+        let start = section.paddr as usize;
+        let end = (start + section.size as usize).min(data.len());
+        if start >= end { continue; }
+        let section_data = &data[start..end];
+        for window in [16, 32, 64, 8] {
+            if section_data.len() < window { continue; }
+            for i in 0..=section_data.len() - window {
+                let offset = (start + i) as u64;
+                if seen.contains(&offset) { continue; }
+                let chunk = &section_data[i..i+window];
+                if calculate_entropy(chunk) > 3.5 {
+                    candidates.push(ExtractedString { value: String::from_utf8_lossy(chunk).to_string(), data_offset: offset, section: Some(section.name.clone()), method: StringMethod::Heuristic, kind: Some(StringKind::XorKey), raw: Some(hex::encode(chunk)), ..Default::default() });
+                    seen.insert(offset);
+                    if candidates.len() > 1000 { return candidates; }
                 }
             }
         }
     }
+    candidates
+}
 
-    // If we found very few candidates with references, fall back to analyzing all candidates
-    if candidates_with_refs.len() < 10 {
-        let candidates_vec: Vec<_> = candidates.iter().map(|(s, _)| *s).collect();
-        return analyze_candidates_by_patterns(tool, path, &candidates_vec);
+pub fn verify_xor_keys(path: &str, _data: &[u8], candidates: &[ExtractedString]) -> Vec<XorKeyInfo> {
+    let Some(tool) = get_tool() else { return Vec::new(); };
+    let sections = get_sections(tool, path);
+    let mut instr_results = Vec::new();
+    let mut seen_keys = HashSet::new();
+    let mut xor_instrs = Vec::new();
+    if let Some(output) = run_tool_command(tool, path, "aaa; /at xor") {
+        for line in output.lines() { if let Ok(addr) = u64::from_str_radix(line.split_whitespace().next().unwrap_or("").trim_start_matches("0x"), 16) { xor_instrs.push(addr); } }
     }
-
-    // Collect unique function names that reference our candidates
-    let mut func_names = HashSet::new();
-    for (_, xref_lines) in &candidates_with_refs {
-        for xref_line in xref_lines.iter().take(10) {
-            let parts: Vec<&str> = xref_line.split_whitespace().collect();
-            if !parts.is_empty() {
-                func_names.insert(parts[0].to_string());
-            }
-        }
-    }
-
-    // Batch all disassembly (pdf) commands for these functions
-    let mut pdf_batch_cmd = vec!["aa".to_string(), "e scr.color=0".to_string()];
-    let func_names_vec: Vec<_> = func_names.into_iter().collect();
-    for func in &func_names_vec {
-        pdf_batch_cmd.push(format!("echo FUNC_MARKER_{func}"));
-        pdf_batch_cmd.push(format!("pdf @ {func}"));
-    }
-
-    let pdf_compound_cmd = pdf_batch_cmd.join("; ");
-    let Some(all_pdf_output) = run_tool_command(tool, path, &pdf_compound_cmd) else {
-        return Vec::new();
-    };
-
-    // Parse batched pdf output
-    let mut func_disasm = HashMap::new();
-    let pdf_chunks: Vec<&str> = all_pdf_output.split("FUNC_MARKER_").collect();
-    for chunk in pdf_chunks {
-        if chunk.is_empty() {
-            continue;
-        }
-        let mut lines = chunk.lines();
-        if let Some(func_name) = lines.next() {
-            let disasm = lines.collect::<Vec<_>>().join("\n");
-            func_disasm.insert(func_name.to_string(), disasm);
-        }
-    }
-
-    // Now analyze the results
-    let mut candidates_with_xor_refs = Vec::new();
-    for (candidate, xref_lines) in &candidates_with_refs {
-        let mut xor_function_refs = 0;
-        let total_refs = xref_lines.len();
-
-        for xref_line in xref_lines.iter().take(10) {
-            let parts: Vec<&str> = xref_line.split_whitespace().collect();
-            if parts.is_empty() {
-                continue;
-            }
-            let func_name = parts[0];
-            if let Some(disasm) = func_disasm.get(func_name) {
-                if disasm.contains("eor ") || disasm.contains("xor ") {
-                    xor_function_refs += 1;
-                }
-            }
-        }
-
-        if xor_function_refs > 0 {
-            candidates_with_xor_refs.push((
-                *candidate,
-                xref_lines.clone(),
-                total_refs,
-                xor_function_refs,
-            ));
-        }
-    }
-
-    // Sort and filter results
-    candidates_with_xor_refs.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| b.2.cmp(&a.2)));
-
-    let results: Vec<_> = candidates_with_xor_refs
-        .iter()
-        .take(20)
-        .filter_map(
-            |(candidate, xref_lines, reference_count, xor_function_refs)| {
-                let mut confidence = XorConfidence::Low;
-
-                for xref_line in xref_lines.iter().take(5) {
-                    let parts: Vec<&str> = xref_line.split_whitespace().collect();
-                    if parts.is_empty() {
-                        continue;
-                    }
-                    let func_name = parts[0];
-                    if let Some(disasm) = func_disasm.get(func_name) {
-                        let has_xor = disasm.contains("eor ") || disasm.contains("xor ");
-                        let has_load_byte = disasm.contains("ldrb ")
-                            || disasm.contains("movzbl ")
-                            || disasm.contains("movzx ");
-                        let has_store_byte = disasm.contains("strb ") || disasm.contains("movb ");
-
-                        if has_xor && has_load_byte && has_store_byte {
-                            confidence = XorConfidence::High;
-                            break;
-                        }
-
-                        if has_xor && confidence == XorConfidence::Low {
-                            confidence = XorConfidence::Medium;
+    if let Some(output) = run_tool_command(tool, path, "aaa; /at lea") {
+        for line in output.lines() {
+            if let Ok(lea_addr) = u64::from_str_radix(line.split_whitespace().next().unwrap_or("").trim_start_matches("0x"), 16) {
+                if xor_instrs.iter().any(|&x| if x >= lea_addr { x - lea_addr < 256 } else { lea_addr - x < 256 }) {
+                    if let Some(ao_output) = run_tool_command(tool, path, &format!("aoj 1 @ 0x{lea_addr:x}")) {
+                        if let Ok(json) = serde_json::from_str::<Vec<serde_json::Value>>(&ao_output) {
+                            if let Some(vaddr) = json.first().and_then(|i| i.get("ptr")).and_then(|v| v.as_u64()) {
+                                if let Some(paddr) = vaddr_to_paddr(vaddr, &sections) {
+                                    if !seen_keys.contains(&paddr) {
+                                        for len in [16, 32, 8] { instr_results.push(XorKeyInfo { offset: paddr, key: None, length: len, confidence: XorConfidence::High, reference_count: 1, source: format!("xor_lea_prox_{len}@0x{lea_addr:x}") }); }
+                                        seen_keys.insert(paddr);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-
-                if confidence != XorConfidence::Low || *xor_function_refs >= 2 {
-                    if *xor_function_refs >= 2 && confidence == XorConfidence::Low {
-                        confidence = XorConfidence::Medium;
-                    }
-
-                    Some(XorKeyInfo {
-                        key: candidate.value.clone(),
-                        confidence,
-                        reference_count: *reference_count,
-                        offset: candidate.data_offset,
-                    })
-                } else {
-                    None
-                }
-            },
-        )
-        .collect();
-
-    tracing::debug!("verify_xor_keys: found {} keys", results.len());
+            }
+        }
+    }
+    let mut results = Vec::new();
+    for c in candidates.iter().take(100) { results.push(XorKeyInfo { key: Some(c.value.as_bytes().to_vec()), length: c.value.len(), confidence: XorConfidence::Low, reference_count: 1, offset: c.data_offset, source: "string_candidate".to_string() }); }
+    for ir in instr_results { if !results.iter().any(|r| r.offset == ir.offset && r.length == ir.length) { results.push(ir); } }
     results
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_available() {
-        // Just test that the function doesn't panic
-        let _ = is_available();
-    }
-
-    #[test]
-    fn test_classify_r2_symbol() {
-        assert_eq!(classify_r2_symbol("FUNC", "GLOBAL"), StringKind::FuncName);
-        assert_eq!(classify_r2_symbol("FILE", "LOCAL"), StringKind::FilePath);
-        assert_eq!(classify_r2_symbol("OBJECT", "GLOBAL"), StringKind::Ident);
-    }
-
-    #[test]
-    fn test_classify_r2_symbol_meth() {
-        assert_eq!(classify_r2_symbol("METH", "GLOBAL"), StringKind::FuncName);
-        assert_eq!(classify_r2_symbol("METH", "LOCAL"), StringKind::FuncName);
-    }
-
-    #[test]
-    fn test_classify_r2_symbol_unknown_type() {
-        assert_eq!(classify_r2_symbol("UNKNOWN", "GLOBAL"), StringKind::Ident);
-        assert_eq!(classify_r2_symbol("", ""), StringKind::Ident);
-        assert_eq!(classify_r2_symbol("NOTYPE", "LOCAL"), StringKind::Ident);
-    }
-
-    #[test]
-    fn test_classify_r2_symbol_object_local() {
-        // OBJECT with LOCAL binding should not be Ident
-        assert_eq!(classify_r2_symbol("OBJECT", "LOCAL"), StringKind::Ident);
-    }
-
-    #[test]
-    fn test_extract_strings_nonexistent_file() {
-        let result = extract_strings("/nonexistent/file/path", 4, false);
-        // Should return None for non-existent files
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_run_tool_command_nonexistent() {
-        if let Some(tool) = get_tool() {
-            let result = run_tool_command(tool, "/nonexistent/file", "iz");
-            assert!(result.is_none());
-        }
-    }
-
-    #[test]
-    fn test_r2_string_deserialize() {
-        let json = r#"{"paddr": 4096, "string": "hello", "section": ".rodata"}"#;
-        let r2_str: R2String = serde_json::from_str(json).unwrap();
-        assert_eq!(r2_str.paddr, 4096);
-        assert_eq!(r2_str.string, "hello");
-        assert_eq!(r2_str.section, ".rodata");
-    }
-
-    #[test]
-    fn test_r2_symbol_deserialize() {
-        let json = r#"{"paddr": 4096, "name": "_main", "section": ".text", "type": "FUNC", "bind": "GLOBAL"}"#;
-        let r2_sym: R2Symbol = serde_json::from_str(json).unwrap();
-        assert_eq!(r2_sym.paddr, 4096);
-        assert_eq!(r2_sym.name, "_main");
-        assert_eq!(r2_sym.section, Some(".text".to_string()));
-        assert_eq!(r2_sym.r#type, "FUNC");
-        assert_eq!(r2_sym.bind, "GLOBAL");
-    }
-
-    #[test]
-    fn test_r2_symbol_deserialize_defaults() {
-        // Missing optional fields should use defaults
-        let json = r#"{"paddr": 4096, "name": "_main"}"#;
-        let r2_sym: R2Symbol = serde_json::from_str(json).unwrap();
-        assert_eq!(r2_sym.paddr, 4096);
-        assert_eq!(r2_sym.name, "_main");
-        assert!(r2_sym.section.is_none());
-        assert_eq!(r2_sym.r#type, "");
-        assert_eq!(r2_sym.bind, "");
-    }
-
-    #[test]
-    fn test_extract_strings_returns_file_offsets() {
-        if !is_available() {
-            return;
-        }
-        // Use /bin/ls which exists on all Unix systems
-        let result = extract_strings("/bin/ls", 4, false);
-        if let Some(strings) = result {
-            // /bin/ls is typically < 200KB, virtual addresses would be > 0x100000000
-            let max_reasonable_offset = 0x100000; // 1MB - generous upper bound
-            for s in &strings {
-                assert!(
-                    s.data_offset < max_reasonable_offset,
-                    "Offset 0x{:x} for '{}' looks like a virtual address, not a file offset",
-                    s.data_offset,
-                    s.value
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_paddr_present_in_tool_output() {
-        // Verify both rizin and r2 provide paddr field
-        let Some(tool) = get_tool() else {
-            return;
-        };
-
-        // Check symbols JSON has paddr
-        if let Some(output) = run_tool_command(tool, "/bin/ls", "isj") {
-            let json: serde_json::Value = serde_json::from_str(&output).unwrap();
-            if let Some(arr) = json.as_array() {
-                // Verify that at least some symbols have paddr
-                let has_paddr = arr.iter().any(|s| s.get("paddr").is_some());
-                assert!(
-                    has_paddr,
-                    "{} isj output has no symbols with paddr field",
-                    tool
-                );
-            }
-        }
-
-        // Check strings JSON has paddr
-        if let Some(output) = run_tool_command(tool, "/bin/ls", "izj") {
-            let json: serde_json::Value = serde_json::from_str(&output).unwrap();
-            if let Some(arr) = json.as_array() {
-                let has_paddr = arr.iter().any(|s| s.get("paddr").is_some());
-                assert!(
-                    has_paddr,
-                    "{} izj output has no strings with paddr field",
-                    tool
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_decode_spaced_ascii_basic() {
-        // "Source" as UTF-16LE rendered as ASCII (trailing space is the null separator)
-        let wide = "S o u r c e ";
-        let decoded = decode_spaced_ascii(wide);
-        assert_eq!(decoded, Some("Source".to_string()));
-    }
-
-    #[test]
-    fn test_decode_spaced_ascii_longer() {
-        // "Hello World" as wide string
-        let wide = "H e l l o   W o r l d ";
-        let decoded = decode_spaced_ascii(wide);
-        assert_eq!(decoded, Some("Hello World".to_string()));
-    }
-
-    #[test]
-    fn test_decode_spaced_ascii_not_wide() {
-        // Normal ASCII string should return None
-        let normal = "Hello World";
-        let decoded = decode_spaced_ascii(normal);
-        assert!(decoded.is_none());
-    }
-
-    #[test]
-    fn test_decode_spaced_ascii_too_short() {
-        // Too short to be meaningful
-        let short = "H i ";
-        let decoded = decode_spaced_ascii(short);
-        // Decoded would be "Hi" which is 2 chars - below threshold
-        assert!(decoded.is_none());
-    }
-
-    #[test]
-    fn test_decode_spaced_ascii_with_punctuation() {
-        // "Test.dll" as wide
-        let wide = "T e s t . d l l ";
-        let decoded = decode_spaced_ascii(wide);
-        assert_eq!(decoded, Some("Test.dll".to_string()));
-    }
-
-    #[test]
-    fn test_decode_spaced_ascii_with_embedded_space() {
-        // Content with spaces: "Hello World" becomes "H e l l o   W o r l d " (double space for space char)
-        let wide = "H e l l o   W o r l d ";
-        let decoded = decode_spaced_ascii(wide);
-        assert_eq!(decoded, Some("Hello World".to_string()));
-    }
-}
-
-/// Extract IP addresses and ports from `connect()` syscall arguments.
-///
-/// Analyzes code to find `connect()` calls and extracts `sockaddr_in` structures
-/// built in-line (common in embedded malware). Returns IP:port strings.
-///
-/// For large files (>10MB), skips R2 analysis (very slow) and only scans binary directly.
-#[must_use]
 pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
-    let Some(tool) = get_tool() else {
-        return Vec::new();
-    };
-
-    // Check file size - skip R2 analysis for large files (aaa is very slow)
-    if data.len() > 10 * 1024 * 1024 {
-        // Scan binary directly without R2 analysis
-        return scan_binary_for_connect_addrs(data);
-    }
-
-    // Analyze binary and disassemble entire .text section
-    let cmd = "aaa; e scr.color=0; s entry0; pdf";
-    let Some(output) = run_tool_command(tool, path, cmd) else {
-        return Vec::new();
-    };
-
+    let Some(tool) = get_tool() else { return Vec::new(); };
+    if data.len() > 10 * 1024 * 1024 { return scan_binary_for_connect_addrs(data); }
+    let Some(output) = run_tool_command(tool, path, "aaa; e scr.color=0; s entry0; pdf") else { return Vec::new(); };
     let mut results = Vec::new();
     let mut seen = HashSet::new();
-
-    // Look for connect syscalls (283 on ARM32, 42 on x86, etc.)
-    // Also look for imports of "connect" function
-    let has_connect = output.contains("283")             // ARM32 connect syscall number
-        || output.contains("syscall.connect")  // Named syscall
-        || output.contains("sym.imp.connect"); // Imported connect
-
-    if !has_connect {
-        return Vec::new();
-    }
-
-    // First try parsing from disassembly
+    if !output.contains("283") && !output.contains("syscall.connect") && !output.contains("sym.imp.connect") { return Vec::new(); }
     if let Some(sockaddr) = parse_sockaddr_from_disasm(&output, data) {
-        let ip_str = format!(
-            "{}.{}.{}.{}",
-            sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]
-        );
-
-        let value = if sockaddr.port > 0 {
-            format!("{}:{}", ip_str, sockaddr.port)
-        } else {
-            ip_str
-        };
-
-        if seen.insert(value.clone()) {
-            results.push(ExtractedString {
-                value,
-                data_offset: sockaddr.offset,
-                section: Some(".text".to_string()),
-                method: StringMethod::InstructionPattern,
-                kind: if sockaddr.port > 0 {
-                    Some(StringKind::IPPort)
-                } else {
-                    Some(StringKind::IP)
-                },
-                source: Some("connect()".to_string()),
-                fragments: None,
-                ..Default::default()
-            });
-        }
+        let ip = format!("{}.{}.{}.{}", sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]);
+        let val = if sockaddr.port > 0 { format!("{}:{}", ip, sockaddr.port) } else { ip };
+        if seen.insert(val.clone()) { results.push(ExtractedString { value: val, data_offset: sockaddr.offset, section: Some(".text".to_string()), method: StringMethod::InstructionPattern, kind: if sockaddr.port > 0 { Some(StringKind::IPPort) } else { Some(StringKind::IP) }, source: Some("connect()".to_string()), ..Default::default() }); }
     } else {
-        // Fallback: scan for IP patterns directly in instruction bytes
         for sockaddr in find_sockaddr_in_binary(data) {
-            let ip_str = format!(
-                "{}.{}.{}.{}",
-                sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]
-            );
-
-            let value = if sockaddr.port > 0 {
-                format!("{}:{}", ip_str, sockaddr.port)
-            } else {
-                ip_str
-            };
-
-            if seen.insert(value.clone()) {
-                results.push(ExtractedString {
-                    value,
-                    data_offset: sockaddr.offset,
-                    section: Some(".text".to_string()),
-                    method: StringMethod::InstructionPattern,
-                    kind: if sockaddr.port > 0 {
-                        Some(StringKind::IPPort)
-                    } else {
-                        Some(StringKind::IP)
-                    },
-                    source: Some("connect()".to_string()),
-                    fragments: None,
-                    ..Default::default()
-                });
-            }
+            let ip = format!("{}.{}.{}.{}", sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]);
+            let val = if sockaddr.port > 0 { format!("{}:{}", ip, sockaddr.port) } else { ip };
+            if seen.insert(val.clone()) { results.push(ExtractedString { value: val, data_offset: sockaddr.offset, section: Some(".text".to_string()), method: StringMethod::InstructionPattern, kind: if sockaddr.port > 0 { Some(StringKind::IPPort) } else { Some(StringKind::IP) }, source: Some("connect()".to_string()), ..Default::default() }); }
         }
     }
-
     results
 }
 
-/// Fast version that scans binary directly without R2 analysis (for large files).
 fn scan_binary_for_connect_addrs(data: &[u8]) -> Vec<ExtractedString> {
     let mut results = Vec::new();
     let mut seen = HashSet::new();
-
     for sockaddr in find_sockaddr_in_binary(data) {
-        let ip_str = format!(
-            "{}.{}.{}.{}",
-            sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]
-        );
-
-        let value = if sockaddr.port > 0 {
-            format!("{}:{}", ip_str, sockaddr.port)
-        } else {
-            ip_str
-        };
-
-        if seen.insert(value.clone()) {
-            results.push(ExtractedString {
-                value,
-                data_offset: sockaddr.offset,
-                section: Some(".text".to_string()),
-                method: StringMethod::InstructionPattern,
-                kind: if sockaddr.port > 0 {
-                    Some(StringKind::IPPort)
-                } else {
-                    Some(StringKind::IP)
-                },
-                source: Some("connect()".to_string()),
-                fragments: None,
-                ..Default::default()
-            });
-        }
+        let ip = format!("{}.{}.{}.{}", sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]);
+        let val = if sockaddr.port > 0 { format!("{}:{}", ip, sockaddr.port) } else { ip };
+        if seen.insert(val.clone()) { results.push(ExtractedString { value: val, data_offset: sockaddr.offset, section: Some(".text".to_string()), method: StringMethod::InstructionPattern, kind: if sockaddr.port > 0 { Some(StringKind::IPPort) } else { Some(StringKind::IP) }, source: Some("connect()".to_string()), ..Default::default() }); }
     }
-
     results
 }
 
 #[derive(Debug)]
-struct SockaddrIn {
-    ip: [u8; 4],
-    port: u16,
-    offset: u64,
-}
-
-/// Parse `sockaddr_in` structure from disassembly output.
-///
-/// Looks for patterns where IP bytes are loaded into registers/stack.
-/// Common patterns:
-/// - ARM32: mov r0, #byte; strb r0, [sp, #offset]
-/// - ARM64: mov w0, #byte; strb w0, [sp, #offset]
-/// - x86: movb $byte, offset(%rsp)
+struct SockaddrIn { ip: [u8; 4], port: u16, offset: u64 }
 fn parse_sockaddr_from_disasm(disasm: &str, _data: &[u8]) -> Option<SockaddrIn> {
-    let mut ip_bytes = [0u8; 4];
-    let mut port: u16 = 0;
-    let mut offset = 0u64;
-    let mut found_count = 0;
-
-    // ARM32 pattern: mov r0, #0x2d; strb r0, [sp, #4]
-    // Look for consecutive byte stores to stack offsets 4-7 (sockaddr_in.sin_addr)
-    let mut pending_byte: Option<u8> = None;
-
+    let (mut ip, mut port, mut offset, mut found, mut pending) = ([0u8; 4], 0u16, 0u64, 0, None);
     for line in disasm.lines() {
-        // Extract offset from line start (address)
-        if let Some(addr_str) = line.split_whitespace().next() {
-            if let Ok(addr) = u64::from_str_radix(addr_str.trim_start_matches("0x"), 16) {
-                if offset == 0 {
-                    offset = addr;
-                }
-            }
-        }
-
-        // ARM32: mov r*, #imm (captures the immediate value)
-        if line.contains(" mov ") && line.contains(", #") || line.contains(", 0x") {
-            if let Some(imm_pos) = line.rfind(", ") {
-                if let Some(val_str) = line[imm_pos + 2..].split_whitespace().next() {
-                    if let Ok(byte_val) = parse_immediate(val_str) {
-                        pending_byte = Some(byte_val);
-                        continue;
-                    }
-                }
-            }
-        }
-
-        // ARM32: strb r*, [stack_offset] (stores the byte)
+        if let Some(addr_str) = line.split_whitespace().next() { if let Ok(addr) = u64::from_str_radix(addr_str.trim_start_matches("0x"), 16) { if offset == 0 { offset = addr; } } }
+        if (line.contains(" mov ") && line.contains(", #")) || line.contains(", 0x") { if let Some(imm) = line.rfind(", ") { if let Some(val) = line[imm+2..].split_whitespace().next() { if let Ok(b) = parse_imm(val) { pending = Some(b); } } } }
         if line.contains("strb") || line.contains("str ") {
-            if let (Some(byte_val), Some(sp_offset)) = (pending_byte, extract_stack_offset(line)) {
-                // sockaddr_in: sin_family (2 bytes), sin_port (2 bytes), sin_addr (4 bytes)
-                // sin_addr starts at offset 4
-                // ONLY accept offsets 4, 5, 6, 7 (exact IP bytes)
-                if sp_offset == 4 {
-                    ip_bytes[0] = byte_val;
-                    found_count += 1;
-                } else if sp_offset == 5 {
-                    ip_bytes[1] = byte_val;
-                    found_count += 1;
-                } else if sp_offset == 6 {
-                    ip_bytes[2] = byte_val;
-                    found_count += 1;
-                } else if sp_offset == 7 {
-                    ip_bytes[3] = byte_val;
-                    found_count += 1;
-                }
-                // Extract port (offsets 2-3)
-                else if (2..4).contains(&sp_offset) {
-                    if sp_offset == 2 {
-                        port = u16::from(byte_val) << 8;
-                    } else {
-                        port |= u16::from(byte_val);
-                    }
-                }
-                pending_byte = None;
+            if let (Some(b), Some(sp)) = (pending, extract_stack_off(line)) {
+                if sp >= 4 && sp <= 7 { ip[sp as usize - 4] = b; found += 1; }
+                else if sp == 2 { port = u16::from(b) << 8; } else if sp == 3 { port |= u16::from(b); }
+                pending = None;
             }
         }
     }
-
-    if found_count == 4 && !is_zero_or_invalid(&ip_bytes) {
-        Some(SockaddrIn {
-            ip: ip_bytes,
-            port,
-            offset,
-        })
-    } else {
-        None
-    }
+    if found == 4 && !is_z(&ip) { Some(SockaddrIn { ip, port, offset }) } else { None }
 }
-
-fn parse_immediate(s: &str) -> Result<u8, std::num::ParseIntError> {
-    let cleaned = s
-        .trim_start_matches("0x")
-        .trim_end_matches(|c: char| !c.is_ascii_hexdigit());
-    if s.starts_with("0x") {
-        u8::from_str_radix(cleaned, 16)
-    } else {
-        cleaned.parse::<u8>()
-    }
+fn parse_imm(s: &str) -> Result<u8, std::num::ParseIntError> {
+    let c = s.trim_start_matches("0x").trim_end_matches(|c: char| !c.is_ascii_hexdigit());
+    if s.starts_with("0x") { u8::from_str_radix(c, 16) } else { c.parse::<u8>() }
 }
-
-fn extract_stack_offset(line: &str) -> Option<u8> {
-    // Extract the raw instruction bytes (first 8 hex chars after address)
-    // strb r0, [sp, #4] encodes as 0400cde5 (little-endian ARM)
-    // The offset is in the first 2 hex digits
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() >= 2 {
-        let hex_str = parts[1];
-        // Parse instruction bytes for ARM strb: offset in first 2 chars
-        if hex_str.len() >= 8 {
-            // First 2 hex digits (offset in little-endian)
-            if let Ok(offset) = u8::from_str_radix(&hex_str[0..2], 16) {
-                return Some(offset);
-            }
-        }
-    }
-
-    // Fallback: Look for [sp, #offset] or [sp, offset] format
-    if let Some(sp_pos) = line.find("sp,") {
-        let after_sp = &line[sp_pos + 3..];
-        if let Some(num_str) = after_sp
-            .trim_start_matches(|c: char| c.is_whitespace() || c == '#')
-            .split(&[']', ','][..])
-            .next()
-        {
-            return parse_immediate(num_str).ok();
-        }
-    }
+fn extract_stack_off(line: &str) -> Option<u8> {
+    let p: Vec<&str> = line.split_whitespace().collect();
+    if p.len() >= 2 && p[1].len() >= 8 { if let Ok(o) = u8::from_str_radix(&p[1][0..2], 16) { return Some(o); } }
+    if let Some(sp) = line.find("sp,") { if let Some(n) = line[sp+3..].trim_start_matches(|c: char| c.is_whitespace() || c == '#').split(&[']', ','][..]).next() { return parse_imm(n).ok(); } }
     None
 }
-
-fn is_zero_or_invalid(ip: &[u8; 4]) -> bool {
-    ip.iter().all(|&b| b == 0) || ip[0] == 0 || ip[0] >= 224
-}
-
-/// Scan binary data for `sockaddr_in` patterns by looking for mov+strb instruction sequences.
-/// ARM32: mov r0, #byte; strb r0, [sp, #offset]
+fn is_z(ip: &[u8; 4]) -> bool { ip.iter().all(|&b| b == 0) || ip[0] == 0 || ip[0] >= 224 }
 fn find_sockaddr_in_binary(data: &[u8]) -> Vec<SockaddrIn> {
-    let mut results = Vec::new();
-
-    // Scan for ARM32 pattern: E3 A0 00 XX (mov r0, #immediate) followed by E5 CD 00 YY (strb r0, [sp, #offset])
+    let mut res = Vec::new();
     let mut i = 0;
     while i + 32 <= data.len() {
-        // Look for sequences of 4 mov+strb pairs with offsets 4, 5, 6, 7
-        let mut ip_bytes = [0u8; 4];
-        let mut found = 0;
-
+        let (mut ip, mut f) = ([0u8; 4], 0);
         for j in 0..32 {
-            if i + j + 8 > data.len() {
-                break;
-            }
-
-            // Check for mov r0, #imm: XX 00 A0 E3
+            if i + j + 8 > data.len() { break; }
             if data[i + j + 2] == 0xA0 && data[i + j + 3] == 0xE3 {
-                let byte_val = data[i + j];
-
-                // Check for strb r0, [sp, #offset]: YY 00 CD E5
-                if i + j + 7 < data.len() && data[i + j + 6] == 0xCD && data[i + j + 7] == 0xE5 {
-                    let offset = data[i + j + 4];
-
-                    // Collect IP bytes at offsets 4-7
-                    if offset == 4 {
-                        ip_bytes[0] = byte_val;
-                        found |= 1;
-                    } else if offset == 5 {
-                        ip_bytes[1] = byte_val;
-                        found |= 2;
-                    } else if offset == 6 {
-                        ip_bytes[2] = byte_val;
-                        found |= 4;
-                    } else if offset == 7 {
-                        ip_bytes[3] = byte_val;
-                        found |= 8;
-                    }
+                let b = data[i+j];
+                if i + j + 7 < data.len() && data[i+j+6] == 0xCD && data[i+j+7] == 0xE5 {
+                    let o = data[i+j+4];
+                    if o >= 4 && o <= 7 { ip[o as usize - 4] = b; f |= 1 << (o-4); }
                 }
             }
         }
-
-        // Check if we found all 4 bytes
-        if found == 15 && !is_zero_or_invalid(&ip_bytes) {
-            results.push(SockaddrIn {
-                ip: ip_bytes,
-                port: 0,
-                offset: i as u64,
-            });
-            i += 32; // Skip past this pattern
-        } else {
-            i += 4;
-        }
+        if f == 15 && !is_z(&ip) { res.push(SockaddrIn { ip, port: 0, offset: i as u64 }); i += 32; } else { i += 4; }
     }
-
-    results
+    res
 }

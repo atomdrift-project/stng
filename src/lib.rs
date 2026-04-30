@@ -230,6 +230,7 @@ fn apply_xor_scan(
     is_pe: bool,
     excluded_ranges: &[(usize, usize)],
 ) {
+    tracing::debug!("apply_xor_scan: called (xor_scan: {}, xor_scan_multi: {})", opts.xor_scan, opts.xor_scan_multi);
     if data.is_empty() || opts.is_cancelled() {
         return;
     }
@@ -250,8 +251,8 @@ fn apply_xor_scan(
     // survives platform signing. Skipping XOR on these is the single biggest
     // throughput win for typical system-binary corpora. Third-party
     // Developer ID signatures are NOT matched — those CAN be signed malware.
-    // Users who passed an explicit xor_key bypass this — they know better.
-    if opts.xor_key.is_none() && binary::is_platform_signed(data) {
+    // Users who passed an explicit xor_key or requested xorscan bypass this.
+    if opts.xor_key.is_none() && !opts.xor_scan_multi && binary::is_platform_signed(data) {
         tracing::debug!("Skipping XOR scan: platform-signed binary");
         return;
     }
@@ -373,22 +374,28 @@ fn apply_xor_scan(
                 }
                 true
             }));
-            if opts.xor_scan_multi {
-                if let Some(ref path) = opts.path {
-                    let xor_keys = r2::verify_xor_keys(path, strings);
-                    if !xor_keys.is_empty() {
-                        let decoded =
-                            xor::extract_multikey_xor_strings(data, &xor_keys, opts.xor_min_length);
-                        strings.extend(decoded);
-                    }
-                }
-            }
         }
 
         // Always run incremental XOR detection if enabled - it might complement regular XOR
         let inc_results =
             xor::extract_incremental_xor_strings(data, opts.xor_min_length, excluded_ranges);
         strings.extend(inc_results);
+    }
+
+    if opts.xor_scan_multi {
+        if let Some(ref path) = opts.path {
+            // Combine existing string candidates with high-entropy binary blobs
+            let mut candidates = strings.clone();
+            let binary_candidates = r2::extract_binary_xor_candidates(path, data);
+            candidates.extend(binary_candidates);
+
+            let xor_keys = r2::verify_xor_keys(path, data, &candidates);
+            if !xor_keys.is_empty() {
+                let decoded =
+                    xor::extract_multikey_xor_strings(data, &xor_keys, opts.xor_min_length);
+                strings.extend(decoded);
+            }
+        }
     }
 
     tracing::debug!("TIME: XOR key scanning took {:?}", t_xor.elapsed());
@@ -1066,6 +1073,8 @@ fn append_script_deobfuscation(
 /// let strings = extract_strings_with_options(&data, &opts);
 /// ```
 #[must_use]
+pub fn build_id() -> &'static str { "BUILD_XOR_V1" }
+
 pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
     extract_strings_inner(data, opts)
 }
@@ -1132,6 +1141,16 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
             ));
         }
 
+        // Extract binary network data (IPs and ports in network byte order)
+        // For unknown formats, use 0 (not M68000) to process normally
+        strings.extend(scan_binary_ips(data, opts.min_length, 0, None, None));
+        strings.extend(extract_stack_strings(data, opts.min_length));
+
+        // Trigger XOR scan even for unknown formats if requested
+        if opts.xor_scan || opts.xor_scan_multi || opts.xor_key.is_some() {
+            apply_xor_scan(&mut strings, data, opts, is_pe, &[]);
+        }
+
         // Decode encoded strings (base64, hex, URL-encoding, unicode escapes).
         // Check cancellation between passes so a large script/unknown blob
         // can be interrupted without running every decoder to completion.
@@ -1162,8 +1181,9 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
 
         // Unknown format — no section info; full-file scan is acceptable
         // because we couldn't identify code regions to skip.
-        apply_xor_scan(&mut strings, data, opts, is_pe, &[]);
-
+        if opts.xor_scan || opts.xor_scan_multi || opts.xor_key.is_some() {
+            apply_xor_scan(&mut strings, data, opts, is_pe, &[]);
+        }
         if opts.filter_garbage {
             strings.retain(passes_garbage_filter);
         }
@@ -1687,17 +1707,18 @@ fn extract_from_object(
         }
     }
 
-    // XOR string detection - for all binary formats except Go (rarely XOR'd).
-    if !is_go_binary {
-        let is_pe = matches!(object, Object::PE(_));
-        // Pull per-object code-section ranges so the scanner can skip `.text`.
-        let section_info = match object {
-            Object::Mach(goblin::mach::Mach::Binary(m)) => binary::collect_macho_section_info(m),
-            Object::Elf(e) => binary::collect_elf_section_info(e),
-            Object::PE(p) => binary::collect_pe_section_info(p),
-            _ => std::collections::HashMap::new(),
-        };
-        let excluded_ranges = binary::code_ranges_from_sections(&section_info);
+    // XOR string detection
+    let is_pe = matches!(object, Object::PE(_));
+    let mut section_info = std::collections::HashMap::new();
+    match object {
+        Object::Mach(goblin::mach::Mach::Binary(m)) => section_info = binary::collect_macho_section_info(m),
+        Object::Elf(e) => section_info = binary::collect_elf_section_info(e),
+        Object::PE(p) => section_info = binary::collect_pe_section_info(p),
+        _ => {}
+    };
+    let excluded_ranges = binary::code_ranges_from_sections(&section_info);
+
+    if !is_go_binary || opts.xor_scan_multi || opts.xor_key.is_some() {
         apply_xor_scan(&mut strings, data, opts, is_pe, &excluded_ranges);
     }
 

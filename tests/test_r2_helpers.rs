@@ -122,7 +122,7 @@ fn test_extract_strings_large_file_fast_mode() {
         let file_size = 11 * 1024 * 1024;
         for s in &strings {
             assert!(
-                s.data_offset < file_size,
+                s.data_offset < file_size as u64,
                 "Offset should be within file bounds"
             );
         }
@@ -213,7 +213,7 @@ fn test_verify_xor_keys_empty_candidates() {
     let temp_path = create_temp_file("r2_xor_empty", b"test content");
     let file_path = temp_path.to_str().unwrap();
 
-    let result = stng::r2::verify_xor_keys(file_path, &[]);
+    let result = stng::r2::verify_xor_keys(file_path, &[], &[]);
 
     // Should return empty vec for empty input
     assert!(result.is_empty(), "Should return empty for no candidates");
@@ -242,7 +242,7 @@ fn test_verify_xor_keys_invalid_lengths() {
         },
     ];
 
-    let result = stng::r2::verify_xor_keys(file_path, &candidates);
+    let result = stng::r2::verify_xor_keys(file_path, &[], &candidates);
 
     // Should return empty since all candidates are filtered out by length
     assert!(
@@ -331,13 +331,15 @@ fn test_xor_key_info_structure() {
     use stng::r2::{XorConfidence, XorKeyInfo};
 
     let key_info = XorKeyInfo {
-        key: "test_key".to_string(),
+        key: Some(b"test_key".to_vec()),
+        length: 8,
         confidence: XorConfidence::High,
         reference_count: 5,
         offset: 0x1000,
+        source: "test".to_string(),
     };
 
-    assert_eq!(key_info.key, "test_key");
+    assert_eq!(key_info.key, Some(b"test_key".to_vec()));
     assert_eq!(key_info.confidence, XorConfidence::High);
     assert_eq!(key_info.reference_count, 5);
     assert_eq!(key_info.offset, 0x1000);

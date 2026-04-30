@@ -278,6 +278,7 @@ fn decode_url_encoding(s: &str) -> Vec<u8> {
 }
 
 fn main() -> Result<()> {
+    eprintln!("DEBUG: stng main started, lib: {}, path: {:?}", stng::build_id(), std::env::current_exe());
     let t_total = std::time::Instant::now();
     let cli = Cli::parse();
 
@@ -392,6 +393,7 @@ fn main() -> Result<()> {
     } else {
         stng::r2::is_available()
     };
+    tracing::debug!("use_r2: {}", use_r2);
 
     // Extract strings with options
     let mut opts = stng::ExtractOptions::new(cli.min_length)
@@ -401,6 +403,7 @@ fn main() -> Result<()> {
     if use_r2 {
         opts = opts.with_r2(&cli.target);
     }
+    tracing::debug!("opts.path: {:?}", opts.path);
 
     // Handle custom XOR key if provided
     let custom_xor_key: Option<Vec<u8>> = if let Some(ref xor_key_str) = cli.xor {
@@ -412,6 +415,8 @@ fn main() -> Result<()> {
         opts = opts.with_xor(Some(cli.xor_min_length));
         if cli.xorscan {
             opts = opts.with_xorscan(true);
+            opts.xor_scan = true; // Ensure base XOR scan is enabled for this to run
+            tracing::debug!("Enabled xorscan (xor_scan_multi)");
         }
         None
     } else {
