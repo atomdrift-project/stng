@@ -46,7 +46,7 @@ urlencoding = "2.1"
 flate2 = "1.1"
 
 # Base32/Base85 encoding
-data-encoding = "2.10"
+data-encoding = "2.11"
 
 # Error handling
 anyhow = "1.0"
