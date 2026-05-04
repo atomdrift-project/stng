@@ -730,6 +730,123 @@ fn is_short_binary_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     false
 }
 
+/// Detect x86-64 register save/restore byte sequences that decoded as
+/// printable ASCII when the string scanner read them out of `.text`.
+///
+/// Function prologues that save callee-saved registers r12-r15 emit
+/// `41 54 41 55 41 56 41 57` (`push r12 … push r15`), which the scanner
+/// reads as the literal text `ATAUAVAW`.  Epilogue / REX-prefix
+/// combinations yield variants like `AVAUATSH`, `AWAVAUATL`, `AXAY`.
+/// These are scattered throughout `.text` of any non-trivial binary
+/// and dominate the strings list with no analytic value.
+///
+/// Two-tier detection:
+///
+/// * **Multi-pair (high confidence):** ≥2 occurrences of byte `0x41`
+///   (`A`, the REX.B prefix) followed by a push/pop opcode byte
+///   (`0x50-0x5F`, `P-_`).  No real string contains two `A`+pushpop
+///   pairs — they only arise from saving / restoring extended r8-r15
+///   registers in succession.
+/// * **Single-pair + digit at length 4 (medium confidence):** exactly
+///   one such pair, has a digit, and every byte is in the x86 opcode
+///   range `0x30-0x39 ∪ 0x40-0x5F`.  Catches short fragments like
+///   `AWE1`, `7ARI`.  Length cap to 4 keeps common architecture /
+///   protocol identifiers (`ARM64`, `AMD64`, `APRIL1`) safe.
+///
+/// Magic numbers stay safe because they neither contain ≥2 REX-pairs
+/// nor (at length 4 with a digit) start at byte 0x41 followed by an
+/// opcode byte: `BSJB`, `RIFF`, `RSDS`, `8BIM`, `IDAT`, `IHDR`, `IEND`,
+/// `MSCF`, `EXIF`, `DICM`, `COFF`, `CAFE`, `BEEF`, `DEAD`, `FEED` all
+/// pass through.
+///
+/// **Scoping:** the rule is x86-only (REX prefix is x86-64 instruction
+/// encoding) and code-only (asm fragments leak from `.text`-like
+/// sections, never from `.rodata`/`.data`/`.symtab`/etc.).  A
+/// `StringContext` with `arch == Some(non-x86)` or
+/// `section == Some(non_code_section)` skips the rule entirely; an
+/// empty context (`None`/`None`) preserves the legacy "apply globally"
+/// behavior for callers that don't know their input.
+///
+/// **Known false positives** (only when the rule actually runs): rare
+/// English words / proper nouns that happen to decode as multiple
+/// REX-pairs — `ATLAS` (`AT`, `AS`), `AVATAR` (`AV`, `AT`, `AR`).
+/// Accepted cost of a byte-level heuristic; a binary that genuinely
+/// embeds the literal token `ATLAS` typically does so inside a longer
+/// string ("ATLAS connect failed") that the scanner extracts as a
+/// single unit, not as the isolated 5-byte word.
+fn is_x86_save_sequence_fragment(
+    s: &str,
+    len: usize,
+    stats: &CharStats,
+    ctx: &crate::types::StringContext<'_>,
+) -> bool {
+    // Architecture scoping: skip when the caller has confirmed the
+    // binary is non-x86. `None` means "unknown" — we still run the
+    // rule because most binaries today are x86-family.
+    if let Some(arch) = ctx.arch {
+        if !arch.is_x86_family() {
+            return false;
+        }
+    }
+
+    // Section scoping: REX-prefix + push/pop bytes only originate in
+    // executable sections. When the caller has tagged the source
+    // section, restrict the rule to known code sections; an unknown
+    // (`None`) section still runs the rule.
+    if let Some(section) = ctx.section {
+        if !is_code_section(section) {
+            return false;
+        }
+    }
+
+    if !(4..=12).contains(&len) {
+        return false;
+    }
+    // Asm fragments are uppercase + digits, no lowercase / whitespace
+    // / punctuation. Real text gets handled elsewhere.
+    if stats.lower > 0 || stats.whitespace > 0 || stats.special > 0 {
+        return false;
+    }
+
+    let bytes = s.as_bytes();
+
+    // Count REX.B + push/pop pairs (`A` = 0x41, push/pop = 0x50-0x5F).
+    let rex_pairs = bytes
+        .windows(2)
+        .filter(|w| w[0] == b'A' && (0x50..=0x5F).contains(&w[1]))
+        .count();
+
+    if rex_pairs >= 2 {
+        return true;
+    }
+
+    if rex_pairs == 1 && len == 4 && stats.digit > 0 {
+        let all_in_asm_range = bytes
+            .iter()
+            .all(|&b| (0x30..=0x39).contains(&b) || (0x40..=0x5F).contains(&b));
+        if all_in_asm_range {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Recognise the executable / code-section names that asm-fragment
+/// strings can leak from. Covers ELF (`.text` and per-function
+/// variants like `.text.startup`, `.text.hot`), PE / Windows (`.text`,
+/// `CODE`), and Mach-O (`__text`, `__TEXT.__text`).  Anything else is
+/// treated as data — the asm filter won't fire there.
+fn is_code_section(section: &str) -> bool {
+    if section.starts_with(".text.") {
+        return true;
+    }
+    matches!(
+        section,
+        ".text" | "__text" | "__TEXT.__text" | "__TEXT,__text" | "CODE" | ".code" | "code"
+    )
+}
+
 /// Detect PE relocation table patterns like "xçx&xìxÇx..." or "uHu}uQu\uYu0u"
 /// where a single lowercase letter repeats frequently with other characters between.
 fn is_reloc_table_pattern(s: &str, len: usize) -> bool {
@@ -1312,7 +1429,12 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
 /// Perform statistical analysis to determine if string is garbage.
 ///
 /// This is the fallback when fast paths and IOC recognition don't apply.
-fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
+fn is_statistical_garbage(
+    s: &str,
+    len: usize,
+    stats: &CharStats,
+    ctx: &crate::types::StringContext<'_>,
+) -> bool {
     // Short pattern checks
     if is_short_identifier_garbage(s, len, stats) {
         return true;
@@ -1489,6 +1611,10 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
         return true;
     }
 
+    if is_x86_save_sequence_fragment(s, len, stats, ctx) {
+        return true;
+    }
+
     // Medium-length strings with mixed case and digits are noise from compressed data
     if (MIXED_CASE_DIGIT_MIN_LEN..=MIXED_CASE_DIGIT_MAX_LEN).contains(&len)
         && stats.digit > 0
@@ -1609,7 +1735,7 @@ fn is_statistical_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
 /// - Strings with embedded null or control characters
 #[must_use]
 pub fn is_garbage(s: &str) -> bool {
-    is_garbage_with_kind(s, None)
+    is_garbage_with_context(s, &crate::types::StringContext::empty())
 }
 
 /// Like [`is_garbage`], but takes a `kind` hint produced by the extractor.
@@ -1628,11 +1754,34 @@ pub fn is_garbage(s: &str) -> bool {
 /// happen to look like a misaligned binary read can still be filtered.
 #[must_use]
 pub fn is_garbage_with_kind(s: &str, kind: Option<crate::types::StringKind>) -> bool {
+    is_garbage_with_context(s, &crate::types::StringContext::with_kind(kind))
+}
+
+/// Garbage check with full context: `kind`, `section`, and `arch`.
+///
+/// Architecture- and section-aware rules use the context to scope
+/// themselves — for example the x86 register save-sequence detector
+/// only fires when `arch` is `None` (unknown) or x86-family AND
+/// `section` is `None` or a known code section.  Callers that don't
+/// know their context can pass [`StringContext::empty`] and get the
+/// same behavior as `is_garbage(s)` did before context was added.
+///
+/// Use cases:
+/// * stng CLI: bind `--arch x86_64 --section .text` flags into a
+///   context to enable code-only filters.
+/// * Library callers (cleave, …): build per-string context from the
+///   binary they're analyzing (ELF/PE/Mach-O machine field +
+///   section name).
+/// * Source-code scans: pass `arch: None, section: None` — the asm
+///   filter intentionally stays inactive when the bytes weren't
+///   extracted from a code section.
+#[must_use]
+pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext<'_>) -> bool {
     let trimmed = s.trim();
     let len = trimmed.len();
 
     // Fast path: obvious valid strings (kind-aware: skips classify_string re-call)
-    if is_fast_path_valid_with_kind(trimmed, len, kind) {
+    if is_fast_path_valid_with_kind(trimmed, len, ctx.kind) {
         return false;
     }
 
@@ -1647,7 +1796,7 @@ pub fn is_garbage_with_kind(s: &str, kind: Option<crate::types::StringKind>) -> 
     // StackString, …) still run through `is_recognized_ioc` and the
     // statistical checks because those labels don't imply content
     // recognition — they indicate *provenance*.
-    if kind.is_some_and(|k| k.is_classifier_output()) {
+    if ctx.kind.is_some_and(|k| k.is_classifier_output()) {
         return false;
     }
 
@@ -1658,7 +1807,7 @@ pub fn is_garbage_with_kind(s: &str, kind: Option<crate::types::StringKind>) -> 
 
     // Statistical analysis (character distribution, patterns, transitions)
     let stats = CharStats::from_str(trimmed);
-    is_statistical_garbage(trimmed, len, &stats)
+    is_statistical_garbage(trimmed, len, &stats, ctx)
 }
 
 #[cfg(test)]
@@ -2494,5 +2643,480 @@ mod dotnet_tests {
         assert!(is_garbage("4ÛŷƮ"), "4ÛŷƮ");
         assert!(is_garbage("6Æťƒ"), "6Æťƒ");
         assert!(is_garbage("2µßĎ"), "2µßĎ");
+    }
+
+    // ─── x86-64 register save/restore fragments ──────────────────────
+    //
+    // These are bytes leaked from `.text` of any non-trivial binary —
+    // function prologues / epilogues that save callee-saved regs
+    // r12-r15 emit byte sequences which decode as printable ASCII
+    // dominated by `A` (REX.B prefix 0x41) and push/pop opcode bytes
+    // (0x50-0x5F).  The diff of `liblzma 5.4.5 → 5.6.0` surfaced ~18
+    // such fragments per file before this filter landed.
+
+    #[test]
+    fn test_is_garbage_x86_multi_pair_save_sequences() {
+        // Multi-pair (≥2 `A`+pushpop) fragments — the smoking gun.
+        // Each is a real string extracted from a `.text` section.
+        let cases = [
+            // r14 r13 r12 + push rbx + REX.W
+            "AVAUATSH",
+            // r15 r14 r13 r12 + push rbx + REX.W (full callee-saved set)
+            "AWAVAUATSH",
+            // r15 r14 r13 r12 + REX.W (truncated at boundary)
+            "AWAVAUATL",
+            // r14 r13 r12 + REX.WRX + XOR
+            "AVAUATE1",
+            // r13 r12 + REX.W
+            "AUATH",
+            // r14 r13 r12 + push rbp + push rbx
+            "AVAUATUS",
+            // r13 r12 + REX.WRX + XOR
+            "AUATE1",
+            // pop r8 + pop r9
+            "AXAY",
+            // r12 + push rbp + push rbx + push r8 + REX.W
+            "ATUSAPH",
+        ];
+        for s in cases {
+            assert!(
+                is_garbage(s),
+                "expected '{s}' to be filtered as asm fragment"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_garbage_x86_single_pair_with_digit() {
+        // Length-4 fragments with one REX-pair + a digit — the
+        // medium-confidence branch.  These leak from short
+        // instruction-boundary alignments.
+        assert!(is_garbage("AWE1"), "push r15 + REX.WRX + XOR");
+        assert!(is_garbage("7ARI"), "XOR opcode + REX.B + push rdx + REX.WX");
+    }
+
+    #[test]
+    fn test_x86_filter_does_not_match_magic_numbers() {
+        // Comprehensive negative coverage at the filter level. These
+        // are the magic numbers / format signatures that we MUST not
+        // misclassify as asm fragments — none have ≥2 REX-pairs, and
+        // none meet the length-4-with-digit single-pair branch.
+        // Some are also filtered by *other* stng rules at the
+        // `is_garbage` integration level (e.g. consonant-only
+        // patterns) — that's a separate decision and not this
+        // filter's concern.
+        let magics = [
+            "BSJB", "RIFF", "RSDS", "8BIM", "MSCF", "IHDR", "IDAT", "IEND", "COFF", "EXIF", "DICM",
+            "CAFE", "BEEF", "DEAD", "FEED", "BABE",
+        ];
+        for s in magics {
+            let stats = CharStats::from_str(s);
+            assert!(
+                !is_x86_save_sequence_fragment(
+                    s,
+                    s.len(),
+                    &stats,
+                    &crate::types::StringContext::empty()
+                ),
+                "magic '{s}' wrongly matched as asm fragment"
+            );
+        }
+    }
+
+    #[test]
+    fn test_x86_filter_does_not_match_identifiers() {
+        // English words / arch identifiers / protocol tokens that
+        // happen to start with `A` followed by a push/pop letter or
+        // contain a single REX-pair — must not be caught by the asm
+        // filter.  Tested at the filter level; some may still be
+        // flagged by other is_garbage rules unrelated to asm bytes.
+        let ids = [
+            // Architectures with version digit (length 5+)
+            "ARM64", "ARM32", "AMD64", "X8664",
+            // English words with one REX-pair (single A+pushpop) — safe
+            "ATOMIC", "ATTACK", "ASTRA", "ASCII", "AUSTIN", "AVOID", "AWAKE", "APPLE",
+            // Encodings / formats
+            "UTF8", "UTF16", "UTF32", // Protocol versions
+            "TLS12", "TLS13", "HTTP1", "HTTP2", "HTTP3",
+        ];
+        for s in ids {
+            let stats = CharStats::from_str(s);
+            assert!(
+                !is_x86_save_sequence_fragment(
+                    s,
+                    s.len(),
+                    &stats,
+                    &crate::types::StringContext::empty()
+                ),
+                "identifier '{s}' wrongly matched as asm fragment"
+            );
+        }
+    }
+
+    #[test]
+    fn test_x86_filter_known_false_positives() {
+        // Documented false positives: rare English words / proper
+        // nouns that happen to decode as multiple REX-pairs.  These
+        // are accepted as the cost of a byte-level heuristic — see
+        // the docstring of `is_x86_save_sequence_fragment`.
+        //
+        // Pinning them in a test means future tightening of the rule
+        // (e.g. requiring 3+ pairs or extra structure) is a deliberate
+        // change rather than an accidental shift.
+        for s in ["ATLAS", "AVATAR"] {
+            let stats = CharStats::from_str(s);
+            assert!(
+                is_x86_save_sequence_fragment(
+                    s,
+                    s.len(),
+                    &stats,
+                    &crate::types::StringContext::empty()
+                ),
+                "expected known FP '{s}' to match (docstring contract)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_garbage_x86_filter_skips_lowercase_and_whitespace() {
+        // The filter intentionally only fires on pure
+        // uppercase+digit strings — lowercase or whitespace presence
+        // means the bytes weren't a clean REX/push-opcode run.
+        // (These cases are caught by other filters or are real text.)
+        let stats = CharStats::from_str("teAVAUA");
+        assert!(
+            !is_x86_save_sequence_fragment(
+                "teAVAUA",
+                "teAVAUA".len(),
+                &stats,
+                &crate::types::StringContext::empty()
+            ),
+            "lowercase prefix must skip the asm filter"
+        );
+
+        let stats = CharStats::from_str("S I9");
+        assert!(
+            !is_x86_save_sequence_fragment(
+                "S I9",
+                "S I9".len(),
+                &stats,
+                &crate::types::StringContext::empty()
+            ),
+            "whitespace must skip the asm filter"
+        );
+    }
+
+    #[test]
+    fn test_is_garbage_x86_filter_skips_short_and_long() {
+        // Length boundaries: <4 too short to be confidently an asm
+        // fragment (would catch real 2-3 char identifiers); >12 is
+        // too long (real strings dominate that length range).
+        let stats = CharStats::from_str("AT");
+        assert!(
+            !is_x86_save_sequence_fragment("AT", 2, &stats, &crate::types::StringContext::empty()),
+            "len <4 must skip the asm filter"
+        );
+
+        // 13 chars, plenty of REX-pairs, but length-gated out.
+        let s = "AVAUATAVAUATA";
+        let stats = CharStats::from_str(s);
+        assert!(
+            !is_x86_save_sequence_fragment(
+                s,
+                s.len(),
+                &stats,
+                &crate::types::StringContext::empty()
+            ),
+            "len >12 must skip the asm filter"
+        );
+    }
+
+    #[test]
+    fn test_x86_filter_unit_multi_pair() {
+        // Direct unit test of the filter function (not via is_garbage),
+        // so the rule's behavior is pinned even if upstream changes.
+        for s in ["AVAUATSH", "AWAVAUATSH", "AVAUATUS", "AXAY", "AUATE1"] {
+            let stats = CharStats::from_str(s);
+            assert!(
+                is_x86_save_sequence_fragment(
+                    s,
+                    s.len(),
+                    &stats,
+                    &crate::types::StringContext::empty()
+                ),
+                "expected '{s}' to match the asm filter"
+            );
+        }
+    }
+
+    #[test]
+    fn test_x86_filter_unit_single_pair_digit() {
+        for s in ["AWE1", "7ARI"] {
+            let stats = CharStats::from_str(s);
+            assert!(
+                is_x86_save_sequence_fragment(
+                    s,
+                    s.len(),
+                    &stats,
+                    &crate::types::StringContext::empty()
+                ),
+                "expected '{s}' (single REX-pair + digit) to match"
+            );
+        }
+
+        // `ARM64` looks similar but length 5 — must not match the
+        // length-4 single-pair branch.
+        let stats = CharStats::from_str("ARM64");
+        assert!(
+            !is_x86_save_sequence_fragment(
+                "ARM64",
+                5,
+                &stats,
+                &crate::types::StringContext::empty()
+            ),
+            "ARM64 (len 5) must not match single-pair branch"
+        );
+    }
+
+    #[test]
+    fn test_x86_filter_unit_no_pairs_passes() {
+        // Strings with zero REX-pairs are out of scope; other filters
+        // handle their classification.
+        for s in ["BSJB", "RIFF", "RSDS", "8BIM", "MSCF", "IHDR"] {
+            let stats = CharStats::from_str(s);
+            assert!(
+                !is_x86_save_sequence_fragment(
+                    s,
+                    s.len(),
+                    &stats,
+                    &crate::types::StringContext::empty()
+                ),
+                "magic '{s}' (0 REX-pairs) wrongly matched"
+            );
+        }
+    }
+
+    #[test]
+    fn test_x86_filter_unit_idat_ends_with_pair_but_not_start() {
+        // `IDAT` is a PNG chunk type that happens to end with `AT` (a
+        // REX-pair).  The filter must not catch it — the rule requires
+        // ≥2 pairs for high confidence; one trailing pair isn't enough.
+        let stats = CharStats::from_str("IDAT");
+        assert!(
+            !is_x86_save_sequence_fragment(
+                "IDAT",
+                4,
+                &stats,
+                &crate::types::StringContext::empty()
+            ),
+            "IDAT has 1 trailing REX-pair but no digit — must not match"
+        );
+    }
+
+    // ─── architecture scoping ────────────────────────────────────────
+
+    #[test]
+    fn test_x86_filter_skipped_for_non_x86_arch() {
+        // ARM / Aarch64 / MIPS / PowerPC don't use REX prefix bytes —
+        // a string that LOOKS like an asm fragment in those binaries
+        // must not be filtered (it's almost certainly real text).
+        use crate::types::{Arch, StringContext};
+
+        let s = "AVAUATSH";
+        let stats = CharStats::from_str(s);
+
+        for arch in [
+            Arch::Aarch64,
+            Arch::Arm,
+            Arch::Mips,
+            Arch::PowerPc,
+            Arch::RiscV64,
+        ] {
+            let ctx = StringContext {
+                arch: Some(arch),
+                ..StringContext::default()
+            };
+            assert!(
+                !is_x86_save_sequence_fragment(s, s.len(), &stats, &ctx),
+                "filter must skip when arch is {arch:?} (non-x86)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_x86_filter_runs_for_x86_arch() {
+        use crate::types::{Arch, StringContext};
+
+        let s = "AVAUATSH";
+        let stats = CharStats::from_str(s);
+
+        for arch in [Arch::X86, Arch::X86_64] {
+            let ctx = StringContext {
+                arch: Some(arch),
+                ..StringContext::default()
+            };
+            assert!(
+                is_x86_save_sequence_fragment(s, s.len(), &stats, &ctx),
+                "filter must run when arch is {arch:?} (x86 family)"
+            );
+        }
+    }
+
+    // ─── section scoping ─────────────────────────────────────────────
+
+    #[test]
+    fn test_x86_filter_skipped_for_non_code_section() {
+        // Asm fragments only leak from `.text`-like sections. A
+        // string from `.rodata` / `.data` / `.symtab` that happens to
+        // match the byte pattern is real text and must be preserved.
+        use crate::types::StringContext;
+
+        let s = "AVAUATSH";
+        let stats = CharStats::from_str(s);
+
+        for section in [".rodata", ".data", ".bss", ".symtab", ".strtab", ".dynstr"] {
+            let ctx = StringContext {
+                section: Some(section),
+                ..StringContext::default()
+            };
+            assert!(
+                !is_x86_save_sequence_fragment(s, s.len(), &stats, &ctx),
+                "filter must skip when section is '{section}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_x86_filter_runs_for_code_section() {
+        use crate::types::StringContext;
+
+        let s = "AVAUATSH";
+        let stats = CharStats::from_str(s);
+
+        for section in [
+            ".text",
+            "__text",
+            "__TEXT.__text",
+            ".text.startup",
+            ".text.hot",
+            "CODE",
+        ] {
+            let ctx = StringContext {
+                section: Some(section),
+                ..StringContext::default()
+            };
+            assert!(
+                is_x86_save_sequence_fragment(s, s.len(), &stats, &ctx),
+                "filter must run when section is '{section}' (code)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_x86_filter_runs_for_unknown_context() {
+        // Empty context (no arch, no section, no kind) — the legacy
+        // behavior — keeps the filter active. Callers that haven't
+        // wired context yet still see the diff cleanup.
+        use crate::types::StringContext;
+
+        let s = "AVAUATSH";
+        let stats = CharStats::from_str(s);
+        assert!(
+            is_x86_save_sequence_fragment(s, s.len(), &stats, &StringContext::empty()),
+            "empty context must keep the filter active (legacy behavior)"
+        );
+    }
+
+    #[test]
+    fn test_x86_filter_skipped_when_arch_or_section_excludes() {
+        // Either signal alone is enough to skip — the rule needs
+        // BOTH conditions (x86-or-unknown arch, code-or-unknown
+        // section) to fire. Confirms the AND-of-OR semantics.
+        use crate::types::{Arch, StringContext};
+
+        let s = "AVAUATSH";
+        let stats = CharStats::from_str(s);
+
+        // x86 arch + non-code section → skip
+        let ctx = StringContext {
+            arch: Some(Arch::X86_64),
+            section: Some(".rodata"),
+            ..StringContext::default()
+        };
+        assert!(
+            !is_x86_save_sequence_fragment(s, s.len(), &stats, &ctx),
+            "non-code section must override x86 arch"
+        );
+
+        // Non-x86 arch + code section → skip
+        let ctx = StringContext {
+            arch: Some(Arch::Aarch64),
+            section: Some(".text"),
+            ..StringContext::default()
+        };
+        assert!(
+            !is_x86_save_sequence_fragment(s, s.len(), &stats, &ctx),
+            "non-x86 arch must override code section"
+        );
+    }
+
+    // ─── arch parsing ────────────────────────────────────────────────
+
+    #[test]
+    fn test_arch_from_name() {
+        use crate::types::Arch;
+        assert_eq!(Arch::from_name("x86_64"), Some(Arch::X86_64));
+        assert_eq!(Arch::from_name("amd64"), Some(Arch::X86_64));
+        assert_eq!(Arch::from_name("x64"), Some(Arch::X86_64));
+        assert_eq!(Arch::from_name("aarch64"), Some(Arch::Aarch64));
+        assert_eq!(Arch::from_name("arm64"), Some(Arch::Aarch64));
+        assert_eq!(Arch::from_name("arm"), Some(Arch::Arm));
+        assert_eq!(Arch::from_name("riscv64"), Some(Arch::RiscV64));
+        assert_eq!(Arch::from_name("mips"), Some(Arch::Mips));
+        assert_eq!(Arch::from_name("powerpc"), Some(Arch::PowerPc));
+        assert_eq!(Arch::from_name("wasm"), Some(Arch::Wasm));
+        // Unknown returns None so callers fall back to the empty context
+        assert_eq!(Arch::from_name("alpha"), None);
+        assert_eq!(Arch::from_name(""), None);
+    }
+
+    #[test]
+    fn test_arch_is_x86_family() {
+        use crate::types::Arch;
+        assert!(Arch::X86.is_x86_family());
+        assert!(Arch::X86_64.is_x86_family());
+        assert!(!Arch::Aarch64.is_x86_family());
+        assert!(!Arch::Arm.is_x86_family());
+        assert!(!Arch::Mips.is_x86_family());
+        assert!(!Arch::Wasm.is_x86_family());
+    }
+
+    // ─── is_code_section ─────────────────────────────────────────────
+
+    #[test]
+    fn test_is_code_section_recognises_known_names() {
+        // ELF
+        assert!(is_code_section(".text"));
+        assert!(is_code_section(".text.startup"));
+        assert!(is_code_section(".text.hot"));
+        assert!(is_code_section(".text.unlikely"));
+        // Mach-O
+        assert!(is_code_section("__text"));
+        assert!(is_code_section("__TEXT.__text"));
+        assert!(is_code_section("__TEXT,__text"));
+        // PE / Windows
+        assert!(is_code_section("CODE"));
+        assert!(is_code_section(".code"));
+        assert!(is_code_section("code"));
+
+        // Data sections — must not be misclassified as code
+        assert!(!is_code_section(".rodata"));
+        assert!(!is_code_section(".data"));
+        assert!(!is_code_section(".bss"));
+        assert!(!is_code_section(".symtab"));
+        assert!(!is_code_section(".strtab"));
+        assert!(!is_code_section(".dynstr"));
+        assert!(!is_code_section("__DATA.__data"));
+        assert!(!is_code_section(""));
     }
 }

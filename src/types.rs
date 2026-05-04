@@ -145,6 +145,162 @@ impl ExtractedString {
     }
 }
 
+/// CPU architecture of the binary the string was extracted from.
+///
+/// Used by validation rules that depend on architecture-specific byte
+/// patterns (notably `is_x86_save_sequence_fragment`, which detects
+/// REX-prefix + push/pop opcode sequences that only x86-64 emits).
+/// `None` on a `StringContext::arch` means "unknown" and rules treat
+/// that as "may be x86, apply heuristics" — so callers that omit the
+/// hint get current behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum Arch {
+    X86,
+    X86_64,
+    Arm,
+    Aarch64,
+    Mips,
+    Mips64,
+    PowerPc,
+    PowerPc64,
+    RiscV,
+    RiscV64,
+    Sparc,
+    Wasm,
+    Other,
+}
+
+impl Arch {
+    /// `true` for x86-family architectures (x86 and x86-64).  Used by
+    /// rules that decode bytes assuming x86 instruction encoding.
+    #[must_use]
+    pub fn is_x86_family(self) -> bool {
+        matches!(self, Self::X86 | Self::X86_64)
+    }
+
+    /// Parse the architecture name strings stng uses elsewhere
+    /// (Mach-O fat slice labels, ELF e_machine names) into a typed
+    /// `Arch`.  Returns `None` for unrecognised inputs so callers can
+    /// fall back to the no-arch-info default.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "x86_64" | "x64" | "amd64" => Some(Self::X86_64),
+            "x86" | "i386" | "i686" => Some(Self::X86),
+            "arm64" | "aarch64" => Some(Self::Aarch64),
+            "arm" | "armv7" | "armv6" => Some(Self::Arm),
+            "mips" => Some(Self::Mips),
+            "mips64" => Some(Self::Mips64),
+            "ppc" | "powerpc" => Some(Self::PowerPc),
+            "ppc64" | "powerpc64" => Some(Self::PowerPc64),
+            "riscv" | "riscv32" => Some(Self::RiscV),
+            "riscv64" => Some(Self::RiscV64),
+            "sparc" => Some(Self::Sparc),
+            "wasm" | "wasm32" | "wasm64" => Some(Self::Wasm),
+            _ => None,
+        }
+    }
+
+    /// Map an ELF `e_machine` value to a typed `Arch`. Returns `None`
+    /// for machines stng has no rule for. Constants per the ELF
+    /// specification.
+    #[must_use]
+    pub fn from_elf_machine(em: u16) -> Option<Self> {
+        match em {
+            2 | 18 | 43 => Some(Self::Sparc), // EM_SPARC, EM_SPARC32PLUS, EM_SPARCV9
+            3 => Some(Self::X86),             // EM_386
+            8 => Some(Self::Mips),            // EM_MIPS
+            20 => Some(Self::PowerPc),        // EM_PPC
+            21 => Some(Self::PowerPc64),      // EM_PPC64
+            40 => Some(Self::Arm),            // EM_ARM
+            62 => Some(Self::X86_64),         // EM_X86_64
+            183 => Some(Self::Aarch64),       // EM_AARCH64
+            243 => Some(Self::RiscV64),       // EM_RISCV — 32/64 distinguished by EI_CLASS
+            _ => None,
+        }
+    }
+
+    /// Map a PE `IMAGE_FILE_MACHINE_*` value to a typed `Arch`.
+    /// Constants per the PE/COFF specification.
+    #[must_use]
+    pub fn from_pe_machine(machine: u16) -> Option<Self> {
+        match machine {
+            0x014c => Some(Self::X86),            // IMAGE_FILE_MACHINE_I386
+            0x8664 => Some(Self::X86_64),         // IMAGE_FILE_MACHINE_AMD64
+            0x01c0 | 0x01c4 => Some(Self::Arm),   // ARM, ARMNT
+            0xaa64 => Some(Self::Aarch64),        // ARM64
+            0x5032 | 0x5064 => Some(Self::RiscV), // RISCV32, RISCV64 (handled below for 64)
+            _ => None,
+        }
+    }
+
+    /// Map a Mach-O `cputype` value to a typed `Arch`.
+    /// `CPU_ARCH_ABI64 = 0x01000000` flag distinguishes 64-bit variants.
+    #[must_use]
+    pub fn from_macho_cputype(cputype: u32) -> Option<Self> {
+        const CPU_ARCH_ABI64: u32 = 0x0100_0000;
+        let base = cputype & !CPU_ARCH_ABI64;
+        let is_64 = (cputype & CPU_ARCH_ABI64) != 0;
+        match (base, is_64) {
+            (7, false) => Some(Self::X86),
+            (7, true) => Some(Self::X86_64),
+            (12, false) => Some(Self::Arm),
+            (12, true) => Some(Self::Aarch64),
+            (18, false) => Some(Self::PowerPc),
+            (18, true) => Some(Self::PowerPc64),
+            _ => None,
+        }
+    }
+}
+
+/// Context passed to the validation rules so architecture- and
+/// section-aware filters can scope themselves correctly.
+///
+/// All fields are optional with `None`-as-"unknown" semantics — every
+/// existing caller of `is_garbage` / `is_garbage_with_kind` keeps its
+/// behavior because the empty context is treated as "no info, apply
+/// the heuristics globally".  Callers that DO know the arch or
+/// section can construct a richer context to suppress filters that
+/// don't apply to their input (e.g. an ARM binary skips the x86
+/// save-sequence filter; a `.rodata` string skips it too).
+///
+/// Lifetime `'a` borrows the section name; pass `None` if you don't
+/// have one.
+#[derive(Debug, Clone, Default)]
+pub struct StringContext<'a> {
+    /// Semantic kind from the extractor (URL, Path, Section, …).
+    /// Same role as the `kind` parameter on `is_garbage_with_kind`.
+    pub kind: Option<StringKind>,
+    /// Section the string was extracted from, when known
+    /// (`.text`, `__TEXT.__text`, `.rodata`, …).  Lets section-scoped
+    /// rules opt out when the section can't host their target pattern.
+    pub section: Option<&'a str>,
+    /// CPU architecture, when known.  `None` means "no info — assume
+    /// any rule may apply"; `Some(non-x86)` switches off x86-only
+    /// rules without the caller having to know which they are.
+    pub arch: Option<Arch>,
+}
+
+impl<'a> StringContext<'a> {
+    /// Empty context — no kind, no section, no arch.  Equivalent to
+    /// the legacy `is_garbage(s)` call.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Convenience: build a context carrying only a kind hint.
+    /// Equivalent to the legacy `is_garbage_with_kind(s, kind)` call.
+    #[must_use]
+    pub fn with_kind(kind: Option<StringKind>) -> Self {
+        Self {
+            kind,
+            ..Self::default()
+        }
+    }
+}
+
 /// Method used to extract the string.
 ///
 /// Indicates the extraction technique, which affects confidence and context.

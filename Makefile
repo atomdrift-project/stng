@@ -123,7 +123,11 @@ lint: ## Run code formatting and linting checks
 	@echo "✓ Clippy passed"
 	@echo ""
 	@echo "Checking for unused dependencies..."
-	@cargo machete --with-metadata || echo "Note: cargo-machete not installed, skipping dependency check"
+	@if command -v cargo-machete >/dev/null 2>&1; then \
+		cargo machete --with-metadata; \
+	else \
+		echo "Note: cargo-machete not installed, skipping dependency check"; \
+	fi
 	@echo ""
 	@echo "✓ All lints passed"
 
