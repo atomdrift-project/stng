@@ -373,7 +373,7 @@ impl<'a> StackStringExtractor<'a> {
                 continue;
             }
 
-            writes.sort_by(|a, b| a.disp.cmp(&b.disp));
+            writes.sort_by_key(|write| write.disp);
 
             let mut iter = writes.into_iter();
             let Some(first) = iter.next() else { continue };

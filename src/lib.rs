@@ -230,7 +230,11 @@ fn apply_xor_scan(
     is_pe: bool,
     excluded_ranges: &[(usize, usize)],
 ) {
-    tracing::debug!("apply_xor_scan: called (xor_scan: {}, xor_scan_multi: {})", opts.xor_scan, opts.xor_scan_multi);
+    tracing::debug!(
+        "apply_xor_scan: called (xor_scan: {}, xor_scan_multi: {})",
+        opts.xor_scan,
+        opts.xor_scan_multi
+    );
     if data.is_empty() || opts.is_cancelled() {
         return;
     }
@@ -979,8 +983,14 @@ fn extract_from_utf16_file(
     let decoded_bytes = decoded.as_bytes();
 
     // Extract strings from the decoded UTF-8 content
-    let mut raw_strings =
-        extract_raw_strings(decoded_bytes, opts.min_length, None, &[], &HashMap::new(), &[]);
+    let mut raw_strings = extract_raw_strings(
+        decoded_bytes,
+        opts.min_length,
+        None,
+        &[],
+        &HashMap::new(),
+        &[],
+    );
 
     // Apply decoders (base64, hex, URL-encoding, etc.) to the extracted strings
     // This allows us to find base64-encoded PowerShell, hex-encoded URLs, etc.
@@ -1025,8 +1035,14 @@ fn append_script_deobfuscation(
     let deob_results = script::deobfuscate_script(data);
     for result in deob_results {
         let payload_bytes = result.decoded.as_bytes();
-        let mut payload_strings =
-            extract_raw_strings(payload_bytes, opts.min_length, None, &[], &HashMap::new(), &[]);
+        let mut payload_strings = extract_raw_strings(
+            payload_bytes,
+            opts.min_length,
+            None,
+            &[],
+            &HashMap::new(),
+            &[],
+        );
 
         // Run decoders on the extracted payload strings
         let mut payload_decoded = Vec::new();
@@ -1073,8 +1089,11 @@ fn append_script_deobfuscation(
 /// let strings = extract_strings_with_options(&data, &opts);
 /// ```
 #[must_use]
-pub fn build_id() -> &'static str { "BUILD_XOR_V1" }
+pub fn build_id() -> &'static str {
+    "BUILD_XOR_V1"
+}
 
+#[must_use]
 pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
     extract_strings_inner(data, opts)
 }
@@ -1439,9 +1458,14 @@ fn extract_from_object(
                 // those regions with correct boundaries.
                 let skip = elf_go_skip_ranges(elf, scan_data.len());
                 let known: HashSet<String> = strings.iter().map(|s| s.value.clone()).collect();
-                for s in
-                    extract_raw_strings(scan_data, min_length, None, &segments, &section_info, &skip)
-                {
+                for s in extract_raw_strings(
+                    scan_data,
+                    min_length,
+                    None,
+                    &segments,
+                    &section_info,
+                    &skip,
+                ) {
                     if !known.contains(&s.value) {
                         strings.push(s);
                     }
@@ -1711,7 +1735,9 @@ fn extract_from_object(
     let is_pe = matches!(object, Object::PE(_));
     let mut section_info = std::collections::HashMap::new();
     match object {
-        Object::Mach(goblin::mach::Mach::Binary(m)) => section_info = binary::collect_macho_section_info(m),
+        Object::Mach(goblin::mach::Mach::Binary(m)) => {
+            section_info = binary::collect_macho_section_info(m)
+        }
         Object::Elf(e) => section_info = binary::collect_elf_section_info(e),
         Object::PE(p) => section_info = binary::collect_pe_section_info(p),
         _ => {}

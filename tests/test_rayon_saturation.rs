@@ -28,7 +28,7 @@ fn synthetic_elf_like(size_bytes: usize) -> Vec<u8> {
 }
 
 #[test]
-fn stng_parallelizes_under_par_iter() {
+fn stng_parallelizes_under_par_iter() -> Result<(), Box<dyn std::error::Error>> {
     let data = synthetic_elf_like(512 * 1024);
     let opts = stng::ExtractOptions::new(4);
     let n_iters: usize = 32;
@@ -37,8 +37,7 @@ fn stng_parallelizes_under_par_iter() {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(n_threads)
         .thread_name(|i| format!("saturation-test-{i}"))
-        .build()
-        .expect("build test rayon pool");
+        .build()?;
 
     // Sequential baseline — no pool install, single-thread processing.
     let serial = {
@@ -63,4 +62,6 @@ fn stng_parallelizes_under_par_iter() {
         speedup > 2.0,
         "stng serialized under par_iter: serial={serial:?} parallel={parallel:?} speedup={speedup:.2}x (expected >2x on {n_threads} threads)"
     );
+
+    Ok(())
 }

@@ -237,7 +237,7 @@ fn text_quality_score(bytes: &[u8]) -> (u32, u32) {
     }
 
     let printable_ratio = (printable * 100) / bytes.len();
-    let vowel_ratio = if alpha > 0 { (vowel * 100) / alpha } else { 0 };
+    let vowel_ratio = (vowel * 100).checked_div(alpha).unwrap_or(0);
 
     // Weighted combination: printability matters most, vowel ratio indicates natural language
     let quality = u32::try_from((printable_ratio * 7 + vowel_ratio * 3) / 10).unwrap_or(0);
@@ -668,11 +668,7 @@ pub(super) fn string_quality_score(s: &str) -> u32 {
 
     let len = s.len();
     let printable_ratio = (printable_count * 100) / len;
-    let vowel_ratio = if alpha_count > 0 {
-        (vowel_count * 100) / alpha_count
-    } else {
-        0
-    };
+    let vowel_ratio = (vowel_count * 100).checked_div(alpha_count).unwrap_or(0);
 
     // Quality = weighted combination of printability and vowel ratio
     // Good English text has ~40% vowels, ~90%+ printable

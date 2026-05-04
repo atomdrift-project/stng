@@ -810,11 +810,7 @@ fn string_quality_score(s: &str) -> u32 {
 
     let len = s.len();
     let printable_ratio = (printable_count * 100) / len;
-    let vowel_ratio = if alpha_count > 0 {
-        (vowel_count * 100) / alpha_count
-    } else {
-        0
-    };
+    let vowel_ratio = (vowel_count * 100).checked_div(alpha_count).unwrap_or(0);
 
     // Quality = weighted combination of printability and vowel ratio
     u32::try_from((printable_ratio * 7 + vowel_ratio * 3) / 10).unwrap_or(0)

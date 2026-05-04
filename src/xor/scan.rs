@@ -365,7 +365,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                                     )
                                 })
                                 .count();
-                            let vowel_ratio = if alpha > 0 { vowels * 100 / alpha } else { 0 };
+                            let vowel_ratio = (vowels * 100).checked_div(alpha).unwrap_or(0);
                             if !(10..=70).contains(&vowel_ratio) {
                                 continue;
                             }
@@ -821,7 +821,7 @@ fn extract_custom_xor_strings_pattern_based_simple(
                             matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u')
                         })
                         .count();
-                    let vowel_ratio = if alpha > 0 { vowels * 100 / alpha } else { 0 };
+                    let vowel_ratio = (vowels * 100).checked_div(alpha).unwrap_or(0);
 
                     // For auto-detected keys, be stricter with vowel ratios
                     let (min_vowel, max_vowel) = if key_is_likely_auto_detected {

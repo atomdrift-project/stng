@@ -819,11 +819,9 @@ fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bool {
     }
 
     if len < 30 {
-        let alpha_percentage = if stats.char_count > 0 {
-            stats.alpha * 100 / stats.char_count
-        } else {
-            0
-        };
+        let alpha_percentage = (stats.alpha * 100)
+            .checked_div(stats.char_count)
+            .unwrap_or(0);
         let has_noise_punct = s.chars().any(|c| {
             matches!(
                 c,

@@ -43,7 +43,9 @@ pub(crate) fn extract_arm64_stack_xor_strings(
             }
 
             let start = section.offset as usize;
-            let size = section.size as usize;
+            let Ok(size) = usize::try_from(section.size) else {
+                continue;
+            };
             let Some(end) = start.checked_add(size) else {
                 continue;
             };
@@ -290,7 +292,7 @@ fn decode_stack_arg_with_candidate_pads(
             pads: Vec::new(),
         };
     }
-    if cipher.get(..4).is_none_or(|prefix| looks_printable(prefix)) {
+    if cipher.get(..4).is_none_or(looks_printable) {
         return StackDecodeResults {
             results: Vec::new(),
             pads: Vec::new(),

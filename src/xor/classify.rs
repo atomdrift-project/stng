@@ -496,13 +496,16 @@ pub(crate) fn extract_multikey_xor_strings(
     for key_info in keys
         .iter()
         .filter(|k| matches!(k.confidence, XorConfidence::High))
-        .take(100) // Increased to catch targeted binary keys that might be further down the list
+        .take(100)
+    // Increased to catch targeted binary keys that might be further down the list
     {
         let key_bytes_owned = if let Some(ref k) = key_info.key {
             k.clone()
         } else {
-            let start = key_info.offset as usize;
-            let end = (key_info.offset as usize + key_info.length).min(data.len());
+            let Ok(start) = usize::try_from(key_info.offset) else {
+                continue;
+            };
+            let end = start.saturating_add(key_info.length).min(data.len());
             if start >= end {
                 continue;
             }
@@ -517,13 +520,15 @@ pub(crate) fn extract_multikey_xor_strings(
         // Blind Decode Fallback: For HIGH confidence keys, try all shifts of the key
         // to find short or split strings (which won't match Aho-Corasick patterns).
         for shift in 0..key_bytes.len() {
-            let decoded_full: Vec<u8> = data.iter().enumerate()
+            let decoded_full: Vec<u8> = data
+                .iter()
+                .enumerate()
                 .map(|(i, &b)| b ^ key_bytes[(i + shift) % key_bytes.len()])
                 .collect();
-            
+
             // Use a much lower min_length for high-confidence blind decodes
             let blind_min_len = 6.min(min_length);
-            
+
             let mut i = 0;
             while i < decoded_full.len() {
                 if is_printable_char(decoded_full[i]) {
@@ -536,13 +541,12 @@ pub(crate) fn extract_multikey_xor_strings(
                         let s = String::from_utf8_lossy(&decoded_full[start..i]).to_string();
                         if let Some(kind) = classify_xor_string(&s) {
                             if seen.insert((start as u64, s.clone())) {
-
-                                 let key_str = String::from_utf8_lossy(key_bytes);
-                                 let key_preview = if key_str.chars().count() > 8 {
-                                     key_str.chars().take(8).collect::<String>()
-                                 } else {
-                                     key_str.into_owned()
-                                 };
+                                let key_str = String::from_utf8_lossy(key_bytes);
+                                let key_preview = if key_str.chars().count() > 8 {
+                                    key_str.chars().take(8).collect::<String>()
+                                } else {
+                                    key_str.into_owned()
+                                };
                                 results.push(ExtractedString {
                                     value: s,
                                     data_offset: start as u64,

@@ -516,7 +516,7 @@ fn test_rodata_blob_not_emitted_as_merged_string() {
 
     // The merged form must NOT appear: this is the bug we're guarding against.
     assert!(
-        !values.iter().any(|v| *v == merged.as_str()),
+        !values.contains(&merged.as_str()),
         "raw scan must not emit the merged rodata blob as a single string"
     );
 

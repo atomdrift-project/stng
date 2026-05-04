@@ -555,7 +555,7 @@ fn classify_prefix(prefix: &str) -> Option<StringKind> {
 
     match first {
         // URLs: http://, https://, ftp://, etc.
-        b'h' | b'f' | b'p' | b'm' | b'r' | b's' | b't' | b'u' => {
+        b'h' | b'f' | b'p' | b'm' | b'r' | b's' | b't' | b'u'
             if prefix.starts_with("http://")
                 || prefix.starts_with("https://")
                 || prefix.starts_with("ftp://")
@@ -565,29 +565,26 @@ fn classify_prefix(prefix: &str) -> Option<StringKind> {
                 || prefix.starts_with("mongodb://")
                 || prefix.starts_with("ssh://")
                 || prefix.starts_with("tcp://")
-                || prefix.starts_with("udp://")
-            {
-                return Some(StringKind::Url);
-            }
+                || prefix.starts_with("udp://") =>
+        {
+            return Some(StringKind::Url);
         }
         // File paths
-        b'/' | b'.' => {
-            if prefix.starts_with('/') || prefix.starts_with("./") || prefix.starts_with("../") {
-                if network::is_suspicious_path(prefix) {
-                    return Some(StringKind::SuspiciousPath);
-                }
-                return Some(StringKind::Path);
+        b'/' | b'.'
+            if prefix.starts_with('/') || prefix.starts_with("./") || prefix.starts_with("../") =>
+        {
+            if network::is_suspicious_path(prefix) {
+                return Some(StringKind::SuspiciousPath);
             }
+            return Some(StringKind::Path);
         }
         // Windows paths / registry
         b'C' if prefix.starts_with("C:\\") => return Some(StringKind::Path),
-        b'H' => {
-            if prefix.starts_with("HKEY_")
-                || prefix.starts_with("HKLM\\")
-                || prefix.starts_with("HKCU\\")
-            {
-                return Some(StringKind::Registry);
-            }
+        b'H' if prefix.starts_with("HKEY_")
+            || prefix.starts_with("HKLM\\")
+            || prefix.starts_with("HKCU\\") =>
+        {
+            return Some(StringKind::Registry);
         }
         // PHP opening tag
         b'<' if prefix.starts_with("<?php") => return Some(StringKind::PhpCode),

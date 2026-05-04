@@ -119,10 +119,10 @@ fn test_extract_strings_large_file_fast_mode() {
     // Just verify it doesn't panic or hang
     if let Some(strings) = result {
         // Verify all strings have valid offsets
-        let file_size = 11 * 1024 * 1024;
+        let file_size = 11_u64 * 1024 * 1024;
         for s in &strings {
             assert!(
-                s.data_offset < file_size as u64,
+                s.data_offset < file_size,
                 "Offset should be within file bounds"
             );
         }

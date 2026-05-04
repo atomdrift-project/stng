@@ -121,11 +121,13 @@ pub(crate) fn extract_raw_strings(
     // This catches strings that aren't null-terminated (common in JPEG, PDF, etc.)
     extract_printable_runs(
         data,
-        min_length,
-        section,
-        &segment_names_set,
-        section_info,
-        skip_ranges,
+        PrintableRunContext {
+            min_length,
+            section,
+            segment_names_set: &segment_names_set,
+            section_info,
+            skip_ranges,
+        },
         &mut strings,
         &mut seen,
     );
@@ -135,13 +137,18 @@ pub(crate) fn extract_raw_strings(
 
 /// Extract strings by scanning for runs of printable ASCII characters.
 /// This mimics the behavior of the traditional `strings` command.
+#[derive(Clone, Copy)]
+pub(crate) struct PrintableRunContext<'a> {
+    pub(crate) min_length: usize,
+    pub(crate) section: Option<&'a str>,
+    pub(crate) segment_names_set: &'a HashSet<&'a str>,
+    pub(crate) section_info: &'a HashMap<String, crate::binary::SectionInfo>,
+    pub(crate) skip_ranges: &'a [Range<usize>],
+}
+
 pub(crate) fn extract_printable_runs(
     data: &[u8],
-    min_length: usize,
-    section: Option<&str>,
-    segment_names_set: &HashSet<&str>,
-    section_info: &HashMap<String, crate::binary::SectionInfo>,
-    skip_ranges: &[Range<usize>],
+    context: PrintableRunContext<'_>,
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
@@ -156,7 +163,7 @@ pub(crate) fn extract_printable_runs(
                 run_start = Some(i);
             }
         } else if let Some(start) = run_start {
-            if i - start >= min_length && !in_skip_range(start, skip_ranges) {
+            if i - start >= context.min_length && !in_skip_range(start, context.skip_ranges) {
                 runs.push((start, &data[start..i]));
             }
             run_start = None;
@@ -164,7 +171,7 @@ pub(crate) fn extract_printable_runs(
     }
 
     if let Some(start) = run_start {
-        if data.len() - start >= min_length && !in_skip_range(start, skip_ranges) {
+        if data.len() - start >= context.min_length && !in_skip_range(start, context.skip_ranges) {
             runs.push((start, &data[start..]));
         }
     }
@@ -175,8 +182,8 @@ pub(crate) fn extract_printable_runs(
         .filter_map(|(start, run)| {
             if let Ok(s) = std::str::from_utf8(run) {
                 let trimmed = s.trim();
-                if trimmed.len() >= min_length {
-                    let mut kind = if segment_names_set.contains(trimmed) {
+                if trimmed.len() >= context.min_length {
+                    let mut kind = if context.segment_names_set.contains(trimmed) {
                         Some(StringKind::Section)
                     } else {
                         classifier::classify_string(trimmed)
@@ -191,7 +198,8 @@ pub(crate) fn extract_printable_runs(
 
                     // Get section metadata if this is a section
                     let (sec_size, sec_exec, sec_write) = if kind == Some(StringKind::Section) {
-                        section_info
+                        context
+                            .section_info
                             .get(trimmed)
                             .map_or((None, None, None), |info| {
                                 (
@@ -207,7 +215,7 @@ pub(crate) fn extract_printable_runs(
                     return Some(ExtractedString {
                         value: trimmed.to_string(),
                         data_offset: start as u64,
-                        section: section.map(str::to_string),
+                        section: context.section.map(str::to_string),
                         method: StringMethod::RawScan,
                         kind,
                         fragments: None,

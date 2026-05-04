@@ -4,7 +4,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use crate::classifier::classify_string;
-use crate::raw::{extract_printable_runs, extract_wide_strings};
+use crate::raw::{extract_printable_runs, extract_wide_strings, PrintableRunContext};
 use crate::types::{ExtractedString, OverlayInfo, StringKind};
 use std::collections::HashSet;
 
@@ -88,13 +88,17 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
             // Extract ASCII strings
             let mut seen = HashSet::new();
             let initial_count = strings.len();
+            let segment_names_set = HashSet::new();
+            let section_info = std::collections::HashMap::new();
             extract_printable_runs(
                 overlay_data,
-                min_length,
-                Some("overlay"),
-                &HashSet::new(),
-                &std::collections::HashMap::new(),
-                &[],
+                PrintableRunContext {
+                    min_length,
+                    section: Some("overlay"),
+                    segment_names_set: &segment_names_set,
+                    section_info: &section_info,
+                    skip_ranges: &[],
+                },
                 &mut strings,
                 &mut seen,
             );

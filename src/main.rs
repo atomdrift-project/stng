@@ -278,7 +278,6 @@ fn decode_url_encoding(s: &str) -> Vec<u8> {
 }
 
 fn main() -> Result<()> {
-    eprintln!("DEBUG: stng main started, lib: {}, path: {:?}", stng::build_id(), std::env::current_exe());
     let t_total = std::time::Instant::now();
     let cli = Cli::parse();
 
