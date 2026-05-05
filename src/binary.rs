@@ -355,6 +355,7 @@ pub fn is_rust_binary(data: &[u8]) -> bool {
             let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
             name.contains("rust") || name == ".rustc"
         }),
+        Ok(Object::PE(pe)) => pe_is_rust(&pe, data),
         _ => false,
     }
 }
@@ -370,6 +371,73 @@ pub(crate) fn macho_is_rust(macho: &MachO<'_>) -> bool {
             })
         })
     })
+}
+
+/// Check if a PE binary appears to be a Rust binary.
+///
+/// Unlike ELF/Mach-O, PE doesn't preserve a `.rustc` section name; the rustc
+/// frontend strips toolchain metadata sections. We instead look for path
+/// fragments rustc embeds verbatim in panic messages: `index.crates.io` (the
+/// crates.io registry root used in dependency paths) and `/rustc/<sha>`
+/// (libstd path prefix). Both are present in any non-trivial Rust PE build.
+#[must_use]
+pub(crate) fn pe_is_rust(pe: &goblin::pe::PE<'_>, data: &[u8]) -> bool {
+    const NEEDLES: &[&[u8]] = &[b"index.crates.io", b"/rustc/"];
+    for section in &pe.sections {
+        let name = pe_section_name(&section.name);
+        if !matches!(name.as_str(), ".rdata" | ".rodata") {
+            continue;
+        }
+        let Ok(start) = usize::try_from(section.pointer_to_raw_data) else {
+            continue;
+        };
+        let Ok(size) = usize::try_from(section.size_of_raw_data) else {
+            continue;
+        };
+        let end = start.saturating_add(size).min(data.len());
+        if start >= end {
+            continue;
+        }
+        let bytes = &data[start..end];
+        if NEEDLES
+            .iter()
+            .any(|n| memchr::memmem::find(bytes, n).is_some())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// File-offset ranges in a Rust PE binary the raw scanner must skip.
+///
+/// Rust's PE backend packs `&'static str` slices into one back-to-back blob in
+/// `.rdata` (no NUL terminators), then references each substring through a
+/// separate `(ptr, len)` table. Without skipping, the raw scanner sees the
+/// entire blob as one long printable run and emits it as a single garbage
+/// string. The structure-based extractor recovers the correctly-sliced
+/// substrings.
+#[must_use]
+pub(crate) fn pe_rust_skip_ranges(
+    pe: &goblin::pe::PE<'_>,
+    data_len: usize,
+) -> Vec<std::ops::Range<usize>> {
+    pe.sections
+        .iter()
+        .filter_map(|sec| {
+            let name = pe_section_name(&sec.name);
+            if !matches!(name.as_str(), ".rdata" | ".rodata") {
+                return None;
+            }
+            let start = usize::try_from(sec.pointer_to_raw_data).ok()?;
+            let size = usize::try_from(sec.size_of_raw_data).ok()?;
+            let end = start.checked_add(size)?.min(data_len);
+            if start >= end {
+                return None;
+            }
+            Some(start..end)
+        })
+        .collect()
 }
 
 /// Find the section name containing an address in a Mach-O binary.

@@ -110,7 +110,7 @@ use std::sync::Arc;
 use binary::{
     collect_elf_section_info, collect_elf_segments, collect_macho_section_info,
     collect_macho_segments, collect_pe_section_info, elf_go_skip_ranges, macho_go_skip_ranges,
-    macho_has_go_sections, pe_go_skip_ranges,
+    macho_has_go_sections, pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
 };
 use binary_net::scan_binary_ips;
 use imports::{extract_elf_imports, extract_macho_imports};
@@ -1850,10 +1850,27 @@ fn extract_from_object(
                 tracing::debug!("TIME: Go PE pclntab scan took {:?}", t_pcln.elapsed());
             }
 
-            // Skip raw-scanning Go's packed string sections to avoid emitting
-            // the entire blob as one merged garbage string.
+            // Rust PE binaries pack `&'static str` data into `.rdata` the
+            // same way Go does; structure-based slicing recovers individual
+            // entries that the raw scanner would otherwise glue into one
+            // megastring (`thumbs.dbnetuser.dat...`).
+            let is_rust = !is_go_binary && pe_is_rust(pe, data);
+            if is_rust {
+                let t_struct = std::time::Instant::now();
+                let extractor = RustStringExtractor::new(min_length);
+                strings.extend(extractor.extract_pe(pe, data));
+                tracing::debug!(
+                    "TIME: Rust PE structure extraction took {:?}",
+                    t_struct.elapsed()
+                );
+            }
+
+            // Skip raw-scanning Go's or Rust's packed string sections to
+            // avoid emitting the entire blob as one merged garbage string.
             let pe_skip: Vec<std::ops::Range<usize>> = if is_go_binary {
                 pe_go_skip_ranges(pe, data.len())
+            } else if is_rust {
+                pe_rust_skip_ranges(pe, data.len())
             } else {
                 Vec::new()
             };

@@ -17,10 +17,11 @@
 use super::classifier::classify_string;
 use super::extraction::{extract_from_structures, find_string_structures};
 use super::instr::{extract_inline_strings_amd64, extract_inline_strings_arm64};
-use super::types::{BinaryInfo, ExtractedString, StringMethod};
+use super::types::{BinaryInfo, ExtractedString, StringMethod, StringStruct};
 use goblin::elf::Elf;
 use goblin::mach::cputype::{CPU_TYPE_ARM64, CPU_TYPE_X86_64};
 use goblin::mach::MachO;
+use goblin::pe::PE;
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::HashSet;
@@ -292,6 +293,93 @@ impl RustStringExtractor {
         });
 
         strings
+    }
+
+    /// Extract strings from a PE binary.
+    ///
+    /// Rust PE binaries pack `&'static str` data into `.rdata` and reference
+    /// each substring through a `(ptr, len)` slice table that also lives in
+    /// `.rdata` (or `.data` for `&'static [&str]` arrays). The pointers are
+    /// absolute virtual addresses (`image_base + virtual_address`), so the
+    /// structure scanner runs against image-base-relative VAs and the result
+    /// is converted back to a file offset for downstream tooling.
+    pub(crate) fn extract_pe(&self, pe: &PE<'_>, data: &[u8]) -> Vec<ExtractedString> {
+        let info = BinaryInfo::from_pe(pe.is_64);
+        let image_base = pe
+            .header
+            .optional_header
+            .map_or(0u64, |opt| opt.windows_fields.image_base);
+
+        let Some(rdata) = pe.sections.iter().find(|s| {
+            let name = crate::binary::pe_section_name(&s.name);
+            name == ".rdata" || name == ".rodata"
+        }) else {
+            return Vec::new();
+        };
+
+        let rdata_file_start = rdata.pointer_to_raw_data as usize;
+        let rdata_size = rdata.size_of_raw_data as usize;
+        let rdata_file_end = rdata_file_start.saturating_add(rdata_size).min(data.len());
+        if rdata_file_start >= rdata_file_end {
+            return Vec::new();
+        }
+        let rdata_bytes = &data[rdata_file_start..rdata_file_end];
+        let rdata_va = image_base + u64::from(rdata.virtual_address);
+
+        // Scan candidate sections for `(ptr, len)` pairs whose pointer falls
+        // inside `.rdata`. `.rdata` itself is the dominant location; `.data`
+        // also holds Rust slice tables for items that the linker chose not to
+        // place in read-only memory.
+        let candidate_names: &[&str] = &[".rdata", ".rodata", ".data"];
+        let scan_sections: Vec<(u64, &[u8])> = pe
+            .sections
+            .iter()
+            .filter_map(|sec| {
+                let name = crate::binary::pe_section_name(&sec.name);
+                if !candidate_names.contains(&name.as_str()) {
+                    return None;
+                }
+                let start = usize::try_from(sec.pointer_to_raw_data).ok()?;
+                let size = usize::try_from(sec.size_of_raw_data).ok()?;
+                let end = start.checked_add(size)?.min(data.len());
+                if start >= end {
+                    return None;
+                }
+                Some((
+                    image_base + u64::from(sec.virtual_address),
+                    &data[start..end],
+                ))
+            })
+            .collect();
+
+        let all_structs: Vec<StringStruct> = scan_sections
+            .par_iter()
+            .flat_map(|(addr, bytes)| {
+                find_string_structures(bytes, *addr, rdata_va, rdata_bytes.len() as u64, &info)
+            })
+            .collect();
+
+        let mut structured = extract_from_structures(
+            rdata_bytes,
+            rdata_va,
+            &all_structs,
+            Some(".rdata"),
+            classify_string,
+        );
+
+        // Convert the VA stored in `data_offset` back to a file offset so the
+        // result lines up with the raw scanner's reporting convention.
+        let rdata_file_start_u64 = rdata_file_start as u64;
+        for s in &mut structured {
+            s.data_offset = rdata_file_start_u64 + (s.data_offset - rdata_va);
+        }
+
+        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
+        let mut seen: HashSet<String> = HashSet::new();
+        structured
+            .into_iter()
+            .filter(|s| s.value.len() >= struct_min && seen.insert(s.value.clone()))
+            .collect()
     }
 
     /// Helper to find a section by name and return its address and data.
