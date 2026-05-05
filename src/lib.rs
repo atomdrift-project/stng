@@ -217,6 +217,33 @@ fn strip_go_varint_prefixes(strings: &mut [ExtractedString]) {
 /// themselves to the right inputs. Kind, section, and arch all come
 /// from the `ExtractedString` itself when known.
 fn passes_garbage_filter(s: &ExtractedString) -> bool {
+    // Strings produced by our own decoders / deobfuscators are
+    // *deliberately* surfaced — base64-decoded payloads, XOR-decrypted
+    // C2 URLs, deobfuscated VBScript fragments, etc. The garbage
+    // heuristic is meant to suppress raw-scan noise from binary
+    // sections, not to second-guess the decoder pipeline. Without
+    // this gate, decoded entries get reclassified by `classify_string`
+    // on their *content* (e.g. obfuscated PowerShell with diacritic
+    // letters), `kind` lands somewhere other than `Base64`, and the
+    // `is_garbage_with_context` check below culls them — exactly the
+    // payload bytes the caller asked us to decode.
+    //
+    // Limited to *transformation* methods (decode / unobfuscate);
+    // raw scan variants like `RawScan` and `WideString` are still
+    // subject to the garbage check.
+    if matches!(
+        s.method,
+        StringMethod::Base64Decode
+            | StringMethod::Base64ObfuscatedDecode
+            | StringMethod::HexDecode
+            | StringMethod::UrlDecode
+            | StringMethod::UnicodeEscapeDecode
+            | StringMethod::ScriptDecode
+            | StringMethod::XorDecode
+            | StringMethod::StackString
+    ) {
+        return true;
+    }
     if matches!(
         s.kind,
         Some(StringKind::EntitlementsXml)
@@ -1187,7 +1214,24 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
         }
     }
 
-    if let Ok(object) = Object::parse(data) {
+    // Route binary objects we actually understand through the goblin
+    // path; treat everything else (parse error *or* `Object::Unknown` —
+    // goblin's "this magic isn't a binary I recognise" catchall) as a
+    // raw / text input.
+    //
+    // Without this, ZIP-prefixed scripts, polyglots, and any
+    // text-with-trailing-binary file land on the goblin branch (which
+    // gates encoded-string decoding behind `is_text_file`) and the
+    // base64 / hex / url decoders never run on the script payload.
+    // Goblin's binary extractors have nothing useful to say about an
+    // `Object::Unknown` anyway, so the only thing the goblin branch
+    // contributes there is the gate that breaks decoding.
+    let parsed_binary = match Object::parse(data) {
+        Ok(obj) if !matches!(obj, Object::Unknown(_)) => Some(obj),
+        _ => None,
+    };
+
+    if let Some(object) = parsed_binary {
         let t0 = std::time::Instant::now();
         let mut strings = extract_from_object(&object, data, opts);
         tracing::debug!("TIME: Extraction took {:?}", t0.elapsed());
@@ -1301,6 +1345,18 @@ pub fn extract_strings_from_object(
 ) -> Vec<ExtractedString> {
     if opts.is_cancelled() {
         return Vec::new();
+    }
+    // `Object::Unknown` means goblin saw no recognised binary magic —
+    // the caller passed in a non-binary (text, polyglot, unfamiliar
+    // container). The goblin branch has nothing to extract from such
+    // inputs, and skipping the raw / decoder pipeline here would mean
+    // base64-encoded payloads in the body never get decoded. Defer to
+    // the main entry point's unknown-format branch instead. The extra
+    // `Object::parse` call inside is one header read; the alternative
+    // (duplicating ~80 lines of decoder pipeline here) is the kind of
+    // drift that creates exactly the bug we're fixing.
+    if matches!(object, Object::Unknown(_)) {
+        return extract_strings_inner(data, opts);
     }
     let mut strings = extract_from_object(object, data, opts);
     if is_text_file(data) {
