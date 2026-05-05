@@ -297,8 +297,13 @@ pub(crate) fn pe_go_skip_ranges(
         .filter_map(|sec| {
             let name = pe_section_name(&sec.name);
             // Stripped Go PE builds fold gopclntab and the string blob into
-            // .rdata; cover both names for robustness.
-            if !matches!(name.as_str(), ".rodata" | ".rdata" | ".gopclntab") {
+            // .rdata; cover both names for robustness. `.text` is included so
+            // raw printable scans don't surface x86 instruction-byte fragments
+            // (`H9A8`, `KYKZ`) or mid-string slices of pclntab funcnames
+            // that the cmp-immediate dispatch code happens to embed.
+            // Stack-constructed strings in `.text` are still recovered by
+            // the stack-string extractor.
+            if !matches!(name.as_str(), ".rodata" | ".rdata" | ".gopclntab" | ".text") {
                 return None;
             }
             let start = usize::try_from(sec.pointer_to_raw_data).ok()?;

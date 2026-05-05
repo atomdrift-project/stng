@@ -85,7 +85,9 @@ pub use types::{
 pub use xor::{extract_incremental_xor_strings, MAX_XOR_SCAN_SIZE};
 
 // Internal — not part of the stable public API
-pub(crate) use go::GoStringExtractor;
+pub(crate) use go::{
+    extract_null_separated_strings, extract_varint_prefixed_strings, GoStringExtractor,
+};
 pub use overlay::extract_overlay_strings;
 pub(crate) use rust::RustStringExtractor;
 pub(crate) use stack_strings::{extract_stack_strings, extract_stack_strings_with_context};
@@ -147,6 +149,64 @@ fn extract_stack_strings_from_ranges(
         })
         .flatten()
         .collect()
+}
+
+/// Strip Go varint length-prefix bytes that bled into otherwise-clean strings.
+///
+/// Go's pclntab `pkgnamestab` packs entries as `<varint length byte><N bytes>`.
+/// Raw printable scanners (including radare2's `izz`) capture the length byte
+/// as the first character of the string. When the pattern is unambiguous —
+/// the leading byte is a small printable value, equals the length of the
+/// remainder, the remainder is all printable ASCII, and starts with a
+/// module-path-like character — we strip the prefix in place.
+fn strip_go_varint_prefixes(strings: &mut [ExtractedString]) {
+    for s in strings.iter_mut() {
+        let bytes = s.value.as_bytes();
+        if bytes.len() < 6 {
+            continue;
+        }
+        let prefix = bytes[0];
+        // Only consider single-byte varint lengths (1..0x80) that are also
+        // printable punctuation. Skip unambiguous separators like ' '.
+        if !(0x21..0x7F).contains(&prefix) {
+            continue;
+        }
+        let rest = &bytes[1..];
+        if rest.len() != prefix as usize {
+            continue;
+        }
+        // Tight predicate: rest must look like a Go package path or type name.
+        // Starts with letter/underscore/* / [ / ( / .
+        // Body: alnum + path/type punctuation only.
+        let starts_ok = matches!(
+            rest[0],
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'*' | b'[' | b'(' | b'.'
+        );
+        if !starts_ok {
+            continue;
+        }
+        let body_ok = rest.iter().all(|&b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'/' | b'.' | b'_' | b'-' | b'*' | b'[' | b']' | b'(' | b')' | b' '
+                )
+        });
+        if !body_ok {
+            continue;
+        }
+        // Module-path / Go-type heuristic: contains '/' or '.' (rules out
+        // 33-letter random alphabet sequences).
+        if !rest.iter().any(|&b| b == b'/' || b == b'.') {
+            continue;
+        }
+        // Safe to strip.
+        s.value = match std::str::from_utf8(rest) {
+            Ok(v) => v.to_string(),
+            Err(_) => continue,
+        };
+        s.data_offset += 1;
+    }
 }
 
 /// Returns `true` if a string should be kept when garbage filtering is enabled.
@@ -1681,8 +1741,57 @@ fn extract_from_object(
 
             if has_go {
                 is_go_binary = true;
+                let t_struct = std::time::Instant::now();
                 let extractor = GoStringExtractor::new(min_length);
                 strings.extend(extractor.extract_pe(pe, data));
+                tracing::debug!(
+                    "TIME: Go PE structure extraction took {:?}",
+                    t_struct.elapsed()
+                );
+
+                // Recover the Go pclntab `pkgnamestab` table that lives inside
+                // .rdata on stripped Windows builds — varint-length-prefixed
+                // module paths and reflect type names that are not reachable
+                // via {ptr,len} structures.
+                let t_pcln = std::time::Instant::now();
+                for sec in &pe.sections {
+                    let name = binary::pe_section_name(&sec.name);
+                    if !matches!(name.as_str(), ".rdata" | ".rodata") {
+                        continue;
+                    }
+                    let Some(start) = usize::try_from(sec.pointer_to_raw_data).ok() else {
+                        continue;
+                    };
+                    let Some(size) = usize::try_from(sec.size_of_raw_data).ok() else {
+                        continue;
+                    };
+                    let end = start.saturating_add(size).min(data.len());
+                    if start >= end {
+                        continue;
+                    }
+                    let section_bytes = &data[start..end];
+                    let (varints, nulls) = rayon::join(
+                        || {
+                            extract_varint_prefixed_strings(
+                                section_bytes,
+                                start as u64,
+                                Some(name.as_str()),
+                                min_length,
+                            )
+                        },
+                        || {
+                            extract_null_separated_strings(
+                                section_bytes,
+                                start as u64,
+                                Some(name.as_str()),
+                                min_length,
+                            )
+                        },
+                    );
+                    strings.extend(varints);
+                    strings.extend(nulls);
+                }
+                tracing::debug!("TIME: Go PE pclntab scan took {:?}", t_pcln.elapsed());
             }
 
             // Skip raw-scanning Go's packed string sections to avoid emitting
@@ -1739,22 +1848,23 @@ fn extract_from_object(
                                             )
                                         },
                                         || {
-                                            if !is_go_binary {
-                                                // Only disassemble executable
-                                                // sections — `.rdata` / `.rsrc`
-                                                // / other non-code PE sections
-                                                // would waste iced-x86 cycles.
-                                                let exec_ranges = binary::code_ranges_from_sections(
-                                                    &section_info,
-                                                );
-                                                extract_stack_strings_from_ranges(
-                                                    data,
-                                                    min_length,
-                                                    &exec_ranges,
-                                                )
-                                            } else {
-                                                Vec::new()
-                                            }
+                                            // Only disassemble executable
+                                            // sections — `.rdata` / `.rsrc`
+                                            // / other non-code PE sections
+                                            // would waste iced-x86 cycles.
+                                            // Go PE binaries also need this:
+                                            // dynamically-resolved Win32 APIs
+                                            // are written via successive
+                                            // `mov reg, imm64; mov [rsp+N], reg`
+                                            // and only emerge as full names
+                                            // when those writes are merged.
+                                            let exec_ranges =
+                                                binary::code_ranges_from_sections(&section_info);
+                                            extract_stack_strings_from_ranges(
+                                                data,
+                                                min_length,
+                                                &exec_ranges,
+                                            )
                                         },
                                     )
                                 },
@@ -1936,6 +2046,8 @@ fn extract_from_object(
     if opts.filter_garbage {
         strings.retain(passes_garbage_filter);
     }
+
+    strip_go_varint_prefixes(&mut strings);
 
     deduplicate_by_offset(strings)
 }

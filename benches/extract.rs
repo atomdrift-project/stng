@@ -44,6 +44,13 @@ fn bench_extract(c: &mut Criterion) {
             "script_kworker_23kb",
             "testdata/kworker_samples/kworker_obfuscated_1",
         ),
+        // Stripped Go PE — exercises the pkgnamestab varint scanner,
+        // null-separated funcnametab scanner, and stack-string extractor
+        // added for the ZyraPrivateVPN tun2socks payload recovery.
+        (
+            "go_pe_zyravpn_8.4mb",
+            "testdata/malware/zyravpn_tun2socks.exe",
+        ),
     ];
 
     for (name, path) in samples {
