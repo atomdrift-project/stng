@@ -236,6 +236,28 @@ fn is_valid_ip(octets: [u8; 4]) -> bool {
         return false;
     }
 
+    // Reject linearly incrementing sequences (e.g., 0x0D 0x0E 0x0F 0x10) — common in
+    // data tables and unwind info, not real addresses.
+    let is_linear = octets[1] == octets[0].wrapping_add(1)
+        && octets[2] == octets[0].wrapping_add(2)
+        && octets[3] == octets[0].wrapping_add(3);
+    if is_linear {
+        return false;
+    }
+
+    // Last octets 1–4 are gateway/infrastructure addresses, not C2 hosts.
+    if octets[3] < 5 {
+        return false;
+    }
+
+    // Repeated low-value octets (< 16) are a hallmark of binary data tables and
+    // counter sequences (e.g., 21.3.12.12 where 12 repeats), not real IP allocations.
+    for val in octets {
+        if val < 16 && octets.iter().filter(|&&b| b == val).count() > 1 {
+            return false;
+        }
+    }
+
     true
 }
 
@@ -318,15 +340,15 @@ mod tests {
         data[270] = 0x02; // AF_INET LE first byte
         data[271] = 0x00; // AF_INET LE second byte
         data[272..274].copy_from_slice(&[0x1F, 0x90]); // Port 8080 BE
-        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x01]); // IP 192.168.1.1 BE
+        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // IP 192.168.1.50 BE
 
         let results = scan_sockaddr_in(&data, 4);
 
         // Should find our target
-        let found = results.iter().find(|s| s.value == "192.168.1.1:8080");
+        let found = results.iter().find(|s| s.value == "192.168.1.50:8080");
         assert!(
             found.is_some(),
-            "Should find 192.168.1.1:8080 in sockaddr_in"
+            "Should find 192.168.1.50:8080 in sockaddr_in"
         );
         assert_eq!(found.unwrap().data_offset, 270);
         assert_eq!(found.unwrap().kind, Some(StringKind::IPPort));
@@ -340,14 +362,14 @@ mod tests {
         data[270] = 0x00; // AF_INET BE first byte
         data[271] = 0x02; // AF_INET BE second byte
         data[272..274].copy_from_slice(&[0x1F, 0x90]); // Port 8080 BE
-        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x01]); // IP 192.168.1.1 BE
+        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // IP 192.168.1.50 BE
 
         let results = scan_sockaddr_in(&data, 4);
 
-        let found = results.iter().find(|s| s.value == "192.168.1.1:8080");
+        let found = results.iter().find(|s| s.value == "192.168.1.50:8080");
         assert!(
             found.is_some(),
-            "Should find 192.168.1.1:8080 with AF_INET BE"
+            "Should find 192.168.1.50:8080 with AF_INET BE"
         );
     }
 
@@ -394,8 +416,7 @@ mod tests {
         data[5] = 0x02;
         data[6] = 0x00;
         data[7..9].copy_from_slice(&[0x1F, 0x90]); // Port 8080
-                                                   // Use IP 172.16.1.1 (0xAC 0x10 0x01 0x01) to avoid accidental AF_INET patterns
-        data[9..13].copy_from_slice(&[0xAC, 0x10, 0x01, 0x01]); // 172.16.1.1
+        data[9..13].copy_from_slice(&[0xAC, 0x10, 0x14, 0x32]); // 172.16.20.50
 
         // Second sockaddr_in at offset 50 (well-separated to avoid overlaps)
         data[50] = 0x00;
@@ -411,7 +432,7 @@ mod tests {
         assert!(results.len() >= 2);
         let ips: std::collections::HashSet<&str> =
             results.iter().map(|s| s.value.as_str()).collect();
-        assert!(ips.contains("172.16.1.1:8080"));
+        assert!(ips.contains("172.16.20.50:8080"));
         assert!(ips.contains("10.20.30.40:80"));
     }
 
@@ -491,6 +512,105 @@ mod tests {
     }
 
     #[test]
+    fn test_sockaddr_in_rejects_linear_ip() {
+        // Linear sequences like 0x0D 0x0E 0x0F 0x10 are common in data tables,
+        // not real addresses (matches the tscfgwmi.dll false positive pattern).
+        let mut data = vec![0xAA; 300];
+
+        // 13.14.15.16 — perfectly sequential, should be rejected
+        data[270] = 0x02;
+        data[271] = 0x00;
+        data[272..274].copy_from_slice(&[0x01, 0x02]); // Port 258
+        data[274..278].copy_from_slice(&[0x0D, 0x0E, 0x0F, 0x10]); // 13.14.15.16
+
+        // 21.22.23.24 — also linear
+        data[280] = 0x02;
+        data[281] = 0x00;
+        data[282..284].copy_from_slice(&[0x1F, 0x90]); // Port 8080
+        data[284..288].copy_from_slice(&[0x15, 0x16, 0x17, 0x18]); // 21.22.23.24
+
+        // 192.168.1.50 — not linear, should be found
+        data[290] = 0x02;
+        data[291] = 0x00;
+        data[292..294].copy_from_slice(&[0x1F, 0x91]); // Port 8081
+        data[294..298].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // 192.168.1.50
+
+        let results = scan_sockaddr_in(&data, 4);
+        let ips: std::collections::HashSet<&str> =
+            results.iter().map(|s| s.value.as_str()).collect();
+
+        assert!(!ips.contains("13.14.15.16:258"), "Should reject linear IP 13.14.15.16");
+        assert!(!ips.contains("21.22.23.24:8080"), "Should reject linear IP 21.22.23.24");
+        assert!(ips.contains("192.168.1.50:8081"), "Should find non-linear IP 192.168.1.50");
+    }
+
+    #[test]
+    fn test_sockaddr_in_rejects_low_last_octet() {
+        // Last octets 1–4 are gateway/infrastructure, not C2 hosts.
+        // Mirrors the 128.92.202.4 false positive from tscfgwmi.dll.
+        let mut data = vec![0xAA; 300];
+
+        // 128.92.202.4 — last octet 4, should be rejected
+        data[270] = 0x00;
+        data[271] = 0x02;
+        data[272..274].copy_from_slice(&[0x80, 0x02]); // Port 32770
+        data[274..278].copy_from_slice(&[0x80, 0x5C, 0xCA, 0x04]); // 128.92.202.4
+
+        // 12.2.120.2 — last octet 2, should be rejected
+        data[280] = 0x00;
+        data[281] = 0x02;
+        data[282..284].copy_from_slice(&[0x1A, 0x04]); // Port 6660
+        data[284..288].copy_from_slice(&[0x0C, 0x02, 0x78, 0x02]); // 12.2.120.2
+
+        // 128.92.202.6 — last octet 6, should be found
+        data[290] = 0x00;
+        data[291] = 0x02;
+        data[292..294].copy_from_slice(&[0x80, 0x02]); // Port 32770
+        data[294..298].copy_from_slice(&[0x80, 0x5C, 0xCA, 0x06]); // 128.92.202.6
+
+        let results = scan_sockaddr_in(&data, 4);
+        let ips: std::collections::HashSet<&str> =
+            results.iter().map(|s| s.value.as_str()).collect();
+
+        assert!(!ips.contains("128.92.202.4:32770"), "Should reject last octet 4");
+        assert!(!ips.contains("12.2.120.2:6660"), "Should reject last octet 2");
+        assert!(ips.contains("128.92.202.6:32770"), "Should find last octet 6");
+    }
+
+    #[test]
+    fn test_sockaddr_in_rejects_repeated_low_octets() {
+        // Repeated low-value octets are common in binary data tables, not real IPs.
+        // Mirrors the 21.3.12.12 false positive from tscfgwmi.dll.
+        let mut data = vec![0xAA; 300];
+
+        // 21.3.12.12 — value 12 repeats and is < 16, should be rejected
+        data[270] = 0x00;
+        data[271] = 0x02;
+        data[272..274].copy_from_slice(&[0x05, 0x5B]); // Port 1371
+        data[274..278].copy_from_slice(&[0x15, 0x03, 0x0C, 0x0C]); // 21.3.12.12
+
+        // 185.220.100.240 — no repeated low values, should be found
+        data[280] = 0x00;
+        data[281] = 0x02;
+        data[282..284].copy_from_slice(&[0x1F, 0x90]); // Port 8080
+        data[284..288].copy_from_slice(&[0xB9, 0xDC, 0x64, 0xF0]); // 185.220.100.240
+
+        // 104.21.25.21 — 21 repeats but 21 >= 16, should be found
+        data[290] = 0x00;
+        data[291] = 0x02;
+        data[292..294].copy_from_slice(&[0x01, 0xBB]); // Port 443
+        data[294..298].copy_from_slice(&[0x68, 0x15, 0x19, 0x15]); // 104.21.25.21
+
+        let results = scan_sockaddr_in(&data, 4);
+        let ips: std::collections::HashSet<&str> =
+            results.iter().map(|s| s.value.as_str()).collect();
+
+        assert!(!ips.contains("21.3.12.12:1371"), "Should reject repeated low octet 12");
+        assert!(ips.contains("185.220.100.240:8080"), "Should find IP with no repeated low octets");
+        assert!(ips.contains("104.21.25.21:443"), "Should find IP where repeated value >= 16");
+    }
+
+    #[test]
     fn test_m68000_skip() {
         // M68000 binaries should return empty results to avoid false positives
         // Their instruction stream naturally contains 0x0002 patterns
@@ -500,7 +620,7 @@ mod tests {
         data[270] = 0x02;
         data[271] = 0x00;
         data[272..274].copy_from_slice(&[0x1F, 0x90]); // Port 8080
-        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x01]); // IP 192.168.1.1
+        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // IP 192.168.1.50
 
         let elf_m68k = 4; // EM_68K from ELF header
         let results = scan_binary_ips(&data, 4, elf_m68k, None, None);
@@ -521,7 +641,7 @@ mod tests {
         data[270] = 0x02;
         data[271] = 0x00;
         data[272..274].copy_from_slice(&[0x1F, 0x90]); // Port 8080
-        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x01]); // IP 192.168.1.1
+        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // IP 192.168.1.50
 
         // Test with various non-M68000 architectures
         let arch_samples = vec![
@@ -539,7 +659,7 @@ mod tests {
                 arch_name
             );
             assert!(
-                results.iter().any(|r| r.value.contains("192.168.1.1:8080")),
+                results.iter().any(|r| r.value.contains("192.168.1.50:8080")),
                 "Should find IP for {} architecture",
                 arch_name
             );
@@ -554,7 +674,7 @@ mod tests {
         data[270] = 0x02;
         data[271] = 0x00;
         data[272..274].copy_from_slice(&[0x1F, 0x90]); // Port 8080
-        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x01]); // IP 192.168.1.1
+        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // IP 192.168.1.50
 
         // Test with ARM architecture (not M68000, not Go)
         let elf_arm = 40; // EM_ARM
@@ -566,7 +686,7 @@ mod tests {
             "Non-Go binaries should still be scanned"
         );
         assert!(
-            results.iter().any(|r| r.value.contains("192.168.1.1:8080")),
+            results.iter().any(|r| r.value.contains("192.168.1.50:8080")),
             "Should find IP in non-Go binary"
         );
     }
