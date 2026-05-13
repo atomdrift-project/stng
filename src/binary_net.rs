@@ -539,9 +539,18 @@ mod tests {
         let ips: std::collections::HashSet<&str> =
             results.iter().map(|s| s.value.as_str()).collect();
 
-        assert!(!ips.contains("13.14.15.16:258"), "Should reject linear IP 13.14.15.16");
-        assert!(!ips.contains("21.22.23.24:8080"), "Should reject linear IP 21.22.23.24");
-        assert!(ips.contains("192.168.1.50:8081"), "Should find non-linear IP 192.168.1.50");
+        assert!(
+            !ips.contains("13.14.15.16:258"),
+            "Should reject linear IP 13.14.15.16"
+        );
+        assert!(
+            !ips.contains("21.22.23.24:8080"),
+            "Should reject linear IP 21.22.23.24"
+        );
+        assert!(
+            ips.contains("192.168.1.50:8081"),
+            "Should find non-linear IP 192.168.1.50"
+        );
     }
 
     #[test]
@@ -572,9 +581,18 @@ mod tests {
         let ips: std::collections::HashSet<&str> =
             results.iter().map(|s| s.value.as_str()).collect();
 
-        assert!(!ips.contains("128.92.202.4:32770"), "Should reject last octet 4");
-        assert!(!ips.contains("12.2.120.2:6660"), "Should reject last octet 2");
-        assert!(ips.contains("128.92.202.6:32770"), "Should find last octet 6");
+        assert!(
+            !ips.contains("128.92.202.4:32770"),
+            "Should reject last octet 4"
+        );
+        assert!(
+            !ips.contains("12.2.120.2:6660"),
+            "Should reject last octet 2"
+        );
+        assert!(
+            ips.contains("128.92.202.6:32770"),
+            "Should find last octet 6"
+        );
     }
 
     #[test]
@@ -605,9 +623,18 @@ mod tests {
         let ips: std::collections::HashSet<&str> =
             results.iter().map(|s| s.value.as_str()).collect();
 
-        assert!(!ips.contains("21.3.12.12:1371"), "Should reject repeated low octet 12");
-        assert!(ips.contains("185.220.100.240:8080"), "Should find IP with no repeated low octets");
-        assert!(ips.contains("104.21.25.21:443"), "Should find IP where repeated value >= 16");
+        assert!(
+            !ips.contains("21.3.12.12:1371"),
+            "Should reject repeated low octet 12"
+        );
+        assert!(
+            ips.contains("185.220.100.240:8080"),
+            "Should find IP with no repeated low octets"
+        );
+        assert!(
+            ips.contains("104.21.25.21:443"),
+            "Should find IP where repeated value >= 16"
+        );
     }
 
     #[test]
@@ -659,7 +686,9 @@ mod tests {
                 arch_name
             );
             assert!(
-                results.iter().any(|r| r.value.contains("192.168.1.50:8080")),
+                results
+                    .iter()
+                    .any(|r| r.value.contains("192.168.1.50:8080")),
                 "Should find IP for {} architecture",
                 arch_name
             );
@@ -686,7 +715,9 @@ mod tests {
             "Non-Go binaries should still be scanned"
         );
         assert!(
-            results.iter().any(|r| r.value.contains("192.168.1.50:8080")),
+            results
+                .iter()
+                .any(|r| r.value.contains("192.168.1.50:8080")),
             "Should find IP in non-Go binary"
         );
     }

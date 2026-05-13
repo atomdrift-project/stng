@@ -12,7 +12,7 @@
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 /// Global cache for file hashes to avoid redundant hashing of large binaries.
@@ -54,6 +54,15 @@ impl R2Cache {
                 .join("r2")
         };
 
+        Self::with_cache_dir(enabled, cache_dir)
+    }
+
+    /// Create a cache instance rooted at an explicit cache directory.
+    pub fn with_cache_dir<P: AsRef<Path>>(
+        enabled: bool,
+        cache_dir: P,
+    ) -> Result<Self, std::io::Error> {
+        let cache_dir = cache_dir.as_ref().to_path_buf();
         if enabled {
             fs::create_dir_all(&cache_dir)?;
         }
