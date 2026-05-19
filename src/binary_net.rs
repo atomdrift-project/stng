@@ -98,6 +98,20 @@ fn is_dotnet_binary(pe_opt: Option<&crate::goblin::pe::PE<'_>>, data: &[u8]) -> 
     false
 }
 
+/// Endianness of the binary being scanned, used to restrict the AF_INET marker
+/// check in [`scan_sockaddr_in`]. On a little-endian platform, sin_family is
+/// stored as `02 00`; on a big-endian platform, `00 02`. Accepting both produces
+/// false positives from byte sequences in code/data (e.g. COM GUIDs in PE
+/// .rdata or small-integer lookup tables).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Endianness {
+    Little,
+    Big,
+    /// Format gave no endianness hint — accept either marker (legacy behavior
+    /// for Mach-O / unknown / fully-unparsed inputs).
+    Unknown,
+}
+
 /// Scans binary data for hardcoded IP addresses in socket structures.
 ///
 /// Only detects IPs in contextual patterns:
@@ -134,11 +148,26 @@ pub(crate) fn scan_binary_ips(
         return Vec::new();
     }
 
+    let endianness = match (elf_opt, pe_opt) {
+        // ELF carries the runtime endianness explicitly.
+        (Some(elf), _) => {
+            if elf.little_endian {
+                Endianness::Little
+            } else {
+                Endianness::Big
+            }
+        }
+        // PE/COFF is always loaded little-endian on every shipping Windows
+        // target (x86, x86_64, ARM, ARM64).
+        (_, Some(_)) => Endianness::Little,
+        _ => Endianness::Unknown,
+    };
+
     let mut results = Vec::new();
 
     // Only scan for sockaddr_in structures - these have the AF_INET marker
     // which provides context that this is actually a socket structure
-    results.extend(scan_sockaddr_in(data, min_length));
+    results.extend(scan_sockaddr_in(data, min_length, endianness));
 
     // For ELF binaries with section info, filter to only accept data sections
     // Real hardcoded C2 IPs are in .data, .rodata, etc., not in .text (code)
@@ -261,7 +290,11 @@ fn is_valid_ip(octets: [u8; 4]) -> bool {
     true
 }
 
-fn scan_sockaddr_in(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
+fn scan_sockaddr_in(
+    data: &[u8],
+    min_length: usize,
+    endianness: Endianness,
+) -> Vec<ExtractedString> {
     let mut results = Vec::new();
 
     // Skip file headers (ELF, PE, Mach-O) which often contain similar byte patterns
@@ -269,12 +302,16 @@ fn scan_sockaddr_in(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     // false positive patterns. Real sockaddr_in structs are in data sections further in.
     let start = if data.len() > 1024 { 1024 } else { 0 };
 
+    let accept_le = matches!(endianness, Endianness::Little | Endianness::Unknown);
+    let accept_be = matches!(endianness, Endianness::Big | Endianness::Unknown);
+
     for i in start..data.len().saturating_sub(7) {
-        // Check for AF_INET marker (value 2) in either endianness
-        // Little-endian: 0x02 0x00
-        // Big-endian: 0x00 0x02
-        let af_inet_le = data[i] == 0x02 && data[i + 1] == 0x00;
-        let af_inet_be = data[i] == 0x00 && data[i + 1] == 0x02;
+        // Check for AF_INET marker (value 2) in the binary's native order.
+        // Accepting the wrong byte order produces false positives because
+        // unrelated structures (COM GUIDs in PE .rdata, small-int tables) often
+        // contain `00 02` or `02 00` runs.
+        let af_inet_le = accept_le && data[i] == 0x02 && data[i + 1] == 0x00;
+        let af_inet_be = accept_be && data[i] == 0x00 && data[i + 1] == 0x02;
 
         if !af_inet_le && !af_inet_be {
             continue;
@@ -342,7 +379,7 @@ mod tests {
         data[272..274].copy_from_slice(&[0x1F, 0x90]); // Port 8080 BE
         data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // IP 192.168.1.50 BE
 
-        let results = scan_sockaddr_in(&data, 4);
+        let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
 
         // Should find our target
         let found = results.iter().find(|s| s.value == "192.168.1.50:8080");
@@ -364,7 +401,7 @@ mod tests {
         data[272..274].copy_from_slice(&[0x1F, 0x90]); // Port 8080 BE
         data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // IP 192.168.1.50 BE
 
-        let results = scan_sockaddr_in(&data, 4);
+        let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
 
         let found = results.iter().find(|s| s.value == "192.168.1.50:8080");
         assert!(
@@ -383,7 +420,7 @@ mod tests {
         data[274..278].copy_from_slice(&[0xC0, 0x00, 0x02, 0x01]);
 
         // Request results with min_length = 100
-        let results = scan_sockaddr_in(&data, 100);
+        let results = scan_sockaddr_in(&data, 100, Endianness::Unknown);
 
         // Should not find it (192.0.2.1:80 is only 15 chars)
         assert!(results.is_empty(), "Should filter by min_length");
@@ -399,7 +436,7 @@ mod tests {
                                                        // IP with 3+ ASCII chars (E=0x45, L=0x4C, F=0x46)
         data[274..278].copy_from_slice(&[0x7F, 0x45, 0x4C, 0x46]);
 
-        let results = scan_sockaddr_in(&data, 4);
+        let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
 
         // Should filter out because IP looks like "ELF" text
         assert!(
@@ -477,7 +514,7 @@ mod tests {
         data[322..324].copy_from_slice(&[0x1F, 0x95]); // Port 8085
         data[324..328].copy_from_slice(&[0x67, 0xD6, 0x8F, 0xD6]); // 103.214.143.214
 
-        let results = scan_sockaddr_in(&data, 4);
+        let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
 
         let ips: std::collections::HashSet<&str> =
             results.iter().map(|s| s.value.as_str()).collect();
@@ -535,7 +572,7 @@ mod tests {
         data[292..294].copy_from_slice(&[0x1F, 0x91]); // Port 8081
         data[294..298].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // 192.168.1.50
 
-        let results = scan_sockaddr_in(&data, 4);
+        let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
         let ips: std::collections::HashSet<&str> =
             results.iter().map(|s| s.value.as_str()).collect();
 
@@ -577,7 +614,7 @@ mod tests {
         data[292..294].copy_from_slice(&[0x80, 0x02]); // Port 32770
         data[294..298].copy_from_slice(&[0x80, 0x5C, 0xCA, 0x06]); // 128.92.202.6
 
-        let results = scan_sockaddr_in(&data, 4);
+        let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
         let ips: std::collections::HashSet<&str> =
             results.iter().map(|s| s.value.as_str()).collect();
 
@@ -619,7 +656,7 @@ mod tests {
         data[292..294].copy_from_slice(&[0x01, 0xBB]); // Port 443
         data[294..298].copy_from_slice(&[0x68, 0x15, 0x19, 0x15]); // 104.21.25.21
 
-        let results = scan_sockaddr_in(&data, 4);
+        let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
         let ips: std::collections::HashSet<&str> =
             results.iter().map(|s| s.value.as_str()).collect();
 
@@ -693,6 +730,60 @@ mod tests {
                 arch_name
             );
         }
+    }
+
+    #[test]
+    fn test_sockaddr_endianness_le_rejects_be_marker() {
+        // On a little-endian binary, only `02 00` is a real sockaddr_in.
+        // A `00 02 ...` sequence (e.g. middle of a COM GUID) must NOT match.
+        let mut data = vec![0xAA; 300];
+        // BE-marker bytes that decode to a plausible-looking 155.241.239.26:48379
+        data[270] = 0x00;
+        data[271] = 0x02;
+        data[272..274].copy_from_slice(&[0xBC, 0xFB]); // Port 48379
+        data[274..278].copy_from_slice(&[0x9B, 0xF1, 0xEF, 0x1A]);
+
+        let results = scan_sockaddr_in(&data, 4, Endianness::Little);
+        assert!(
+            results.is_empty(),
+            "LE binary should not accept BE AF_INET marker; got {results:?}"
+        );
+
+        // Sanity: the same buffer with Unknown endianness *would* match.
+        let results_unknown = scan_sockaddr_in(&data, 4, Endianness::Unknown);
+        assert!(
+            !results_unknown.is_empty(),
+            "Unknown endianness should accept either marker"
+        );
+    }
+
+    #[test]
+    fn test_sockaddr_endianness_be_rejects_le_marker() {
+        // Inverse: on a big-endian binary, only `00 02` is real.
+        let mut data = vec![0xAA; 300];
+        data[270] = 0x02;
+        data[271] = 0x00;
+        data[272..274].copy_from_slice(&[0x1F, 0x90]); // Port 8080
+        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // 192.168.1.50
+
+        let results = scan_sockaddr_in(&data, 4, Endianness::Big);
+        assert!(
+            results.is_empty(),
+            "BE binary should not accept LE AF_INET marker; got {results:?}"
+        );
+    }
+
+    #[test]
+    fn test_sockaddr_endianness_le_still_finds_native_marker() {
+        // Regression guard: real LE sockaddr_in still extracts.
+        let mut data = vec![0xAA; 300];
+        data[270] = 0x02;
+        data[271] = 0x00;
+        data[272..274].copy_from_slice(&[0x1F, 0x90]);
+        data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]);
+
+        let results = scan_sockaddr_in(&data, 4, Endianness::Little);
+        assert!(results.iter().any(|s| s.value == "192.168.1.50:8080"));
     }
 
     #[test]

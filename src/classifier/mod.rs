@@ -384,8 +384,9 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
         }
     }
 
-    // Windows registry paths
-    if s.starts_with("HKEY_") || s.starts_with("HKLM\\") || s.starts_with("HKCU\\") {
+    // Windows registry paths (full HKEY-prefixed or root-relative subkeys
+    // passed alongside a separate hKey arg to Reg* APIs).
+    if is_registry_path(s) {
         return Some(StringKind::Registry);
     }
 
@@ -542,6 +543,60 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
     None
 }
 
+/// Recognize a Windows registry key path, including the root-relative subkey
+/// form that is passed alongside a separate `hKey` argument to `RegOpenKeyExA`
+/// & friends (e.g. `Software\Microsoft\Windows\CurrentVersion\Run`).
+///
+/// The all-caps variant `SOFTWARE\` / `SYSTEM\` is matched on its own because
+/// it is overwhelmingly registry-specific in practice. The mixed-case
+/// `Software\` / `System\` form requires a known second component to avoid
+/// false positives on generic filesystem strings.
+fn is_registry_path(s: &str) -> bool {
+    // Standard HKEY-prefixed forms.
+    if s.starts_with("HKEY_")
+        || s.starts_with("HKLM\\")
+        || s.starts_with("HKCU\\")
+        || s.starts_with("HKCR\\")
+        || s.starts_with("HKU\\")
+        || s.starts_with("HKCC\\")
+    {
+        return true;
+    }
+
+    // All-caps hive-relative paths are almost exclusively registry keys.
+    if s.starts_with("SOFTWARE\\") || s.starts_with("SYSTEM\\") {
+        return true;
+    }
+
+    // Mixed-case hive-relative paths. Restrict to well-known second components
+    // so we don't classify a literal Windows filesystem path like
+    // `Software\Foo\bar.dll` (which a few games / installers do embed).
+    const WELL_KNOWN_SOFTWARE_SUBKEYS: &[&str] = &[
+        "Software\\Microsoft\\",
+        "Software\\Wow6432Node\\",
+        "Software\\Classes\\",
+        "Software\\Policies\\",
+        "Software\\JavaSoft\\",
+        "Software\\Clients\\",
+        "Software\\WOW6432Node\\",
+        "Software\\Mozilla\\",
+        "Software\\Google\\",
+    ];
+    if WELL_KNOWN_SOFTWARE_SUBKEYS.iter().any(|p| s.starts_with(p)) {
+        return true;
+    }
+
+    if s.starts_with("System\\CurrentControlSet\\")
+        || s.starts_with("System\\Setup\\")
+        || s.starts_with("SAM\\")
+        || s.starts_with("SECURITY\\")
+    {
+        return true;
+    }
+
+    false
+}
+
 /// Classify a long string using only its prefix.
 ///
 /// Uses first-byte dispatch to avoid running expensive checks on irrelevant
@@ -580,10 +635,7 @@ fn classify_prefix(prefix: &str) -> Option<StringKind> {
         }
         // Windows paths / registry
         b'C' if prefix.starts_with("C:\\") => return Some(StringKind::Path),
-        b'H' if prefix.starts_with("HKEY_")
-            || prefix.starts_with("HKLM\\")
-            || prefix.starts_with("HKCU\\") =>
-        {
+        b'H' | b'S' if is_registry_path(prefix) => {
             return Some(StringKind::Registry);
         }
         // PHP opening tag
