@@ -230,9 +230,12 @@ fn test_short_garbage_patterns() {
     // Mixed case (upper and lower) with digits is garbage
     assert!(is_garbage("8oz1"), "Mixed case with digits");
 
-    // Short mixed case (garbage)
-    assert!(is_garbage("gnzUrs"), "Short irregular mixed");
-    assert!(is_garbage("phbS"), "Mixed case");
+    // `gnzUrs` shares its shape (lowercase prefix + one uppercase + lowercase)
+    // with valid camelCase like `getTime` / `setLine`, so the looser
+    // identifier-shape rule now keeps it. `phbS` is still 4 chars and rejected
+    // because the alphanumeric arm only fires at length >= 5.
+    assert!(!is_garbage("gnzUrs"), "Short camelCase-shaped mixed");
+    assert!(is_garbage("phbS"), "4-char mixed case");
 
     // Internal whitespace (garbage)
     assert!(is_garbage("5c 9"), "Digits with space");
@@ -251,12 +254,13 @@ fn test_camelcase_patterns() {
 }
 
 #[test]
-fn test_invalid_camelcase() {
-    // Too short (< 7 chars) - mixed case short strings ARE garbage
-    assert!(is_garbage("myVal"), "Short mixed case is garbage");
-
-    // Uppercase at end - short strings with irregular patterns are garbage
-    assert!(!is_garbage("someworD"), "Longer mixed case may be OK");
+fn test_short_camelcase_accepted() {
+    // 5+ char camelCase identifiers are now kept — `myVal`, `getId`,
+    // `iOSv2` are all valid abbreviated names that security analysts
+    // care about. The 4-char floor in `looks_like_word_like` still
+    // rejects 4-char mixed-case noise.
+    assert!(!is_garbage("myVal"));
+    assert!(!is_garbage("someworD"));
 }
 
 // ===== Filename and Section Tests =====
@@ -524,8 +528,11 @@ fn test_balanced_punctuation() {
 
 #[test]
 fn test_medium_mixed_case_digits() {
-    // 5-10 chars with digits + uppercase + lowercase (usually garbage unless version-like)
-    assert!(is_garbage("fprzTR8"), "Random mix");
+    // 5-10 chars with digits + uppercase + lowercase: identifier-shaped
+    // alphanumeric strings (`fprzTR8`-style — a random-looking ID could
+    // be a mutex name, hash prefix, or generated token) are now kept.
+    // Strings with embedded punctuation (`=`, `:`) still get filtered.
+    assert!(!is_garbage("fprzTR8"));
     assert!(is_garbage("J=22KJT"), "Mixed with equals");
     assert!(is_garbage("V1rN:R"), "Mixed with colon");
 }

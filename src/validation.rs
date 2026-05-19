@@ -640,7 +640,11 @@ fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
         && stats.lower > 0
         && stats.digit == 0;
     let last_char = stats.last_char;
-    let is_camel_case = len >= 7
+    // camelCase identifiers: lowercase first char, exactly one uppercase
+    // somewhere in the middle, lowercase tail. At 4+ chars this matches
+    // short brand/Hungarian names (`iPad`, `iMac`, `hWnd`, `lpSz`) — the
+    // 7-char floor used to filter these out alongside actual noise.
+    let is_camel_case = len >= 4
         && stats.first_char.is_ascii_lowercase()
         && stats.upper == 1
         && stats.digit == 0
@@ -695,6 +699,17 @@ fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     {
         return false;
     }
+    // Identifier-shaped alphanumeric strings (`iPad`, `hWnd`, `Argon2`) have
+    // a same-class run of ≥ 2 even at 4–6 chars and should be kept.
+    if looks_like_word_like(s, len, stats) {
+        return false;
+    }
+    // Short multi-word fragments (`JMP +5`) — at least 4 alphanumeric chars
+    // with whitespace separating tokens. Garbage like `5c 9` or `VW N` has
+    // too few alphanumeric chars to clear this bar.
+    if stats.whitespace > 0 && stats.alphanumeric >= 4 {
+        return false;
+    }
     if stats.digit > 0 && (stats.upper > 0 || stats.lower > 0) {
         return true;
     }
@@ -712,10 +727,23 @@ fn is_short_binary_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     if len > 6 {
         return false;
     }
-    if stats.upper > 0 && stats.special > 0 && stats.alpha == stats.upper {
+    // All-uppercase + punctuation is usually misaligned binary (`MD%`, `AB#`).
+    // Whitespace flips the meaning — `JMP +5` is a disassembly fragment, not
+    // noise, so a multi-word string with this shape is kept.
+    if stats.upper > 0 && stats.special > 0 && stats.alpha == stats.upper && stats.whitespace == 0 {
         return true;
     }
     if stats.special > 0 && len <= 5 {
+        // Function-call shapes (`Run()`, `F(x)`, `fn()`) are meaningful code
+        // even at short lengths. Balanced parens accounting for every special
+        // char is a strong signal.
+        let is_function_call = stats.open_parens > 0
+            && stats.open_parens == stats.close_parens
+            && stats.open_parens + stats.close_parens == stats.special
+            && stats.alphanumeric > 0;
+        if is_function_call {
+            return false;
+        }
         let dot_count = memchr::memchr_iter(b'.', s.as_bytes()).count();
         if dot_count == stats.special {
             let is_filename_pattern =
@@ -1024,9 +1052,82 @@ fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bool {
     false
 }
 
+/// Returns true if the string is a plausible identifier or word-like sequence
+/// that the chaos / mixed-case-digit / short-identifier filters would
+/// otherwise reject for having too many class transitions.
+///
+/// Two shapes are accepted:
+/// * **Pure ASCII letters, length ≥ 7** (`AbCdEfGh`, `TheQuickBrownFox`,
+///   `PaSsWoRd`): a long sequence of nothing but letters is almost certainly
+///   meaningful even when case alternates frequently. Pure all-caps and
+///   all-lowercase are handled elsewhere; this arm covers the mixed-case
+///   middle ground.
+/// * **Pure ASCII alphanumeric with a ≥2-char same-class run** (`MD5Hash`,
+///   `Ed25519`, `Curve25519`, `ToInt32`, `Argon2`, `CallByName`, `iPad`,
+///   `hWnd`): one same-class run of length ≥ 2 (a multi-letter word, an
+///   acronym, or a multi-digit version number) is enough structure to
+///   distinguish a real identifier from noise like `A1b2c3` or `AaBbCc`,
+///   where every position is in a different class than its neighbour.
+fn looks_like_word_like(s: &str, len: usize, stats: &CharStats) -> bool {
+    if stats.upper == 0 || stats.lower == 0 {
+        return false;
+    }
+    // Pure ASCII letters: 7+ chars is enough signal on its own.
+    if len >= 7 && stats.alpha == len && stats.ascii_count == len {
+        return true;
+    }
+    // Pure ASCII alphanumeric — letters and optional digits, nothing else.
+    // The class-run check below is too permissive at very short lengths
+    // (4-char patterns like `Ilu4` or `cwZd` always hit a 2-char run and are
+    // indistinguishable from real garbage), so this arm only fires at 5+.
+    if len < 5 || stats.upper + stats.lower + stats.digit != len || stats.ascii_count != len {
+        return false;
+    }
+    let class = |b: u8| -> u8 {
+        if b.is_ascii_uppercase() {
+            0
+        } else if b.is_ascii_lowercase() {
+            1
+        } else {
+            2 // digit
+        }
+    };
+    let bytes = s.as_bytes();
+    let mut max_run = 1usize;
+    let mut cur_run = 1usize;
+    for i in 1..bytes.len() {
+        if class(bytes[i]) == class(bytes[i - 1]) {
+            cur_run += 1;
+            if cur_run > max_run {
+                max_run = cur_run;
+            }
+        } else {
+            cur_run = 1;
+        }
+    }
+    max_run >= 2
+}
+
+/// Returns true if the string is a file-glob pattern like `*.exe`, `*.dll`,
+/// or `*.tmp` — a literal asterisk + dot + 1–6 alphanumeric characters.
+/// These are common malware indicators (search patterns, dropped-file
+/// extensions) and the bare extension form (`.exe`) is already accepted.
+fn is_file_glob(s: &str) -> bool {
+    let Some(ext) = s.strip_prefix("*.") else {
+        return false;
+    };
+    !ext.is_empty() && ext.len() <= 6 && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 /// Returns true if the string's character class run pattern indicates random/garbage data.
 fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
     if len < 6 {
+        return false;
+    }
+    // Identifier-shaped or all-letter strings (CallByName, FooBarBaz,
+    // ToInt32, AbCdEfGh) have short Upper/Lower runs by construction and
+    // would otherwise trip the run-length and transition-ratio checks below.
+    if looks_like_word_like(s, len, stats) {
         return false;
     }
 
@@ -1122,12 +1223,24 @@ fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
         || s.contains("%p")
         || s.contains("%c")
         || s.contains("%u");
+    // Multi-word fragments (assembly output like `MOV EAX, 0`, formatted
+    // text, list literals) have whitespace separating meaningful tokens.
+    // Their Upper/Lower/Special run pattern looks "chaotic" by the
+    // class-transition metric, but the whitespace is itself the structure.
+    // Guards: all-ASCII (excludes non-ASCII noise like `` `C dJe`eN{Û ``) and
+    // at most one noise-punct char (excludes random punctuation like
+    // `ZFI7% eE;*\\Y` that happens to contain one space).
+    let looks_like_multi_word = stats.whitespace > 0
+        && alphanumeric >= 4
+        && stats.ascii_count == len
+        && stats.noise_punct <= 1;
     let is_structured_pattern = looks_like_path
         || looks_like_url
         || looks_like_domain
         || looks_like_version
         || looks_like_base64
-        || looks_like_format_string;
+        || looks_like_format_string
+        || looks_like_multi_word;
 
     if !is_mostly_one_class && !is_structured_pattern {
         if transitions * 100 / len > MAX_TRANSITION_RATIO {
@@ -1148,6 +1261,7 @@ fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
         && !looks_like_base64
         && !looks_like_format_string
         && !looks_like_url
+        && !looks_like_multi_word
     {
         return true;
     }
@@ -1253,9 +1367,10 @@ fn is_fast_path_garbage(s: &str, original: &str, len: usize) -> bool {
         return true;
     }
 
-    // Reject strings with embedded control characters (except trailing newlines).
-    let check_control = original.trim_end_matches('\n');
-    if check_control.chars().any(char::is_control) {
+    // Reject strings with embedded control characters. `s` is already trimmed
+    // (whitespace, including `\n`, `\t`, and ` `, is stripped by `str::trim`),
+    // so anything that survives is embedded mid-string and is genuine noise.
+    if s.chars().any(char::is_control) {
         return true;
     }
 
@@ -1309,6 +1424,12 @@ fn is_fast_path_garbage(s: &str, original: &str, len: usize) -> bool {
 ///
 /// These are high-value strings that should never be filtered.
 fn is_recognized_ioc(s: &str, len: usize) -> bool {
+    // File-glob patterns (`*.exe`, `*.dll`, `*.tmp`) — high-value malware
+    // indicators that would otherwise be killed by the short-string
+    // noise-punctuation filter because `*` is in the noise set.
+    if is_file_glob(s) {
+        return true;
+    }
     // Crypto and malware IOCs
     if is_crypto_wallet_address(s, len) {
         return true;
@@ -1579,8 +1700,11 @@ fn is_statistical_garbage(
         }
     }
 
-    // Short strings with noise punctuation are garbage
-    if len <= 10 && stats.noise_punct > 0 {
+    // Short strings with noise punctuation are garbage — unless the string
+    // also contains whitespace, in which case it's likely a multi-word
+    // fragment (assembly output like `MOV EAX, 0`, list literals, formatted
+    // text) where the punctuation is structural rather than noise.
+    if len <= 10 && stats.noise_punct > 0 && stats.whitespace == 0 {
         return true;
     }
 
@@ -1623,7 +1747,11 @@ fn is_statistical_garbage(
     {
         let looks_like_version =
             s.starts_with("go") || s.starts_with('v') || s.starts_with('V') || s.contains('.');
-        if !looks_like_version {
+        // Crypto/algorithm names (`MD5Hash`, `SHA256Init`, `Curve25519`,
+        // `Ed25519`, `ToInt32`) all match this rule but are valid identifiers.
+        // `looks_like_word_like` keeps them while still rejecting random
+        // patterns like `A1b2c3` where no class has a ≥2-char run.
+        if !looks_like_version && !looks_like_word_like(s, len, stats) {
             return true;
         }
     }
@@ -1877,16 +2005,24 @@ mod tests {
         assert!(is_garbage("Gi4r"));
         assert!(is_garbage("Uim0"));
         assert!(is_garbage("Ilu4")); // mixed case with digit
-        assert!(is_garbage("cwZd")); // mixed case
-                                     // Consistent case alphanumeric patterns are accepted if they look like real identifiers
+                                     // `cwZd` (lowercase + one uppercase + lowercase) used to be filtered
+                                     // here, but it shares its shape with valid 4-char camelCase like
+                                     // `iPad`, `hWnd`, `lpSz`. The looser short-camelCase rule now keeps
+                                     // both — too brittle to distinguish without a whitelist.
+        assert!(!is_garbage("cwZd"));
+        // Consistent case alphanumeric patterns are accepted if they look like real identifiers
         assert!(!is_garbage("9N2A")); // all uppercase + digits, leading 9 = valid
         assert!(is_garbage("0YI0")); // digits at BOTH ends = garbage
         assert!(is_garbage("0GZF")); // single leading 0 = garbage
         assert!(is_garbage("1ABC")); // single leading 1 = garbage
         assert!(is_garbage("8oz1")); // mixed case (upper and lower) = garbage
-        assert!(is_garbage("gnzUrs")); // mixed case = garbage
-                                       // Note: "3OEP" looks like "8BIM" (digit + uppercase), can't distinguish without whitelist
-                                       // Short strings with internal spaces
+                                     // `gnzUrs` (one upper mid-string) used to be filtered here, but the
+                                     // same shape covers real camelCase identifiers like `getTime` and
+                                     // `setLine`. The looser identifier-shape rule now keeps both.
+        assert!(!is_garbage("gnzUrs"));
+        assert!(!is_garbage("getTime"));
+        // Note: "3OEP" looks like "8BIM" (digit + uppercase), can't distinguish without whitelist
+        // Short strings with internal spaces
         assert!(is_garbage("5c 9"));
         assert!(is_garbage("VW N"));
         // But all-uppercase, all-lowercase, or all-numeric are OK
@@ -1961,6 +2097,150 @@ mod tests {
     fn test_is_garbage_trailing_newline_ok() {
         // Trailing newline should not trigger control char detection
         assert!(!is_garbage("hello world\n"));
+    }
+
+    #[test]
+    fn test_is_garbage_pascal_case_identifiers() {
+        // PascalCase / camelCase symbol names with frequent Upper↔Lower
+        // transitions are valid identifiers and must not be flagged as chaotic.
+        // Regression: pre-fix, the binary at SHA
+        // 515638dc...e7.exe (a .NET PE with `CallByName` at offset 0x46fd) was
+        // missing this symbol because the chaos detector saw avg run length
+        // 1.67 over 10 chars and bailed.
+        for s in [
+            "CallByName",
+            "FooBarBaz",
+            "PtrToThis",
+            "SetIterKey",
+            "FileSizeLow",
+            "LowDateTime",
+            "MaxSockAddr",
+            "ReturnIsPtr",
+            "GetHashCode",
+            "AddRange",
+            "ToString",
+        ] {
+            assert!(!is_garbage(s), "{s:?} is a valid PascalCase identifier");
+        }
+    }
+
+    #[test]
+    fn test_is_garbage_alternating_case_letters_kept() {
+        // Long pure-ASCII letter strings — even with frequent case alternation —
+        // are likely meaningful (identifiers, obfuscated text, words).
+        for s in ["AbCdEfGh", "PaSsWoRd", "TheQuickBrownFox", "AaBbCcDdEe"] {
+            assert!(!is_garbage(s), "{s:?} is a long letter string");
+        }
+    }
+
+    #[test]
+    fn test_is_garbage_leading_tab_trimmed() {
+        // A leading tab on an otherwise valid identifier must not poison
+        // the control-character check. Real Go pclntab entries surface
+        // identifiers prefixed with a `\t` byte. (Leading literal spaces
+        // are still treated as garbage by the short-string heuristic at
+        // `is_fast_path_garbage` — that's separate and intentional.)
+        assert!(!is_garbage("\tPtrToThis"));
+        assert!(!is_garbage("\tCallByName"));
+        assert!(!is_garbage("\tFieldByName"));
+    }
+
+    #[test]
+    fn test_is_garbage_camel_case_garbage_still_rejected() {
+        // Alternation alone is not enough — without any ≥2-char lowercase run
+        // and at <7 chars, mixed-case strings should still be considered garbage.
+        assert!(is_garbage("AaBbCc"));
+    }
+
+    #[test]
+    fn test_is_garbage_crypto_algorithm_names() {
+        // Crypto / hash / type names with digits used to be killed by the
+        // MIXED_CASE_DIGIT range filter (5–10 chars + upper + lower + digit).
+        // The looser identifier-shape rule keeps them.
+        for s in [
+            "MD5Hash",
+            "SHA256Init",
+            "Curve25519",
+            "Ed25519",
+            "Argon2",
+            "ToInt32",
+            "Int64",
+            "BCrypt",
+        ] {
+            assert!(!is_garbage(s), "{s:?} is a valid identifier with digits");
+        }
+    }
+
+    #[test]
+    fn test_is_garbage_file_globs() {
+        // File-glob patterns are high-value malware indicators and must
+        // survive the short-string noise-punctuation filter.
+        for s in ["*.exe", "*.dll", "*.bin", "*.tmp", "*.log", "*.so"] {
+            assert!(!is_garbage(s), "{s:?} is a valid file glob");
+        }
+        // Sanity: the bare extension form was already accepted.
+        for s in [".exe", ".dll", ".so", "exe", "dll"] {
+            assert!(!is_garbage(s));
+        }
+    }
+
+    #[test]
+    fn test_is_garbage_four_char_camelcase_kept() {
+        // 4-char camelCase: brand names, Hungarian notation, abbreviated
+        // identifiers — high signal for security analysts (`hWnd` is a
+        // ubiquitous Win32 type; `iPad`, `iMac` are Apple device IDs).
+        for s in ["iPad", "iMac", "iPod", "hWnd", "lpSz", "dwId"] {
+            assert!(!is_garbage(s), "{s:?} is a valid 4-char camelCase");
+        }
+    }
+
+    #[test]
+    fn test_is_garbage_short_function_calls_kept() {
+        // `Run()`, `F(x)`, `fn()` — short function-call shapes are
+        // meaningful code fragments, not noise.
+        for s in ["Run()", "fn()", "F(x)", "Init()", "Stop()"] {
+            assert!(!is_garbage(s), "{s:?} is a valid function call");
+        }
+    }
+
+    #[test]
+    fn test_is_garbage_multi_word_fragments_kept() {
+        // Multi-word fragments from disassembly output, formatted logs, etc.
+        // The space-separated structure is meaningful even when individual
+        // tokens look like noise (single-letter, all-caps, etc.).
+        for s in [
+            "MOV EAX, 0",
+            "JMP +5",
+            "SUB ESP, 8",
+            "PUSH EAX",
+            "LEA RAX, [RBX]",
+        ] {
+            assert!(!is_garbage(s), "{s:?} is a valid asm fragment");
+        }
+    }
+
+    #[test]
+    fn test_is_garbage_multi_word_noise_still_rejected() {
+        // A single space inside otherwise-noisy bytes shouldn't save them.
+        // The exemption requires <=1 noise-punct char and all-ASCII.
+        assert!(is_garbage("ZFI7% eE;*\\Y"));
+        assert!(is_garbage("`C dJe`eN{Û"));
+    }
+
+    #[test]
+    fn test_is_garbage_short_camelcase_kept() {
+        // 5+ char identifier-shaped names are kept — covers `iPad`-style
+        // abbreviated identifiers, Hungarian notation like `hModule`, and
+        // brand-shaped strings like `iOSv2`.
+        for s in ["myVal", "getId", "iOSv2", "setLen"] {
+            assert!(!is_garbage(s));
+        }
+        // 4-char binary noise with a digit or uppercase prefix is still
+        // rejected. (`cwZd` was previously here but is now kept because
+        // it has the same lowercase-first camelCase shape as `iPad`.)
+        for s in ["Ilu4", "Uim0", "Gi4r", "8oz1"] {
+            assert!(is_garbage(s));
+        }
     }
 
     #[test]
