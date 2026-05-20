@@ -376,9 +376,12 @@ fn test_low_transition_patterns() {
 
 #[test]
 fn test_high_transition_patterns() {
-    // Chaotic alternation should be garbage
-    assert!(is_garbage("aB1cD2eF3"), "High alternation");
-    assert!(is_garbage("1a2b3c4d"), "Digit-letter alternation");
+    // Pure-hex runs ≥8 chars are kept (see is_hex_id_run): they could
+    // be hash fragments, build IDs, or other identifiers.
+    assert!(!is_garbage("aB1cD2eF3"), "All-hex run is a valid hex id");
+    assert!(!is_garbage("1a2b3c4d"), "All-hex run is a valid hex id");
+    // Same chaotic shape but with non-hex letters stays garbage.
+    assert!(is_garbage("1z2y3x4w"), "Non-hex chaotic alternation");
 }
 
 // ===== Whitespace Tests =====

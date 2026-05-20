@@ -247,11 +247,10 @@ fn test_is_garbage_noise_punctuation() {
 
 #[test]
 fn test_is_garbage_hex_patterns() {
-    // These are actually valid lowercase strings
-    // The is_garbage function allows all-lowercase short strings
-    assert!(!is_garbage("deadbeef")); // All lowercase, allowed
-                                      // Mixed case short patterns that look like garbage
-    assert!(is_garbage("0a1b2c3d")); // Has digits mixed with letters
+    // Pure-hex runs ≥8 chars are kept — could be hash fragments,
+    // short build IDs, or other hex identifiers.
+    assert!(!is_garbage("deadbeef"));
+    assert!(!is_garbage("0a1b2c3d"));
 }
 
 // Test StringKind variants

@@ -156,6 +156,55 @@ fn is_miner_ioc(s: &str) -> bool {
     s.contains("-o ") && s.contains("-u ")
 }
 
+/// String of length ≥8 composed entirely of `[0-9a-fA-F:-]`, with at
+/// least 6 hex digits drawn from ≥4 distinct hex characters. Catches
+/// UUIDs, MD5/SHA hashes, MAC addresses, IPv6 address fragments,
+/// OpenSSH key fingerprints, and build IDs that the statistical filter
+/// would otherwise drop as chaotic. The diversity floor rejects
+/// degenerate same-char runs like `aaaaaaaa` or `12121212`.
+fn is_hex_id_run(s: &str, len: usize) -> bool {
+    if len < 8 {
+        return false;
+    }
+    let mut hex = 0usize;
+    let mut seen: u16 = 0;
+    for b in s.bytes() {
+        let v = match b {
+            b'0'..=b'9' => b - b'0',
+            b'a'..=b'f' => b - b'a' + 10,
+            b'A'..=b'F' => b - b'A' + 10,
+            b':' | b'-' => continue,
+            _ => return false,
+        };
+        hex += 1;
+        seen |= 1u16 << v;
+    }
+    hex >= 6 && seen.count_ones() >= 4
+}
+
+/// String of length ≥12 composed entirely of base64 and base64url
+/// alphabet characters (`[A-Za-z0-9+/=_-]`) with ≥6 distinct
+/// characters. Catches opaque API tokens, short b64 payloads, AES keys,
+/// and other token-shaped IDs the chaos filter would otherwise drop.
+/// The diversity floor rejects degenerate runs like `aaaaaaaaaaaa`.
+fn is_token_id_run(s: &str, len: usize) -> bool {
+    if len < 12 {
+        return false;
+    }
+    let mut seen: u128 = 0;
+    for b in s.bytes() {
+        let in_set = matches!(b,
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'+' | b'/' | b'=' | b'_' | b'-'
+        );
+        if !in_set {
+            return false;
+        }
+        seen |= 1u128 << (b - 0x20);
+    }
+    seen.count_ones() >= 6
+}
+
 fn is_ctf_or_guid(s: &str, len: usize) -> bool {
     if !s.starts_with('{') || !s.ends_with('}') {
         return false;
@@ -1448,6 +1497,18 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
     if is_ctf_or_guid(s, len) {
         return true;
     }
+    // Contiguous runs of hex/colon/dash (UUIDs, hashes, MAC addresses,
+    // public-key fingerprints, IPv6 fragments, build IDs). These all
+    // trip the chaos filter because they oscillate between digit and
+    // letter classes on nearly every byte.
+    if is_hex_id_run(s, len) {
+        return true;
+    }
+    // Longer runs of base64/base64url-alphabet characters: API tokens,
+    // opaque service IDs, AES keys, short b64-encoded payloads.
+    if is_token_id_run(s, len) {
+        return true;
+    }
     if is_email_address(s, len) {
         return true;
     }
@@ -1959,6 +2020,45 @@ mod tests {
     }
 
     #[test]
+    fn test_is_garbage_hex_id_runs() {
+        // UUIDs / Mythic payload_uuid
+        assert!(!is_garbage("88a39a12-f279-4bb2-b102-1ee1157ad859"));
+        assert!(!is_garbage("550e8400-e29b-41d4-a716-446655440000"));
+        // Cryptographic hashes
+        assert!(!is_garbage("d41d8cd98f00b204e9800998ecf8427e")); // MD5
+        assert!(!is_garbage("da39a3ee5e6b4b0d3255bfef95601890afd80709")); // SHA1
+                                                                          // MAC address
+        assert!(!is_garbage("aa:bb:cc:dd:ee:ff"));
+        assert!(!is_garbage("00:11:22:33:44:55"));
+        // IPv6 fragment / full
+        assert!(!is_garbage("2001:db8::1"));
+        assert!(!is_garbage("fe80::1ff:fe23:4567:890a"));
+        // GNU/ELF BuildID (hex blob)
+        assert!(!is_garbage("26c9f26735a5f88a34ea361101b66971e5d74a29"));
+        // Pure punctuation / too short / degenerate runs must NOT match
+        assert!(!is_hex_id_run("--------", 8));
+        assert!(!is_hex_id_run("::::::::", 8));
+        assert!(!is_hex_id_run("12-34", 5));
+        assert!(!is_hex_id_run("aaaaaaaa", 8)); // single distinct hex char
+        assert!(!is_hex_id_run("12121212", 8)); // two distinct hex chars
+        assert!(!is_hex_id_run("aa:bb:cc", 8)); // three distinct hex chars
+    }
+
+    #[test]
+    fn test_is_garbage_token_id_runs() {
+        // Opaque API tokens / b64-shaped IDs (length ≥ 12, base64 alphabet)
+        assert!(!is_garbage("AKIAIOSFODNN7EXAMPLE")); // AWS access key id shape
+        assert!(!is_garbage("ghp_AbCd1234EfGh5678IjKl"));
+        assert!(!is_garbage("se3A/A1YKZQ630wtjjvw")); // Mythic PSK fragment
+        assert!(!is_garbage("1z2y3x4w5v6u")); // chaotic but diverse alphanumeric
+                                              // Too short / not enough diversity / wrong alphabet
+        assert!(!is_token_id_run("AKIA", 4));
+        assert!(!is_token_id_run("aaaaaaaaaaaa", 12)); // 1 distinct
+        assert!(!is_token_id_run("ababababababab", 14)); // 2 distinct
+        assert!(!is_token_id_run("hello world!", 12)); // space + !
+    }
+
+    #[test]
     fn test_is_garbage_jpeg_metadata() {
         // JPEG/image metadata strings should NOT be garbage
         assert!(!is_garbage("JFIF"));
@@ -2072,8 +2172,12 @@ mod tests {
 
     #[test]
     fn test_is_garbage_alternating_pattern() {
-        // Alternating digit-letter patterns
-        assert!(is_garbage("1a2b3c4d5e"));
+        // Alternating digit/non-hex-letter chaos with no other signal
+        assert!(is_garbage("1z2y3x4w5v"));
+        // Pure-hex run of the same shape is kept — could be a short
+        // hash fragment, build ID, or other identifier (see
+        // is_hex_id_run / test_is_garbage_hex_id_runs).
+        assert!(!is_garbage("1a2b3c4d5e"));
     }
 
     #[test]

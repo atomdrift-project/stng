@@ -53,6 +53,20 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
         }
     }
 
+    // Canonical UUIDs: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX (RFC 4122 form,
+    // 8-4-4-4-12). Used by Mythic agent payload_uuid, systemd, COM objects in
+    // .NET registry hives, etc. The chaos filter would otherwise drop these
+    // because hex+dash strings trip the character-class-transition check.
+    if len == 36
+        && bytes[8] == b'-'
+        && bytes[13] == b'-'
+        && bytes[18] == b'-'
+        && bytes[23] == b'-'
+        && s.bytes().filter(u8::is_ascii_hexdigit).count() == 32
+    {
+        return Some(StringKind::GUID);
+    }
+
     // Cryptographic hashes (MD5=32, SHA1=40, SHA256=64, SHA512=128)
     if encoding::is_cryptographic_hash(s) {
         return Some(StringKind::Hash);
@@ -1174,6 +1188,38 @@ mod tests {
         assert!(!is_hex_encoded(
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         ));
+    }
+
+    #[test]
+    fn test_classify_string_guid() {
+        // Braced COM GUID
+        assert_eq!(
+            classify_string("{550e8400-e29b-41d4-a716-446655440000}"),
+            Some(StringKind::GUID)
+        );
+        // Bare canonical UUID (RFC 4122 / Mythic payload_uuid)
+        assert_eq!(
+            classify_string("88a39a12-f279-4bb2-b102-1ee1157ad859"),
+            Some(StringKind::GUID)
+        );
+        assert_eq!(
+            classify_string("550e8400-e29b-41d4-a716-446655440000"),
+            Some(StringKind::GUID)
+        );
+        // Uppercase
+        assert_eq!(
+            classify_string("88A39A12-F279-4BB2-B102-1EE1157AD859"),
+            Some(StringKind::GUID)
+        );
+        // Wrong shape — not classified as GUID
+        assert_ne!(
+            classify_string("88a39a12f2794bb2b1021ee1157ad859"),
+            Some(StringKind::GUID)
+        );
+        assert_ne!(
+            classify_string("88a39a12-f279-4bb2-b102"),
+            Some(StringKind::GUID)
+        );
     }
 
     #[test]

@@ -427,8 +427,9 @@ fn test_guid_rejection() {
     // Wrong length
     assert_ne!(classify_string("{123-456-789}"), Some(StringKind::GUID));
 
-    // No braces
-    assert_ne!(
+    // Bare canonical UUIDs (no braces) are also recognized — used by
+    // Mythic agent payload_uuid, RFC 4122 IDs, systemd, etc.
+    assert_eq!(
         classify_string("12345678-1234-1234-1234-123456789ABC"),
         Some(StringKind::GUID)
     );
@@ -436,6 +437,10 @@ fn test_guid_rejection() {
     // Not hex characters
     assert_ne!(
         classify_string("{GGGGGGGG-1234-1234-1234-123456789ABC}"),
+        Some(StringKind::GUID)
+    );
+    assert_ne!(
+        classify_string("GGGGGGGG-1234-1234-1234-123456789ABC"),
         Some(StringKind::GUID)
     );
 }
