@@ -373,11 +373,19 @@ fn apply_xor_scan(
         strings.extend(rolling_results);
     }
 
-    let r2_boundaries = if opts.use_r2 {
-        opts.path.as_deref().and_then(r2::extract_string_boundaries)
-    } else {
-        None
-    };
+    // Rizin string boundaries. Two sources, in preference order:
+    //   1. Caller pre-populated via `ExtractOptions::with_rizin_boundaries`
+    //      — set by expose when it ran rizin upstream. Skip the spawn.
+    //   2. Standalone stng with `use_r2` on and an available path —
+    //      spawn rizin in-process. This keeps stng usable as an
+    //      independent CLI tool.
+    let r2_boundaries = opts.rizin_boundaries.clone().or_else(|| {
+        if opts.use_r2 {
+            opts.path.as_deref().and_then(r2::extract_string_boundaries)
+        } else {
+            None
+        }
+    });
 
     if let Some(ref key) = opts.xor_key {
         let key_str = String::from_utf8_lossy(key);
@@ -486,13 +494,32 @@ fn apply_xor_scan(
     }
 
     if opts.xor_scan_multi {
-        if let Some(ref path) = opts.path {
-            // Combine existing string candidates with high-entropy binary blobs
-            let mut candidates = strings.clone();
-            let binary_candidates = r2::extract_binary_xor_candidates(path, data);
-            candidates.extend(binary_candidates);
-
-            let xor_keys = r2::verify_xor_keys(path, data, &candidates);
+        // Multikey XOR candidate harvesting. Caller-pre-populated
+        // candidates (from expose's upstream rizin pass) win;
+        // otherwise stng spawns rizin itself when `use_r2` is set
+        // and a path is available — standalone CLI behaviour.
+        let (candidates, path_for_verify) = if let Some(ref pre) = opts.rizin_xor_candidates {
+            if pre.is_empty() {
+                (None, opts.path.as_deref())
+            } else {
+                let mut c = strings.clone();
+                c.extend(pre.clone());
+                (Some(c), opts.path.as_deref())
+            }
+        } else if opts.use_r2 {
+            if let Some(path) = opts.path.as_deref() {
+                let mut c = strings.clone();
+                c.extend(r2::extract_binary_xor_candidates(path, data));
+                (Some(c), Some(path))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+        if let Some(candidates) = candidates {
+            let verify_path = path_for_verify.unwrap_or("");
+            let xor_keys = r2::verify_xor_keys(verify_path, data, &candidates);
             if !xor_keys.is_empty() {
                 let decoded =
                     xor::extract_multikey_xor_strings(data, &xor_keys, opts.xor_min_length);
@@ -814,6 +841,25 @@ pub struct ExtractOptions {
     /// Hint about the input so stng can skip analyses that will produce
     /// nothing on that shape of input.  See `FormatHint` for the semantics.
     pub format_hint: FormatHint,
+    /// Pre-extracted rizin string boundaries. When set, stng uses these
+    /// to constrain the XOR scan instead of spawning rizin to run
+    /// `izj`. Part of the Wave A cleave→expose rizin migration: lets
+    /// the caller (expose) own the rizin invocation and feed the
+    /// resulting metadata down into stng without a second subprocess.
+    pub rizin_boundaries: Option<Vec<r2::StringBoundary>>,
+    /// Pre-extracted rizin function metadata, keyed by function name.
+    /// When set, stng uses this in place of an `aflj` spawn for
+    /// function-context lookups.
+    pub rizin_function_metadata: Option<HashMap<String, FunctionMetadata>>,
+    /// Pre-extracted connect-address strings (sockaddr_in literals
+    /// resolved through rizin's disassembly walker). When set, stng
+    /// merges these into the output instead of spawning rizin to
+    /// reproduce the walk.
+    pub rizin_connect_addrs: Option<Vec<ExtractedString>>,
+    /// Pre-extracted XOR key candidates from rizin's instruction-
+    /// pattern walker. When set, stng skips the
+    /// `extract_binary_xor_candidates` spawn.
+    pub rizin_xor_candidates: Option<Vec<ExtractedString>>,
 }
 
 impl Default for ExtractOptions {
@@ -838,7 +884,49 @@ impl ExtractOptions {
             use_cache: true,
             cancel: None,
             format_hint: FormatHint::Auto,
+            rizin_boundaries: None,
+            rizin_function_metadata: None,
+            rizin_connect_addrs: None,
+            rizin_xor_candidates: None,
         }
+    }
+
+    /// Supply pre-extracted rizin string boundaries. Wave A of the
+    /// cleave→expose rizin migration: callers (notably expose) run
+    /// rizin once and feed the resulting metadata down into stng so
+    /// stng doesn't have to re-spawn for the same binary. Setting
+    /// this disables stng's internal `extract_string_boundaries`
+    /// spawn.
+    #[must_use]
+    pub fn with_rizin_boundaries(mut self, b: Vec<r2::StringBoundary>) -> Self {
+        self.rizin_boundaries = Some(b);
+        self
+    }
+
+    /// Supply pre-extracted rizin function metadata keyed by name.
+    /// When set, stng uses this instead of running `aflj` itself.
+    #[must_use]
+    pub fn with_rizin_function_metadata(mut self, m: HashMap<String, FunctionMetadata>) -> Self {
+        self.rizin_function_metadata = Some(m);
+        self
+    }
+
+    /// Supply pre-extracted connect-address strings (sockaddr_in
+    /// literals recovered from rizin's disassembly walker). Replaces
+    /// stng's internal `extract_connect_addrs` spawn.
+    #[must_use]
+    pub fn with_rizin_connect_addrs(mut self, c: Vec<ExtractedString>) -> Self {
+        self.rizin_connect_addrs = Some(c);
+        self
+    }
+
+    /// Supply pre-extracted XOR key candidates from rizin's
+    /// instruction-pattern walker. Replaces stng's internal
+    /// `extract_binary_xor_candidates` spawn.
+    #[must_use]
+    pub fn with_rizin_xor_candidates(mut self, x: Vec<ExtractedString>) -> Self {
+        self.rizin_xor_candidates = Some(x);
+        self
     }
 
     /// Set the binary path and enable radare2-assisted extraction.
@@ -1997,9 +2085,16 @@ fn extract_from_object(
         apply_xor_scan(&mut strings, data, opts, is_pe, &excluded_ranges);
     }
 
-    // Extract IP addresses from connect() syscalls using radare2 (if enabled)
-    // Skip for large files (>10MB) as even binary scan has diminishing returns
-    if opts.use_r2 && data.len() <= 10 * 1024 * 1024 {
+    // IPs recovered from `connect()` syscalls. Pre-populated wins
+    // (expose's upstream rizin pass already harvested them);
+    // otherwise stng spawns rizin itself when `use_r2` is on and we
+    // have a path — standalone CLI behaviour. Skip on large files
+    // (>10 MB) where the binary scan has diminishing returns.
+    if let Some(ref pre) = opts.rizin_connect_addrs {
+        if !pre.is_empty() {
+            strings.extend(pre.clone());
+        }
+    } else if opts.use_r2 && data.len() <= 10 * 1024 * 1024 {
         if let Some(ref path) = opts.path {
             let connect_addrs = r2::extract_connect_addrs(path, data);
             if !connect_addrs.is_empty() {
@@ -2125,13 +2220,16 @@ fn extract_from_object(
     deduplicate_by_offset(strings)
 }
 
-/// Helper to get r2 strings from options (pre-extracted or by running r2)
+/// Rizin string set. Two sources, in preference order:
+///   1. Caller-provided via `ExtractOptions::with_r2_strings` — set
+///      by expose when it ran rizin upstream.
+///   2. Standalone stng with `use_r2` on and an available path —
+///      spawn rizin in-process. Keeps stng usable as an independent
+///      CLI tool.
 fn get_r2_strings(opts: &ExtractOptions) -> Option<Vec<ExtractedString>> {
-    // Use pre-extracted r2 strings if provided
-    if let Some(ref r2_strings) = opts.r2_strings {
-        return Some(r2_strings.clone());
+    if let Some(ref pre) = opts.r2_strings {
+        return Some(pre.clone());
     }
-    // Otherwise run r2 if enabled
     if opts.use_r2 {
         if let Some(ref path) = opts.path {
             return r2::extract_strings(path, opts.min_length, opts.use_cache);

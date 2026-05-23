@@ -2,6 +2,13 @@
 //!
 //! Extract strings from Go and Rust binaries with proper boundary detection.
 
+// Use jemalloc on unix systems where it isn't the OS default (see Cargo.toml).
+// Built-in `--features jemalloc-prof` activates jemalloc's heap-profiling support
+// (`_RJEM_MALLOC_CONF=prof:true,...`) which cleave-tuna's memory-mode benches consume.
+#[cfg(all(unix, not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "illumos", target_os = "solaris"))))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -294,16 +301,49 @@ fn main() -> Result<()> {
             .init();
     }
 
-    // Handle cache flushing if requested
-    if cli.flush_cache {
-        if let Err(e) = stng::r2::flush_cache(&cli.target) {
-            eprintln!("Warning: failed to flush cache: {}", e);
-        }
+    let root = Path::new(&cli.target);
+    if !root.exists() {
+        anyhow::bail!("Path does not exist: {}", cli.target);
     }
 
-    let path = Path::new(&cli.target);
-    if !path.exists() {
-        anyhow::bail!("File does not exist: {}", cli.target);
+    if root.is_dir() {
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let entries = match fs::read_dir(&dir) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("warning: {}: {}", dir.display(), e);
+                    continue;
+                }
+            };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                match entry.file_type() {
+                    Ok(ft) if ft.is_dir() => stack.push(p),
+                    Ok(ft) if ft.is_file() => {
+                        if let Err(e) = analyze_one(&cli, &p) {
+                            eprintln!("warning: {}: {}", p.display(), e);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    } else {
+        analyze_one(&cli, root)?;
+    }
+
+    tracing::debug!("TIME: Total execution time: {:?}", t_total.elapsed());
+    Ok(())
+}
+
+fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
+    // Handle cache flushing if requested
+    if cli.flush_cache {
+        let target = path.to_string_lossy();
+        if let Err(e) = stng::r2::flush_cache(target.as_ref()) {
+            eprintln!("Warning: failed to flush cache: {}", e);
+        }
     }
 
     let t_read = std::time::Instant::now();
@@ -361,7 +401,7 @@ fn main() -> Result<()> {
         // Jump to output section
         if strings.is_empty() {
             if !cli.json {
-                eprintln!("No strings found in {}", cli.target);
+                eprintln!("No strings found in {}", path.display());
             }
             return Ok(());
         }
@@ -400,7 +440,7 @@ fn main() -> Result<()> {
         .with_cache(!cli.no_cache);
 
     if use_r2 {
-        opts = opts.with_r2(&cli.target);
+        opts = opts.with_r2(path.to_string_lossy().as_ref());
     }
     tracing::debug!("opts.path: {:?}", opts.path);
 
@@ -510,7 +550,7 @@ fn main() -> Result<()> {
         eprintln!("\n{} strings extracted", strings.len());
     } else {
         if strings.is_empty() {
-            println!("No strings found in {}", cli.target);
+            println!("No strings found in {}", path.display());
             return Ok(());
         }
 
@@ -803,7 +843,6 @@ fn main() -> Result<()> {
         println!();
     }
 
-    tracing::debug!("TIME: Total execution time: {:?}", t_total.elapsed());
     Ok(())
 }
 
