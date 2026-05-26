@@ -229,8 +229,9 @@ impl Arch {
             0x014c => Some(Self::X86),            // IMAGE_FILE_MACHINE_I386
             0x8664 => Some(Self::X86_64),         // IMAGE_FILE_MACHINE_AMD64
             0x01c0 | 0x01c4 => Some(Self::Arm),   // ARM, ARMNT
-            0xaa64 => Some(Self::Aarch64),        // ARM64
-            0x5032 | 0x5064 => Some(Self::RiscV), // RISCV32, RISCV64 (handled below for 64)
+            0xaa64 => Some(Self::Aarch64),   // ARM64
+            0x5032 => Some(Self::RiscV),     // IMAGE_FILE_MACHINE_RISCV32
+            0x5064 => Some(Self::RiscV64),   // IMAGE_FILE_MACHINE_RISCV64
             _ => None,
         }
     }
@@ -573,7 +574,7 @@ impl StringKind {
     /// the original classifier check because the filter uses classifier
     /// recognition to decide "meaningful".
     #[must_use]
-    pub fn is_classifier_output(&self) -> bool {
+    pub fn is_classifier_output(self) -> bool {
         matches!(
             self,
             Self::Url
@@ -612,7 +613,7 @@ impl StringKind {
 
     /// Get the severity level for this kind
     #[must_use]
-    pub fn severity(&self) -> Severity {
+    pub fn severity(self) -> Severity {
         match self {
             Self::IP
             | Self::IPPort
@@ -666,7 +667,7 @@ impl StringKind {
 
     /// Get short display name for the kind
     #[must_use]
-    pub fn short_name(&self) -> &'static str {
+    pub fn short_name(self) -> &'static str {
         match self {
             Self::FuncName => "func",
             Self::FilePath => "file",

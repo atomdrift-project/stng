@@ -791,7 +791,7 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
             print_string_line(s, use_color);
 
             // Collect all high-severity items (we'll sort and truncate later)
-            if s.kind.map_or(Severity::Info, |k| k.severity()) == Severity::High
+            if s.kind.map_or(Severity::Info, StringKind::severity) == Severity::High
                 && s.kind != Some(stng::StringKind::XorKey)
             {
                 notable.push(s);
@@ -1044,7 +1044,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
             // Section names are rarely interesting - show in dim grey
             (DIM, DIM)
         } else {
-            match s.kind.map_or(Severity::Info, |k| k.severity()) {
+            match s.kind.map_or(Severity::Info, StringKind::severity) {
                 Severity::High => (RED, RED),
                 Severity::Medium => (CYAN, CYAN),
                 Severity::Low => (GREEN, GREEN),

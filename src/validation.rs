@@ -1398,7 +1398,7 @@ fn is_fast_path_valid_with_kind(
     // (`Overlay`, `Section`, `Import`, …) fall through to the real
     // classifier because those labels don't imply content recognition.
     if s.is_ascii() {
-        if kind.is_some_and(|k| k.is_classifier_output()) {
+        if kind.is_some_and(crate::types::StringKind::is_classifier_output) {
             return true;
         }
         if crate::classifier::classify_string(s).is_some() {
@@ -1985,7 +1985,7 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext<'_>) -
     // StackString, …) still run through `is_recognized_ioc` and the
     // statistical checks because those labels don't imply content
     // recognition — they indicate *provenance*.
-    if ctx.kind.is_some_and(|k| k.is_classifier_output()) {
+    if ctx.kind.is_some_and(crate::types::StringKind::is_classifier_output) {
         return false;
     }
 

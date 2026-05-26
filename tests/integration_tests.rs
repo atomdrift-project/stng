@@ -1843,7 +1843,7 @@ mod ip_detection_tests {
 
         if let Some(s) = ip_string {
             assert_eq!(
-                s.kind.map(|k| k.severity()).unwrap_or(Severity::Info),
+                s.kind.map(StringKind::severity).unwrap_or(Severity::Info),
                 Severity::High,
                 "IP addresses should have High severity"
             );
@@ -2896,7 +2896,7 @@ mod severity_tests {
         ];
 
         for kind in kinds {
-            let severity = kind.map(|k| k.severity()).unwrap_or(Severity::Info);
+            let severity = kind.map(StringKind::severity).unwrap_or(Severity::Info);
             assert!(
                 matches!(
                     severity,
@@ -2942,7 +2942,7 @@ mod severity_tests {
         // Test None instead of Const
         assert_eq!(
             None::<StringKind>
-                .map(|k| k.severity())
+                .map(StringKind::severity)
                 .unwrap_or(Severity::Info),
             Severity::Info
         );
