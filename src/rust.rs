@@ -19,8 +19,8 @@ use super::extraction::{extract_from_structures, find_string_structures};
 use super::instr::{extract_inline_strings_amd64, extract_inline_strings_arm64};
 use super::types::{BinaryInfo, ExtractedString, StringMethod, StringStruct};
 use goblin::elf::Elf;
-use goblin::mach::cputype::{CPU_TYPE_ARM64, CPU_TYPE_X86_64};
 use goblin::mach::MachO;
+use goblin::mach::cputype::{CPU_TYPE_ARM64, CPU_TYPE_X86_64};
 use goblin::pe::PE;
 use rayon::prelude::*;
 use regex::Regex;
@@ -394,10 +394,10 @@ impl RustStringExtractor {
             if name == section_name {
                 let offset = sh.sh_offset as usize;
                 let size = sh.sh_size as usize;
-                if let Some(end) = offset.checked_add(size) {
-                    if end <= data.len() {
-                        return Some((sh.sh_addr, &data[offset..end]));
-                    }
+                if let Some(end) = offset.checked_add(size)
+                    && end <= data.len()
+                {
+                    return Some((sh.sh_addr, &data[offset..end]));
                 }
             }
         }
@@ -488,20 +488,20 @@ impl RustStringExtractor {
 
         for (i, &byte) in data.iter().enumerate() {
             if byte == 0 {
-                if current.len() >= self.min_length {
-                    if let Ok(s) = std::str::from_utf8(&current) {
-                        let trimmed = s.trim();
-                        if !trimmed.is_empty() && !seen.contains(trimmed) {
-                            seen.insert(trimmed.to_string());
-                            strings.push(ExtractedString {
-                                value: trimmed.to_string(),
-                                data_offset: start_offset as u64,
-                                section: section_name.map(str::to_string),
-                                method: StringMethod::RawScan,
-                                kind: classify_string(trimmed),
-                                ..Default::default()
-                            });
-                        }
+                if current.len() >= self.min_length
+                    && let Ok(s) = std::str::from_utf8(&current)
+                {
+                    let trimmed = s.trim();
+                    if !trimmed.is_empty() && !seen.contains(trimmed) {
+                        seen.insert(trimmed.to_string());
+                        strings.push(ExtractedString {
+                            value: trimmed.to_string(),
+                            data_offset: start_offset as u64,
+                            section: section_name.map(str::to_string),
+                            method: StringMethod::RawScan,
+                            kind: classify_string(trimmed),
+                            ..Default::default()
+                        });
                     }
                 }
                 current.clear();
@@ -1065,24 +1065,24 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let test_paths = ["/bin/true", "/usr/bin/true", "/bin/echo"];
         for path in &test_paths {
-            if let Ok(data) = std::fs::read(path) {
-                if let Ok(elf) = goblin::elf::Elf::parse(&data) {
-                    let strings = extractor.extract_elf(&elf, &data);
-                    assert!(!strings.is_empty(), "Should find strings in {}", path);
-                    for s in &strings {
-                        assert!(s.value.len() >= 4, "String too short: '{}'", s.value);
-                    }
-                    let has_any_method = strings.iter().any(|s| {
-                        matches!(
-                            s.method,
-                            crate::StringMethod::Structure
-                                | crate::StringMethod::InstructionPattern
-                                | crate::StringMethod::RawScan
-                        )
-                    });
-                    assert!(has_any_method, "Should use at least one extraction method");
-                    break;
+            if let Ok(data) = std::fs::read(path)
+                && let Ok(elf) = goblin::elf::Elf::parse(&data)
+            {
+                let strings = extractor.extract_elf(&elf, &data);
+                assert!(!strings.is_empty(), "Should find strings in {}", path);
+                for s in &strings {
+                    assert!(s.value.len() >= 4, "String too short: '{}'", s.value);
                 }
+                let has_any_method = strings.iter().any(|s| {
+                    matches!(
+                        s.method,
+                        crate::StringMethod::Structure
+                            | crate::StringMethod::InstructionPattern
+                            | crate::StringMethod::RawScan
+                    )
+                });
+                assert!(has_any_method, "Should use at least one extraction method");
+                break;
             }
         }
     }
@@ -1091,18 +1091,18 @@ mod tests {
     fn test_min_length_filtering_elf() {
         let extractor_short = RustStringExtractor::new(4);
         let extractor_long = RustStringExtractor::new(20);
-        if let Ok(data) = std::fs::read("/bin/ls") {
-            if let Ok(elf) = goblin::elf::Elf::parse(&data) {
-                let strings_short = extractor_short.extract_elf(&elf, &data);
-                let strings_long = extractor_long.extract_elf(&elf, &data);
-                assert!(strings_long.len() <= strings_short.len());
-                for s in &strings_long {
-                    // Structure-based strings can be shorter than min_length (down to 2)
-                    assert!(s.value.len() >= 2, "String '{}' too short", s.value);
-                }
-                for s in &strings_short {
-                    assert!(s.value.len() >= 2, "String too short: '{}'", s.value);
-                }
+        if let Ok(data) = std::fs::read("/bin/ls")
+            && let Ok(elf) = goblin::elf::Elf::parse(&data)
+        {
+            let strings_short = extractor_short.extract_elf(&elf, &data);
+            let strings_long = extractor_long.extract_elf(&elf, &data);
+            assert!(strings_long.len() <= strings_short.len());
+            for s in &strings_long {
+                // Structure-based strings can be shorter than min_length (down to 2)
+                assert!(s.value.len() >= 2, "String '{}' too short", s.value);
+            }
+            for s in &strings_short {
+                assert!(s.value.len() >= 2, "String too short: '{}'", s.value);
             }
         }
     }
@@ -1110,23 +1110,23 @@ mod tests {
     #[test]
     fn test_elf_string_deduplication() {
         let extractor = RustStringExtractor::new(4);
-        if let Ok(data) = std::fs::read("/bin/ls") {
-            if let Ok(elf) = goblin::elf::Elf::parse(&data) {
-                let strings = extractor.extract_elf(&elf, &data);
-                let mut seen = std::collections::HashSet::new();
-                let mut duplicates = Vec::new();
-                for s in &strings {
-                    if !seen.insert(&s.value) {
-                        duplicates.push(&s.value);
-                    }
+        if let Ok(data) = std::fs::read("/bin/ls")
+            && let Ok(elf) = goblin::elf::Elf::parse(&data)
+        {
+            let strings = extractor.extract_elf(&elf, &data);
+            let mut seen = std::collections::HashSet::new();
+            let mut duplicates = Vec::new();
+            for s in &strings {
+                if !seen.insert(&s.value) {
+                    duplicates.push(&s.value);
                 }
-                assert!(
-                    duplicates.len() < strings.len() / 10,
-                    "Too many duplicates: {} out of {}",
-                    duplicates.len(),
-                    strings.len()
-                );
             }
+            assert!(
+                duplicates.len() < strings.len() / 10,
+                "Too many duplicates: {} out of {}",
+                duplicates.len(),
+                strings.len()
+            );
         }
     }
 
@@ -1134,17 +1134,17 @@ mod tests {
     fn test_macho_text_const() {
         let extractor = RustStringExtractor::new(4);
         for path in &["/bin/ls", "/usr/bin/true", "/bin/cat"] {
-            if let Ok(data) = std::fs::read(path) {
-                if data.len() > 4 && data[0..4] == [0xcf, 0xfa, 0xed, 0xfe] {
-                    if let Ok(macho) = MachO::parse(&data, 0) {
-                        let strings = extractor.extract_macho(&macho, &data);
-                        if !strings.is_empty() {
-                            for s in &strings {
-                                assert!(s.value.len() >= 4);
-                            }
-                            break;
-                        }
+            if let Ok(data) = std::fs::read(path)
+                && data.len() > 4
+                && data[0..4] == [0xcf, 0xfa, 0xed, 0xfe]
+                && let Ok(macho) = MachO::parse(&data, 0)
+            {
+                let strings = extractor.extract_macho(&macho, &data);
+                if !strings.is_empty() {
+                    for s in &strings {
+                        assert!(s.value.len() >= 4);
                     }
+                    break;
                 }
             }
         }
@@ -1171,45 +1171,45 @@ mod tests {
     #[test]
     fn test_very_large_min_length() {
         let extractor = RustStringExtractor::new(1000);
-        if let Ok(data) = std::fs::read("/bin/ls") {
-            if let Ok(elf) = goblin::elf::Elf::parse(&data) {
-                let strings = extractor.extract_elf(&elf, &data);
-                for s in &strings {
-                    // Even with 1000 min_length, structure-based strings can be as short as 2
-                    assert!(
-                        s.value.len() >= 2,
-                        "String shorter than STRUCTURE_MIN_LENGTH"
-                    );
-                }
-                assert!(strings.len() < 50);
+        if let Ok(data) = std::fs::read("/bin/ls")
+            && let Ok(elf) = goblin::elf::Elf::parse(&data)
+        {
+            let strings = extractor.extract_elf(&elf, &data);
+            for s in &strings {
+                // Even with 1000 min_length, structure-based strings can be as short as 2
+                assert!(
+                    s.value.len() >= 2,
+                    "String shorter than STRUCTURE_MIN_LENGTH"
+                );
             }
+            assert!(strings.len() < 50);
         }
     }
 
     #[test]
     fn test_section_metadata() {
         let extractor = RustStringExtractor::new(4);
-        if let Ok(data) = std::fs::read("/bin/ls") {
-            if let Ok(elf) = goblin::elf::Elf::parse(&data) {
-                let strings = extractor.extract_elf(&elf, &data);
-                if !strings.is_empty() {
-                    let with_sections = strings.iter().filter(|s| s.section.is_some()).count();
-                    assert!(
-                        with_sections > 0,
-                        "At least some strings should have section metadata"
-                    );
-                    for s in &strings {
-                        if let Some(section) = &s.section {
-                            assert!(!section.is_empty());
-                            assert!(
-                                section.starts_with('.')
-                                    || section.starts_with("__")
-                                    || section == "rodata"
-                                    || section == "text",
-                                "Unexpected section name: {}",
-                                section
-                            );
-                        }
+        if let Ok(data) = std::fs::read("/bin/ls")
+            && let Ok(elf) = goblin::elf::Elf::parse(&data)
+        {
+            let strings = extractor.extract_elf(&elf, &data);
+            if !strings.is_empty() {
+                let with_sections = strings.iter().filter(|s| s.section.is_some()).count();
+                assert!(
+                    with_sections > 0,
+                    "At least some strings should have section metadata"
+                );
+                for s in &strings {
+                    if let Some(section) = &s.section {
+                        assert!(!section.is_empty());
+                        assert!(
+                            section.starts_with('.')
+                                || section.starts_with("__")
+                                || section == "rodata"
+                                || section == "text",
+                            "Unexpected section name: {}",
+                            section
+                        );
                     }
                 }
             }

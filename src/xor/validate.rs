@@ -758,12 +758,11 @@ pub(crate) fn has_known_path_prefix(path: &str) -> bool {
     // ../ needs at least 2 levels
     if let Some(after_dot_slash) = path.strip_prefix("./") {
         // Must have some content after ./ and the first character must be alphanumeric
-        if !after_dot_slash.is_empty() {
-            if let Some(first_char) = after_dot_slash.chars().next() {
-                if first_char.is_ascii_alphanumeric() {
-                    return true;
-                }
-            }
+        if !after_dot_slash.is_empty()
+            && let Some(first_char) = after_dot_slash.chars().next()
+            && first_char.is_ascii_alphanumeric()
+        {
+            return true;
         }
     }
 

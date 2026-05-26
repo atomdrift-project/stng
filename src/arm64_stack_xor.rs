@@ -8,9 +8,9 @@
 
 use crate::classifier::classify_string;
 use crate::types::{ExtractedString, StringKind, StringMethod};
-use goblin::mach::constants::cputype::CPU_TYPE_ARM64;
-use goblin::mach::constants::S_ATTR_SOME_INSTRUCTIONS;
 use goblin::mach::MachO;
+use goblin::mach::constants::S_ATTR_SOME_INSTRUCTIONS;
+use goblin::mach::constants::cputype::CPU_TYPE_ARM64;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -116,22 +116,22 @@ fn extract_section(
         }
 
         if decode_bl_target(word, pc).is_some() {
-            if let Some(RegValue::Ptr(arg0)) = regs.get(&0) {
-                if decoded_arg_starts.insert(*arg0) {
-                    let decoded = decode_stack_arg_with_candidate_pads(
-                        &memory,
-                        *arg0,
-                        section_file_offset + instr_off,
-                        section_name,
-                        min_length,
-                    );
-                    for pad in decoded.pads {
-                        if !recovered_pads.contains(&pad) {
-                            recovered_pads.push(pad);
-                        }
+            if let Some(RegValue::Ptr(arg0)) = regs.get(&0)
+                && decoded_arg_starts.insert(*arg0)
+            {
+                let decoded = decode_stack_arg_with_candidate_pads(
+                    &memory,
+                    *arg0,
+                    section_file_offset + instr_off,
+                    section_name,
+                    min_length,
+                );
+                for pad in decoded.pads {
+                    if !recovered_pads.contains(&pad) {
+                        recovered_pads.push(pad);
                     }
-                    append_unique_results(&mut sink_results, decoded.results, &mut seen_values);
                 }
+                append_unique_results(&mut sink_results, decoded.results, &mut seen_values);
             }
             continue;
         }
@@ -553,11 +553,12 @@ fn normalize_decoded_value(value: &str, min_length: usize) -> Option<String> {
         "Exodus",
         "Atomic",
     ] {
-        if let Some(idx) = value.find(anchor) {
-            if idx > 0 && idx <= 24 {
-                value = value[idx..].to_string();
-                break;
-            }
+        if let Some(idx) = value.find(anchor)
+            && idx > 0
+            && idx <= 24
+        {
+            value = value[idx..].to_string();
+            break;
         }
     }
 
@@ -635,11 +636,7 @@ fn collect_contiguous(
         out.extend_from_slice(chunk);
         pos += chunk.len() as i64;
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 fn looks_printable(bytes: &[u8]) -> bool {

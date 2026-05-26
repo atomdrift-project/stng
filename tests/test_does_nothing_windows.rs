@@ -21,7 +21,7 @@
 
 use std::path::Path;
 use std::process::Command;
-use stng::{extract_strings_with_options, ExtractOptions, StringKind, StringMethod};
+use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
 const SAMPLE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

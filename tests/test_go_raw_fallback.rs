@@ -9,7 +9,7 @@
 //! 2. Structure-extracted strings are not duplicated by the raw scan
 //! 3. Structure-extracted strings keep their higher-priority method tag
 
-use stng::{extract_strings_with_options, ExtractOptions, StringMethod};
+use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 
 /// Build a minimal but valid 64-bit little-endian ELF with custom sections.
 ///
@@ -56,7 +56,7 @@ fn build_elf_with_sections(sections: &[(&str, u64, u64, &[u8], u32)]) -> Vec<u8>
     data[5] = 1; // ELFDATA2LSB
     data[6] = 1; // EV_CURRENT
     data[7] = 0; // ELFOSABI_NONE
-                 // e_type = ET_DYN (shared object, like .so)
+    // e_type = ET_DYN (shared object, like .so)
     data[16..18].copy_from_slice(&3u16.to_le_bytes());
     // e_machine = EM_X86_64
     data[18..20].copy_from_slice(&0x3Eu16.to_le_bytes());

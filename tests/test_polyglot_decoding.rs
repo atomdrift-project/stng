@@ -15,7 +15,7 @@
 //! input does, regardless of `is_text_file`'s byte-percentage verdict.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use stng::{extract_strings_with_options, ExtractOptions};
+use stng::{ExtractOptions, extract_strings_with_options};
 
 /// Minimum data: a script command line that embeds a base64 payload
 /// containing a marker we want to surface. No leading binary header,
@@ -81,9 +81,9 @@ fn real_elf_still_uses_goblin_path() {
     data[6] = 1; // version
     data[16..18].copy_from_slice(&[2, 0]); // ET_EXEC
     data[18..20].copy_from_slice(&[0x3E, 0]); // EM_X86_64
-                                              // We don't assert on what the goblin path returns (that's tested
-                                              // elsewhere); we only need to confirm extraction doesn't blow up
-                                              // and we still get *some* output. The previous routing logic for
-                                              // recognised binaries is unchanged by the polyglot fix.
+    // We don't assert on what the goblin path returns (that's tested
+    // elsewhere); we only need to confirm extraction doesn't blow up
+    // and we still get *some* output. The previous routing logic for
+    // recognised binaries is unchanged by the polyglot fix.
     let _strings = extract_strings_with_options(&data, &ExtractOptions::new(4));
 }

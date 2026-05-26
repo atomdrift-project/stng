@@ -4,7 +4,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use crate::classifier::classify_string;
-use crate::raw::{extract_printable_runs, extract_wide_strings, PrintableRunContext};
+use crate::raw::{PrintableRunContext, extract_printable_runs, extract_wide_strings};
 use crate::types::{ExtractedString, OverlayInfo, StringKind};
 use std::collections::HashSet;
 

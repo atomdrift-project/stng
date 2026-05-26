@@ -112,74 +112,74 @@ pub fn extract_strings(
 
     let mut strings = Vec::new();
     let mut seen = HashSet::new();
-    if let Some(data_strings) = data_result {
-        if let Ok(json) = serde_json::from_str::<Vec<R2String>>(&data_strings) {
-            for s in json {
-                if s.paddr > file_size {
-                    continue;
-                }
-                if s.string.len() >= min_length && seen.insert(s.string.clone()) {
-                    if let Some(decoded) = decode_spaced_ascii(&s.string) {
-                        if decoded.len() >= min_length && seen.insert(decoded.clone()) {
-                            let kind = classify_string(&decoded);
-                            strings.push(ExtractedString {
-                                value: decoded,
-                                data_offset: s.paddr,
-                                section: Some(s.section.clone()),
-                                method: StringMethod::SpacedAscii,
-                                kind,
-                                raw: Some(s.string.clone()),
-                                ..Default::default()
-                            });
-                        }
-                    } else {
-                        let kind = classify_string(&s.string);
+    if let Some(data_strings) = data_result
+        && let Ok(json) = serde_json::from_str::<Vec<R2String>>(&data_strings)
+    {
+        for s in json {
+            if s.paddr > file_size {
+                continue;
+            }
+            if s.string.len() >= min_length && seen.insert(s.string.clone()) {
+                if let Some(decoded) = decode_spaced_ascii(&s.string) {
+                    if decoded.len() >= min_length && seen.insert(decoded.clone()) {
+                        let kind = classify_string(&decoded);
                         strings.push(ExtractedString {
-                            value: s.string,
+                            value: decoded,
                             data_offset: s.paddr,
-                            section: Some(s.section),
-                            method: StringMethod::R2String,
+                            section: Some(s.section.clone()),
+                            method: StringMethod::SpacedAscii,
                             kind,
+                            raw: Some(s.string.clone()),
                             ..Default::default()
                         });
                     }
+                } else {
+                    let kind = classify_string(&s.string);
+                    strings.push(ExtractedString {
+                        value: s.string,
+                        data_offset: s.paddr,
+                        section: Some(s.section),
+                        method: StringMethod::R2String,
+                        kind,
+                        ..Default::default()
+                    });
                 }
             }
         }
     }
     let function_metadata = extract_function_metadata(path, file_size, use_cache);
-    if let Some(symbols) = symbols_result {
-        if let Ok(json) = serde_json::from_str::<Vec<R2Symbol>>(&symbols) {
-            for s in json {
-                if s.paddr > file_size {
-                    continue;
-                }
-                if s.name.len() >= min_length && seen.insert(s.name.clone()) {
-                    let kind = Some(classify_r2_symbol(&s.r#type, &s.bind));
-                    let func_meta = if s.r#type == "FUNC" || s.r#type == "METH" {
-                        function_metadata.as_ref().and_then(|map| {
-                            map.get(&s.name).cloned().or_else(|| {
-                                let clean = s
-                                    .name
-                                    .strip_prefix("sym.")
-                                    .or_else(|| s.name.strip_prefix("sym.imp."))
-                                    .unwrap_or(&s.name);
-                                map.get(clean).cloned()
-                            })
+    if let Some(symbols) = symbols_result
+        && let Ok(json) = serde_json::from_str::<Vec<R2Symbol>>(&symbols)
+    {
+        for s in json {
+            if s.paddr > file_size {
+                continue;
+            }
+            if s.name.len() >= min_length && seen.insert(s.name.clone()) {
+                let kind = Some(classify_r2_symbol(&s.r#type, &s.bind));
+                let func_meta = if s.r#type == "FUNC" || s.r#type == "METH" {
+                    function_metadata.as_ref().and_then(|map| {
+                        map.get(&s.name).cloned().or_else(|| {
+                            let clean = s
+                                .name
+                                .strip_prefix("sym.")
+                                .or_else(|| s.name.strip_prefix("sym.imp."))
+                                .unwrap_or(&s.name);
+                            map.get(clean).cloned()
                         })
-                    } else {
-                        None
-                    };
-                    strings.push(ExtractedString {
-                        value: s.name,
-                        data_offset: s.paddr,
-                        section: s.section,
-                        method: StringMethod::R2Symbol,
-                        kind,
-                        function_meta: func_meta,
-                        ..Default::default()
-                    });
-                }
+                    })
+                } else {
+                    None
+                };
+                strings.push(ExtractedString {
+                    value: s.name,
+                    data_offset: s.paddr,
+                    section: s.section,
+                    method: StringMethod::R2Symbol,
+                    kind,
+                    function_meta: func_meta,
+                    ..Default::default()
+                });
             }
         }
     }
@@ -250,12 +250,11 @@ fn run_tool_command_with_cache(
     cmd: &str,
     use_cache: bool,
 ) -> Option<String> {
-    if use_cache {
-        if let Ok(cache) = R2Cache::new() {
-            if let Some(cached) = cache.get(path, cmd) {
-                return Some(cached);
-            }
-        }
+    if use_cache
+        && let Ok(cache) = R2Cache::new()
+        && let Some(cached) = cache.get(path, cmd)
+    {
+        return Some(cached);
     }
     let output = Command::new(tool)
         .args(["-q", "-c", cmd, path])
@@ -263,10 +262,8 @@ fn run_tool_command_with_cache(
         .ok()?;
     if output.status.success() {
         let result = String::from_utf8(output.stdout).ok()?;
-        if use_cache {
-            if let Ok(cache) = R2Cache::new() {
-                let _ = cache.set(path, cmd, &result);
-            }
+        if use_cache && let Ok(cache) = R2Cache::new() {
+            let _ = cache.set(path, cmd, &result);
         }
         Some(result)
     } else {
@@ -479,45 +476,33 @@ pub fn verify_xor_keys(
                     .unwrap_or("")
                     .trim_start_matches("0x"),
                 16,
-            ) {
-                if xor_instrs.iter().any(|&x| {
-                    if x >= lea_addr {
-                        x - lea_addr < 256
-                    } else {
-                        lea_addr - x < 256
-                    }
-                }) {
-                    if let Some(ao_output) =
-                        run_tool_command(tool, path, &format!("aoj 1 @ 0x{lea_addr:x}"))
-                    {
-                        if let Ok(json) = serde_json::from_str::<Vec<serde_json::Value>>(&ao_output)
-                        {
-                            if let Some(vaddr) = json
-                                .first()
-                                .and_then(|i| i.get("ptr"))
-                                .and_then(serde_json::Value::as_u64)
-                            {
-                                if let Some(paddr) = vaddr_to_paddr(vaddr, &sections) {
-                                    if !seen_keys.contains(&paddr) {
-                                        for len in [16, 32, 8] {
-                                            instr_results.push(XorKeyInfo {
-                                                offset: paddr,
-                                                key: None,
-                                                length: len,
-                                                confidence: XorConfidence::High,
-                                                reference_count: 1,
-                                                source: format!(
-                                                    "xor_lea_prox_{len}@0x{lea_addr:x}"
-                                                ),
-                                            });
-                                        }
-                                        seen_keys.insert(paddr);
-                                    }
-                                }
-                            }
-                        }
-                    }
+            ) && xor_instrs.iter().any(|&x| {
+                if x >= lea_addr {
+                    x - lea_addr < 256
+                } else {
+                    lea_addr - x < 256
                 }
+            }) && let Some(ao_output) =
+                run_tool_command(tool, path, &format!("aoj 1 @ 0x{lea_addr:x}"))
+                && let Ok(json) = serde_json::from_str::<Vec<serde_json::Value>>(&ao_output)
+                && let Some(vaddr) = json
+                    .first()
+                    .and_then(|i| i.get("ptr"))
+                    .and_then(serde_json::Value::as_u64)
+                && let Some(paddr) = vaddr_to_paddr(vaddr, &sections)
+                && !seen_keys.contains(&paddr)
+            {
+                for len in [16, 32, 8] {
+                    instr_results.push(XorKeyInfo {
+                        offset: paddr,
+                        key: None,
+                        length: len,
+                        confidence: XorConfidence::High,
+                        reference_count: 1,
+                        source: format!("xor_lea_prox_{len}@0x{lea_addr:x}"),
+                    });
+                }
+                seen_keys.insert(paddr);
             }
         }
     }
@@ -663,34 +648,31 @@ struct SockaddrIn {
 fn parse_sockaddr_from_disasm(disasm: &str, _data: &[u8]) -> Option<SockaddrIn> {
     let (mut ip, mut port, mut offset, mut found, mut pending) = ([0u8; 4], 0u16, 0u64, 0, None);
     for line in disasm.lines() {
-        if let Some(addr_str) = line.split_whitespace().next() {
-            if let Ok(addr) = u64::from_str_radix(addr_str.trim_start_matches("0x"), 16) {
-                if offset == 0 {
-                    offset = addr;
-                }
-            }
+        if let Some(addr_str) = line.split_whitespace().next()
+            && let Ok(addr) = u64::from_str_radix(addr_str.trim_start_matches("0x"), 16)
+            && offset == 0
+        {
+            offset = addr;
         }
-        if (line.contains(" mov ") && line.contains(", #")) || line.contains(", 0x") {
-            if let Some(imm) = line.rfind(", ") {
-                if let Some(val) = line[imm + 2..].split_whitespace().next() {
-                    if let Ok(b) = parse_imm(val) {
-                        pending = Some(b);
-                    }
-                }
-            }
+        if ((line.contains(" mov ") && line.contains(", #")) || line.contains(", 0x"))
+            && let Some(imm) = line.rfind(", ")
+            && let Some(val) = line[imm + 2..].split_whitespace().next()
+            && let Ok(b) = parse_imm(val)
+        {
+            pending = Some(b);
         }
-        if line.contains("strb") || line.contains("str ") {
-            if let (Some(b), Some(sp)) = (pending, extract_stack_off(line)) {
-                if (4..=7).contains(&sp) {
-                    ip[sp as usize - 4] = b;
-                    found += 1;
-                } else if sp == 2 {
-                    port = u16::from(b) << 8;
-                } else if sp == 3 {
-                    port |= u16::from(b);
-                }
-                pending = None;
+        if (line.contains("strb") || line.contains("str "))
+            && let (Some(b), Some(sp)) = (pending, extract_stack_off(line))
+        {
+            if (4..=7).contains(&sp) {
+                ip[sp as usize - 4] = b;
+                found += 1;
+            } else if sp == 2 {
+                port = u16::from(b) << 8;
+            } else if sp == 3 {
+                port |= u16::from(b);
             }
+            pending = None;
         }
     }
     if found == 4 && !is_z(&ip) {
@@ -711,21 +693,20 @@ fn parse_imm(s: &str) -> Result<u8, std::num::ParseIntError> {
 }
 fn extract_stack_off(line: &str) -> Option<u8> {
     let p: Vec<&str> = line.split_whitespace().collect();
-    if p.len() >= 2 && p[1].len() >= 8 {
-        if let Some(s) = p[1].get(0..2) {
-            if let Ok(o) = u8::from_str_radix(s, 16) {
-                return Some(o);
-            }
-        }
+    if p.len() >= 2
+        && p[1].len() >= 8
+        && let Some(s) = p[1].get(0..2)
+        && let Ok(o) = u8::from_str_radix(s, 16)
+    {
+        return Some(o);
     }
-    if let Some(sp) = line.find("sp,") {
-        if let Some(n) = line[sp + 3..]
+    if let Some(sp) = line.find("sp,")
+        && let Some(n) = line[sp + 3..]
             .trim_start_matches(|c: char| c.is_whitespace() || c == '#')
             .split(&[']', ','][..])
             .next()
-        {
-            return parse_imm(n).ok();
-        }
+    {
+        return parse_imm(n).ok();
     }
     None
 }
@@ -787,9 +768,6 @@ mod tests {
 
     #[test]
     fn extract_stack_off_sp_offset() {
-        assert_eq!(
-            extract_stack_off("str w8, [sp, #0x4]"),
-            Some(4)
-        );
+        assert_eq!(extract_stack_off("str w8, [sp, #0x4]"), Some(4));
     }
 }

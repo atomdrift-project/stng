@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use stng::{extract_strings_with_options, ExtractOptions, StringMethod};
+use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 
 /// Integration test against a real LD_PRELOAD Linux rootkit ELF.
 ///
@@ -13,8 +13,7 @@ use stng::{extract_strings_with_options, ExtractOptions, StringMethod};
 ///   - /proc/net/tcp6  (offset 0x442c) — IPv6 connection hiding
 #[test]
 fn test_elf_rootkit_xor_detection() {
-    let sample_path =
-        "../../../data/bad/datasets/mbdl/rootkit/3b378846bc429fdf9bec08b9635885267d8d269f6d941ab1d6e526a03304331b.elf";
+    let sample_path = "../../../data/bad/datasets/mbdl/rootkit/3b378846bc429fdf9bec08b9635885267d8d269f6d941ab1d6e526a03304331b.elf";
 
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - rootkit sample not found at {}", sample_path);

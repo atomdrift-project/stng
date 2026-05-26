@@ -7,7 +7,7 @@
 //! - Quality filtering
 //! - Edge cases and error handling
 
-use stng::{extract_strings_with_options, ExtractOptions, StringKind, StringMethod};
+use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
 /// Helper to create test data with embedded content
 fn make_test_data(content: &str) -> Vec<u8> {
@@ -15,7 +15,7 @@ fn make_test_data(content: &str) -> Vec<u8> {
     // Add some binary header
     data.extend_from_slice(&[0x7f, 0x45, 0x4c, 0x46]); // ELF magic
     data.extend_from_slice(&[0; 100]); // Padding
-                                       // Add the content
+    // Add the content
     data.extend_from_slice(content.as_bytes());
     // Add trailing data
     data.extend_from_slice(&[0; 100]);

@@ -9,7 +9,7 @@
 //! Profile ARM64:  cargo bench --bench extract -- "dynamichub_arm64_stack_xor"
 //! With flamegraph: cargo flamegraph --bench extract -- --bench "go_garble_3mb"
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use std::time::Duration;
 use stng::ExtractOptions;
 

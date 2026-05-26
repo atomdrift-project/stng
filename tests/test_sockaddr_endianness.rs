@@ -15,7 +15,7 @@
     clippy::cast_possible_truncation
 )]
 
-use stng::{classify_string, extract_strings_with_options, ExtractOptions, StringKind};
+use stng::{ExtractOptions, StringKind, classify_string, extract_strings_with_options};
 
 /// Builds a minimal PE32 image (i386, single `.data` section) with `data_bytes`
 /// placed at the start of `.data`. The image is just complete enough for

@@ -35,26 +35,26 @@ fn is_go_binary_from_sections(
     data: &[u8],
 ) -> bool {
     // Check ELF for Go sections
-    if let Some(elf) = elf_opt {
-        if elf.section_headers.iter().any(|sh| {
+    if let Some(elf) = elf_opt
+        && elf.section_headers.iter().any(|sh| {
             if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
                 name == ".gopclntab" || name == ".go.buildinfo"
             } else {
                 false
             }
-        }) {
-            return true;
-        }
+        })
+    {
+        return true;
     }
 
     // Check PE for Go sections
-    if let Some(pe) = pe_opt {
-        if pe.sections.iter().any(|section| {
+    if let Some(pe) = pe_opt
+        && pe.sections.iter().any(|section| {
             let name = crate::binary::pe_section_name(&section.name).to_lowercase();
             name.contains("gopclntab") || name.contains("go.buildinfo")
-        }) {
-            return true;
-        }
+        })
+    {
+        return true;
     }
 
     // Fallback: check for "Go build ID:" string in first 4KB of binary
@@ -75,12 +75,12 @@ fn is_dotnet_binary(pe_opt: Option<&crate::goblin::pe::PE<'_>>, data: &[u8]) -> 
         if let Some(optional_header) = pe.header.optional_header {
             let data_directories = &optional_header.data_directories.data_directories;
             // Index 14 is IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR (CLR header)
-            if data_directories.len() > 14 {
-                if let Some((_, clr_dir)) = &data_directories[14] {
-                    if clr_dir.virtual_address != 0 && clr_dir.size != 0 {
-                        return true;
-                    }
-                }
+            if data_directories.len() > 14
+                && let Some((_, clr_dir)) = &data_directories[14]
+                && clr_dir.virtual_address != 0
+                && clr_dir.size != 0
+            {
+                return true;
             }
         }
 
@@ -177,11 +177,10 @@ pub(crate) fn scan_binary_ips(
             for sh in &elf.section_headers {
                 if s.data_offset >= sh.sh_offset
                     && s.data_offset < sh.sh_offset.saturating_add(sh.sh_size)
+                    && let Some(name) = elf.shdr_strtab.get_at(sh.sh_name)
                 {
-                    if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
-                        // Accept if in a data section, reject if in code section
-                        return is_data_section_elf(name);
-                    }
+                    // Accept if in a data section, reject if in code section
+                    return is_data_section_elf(name);
                 }
             }
             // If section can't be determined, reject to be safe
@@ -433,7 +432,7 @@ mod tests {
         data[270] = 0x02; // AF_INET LE
         data[271] = 0x00;
         data[272..274].copy_from_slice(&[0x1F, 0x90]); // Port 8080
-                                                       // IP with 3+ ASCII chars (E=0x45, L=0x4C, F=0x46)
+        // IP with 3+ ASCII chars (E=0x45, L=0x4C, F=0x46)
         data[274..278].copy_from_slice(&[0x7F, 0x45, 0x4C, 0x46]);
 
         let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
@@ -459,7 +458,7 @@ mod tests {
         data[50] = 0x00;
         data[51] = 0x02;
         data[52..54].copy_from_slice(&[0x00, 0x50]); // Port 80
-                                                     // Use IP 10.20.30.40 (0x0A 0x14 0x1E 0x28) to avoid accidental AF_INET patterns
+        // Use IP 10.20.30.40 (0x0A 0x14 0x1E 0x28) to avoid accidental AF_INET patterns
         data[54..58].copy_from_slice(&[0x0A, 0x14, 0x1E, 0x28]); // 10.20.30.40
 
         let elf_arm = 40; // EM_ARM from ELF header

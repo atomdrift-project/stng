@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for improved text file decoding with embedded base64 extraction
 
-use stng::{classify_string, StringKind};
+use stng::{StringKind, classify_string};
 
 #[test]
 fn test_base64_classification_short_strings() {
@@ -82,8 +82,8 @@ fn test_url_encoding_not_detected_one_sequence() {
 
 #[test]
 fn test_base64_decoding() {
-    use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     let encoded = "SGVsbG8gV29ybGQ=";
     let decoded = BASE64.decode(encoded).unwrap();
@@ -139,9 +139,11 @@ fn test_embedded_base64_in_variable_assignment() {
         .collect();
 
     assert!(!captures.is_empty());
-    assert!(captures
-        .iter()
-        .any(|s| s.starts_with("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9")));
+    assert!(
+        captures
+            .iter()
+            .any(|s| s.starts_with("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"))
+    );
 }
 
 #[test]
@@ -162,8 +164,8 @@ fn test_command_injection_classification() {
 
 #[test]
 fn test_invalid_base64_not_decoded() {
-    use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     // Invalid base64 should fail gracefully
     let invalid = "ThisIsNotBase64!@#$%";
@@ -190,8 +192,8 @@ fn test_malformed_url_encoding() {
 
 #[test]
 fn test_base64_with_whitespace() {
-    use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     // Base64 with whitespace should be trimmed and decoded
     let encoded = "  SGVsbG8gV29ybGQ=  ";
@@ -242,8 +244,8 @@ fn test_base64_in_json() {
 
 #[test]
 fn test_base64_padding_variations() {
-    use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     // Test different padding scenarios
     let test_cases = vec![
@@ -273,8 +275,8 @@ fn test_case_sensitivity() {
 
 #[test]
 fn test_non_utf8_decoded_content() {
-    use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     // Base64 that decodes to binary (non-UTF8) should be handled
     let binary_b64 = "AAECAwQFBgcICQ=="; // Binary data

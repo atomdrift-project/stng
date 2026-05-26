@@ -7,19 +7,19 @@
 // This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
 #![allow(clippy::cast_possible_truncation)]
 
+use super::SKIP_XOR_KEYS;
 use super::classify::{
     classify_xor_string, clean_locale_trailing_garbage, clean_url_trailing_garbage,
     trim_consonant_clusters, trim_trailing_garbage,
 };
 use super::validate::is_locale_string;
-use super::SKIP_XOR_KEYS;
 use crate::validation;
 use crate::{ExtractedString, StringKind, StringMethod};
 use aho_corasick::AhoCorasick;
 use rayon::prelude::*;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Minimal high-signal patterns for XOR detection.
 /// These short patterns catch a wide variety of malware indicators:
@@ -322,78 +322,75 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
             };
 
             // Re-check minimum length after trimming
-            if actual_end - run_start >= min_length {
-                if let Ok(s) = String::from_utf8(decoded[run_start..actual_end].to_vec()) {
-                    // Always classify to determine kind — used for vowel ratio bypass below.
-                    // When apply_filters is false, accept all classified strings (no rejection).
-                    let kind_opt = classify_xor_string(&s);
+            if actual_end - run_start >= min_length
+                && let Ok(s) = String::from_utf8(decoded[run_start..actual_end].to_vec())
+            {
+                // Always classify to determine kind — used for vowel ratio bypass below.
+                // When apply_filters is false, accept all classified strings (no rejection).
+                let kind_opt = classify_xor_string(&s);
 
-                    if let Some(kind) = kind_opt {
-                        // Additional sanity check: reject obvious garbage.
-                        // Since single-byte XOR uses ASCII-only run detection, all strings are ASCII;
-                        // use fast byte-based counting instead of slow Unicode char iteration.
-                        let alnum = s.bytes().filter(u8::is_ascii_alphanumeric).count();
-                        let alpha = s.bytes().filter(u8::is_ascii_alphabetic).count();
+                if let Some(kind) = kind_opt {
+                    // Additional sanity check: reject obvious garbage.
+                    // Since single-byte XOR uses ASCII-only run detection, all strings are ASCII;
+                    // use fast byte-based counting instead of slow Unicode char iteration.
+                    let alnum = s.bytes().filter(u8::is_ascii_alphanumeric).count();
+                    let alpha = s.bytes().filter(u8::is_ascii_alphabetic).count();
 
-                        // Reject if < 50% alphanumeric (likely garbage)
-                        let char_count = s.len(); // ASCII: len == char count
-                        if char_count > 0 && alnum * 100 < char_count * 50 {
+                    // Reject if < 50% alphanumeric (likely garbage)
+                    let char_count = s.len(); // ASCII: len == char count
+                    if char_count > 0 && alnum * 100 < char_count * 50 {
+                        continue;
+                    }
+
+                    // Reject if has letters but poor vowel ratio (English-specific check).
+                    // Skip for encoded formats (base64, hex, etc.) and high-value IOCs
+                    // (SuspiciousPath/ShellCmd) which may not follow English vowel patterns.
+                    // DLL names (bcrypt.dll), API names (BCryptDecrypt), and shell commands
+                    // are valid targets even with 0% vowels.
+                    let is_encoded_format = matches!(
+                        kind,
+                        Some(StringKind::Base64)
+                            | Some(StringKind::UnicodeEscaped)
+                            | Some(StringKind::HexEncoded)
+                            | Some(StringKind::UrlEncoded)
+                            | Some(StringKind::SuspiciousPath)
+                            | Some(StringKind::ShellCmd)
+                    );
+                    if !is_encoded_format && alpha >= 3 {
+                        let vowels = s
+                            .bytes()
+                            .filter(|&b| {
+                                matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u')
+                            })
+                            .count();
+                        let vowel_ratio = (vowels * 100).checked_div(alpha).unwrap_or(0);
+                        if !(10..=70).contains(&vowel_ratio) {
                             continue;
                         }
+                    }
 
-                        // Reject if has letters but poor vowel ratio (English-specific check).
-                        // Skip for encoded formats (base64, hex, etc.) and high-value IOCs
-                        // (SuspiciousPath/ShellCmd) which may not follow English vowel patterns.
-                        // DLL names (bcrypt.dll), API names (BCryptDecrypt), and shell commands
-                        // are valid targets even with 0% vowels.
-                        let is_encoded_format = matches!(
+                    let offset = run_start as u64;
+                    if seen.insert((offset, s.clone())) {
+                        // Use hex format consistent with the AC scan path ("xor:0xNN").
+                        let source_tag = format!("xor:0x{:02X}", key[0]);
+
+                        // Clean up URLs by removing trailing garbage
+                        let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
+                            clean_url_trailing_garbage(&s)
+                        } else {
+                            s.clone()
+                        };
+
+                        results.push(ExtractedString {
+                            value: cleaned_value,
+                            data_offset: offset,
+                            section: None,
+                            method: StringMethod::XorDecode,
                             kind,
-                            Some(StringKind::Base64)
-                                | Some(StringKind::UnicodeEscaped)
-                                | Some(StringKind::HexEncoded)
-                                | Some(StringKind::UrlEncoded)
-                                | Some(StringKind::SuspiciousPath)
-                                | Some(StringKind::ShellCmd)
-                        );
-                        if !is_encoded_format && alpha >= 3 {
-                            let vowels = s
-                                .bytes()
-                                .filter(|&b| {
-                                    matches!(
-                                        b.to_ascii_lowercase(),
-                                        b'a' | b'e' | b'i' | b'o' | b'u'
-                                    )
-                                })
-                                .count();
-                            let vowel_ratio = (vowels * 100).checked_div(alpha).unwrap_or(0);
-                            if !(10..=70).contains(&vowel_ratio) {
-                                continue;
-                            }
-                        }
-
-                        let offset = run_start as u64;
-                        if seen.insert((offset, s.clone())) {
-                            // Use hex format consistent with the AC scan path ("xor:0xNN").
-                            let source_tag = format!("xor:0x{:02X}", key[0]);
-
-                            // Clean up URLs by removing trailing garbage
-                            let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
-                                clean_url_trailing_garbage(&s)
-                            } else {
-                                s.clone()
-                            };
-
-                            results.push(ExtractedString {
-                                value: cleaned_value,
-                                data_offset: offset,
-                                section: None,
-                                method: StringMethod::XorDecode,
-                                kind,
-                                source: Some(source_tag),
-                                fragments: None,
-                                ..Default::default()
-                            });
-                        }
+                            source: Some(source_tag),
+                            fragments: None,
+                            ..Default::default()
+                        });
                     }
                 }
             }
@@ -475,25 +472,25 @@ fn extract_xor_strings_from_hints(
                 // we still keep unclassified strings if classify_xor_string accepts them.
                 let kind_opt = classify_xor_string(&s);
 
-                if let Some(kind) = kind_opt {
-                    if seen.insert((offset as u64, s.clone())) {
-                        let key_preview = if key.len() > 8 {
-                            format!("{}...", String::from_utf8_lossy(&key[..8]))
-                        } else {
-                            String::from_utf8_lossy(key).into_owned()
-                        };
+                if let Some(kind) = kind_opt
+                    && seen.insert((offset as u64, s.clone()))
+                {
+                    let key_preview = if key.len() > 8 {
+                        format!("{}...", String::from_utf8_lossy(&key[..8]))
+                    } else {
+                        String::from_utf8_lossy(key).into_owned()
+                    };
 
-                        results.push(ExtractedString {
-                            value: s,
-                            data_offset: offset as u64,
-                            section: None,
-                            method: StringMethod::XorDecode,
-                            kind,
-                            source: Some(format!("xor:key:{key_preview}@hint")),
-                            fragments: None,
-                            ..Default::default()
-                        });
-                    }
+                    results.push(ExtractedString {
+                        value: s,
+                        data_offset: offset as u64,
+                        section: None,
+                        method: StringMethod::XorDecode,
+                        kind,
+                        source: Some(format!("xor:key:{key_preview}@hint")),
+                        fragments: None,
+                        ..Default::default()
+                    });
                 }
             }
         }
@@ -552,10 +549,10 @@ fn is_xor_key_artifact(s: &str, key: &[u8]) -> bool {
             let key_str_bytes = key_str.as_bytes();
             for key_start in 0..=(key.len().saturating_sub(window_size)) {
                 let key_fragment = &key_str_bytes[key_start..key_start + window_size];
-                if let Ok(fragment_str) = std::str::from_utf8(key_fragment) {
-                    if s.contains(fragment_str) {
-                        return true;
-                    }
+                if let Ok(fragment_str) = std::str::from_utf8(key_fragment)
+                    && s.contains(fragment_str)
+                {
+                    return true;
                 }
             }
         }
@@ -1064,23 +1061,22 @@ pub(crate) fn extract_rolling_xor_with_known_plaintext(
                         }
                     }
 
-                    if decoded_bytes.len() >= min_length {
-                        if let Ok(s) = String::from_utf8(decoded_bytes.clone()) {
-                            if s.bytes().any(|b| b.is_ascii_alphabetic()) {
-                                let file_offset = (region_start + start_pos) as u64;
-                                let kind = classify_xor_string(&s).flatten();
-                                results.push(ExtractedString {
-                                    value: s,
-                                    data_offset: file_offset,
-                                    section: None,
-                                    method: StringMethod::XorDecode,
-                                    kind,
-                                    source: Some(format!("xor:rolling:{}", key_hex)),
-                                    fragments: None,
-                                    ..Default::default()
-                                });
-                            }
-                        }
+                    if decoded_bytes.len() >= min_length
+                        && let Ok(s) = String::from_utf8(decoded_bytes.clone())
+                        && s.bytes().any(|b| b.is_ascii_alphabetic())
+                    {
+                        let file_offset = (region_start + start_pos) as u64;
+                        let kind = classify_xor_string(&s).flatten();
+                        results.push(ExtractedString {
+                            value: s,
+                            data_offset: file_offset,
+                            section: None,
+                            method: StringMethod::XorDecode,
+                            kind,
+                            source: Some(format!("xor:rolling:{}", key_hex)),
+                            fragments: None,
+                            ..Default::default()
+                        });
                     }
                 }
 
@@ -1211,8 +1207,34 @@ pub fn extract_incremental_xor_strings(
                                     // match triggers 4KB of speculative decoding. Only keep
                                     // strings that the classifier affirms are meaningful
                                     // — unclassified "any-alpha-char" noise should be dropped.
-                                    if s.chars().any(char::is_alphabetic) {
-                                        if let Some(Some(kind)) = classify_xor_string(&s) {
+                                    if s.chars().any(char::is_alphabetic)
+                                        && let Some(Some(kind)) = classify_xor_string(&s)
+                                    {
+                                        results.push(ExtractedString {
+                                            value: s,
+                                            data_offset: current_start as u64,
+                                            section: None,
+                                            method: StringMethod::XorDecode,
+                                            kind: Some(kind),
+                                            source: Some(format!(
+                                                "xor:incremental:seed0x{:02x}",
+                                                seed
+                                            )),
+                                            fragments: None,
+                                            ..Default::default()
+                                        });
+                                    }
+                                    break;
+                                }
+                                Err(e) => {
+                                    let valid_up_to = e.utf8_error().valid_up_to();
+                                    if valid_up_to >= min_length {
+                                        let mut valid_bytes = current_bytes.clone();
+                                        valid_bytes.truncate(valid_up_to);
+                                        if let Ok(s) = String::from_utf8(valid_bytes)
+                                            && s.chars().any(char::is_alphabetic)
+                                            && let Some(Some(kind)) = classify_xor_string(&s)
+                                        {
                                             results.push(ExtractedString {
                                                 value: s,
                                                 data_offset: current_start as u64,
@@ -1226,33 +1248,6 @@ pub fn extract_incremental_xor_strings(
                                                 fragments: None,
                                                 ..Default::default()
                                             });
-                                        }
-                                    }
-                                    break;
-                                }
-                                Err(e) => {
-                                    let valid_up_to = e.utf8_error().valid_up_to();
-                                    if valid_up_to >= min_length {
-                                        let mut valid_bytes = current_bytes.clone();
-                                        valid_bytes.truncate(valid_up_to);
-                                        if let Ok(s) = String::from_utf8(valid_bytes) {
-                                            if s.chars().any(char::is_alphabetic) {
-                                                if let Some(Some(kind)) = classify_xor_string(&s) {
-                                                    results.push(ExtractedString {
-                                                        value: s,
-                                                        data_offset: current_start as u64,
-                                                        section: None,
-                                                        method: StringMethod::XorDecode,
-                                                        kind: Some(kind),
-                                                        source: Some(format!(
-                                                            "xor:incremental:seed0x{:02x}",
-                                                            seed
-                                                        )),
-                                                        fragments: None,
-                                                        ..Default::default()
-                                                    });
-                                                }
-                                            }
                                         }
                                     }
 

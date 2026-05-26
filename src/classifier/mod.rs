@@ -336,29 +336,29 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
 
         // Command substitution: $(...) - require actual command content inside
         // Must have command-like content, not just random binary data
-        if let Some(start) = s.find("$(") {
-            if let Some(end_rel) = s[start + 2..].find(')') {
-                let content = &s[start + 2..start + 2 + end_rel];
-                // Must be non-empty and contain a space (actual command with args)
-                // or be a known command name
-                let is_command = !content.is_empty()
-                    && (content.contains(' ')
-                        || content.starts_with("whoami")
-                        || content.starts_with("id")
-                        || content.starts_with("pwd")
-                        || content.starts_with("hostname")
-                        || content.starts_with("uname"));
-                // Must be mostly ASCII and have reasonable alphanumeric ratio
-                let ascii_count = content.bytes().filter(u8::is_ascii).count();
-                let alpha_count = content.bytes().filter(u8::is_ascii_alphanumeric).count();
-                let content_len = content.len();
-                let is_valid = content_len >= 2
-                    && ascii_count * 100 / content_len > 90
-                    && alpha_count * 100 / content_len > 40;
+        if let Some(start) = s.find("$(")
+            && let Some(end_rel) = s[start + 2..].find(')')
+        {
+            let content = &s[start + 2..start + 2 + end_rel];
+            // Must be non-empty and contain a space (actual command with args)
+            // or be a known command name
+            let is_command = !content.is_empty()
+                && (content.contains(' ')
+                    || content.starts_with("whoami")
+                    || content.starts_with("id")
+                    || content.starts_with("pwd")
+                    || content.starts_with("hostname")
+                    || content.starts_with("uname"));
+            // Must be mostly ASCII and have reasonable alphanumeric ratio
+            let ascii_count = content.bytes().filter(u8::is_ascii).count();
+            let alpha_count = content.bytes().filter(u8::is_ascii_alphanumeric).count();
+            let content_len = content.len();
+            let is_valid = content_len >= 2
+                && ascii_count * 100 / content_len > 90
+                && alpha_count * 100 / content_len > 40;
 
-                if is_command && is_valid {
-                    return Some(StringKind::CommandInjection);
-                }
+            if is_command && is_valid {
+                return Some(StringKind::CommandInjection);
             }
         }
     }
@@ -392,10 +392,10 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
     }
 
     // IP addresses and IP:port - only if starts with digit
-    if first.is_ascii_digit() {
-        if let Some(kind) = network::classify_ip(s) {
-            return Some(kind);
-        }
+    if first.is_ascii_digit()
+        && let Some(kind) = network::classify_ip(s)
+    {
+        return Some(kind);
     }
 
     // Windows registry paths (full HKEY-prefixed or root-relative subkeys

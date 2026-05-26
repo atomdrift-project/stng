@@ -305,12 +305,11 @@ pub(super) fn is_unicode_escaped(s: &str) -> bool {
     let mut chars = s.chars().peekable();
 
     while let Some(c) = chars.next() {
-        if c == '\\' {
-            if let Some(&next) = chars.peek() {
-                if next == 'x' || next == 'u' {
-                    escape_count += 1;
-                }
-            }
+        if c == '\\'
+            && let Some(&next) = chars.peek()
+            && (next == 'x' || next == 'u')
+        {
+            escape_count += 1;
         }
     }
 
@@ -346,11 +345,11 @@ pub(super) fn decode_unicode_escapes(s: &str) -> Vec<u8> {
                     // \xXX format (2 hex digits)
                     'x' => {
                         let hex: String = chars.by_ref().take(2).collect();
-                        if hex.len() == 2 {
-                            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                                result.push(byte);
-                                continue;
-                            }
+                        if hex.len() == 2
+                            && let Ok(byte) = u8::from_str_radix(&hex, 16)
+                        {
+                            result.push(byte);
+                            continue;
                         }
                         // Failed to parse, add literal characters
                         result.push(b'\\');
@@ -360,15 +359,15 @@ pub(super) fn decode_unicode_escapes(s: &str) -> Vec<u8> {
                     // \uXXXX format (4 hex digits)
                     'u' => {
                         let hex: String = chars.by_ref().take(4).collect();
-                        if hex.len() == 4 {
-                            if let Ok(codepoint) = u16::from_str_radix(&hex, 16) {
-                                // Convert to UTF-8
-                                if let Some(ch) = char::from_u32(codepoint as u32) {
-                                    let mut buf = [0u8; 4];
-                                    let encoded = ch.encode_utf8(&mut buf);
-                                    result.extend_from_slice(encoded.as_bytes());
-                                    continue;
-                                }
+                        if hex.len() == 4
+                            && let Ok(codepoint) = u16::from_str_radix(&hex, 16)
+                        {
+                            // Convert to UTF-8
+                            if let Some(ch) = char::from_u32(codepoint as u32) {
+                                let mut buf = [0u8; 4];
+                                let encoded = ch.encode_utf8(&mut buf);
+                                result.extend_from_slice(encoded.as_bytes());
+                                continue;
                             }
                         }
                         // Failed to parse, add literal characters
@@ -489,11 +488,11 @@ pub(super) fn decode_url_encoding(s: &str) -> Vec<u8> {
         if c == '%' {
             // Try to read two hex digits
             let hex: String = chars.by_ref().take(2).collect();
-            if hex.len() == 2 {
-                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                    result.push(byte);
-                    continue;
-                }
+            if hex.len() == 2
+                && let Ok(byte) = u8::from_str_radix(&hex, 16)
+            {
+                result.push(byte);
+                continue;
             }
             // Failed to parse, add literal characters
             result.push(b'%');

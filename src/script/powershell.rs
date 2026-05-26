@@ -11,8 +11,8 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::decode_chain::DecodeStep;
 use super::DeobfuscationResult;
+use super::decode_chain::DecodeStep;
 
 /// -EncodedCommand or -enc followed by base64 (case insensitive via (?i))
 #[allow(clippy::expect_used)]

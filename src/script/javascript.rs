@@ -9,8 +9,8 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::decode_chain::DecodeStep;
 use super::DeobfuscationResult;
+use super::decode_chain::DecodeStep;
 
 /// eval(atob("..."))
 #[allow(clippy::expect_used)]

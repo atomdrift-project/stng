@@ -461,51 +461,51 @@ pub(super) fn is_shell_command(s: &str) -> bool {
     }
 
     // Command substitution: $(...) - require actual command content inside
-    if let Some(start) = s.find("$(") {
-        if let Some(end_rel) = s[start + 2..].find(')') {
-            let content = &s[start + 2..start + 2 + end_rel];
-            // Must contain a space (actual command with args) or be a known command name
-            let is_command = !content.is_empty()
-                && (content.contains(' ')
-                    || content.starts_with("whoami")
-                    || content.starts_with("id")
-                    || content.starts_with("pwd")
-                    || content.starts_with("hostname")
-                    || content.starts_with("uname"));
-            // Must be mostly ASCII with reasonable alphanumeric ratio
-            let ascii_count = content.bytes().filter(u8::is_ascii).count();
-            let alpha_count = content.bytes().filter(u8::is_ascii_alphanumeric).count();
-            let content_len = content.len();
-            if content_len >= 2
-                && ascii_count * 100 / content_len > 90
-                && alpha_count * 100 / content_len > 40
-                && is_command
-            {
-                return true;
-            }
+    if let Some(start) = s.find("$(")
+        && let Some(end_rel) = s[start + 2..].find(')')
+    {
+        let content = &s[start + 2..start + 2 + end_rel];
+        // Must contain a space (actual command with args) or be a known command name
+        let is_command = !content.is_empty()
+            && (content.contains(' ')
+                || content.starts_with("whoami")
+                || content.starts_with("id")
+                || content.starts_with("pwd")
+                || content.starts_with("hostname")
+                || content.starts_with("uname"));
+        // Must be mostly ASCII with reasonable alphanumeric ratio
+        let ascii_count = content.bytes().filter(u8::is_ascii).count();
+        let alpha_count = content.bytes().filter(u8::is_ascii_alphanumeric).count();
+        let content_len = content.len();
+        if content_len >= 2
+            && ascii_count * 100 / content_len > 90
+            && alpha_count * 100 / content_len > 40
+            && is_command
+        {
+            return true;
         }
     }
 
     // Backtick command substitution - must start with backtick and look like actual command
     // Skip documentation references like "see `go doc ...`" or inline code in error messages
     // Skip strings with escaped backticks (complicated to parse correctly)
-    if s.starts_with('`') && !s.contains("\\`") {
-        if let Some(rest) = s.strip_prefix('`') {
-            if let Some(end) = rest.find('`') {
-                let content = &rest[..end];
-                // Must have command-like content and not look like a doc reference
-                if !content.is_empty()
-                    && content.contains(' ')
-                    && !content.starts_with("go ")
-                    && !content.contains(" doc ")
-                {
-                    // Must be mostly ASCII (>90%) - reject garbage with non-ASCII chars
-                    let ascii_count = content.bytes().filter(u8::is_ascii).count();
-                    let content_len = content.len();
-                    if content_len > 0 && ascii_count * 100 / content_len > 90 {
-                        return true;
-                    }
-                }
+    if s.starts_with('`')
+        && !s.contains("\\`")
+        && let Some(rest) = s.strip_prefix('`')
+        && let Some(end) = rest.find('`')
+    {
+        let content = &rest[..end];
+        // Must have command-like content and not look like a doc reference
+        if !content.is_empty()
+            && content.contains(' ')
+            && !content.starts_with("go ")
+            && !content.contains(" doc ")
+        {
+            // Must be mostly ASCII (>90%) - reject garbage with non-ASCII chars
+            let ascii_count = content.bytes().filter(u8::is_ascii).count();
+            let content_len = content.len();
+            if content_len > 0 && ascii_count * 100 / content_len > 90 {
+                return true;
             }
         }
     }
@@ -562,39 +562,40 @@ pub(super) fn is_shell_command(s: &str) -> bool {
     for prefix in cmd_prefixes {
         if s.starts_with(prefix) {
             // Special case: "service " at start should be followed by command words
-            if prefix == "service " {
-                if let Some(after) = s.strip_prefix(prefix) {
-                    let is_command = after.starts_with("start")
-                        || after.starts_with("stop")
-                        || after.starts_with("restart")
-                        || after.starts_with("status")
-                        || after.starts_with("enable")
-                        || after.starts_with("disable");
-                    if !is_command {
-                        continue;
-                    }
+            if prefix == "service "
+                && let Some(after) = s.strip_prefix(prefix)
+            {
+                let is_command = after.starts_with("start")
+                    || after.starts_with("stop")
+                    || after.starts_with("restart")
+                    || after.starts_with("status")
+                    || after.starts_with("enable")
+                    || after.starts_with("disable");
+                if !is_command {
+                    continue;
                 }
             }
             return true;
         }
         // Check for " prefix" pattern without allocation
-        if let Some(pos) = s.find(prefix) {
-            if pos > 0 && s.as_bytes()[pos - 1] == b' ' {
-                // Special case: "service " should be followed by command words, not "provider" etc.
-                if prefix == "service " {
-                    let after = &s[pos + prefix.len()..];
-                    let is_command = after.starts_with("start")
-                        || after.starts_with("stop")
-                        || after.starts_with("restart")
-                        || after.starts_with("status")
-                        || after.starts_with("enable")
-                        || after.starts_with("disable");
-                    if !is_command {
-                        continue;
-                    }
+        if let Some(pos) = s.find(prefix)
+            && pos > 0
+            && s.as_bytes()[pos - 1] == b' '
+        {
+            // Special case: "service " should be followed by command words, not "provider" etc.
+            if prefix == "service " {
+                let after = &s[pos + prefix.len()..];
+                let is_command = after.starts_with("start")
+                    || after.starts_with("stop")
+                    || after.starts_with("restart")
+                    || after.starts_with("status")
+                    || after.starts_with("enable")
+                    || after.starts_with("disable");
+                if !is_command {
+                    continue;
                 }
-                return true;
             }
+            return true;
         }
     }
 

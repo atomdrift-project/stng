@@ -8,7 +8,7 @@
 
 use std::fs;
 use std::path::Path;
-use stng::{extract_strings_with_options, ExtractOptions, StringKind, StringMethod};
+use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
 fn macho_arch_count(data: &[u8]) -> usize {
     match goblin::Object::parse(data) {
@@ -84,8 +84,8 @@ fn test_codesig_base64_categorization() {
     }
 
     // Verify the hashes decode to valid SHA-1 hashes (20 bytes)
-    use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     for s in &codesig_hashes {
         let decoded = BASE64
@@ -517,8 +517,8 @@ fn test_codesig_hashes_are_sha1() {
         return;
     }
 
-    use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     for hash in &codesig_hashes {
         // Extract just the base64 part (before any hex preview)

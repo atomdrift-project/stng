@@ -2,7 +2,7 @@
 /// Comprehensive tests for security-focused string classification
 /// Covers patterns in go/classifier.rs that detect malware indicators
 /// Tests JWT, API keys, ransom notes, injection attacks, crypto, and gopclntab classification
-use stng::{classify_string, StringKind};
+use stng::{StringKind, classify_string};
 
 /// Test JWT (JSON Web Token) detection
 #[test]
@@ -569,7 +569,12 @@ fn test_crypto_address_edge_cases() {
     );
 
     // Monero addresses (long, starts with 4)
-    assert_eq!(classify_string("4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rge"), Some(StringKind::CryptoWallet));
+    assert_eq!(
+        classify_string(
+            "4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rge"
+        ),
+        Some(StringKind::CryptoWallet)
+    );
 }
 
 /// Test crypto address rejection for similar patterns

@@ -860,20 +860,20 @@ fn is_x86_save_sequence_fragment(
     // Architecture scoping: skip when the caller has confirmed the
     // binary is non-x86. `None` means "unknown" — we still run the
     // rule because most binaries today are x86-family.
-    if let Some(arch) = ctx.arch {
-        if !arch.is_x86_family() {
-            return false;
-        }
+    if let Some(arch) = ctx.arch
+        && !arch.is_x86_family()
+    {
+        return false;
     }
 
     // Section scoping: REX-prefix + push/pop bytes only originate in
     // executable sections. When the caller has tagged the source
     // section, restrict the rule to known code sections; an unknown
     // (`None`) section still runs the rule.
-    if let Some(section) = ctx.section {
-        if !is_code_section(section) {
-            return false;
-        }
+    if let Some(section) = ctx.section
+        && !is_code_section(section)
+    {
+        return false;
     }
 
     if !(4..=12).contains(&len) {
@@ -1776,12 +1776,12 @@ fn is_statistical_garbage(
 
     // Pattern: ends with backtick + single letter (Go misaligned reads)
     let bytes = s.as_bytes();
-    if len >= MIN_SEGMENT_COUNT {
-        if let Some(idx) = bytes.iter().rposition(|&b| b.is_ascii_alphabetic()) {
-            if idx > 0 && bytes[idx - 1] == b'`' {
-                return true;
-            }
-        }
+    if len >= MIN_SEGMENT_COUNT
+        && let Some(idx) = bytes.iter().rposition(|&b| b.is_ascii_alphabetic())
+        && idx > 0
+        && bytes[idx - 1] == b'`'
+    {
+        return true;
     }
 
     if len <= 4 && stats.alphanumeric < len / 2 {
@@ -2027,7 +2027,7 @@ mod tests {
         // Cryptographic hashes
         assert!(!is_garbage("d41d8cd98f00b204e9800998ecf8427e")); // MD5
         assert!(!is_garbage("da39a3ee5e6b4b0d3255bfef95601890afd80709")); // SHA1
-                                                                          // MAC address
+        // MAC address
         assert!(!is_garbage("aa:bb:cc:dd:ee:ff"));
         assert!(!is_garbage("00:11:22:33:44:55"));
         // IPv6 fragment / full
@@ -2051,7 +2051,7 @@ mod tests {
         assert!(!is_garbage("ghp_AbCd1234EfGh5678IjKl"));
         assert!(!is_garbage("se3A/A1YKZQ630wtjjvw")); // Mythic PSK fragment
         assert!(!is_garbage("1z2y3x4w5v6u")); // chaotic but diverse alphanumeric
-                                              // Too short / not enough diversity / wrong alphabet
+        // Too short / not enough diversity / wrong alphabet
         assert!(!is_token_id_run("AKIA", 4));
         assert!(!is_token_id_run("aaaaaaaaaaaa", 12)); // 1 distinct
         assert!(!is_token_id_run("ababababababab", 14)); // 2 distinct
@@ -2093,8 +2093,8 @@ mod tests {
         assert!(is_garbage("P9O"));
         assert!(is_garbage("8ZAj"));
         assert!(is_garbage("pIo2")); // mixed case + digit = garbage
-                                     // Note: "PIO2" (3 upper + 1 digit) is now accepted as it matches
-                                     // common patterns like "UTF8", "SHA1", "3DES" (file sigs, algorithms)
+        // Note: "PIO2" (3 upper + 1 digit) is now accepted as it matches
+        // common patterns like "UTF8", "SHA1", "3DES" (file sigs, algorithms)
         assert!(!is_garbage("PIO2"));
         assert!(is_garbage("@E?"));
         assert!(is_garbage("P$O"));
@@ -2105,10 +2105,10 @@ mod tests {
         assert!(is_garbage("Gi4r"));
         assert!(is_garbage("Uim0"));
         assert!(is_garbage("Ilu4")); // mixed case with digit
-                                     // `cwZd` (lowercase + one uppercase + lowercase) used to be filtered
-                                     // here, but it shares its shape with valid 4-char camelCase like
-                                     // `iPad`, `hWnd`, `lpSz`. The looser short-camelCase rule now keeps
-                                     // both — too brittle to distinguish without a whitelist.
+        // `cwZd` (lowercase + one uppercase + lowercase) used to be filtered
+        // here, but it shares its shape with valid 4-char camelCase like
+        // `iPad`, `hWnd`, `lpSz`. The looser short-camelCase rule now keeps
+        // both — too brittle to distinguish without a whitelist.
         assert!(!is_garbage("cwZd"));
         // Consistent case alphanumeric patterns are accepted if they look like real identifiers
         assert!(!is_garbage("9N2A")); // all uppercase + digits, leading 9 = valid
@@ -2116,9 +2116,9 @@ mod tests {
         assert!(is_garbage("0GZF")); // single leading 0 = garbage
         assert!(is_garbage("1ABC")); // single leading 1 = garbage
         assert!(is_garbage("8oz1")); // mixed case (upper and lower) = garbage
-                                     // `gnzUrs` (one upper mid-string) used to be filtered here, but the
-                                     // same shape covers real camelCase identifiers like `getTime` and
-                                     // `setLine`. The looser identifier-shape rule now keeps both.
+        // `gnzUrs` (one upper mid-string) used to be filtered here, but the
+        // same shape covers real camelCase identifiers like `getTime` and
+        // `setLine`. The looser identifier-shape rule now keeps both.
         assert!(!is_garbage("gnzUrs"));
         assert!(!is_garbage("getTime"));
         // Note: "3OEP" looks like "8BIM" (digit + uppercase), can't distinguish without whitelist
@@ -2376,8 +2376,14 @@ mod tests {
         // This is common in malware and should be preserved for analysis
         let test_cases = vec![
             ("const _0x1c1000=_0x230d;", "simple const assignment"),
-            ("const _0x1c1000=_0x230d;function _0x230d(_0x996a22,_0x589a56){const _0x11053a=_0x1105();return _0x230d=function(_0x2", "full obfuscated code"),
-            ("function _0x230d(_0x996a22,_0x589a56)", "function declaration"),
+            (
+                "const _0x1c1000=_0x230d;function _0x230d(_0x996a22,_0x589a56){const _0x11053a=_0x1105();return _0x230d=function(_0x2",
+                "full obfuscated code",
+            ),
+            (
+                "function _0x230d(_0x996a22,_0x589a56)",
+                "function declaration",
+            ),
             ("const _0x1c1000=_0x230d", "const without semicolon"),
             ("_0x230d(_0x996a22,_0x589a56)", "function call"),
             ("return _0x230d", "return statement"),
@@ -2411,9 +2417,15 @@ mod tests {
     fn test_is_garbage_obfuscated_python() {
         // Obfuscated Python with mangled identifiers should NOT be garbage
         assert!(!is_garbage("def llIIlIlllllIIlllII(lllIllllIIIllIllII):"));
-        assert!(!is_garbage("lllllIIIIlllllIlII=IIllIlI.IllIllIllIllllIIlIIlIllIl();llIIIIIllllIllIlII=lilIIlI.IllIllIllIllllIIlIIlIllIl();llIlIIIIIIIIllIIlI=lIllIlIlIIIlIIIlII.IllIIlIIlllIIIIlIlIIllIII(lllllIIIIlllllIlII,llIIIIIllllIllIlII)"));
-        assert!(!is_garbage("return llIIIIIlIllIllIlIl(lllIllllIIIllIllII.IllllIIllllIIIIIIlIIlIIII(llIlIIIIIIIIllIIlI)).IlIlIlIlIIIIlIllIllllllII()"));
-        assert!(!is_garbage("lIlIlIlIIIlIllllll(IIlIlIIIlIIIIlIIIl(IllIllIlIIIlllllII(llIIlIlllllIIlllII(lIlllllIl)),llIIlIlllllIIlllII(lIIIIIlI))(lIllIlIlIIIlIIIlII.IlIIIllIIIIlllIIIlllIlIll(lIlIIIlIlIIIlI.replace"));
+        assert!(!is_garbage(
+            "lllllIIIIlllllIlII=IIllIlI.IllIllIllIllllIIlIIlIllIl();llIIIIIllllIllIlII=lilIIlI.IllIllIllIllllIIlIIlIllIl();llIlIIIIIIIIllIIlI=lIllIlIlIIIlIIIlII.IllIIlIIlllIIIIlIlIIllIII(lllllIIIIlllllIlII,llIIIIIllllIllIlII)"
+        ));
+        assert!(!is_garbage(
+            "return llIIIIIlIllIllIlIl(lllIllllIIIllIllII.IllllIIllllIIIIIIlIIlIIII(llIlIIIIIIIIllIIlI)).IlIlIlIlIIIIlIllIllllllII()"
+        ));
+        assert!(!is_garbage(
+            "lIlIlIlIIIlIllllll(IIlIlIIIlIIIIlIIIl(IllIllIlIIIlllllII(llIIlIlllllIIlllII(lIlllllIl)),llIIlIlllllIIlllII(lIIIIIlI))(lIllIlIlIIIlIIIlII.IlIIIllIIIIlllIIIlllIlIll(lIlIIIlIlIIIlI.replace"
+        ));
     }
 
     #[test]
@@ -2583,7 +2595,12 @@ mod tests {
             !is_garbage("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"),
             "Ethereum address"
         );
-        assert!(!is_garbage("44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"), "Monero address");
+        assert!(
+            !is_garbage(
+                "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"
+            ),
+            "Monero address"
+        );
         assert!(
             !is_garbage("LdP8Qox1VAhCzLJNqrqPRHWXpnRAjRUa4L"),
             "Litecoin address"
@@ -2737,7 +2754,12 @@ mod tests {
         );
 
         // JWT tokens (common in web CTFs)
-        assert!(!is_garbage("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"), "JWT token");
+        assert!(
+            !is_garbage(
+                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+            ),
+            "JWT token"
+        );
 
         // RSA/PEM keys (truncated for test)
         assert!(!is_garbage("-----BEGIN PUBLIC KEY-----"), "PEM header");

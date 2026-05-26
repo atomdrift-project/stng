@@ -170,10 +170,11 @@ pub(crate) fn extract_printable_runs(
         }
     }
 
-    if let Some(start) = run_start {
-        if data.len() - start >= context.min_length && !in_skip_range(start, context.skip_ranges) {
-            runs.push((start, &data[start..]));
-        }
+    if let Some(start) = run_start
+        && data.len() - start >= context.min_length
+        && !in_skip_range(start, context.skip_ranges)
+    {
+        runs.push((start, &data[start..]));
     }
 
     use rayon::prelude::*;

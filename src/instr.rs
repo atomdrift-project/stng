@@ -184,24 +184,24 @@ fn extract_arm64_string_pattern(
             rodata_data,
             rodata_addr,
             rodata_end,
-        ) {
-            if s.len() >= min_length && !seen.contains(&s) {
-                seen.insert(s.clone());
-                // Use content-based classification, but prefer MapKey hint from register position
-                let final_kind = if _kind == Some(StringKind::MapKey) && looks_like_key(&s) {
-                    Some(StringKind::MapKey)
-                } else {
-                    classify_string(&s)
-                };
-                strings.push(ExtractedString {
-                    value: s,
-                    data_offset: str_addr,
-                    section: Some(".rodata".to_string()),
-                    method: StringMethod::InstructionPattern,
-                    kind: final_kind,
-                    ..Default::default()
-                });
-            }
+        ) && s.len() >= min_length
+            && !seen.contains(&s)
+        {
+            seen.insert(s.clone());
+            // Use content-based classification, but prefer MapKey hint from register position
+            let final_kind = if _kind == Some(StringKind::MapKey) && looks_like_key(&s) {
+                Some(StringKind::MapKey)
+            } else {
+                classify_string(&s)
+            };
+            strings.push(ExtractedString {
+                value: s,
+                data_offset: str_addr,
+                section: Some(".rodata".to_string()),
+                method: StringMethod::InstructionPattern,
+                kind: final_kind,
+                ..Default::default()
+            });
         }
 
         return;
@@ -384,7 +384,7 @@ pub(crate) fn extract_inline_strings_amd64(
     let call_positions: Vec<usize> = text_data
         .iter()
         .enumerate()
-        .filter(|(i, &b)| b == 0xE8 && *i < text_data.len().saturating_sub(5))
+        .filter(|(i, b)| **b == 0xE8 && *i < text_data.len().saturating_sub(5))
         .map(|(i, _)| i)
         .collect();
 
@@ -681,12 +681,12 @@ fn extract_backward_strings(
 
                 if len > 0 && len <= 1000 && str_addr + len <= rodata_end {
                     let ro = (str_addr - rodata_addr) as usize;
-                    if ro + len as usize <= rodata_data.len() {
-                        if let Ok(s) = std::str::from_utf8(&rodata_data[ro..ro + len as usize]) {
-                            if is_valid_utf8_string(s) && best_len.is_none() {
-                                best_len = Some(len);
-                            }
-                        }
+                    if ro + len as usize <= rodata_data.len()
+                        && let Ok(s) = std::str::from_utf8(&rodata_data[ro..ro + len as usize])
+                        && is_valid_utf8_string(s)
+                        && best_len.is_none()
+                    {
+                        best_len = Some(len);
                     }
                 }
 
@@ -695,24 +695,23 @@ fn extract_backward_strings(
 
             if let Some(str_len) = best_len {
                 let rodata_offset = (str_addr - rodata_addr) as usize;
-                if let Some(end) = rodata_offset.checked_add(str_len as usize) {
-                    if end <= rodata_data.len() {
-                        if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
-                            if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s)
-                            {
-                                seen.insert(s.to_string());
-                                let final_kind = classify_string(s);
-                                strings.push(ExtractedString {
-                                    value: s.to_string(),
-                                    data_offset: str_addr,
-                                    section: Some(".rodata".to_string()),
-                                    method: StringMethod::InstructionPattern,
-                                    kind: final_kind,
-                                    ..Default::default()
-                                });
-                            }
-                        }
-                    }
+                if let Some(end) = rodata_offset.checked_add(str_len as usize)
+                    && end <= rodata_data.len()
+                    && let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end])
+                    && is_valid_utf8_string(s)
+                    && s.len() >= min_length
+                    && !seen.contains(s)
+                {
+                    seen.insert(s.to_string());
+                    let final_kind = classify_string(s);
+                    strings.push(ExtractedString {
+                        value: s.to_string(),
+                        data_offset: str_addr,
+                        section: Some(".rodata".to_string()),
+                        method: StringMethod::InstructionPattern,
+                        kind: final_kind,
+                        ..Default::default()
+                    });
                 }
             }
         }
@@ -763,21 +762,20 @@ fn try_extract_register_string(
         }
 
         // MOVQ $imm32, Rxx (3-byte prefix)
-        if let Some((b0, b1, b2)) = movq_prefix {
-            if pos + off + 7 <= text_data.len()
-                && text_data[pos + off] == b0
-                && text_data[pos + off + 1] == b1
-                && text_data[pos + off + 2] == b2
-            {
-                str_len = u64::from(u32::from_le_bytes([
-                    text_data[pos + off + 3],
-                    text_data[pos + off + 4],
-                    text_data[pos + off + 5],
-                    text_data[pos + off + 6],
-                ]));
-                found_len = true;
-                break;
-            }
+        if let Some((b0, b1, b2)) = movq_prefix
+            && pos + off + 7 <= text_data.len()
+            && text_data[pos + off] == b0
+            && text_data[pos + off + 1] == b1
+            && text_data[pos + off + 2] == b2
+        {
+            str_len = u64::from(u32::from_le_bytes([
+                text_data[pos + off + 3],
+                text_data[pos + off + 4],
+                text_data[pos + off + 5],
+                text_data[pos + off + 6],
+            ]));
+            found_len = true;
+            break;
         }
     }
 
@@ -923,19 +921,21 @@ fn extract_amd64_first_arg_string(
                 continue;
             }
 
-            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
-                if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
-                    seen.insert(s.to_string());
-                    let final_kind = classify_string(s);
-                    strings.push(ExtractedString {
-                        value: s.to_string(),
-                        data_offset: str_addr,
-                        section: Some(".rodata".to_string()),
-                        method: StringMethod::InstructionPattern,
-                        kind: final_kind,
-                        ..Default::default()
-                    });
-                }
+            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end])
+                && is_valid_utf8_string(s)
+                && s.len() >= min_length
+                && !seen.contains(s)
+            {
+                seen.insert(s.to_string());
+                let final_kind = classify_string(s);
+                strings.push(ExtractedString {
+                    value: s.to_string(),
+                    data_offset: str_addr,
+                    section: Some(".rodata".to_string()),
+                    method: StringMethod::InstructionPattern,
+                    kind: final_kind,
+                    ..Default::default()
+                });
             }
 
             return;
@@ -1050,24 +1050,26 @@ fn extract_amd64_key_string(
                 continue;
             }
 
-            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
-                if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
-                    seen.insert(s.to_string());
-                    // Use content-based classification, but prefer MapKey hint from register position
-                    let final_kind = if _kind == Some(StringKind::MapKey) && looks_like_key(s) {
-                        Some(StringKind::MapKey)
-                    } else {
-                        classify_string(s)
-                    };
-                    strings.push(ExtractedString {
-                        value: s.to_string(),
-                        data_offset: str_addr,
-                        section: Some(".rodata".to_string()),
-                        method: StringMethod::InstructionPattern,
-                        kind: final_kind,
-                        ..Default::default()
-                    });
-                }
+            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end])
+                && is_valid_utf8_string(s)
+                && s.len() >= min_length
+                && !seen.contains(s)
+            {
+                seen.insert(s.to_string());
+                // Use content-based classification, but prefer MapKey hint from register position
+                let final_kind = if _kind == Some(StringKind::MapKey) && looks_like_key(s) {
+                    Some(StringKind::MapKey)
+                } else {
+                    classify_string(s)
+                };
+                strings.push(ExtractedString {
+                    value: s.to_string(),
+                    data_offset: str_addr,
+                    section: Some(".rodata".to_string()),
+                    method: StringMethod::InstructionPattern,
+                    kind: final_kind,
+                    ..Default::default()
+                });
             }
 
             return;
@@ -1191,19 +1193,21 @@ fn extract_amd64_value_string(
                 continue;
             }
 
-            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
-                if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
-                    seen.insert(s.to_string());
-                    let final_kind = classify_string(s);
-                    strings.push(ExtractedString {
-                        value: s.to_string(),
-                        data_offset: str_addr,
-                        section: Some(".rodata".to_string()),
-                        method: StringMethod::InstructionPattern,
-                        kind: final_kind,
-                        ..Default::default()
-                    });
-                }
+            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end])
+                && is_valid_utf8_string(s)
+                && s.len() >= min_length
+                && !seen.contains(s)
+            {
+                seen.insert(s.to_string());
+                let final_kind = classify_string(s);
+                strings.push(ExtractedString {
+                    value: s.to_string(),
+                    data_offset: str_addr,
+                    section: Some(".rodata".to_string()),
+                    method: StringMethod::InstructionPattern,
+                    kind: final_kind,
+                    ..Default::default()
+                });
             }
 
             return;
@@ -1309,19 +1313,21 @@ fn extract_amd64_go_arg1_string(
             continue;
         }
 
-        if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
-            if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
-                seen.insert(s.to_string());
-                let final_kind = classify_string(s);
-                strings.push(ExtractedString {
-                    value: s.to_string(),
-                    data_offset: str_addr,
-                    section: Some(".rodata".to_string()),
-                    method: StringMethod::InstructionPattern,
-                    kind: final_kind,
-                    ..Default::default()
-                });
-            }
+        if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end])
+            && is_valid_utf8_string(s)
+            && s.len() >= min_length
+            && !seen.contains(s)
+        {
+            seen.insert(s.to_string());
+            let final_kind = classify_string(s);
+            strings.push(ExtractedString {
+                value: s.to_string(),
+                data_offset: str_addr,
+                section: Some(".rodata".to_string()),
+                method: StringMethod::InstructionPattern,
+                kind: final_kind,
+                ..Default::default()
+            });
         }
 
         return;
@@ -1422,19 +1428,21 @@ fn extract_amd64_go_arg2_string(
             continue;
         }
 
-        if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
-            if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
-                seen.insert(s.to_string());
-                let final_kind = classify_string(s);
-                strings.push(ExtractedString {
-                    value: s.to_string(),
-                    data_offset: str_addr,
-                    section: Some(".rodata".to_string()),
-                    method: StringMethod::InstructionPattern,
-                    kind: final_kind,
-                    ..Default::default()
-                });
-            }
+        if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end])
+            && is_valid_utf8_string(s)
+            && s.len() >= min_length
+            && !seen.contains(s)
+        {
+            seen.insert(s.to_string());
+            let final_kind = classify_string(s);
+            strings.push(ExtractedString {
+                value: s.to_string(),
+                data_offset: str_addr,
+                section: Some(".rodata".to_string()),
+                method: StringMethod::InstructionPattern,
+                kind: final_kind,
+                ..Default::default()
+            });
         }
 
         return;
@@ -1547,12 +1555,12 @@ fn extract_amd64_stack_strings(
             // Plausible string length that produces valid UTF-8 from rodata
             if len > 0 && len <= 1000 && str_addr + len <= rodata_end {
                 let ro = (str_addr - rodata_addr) as usize;
-                if ro + len as usize <= rodata_data.len() {
-                    if let Ok(s) = std::str::from_utf8(&rodata_data[ro..ro + len as usize]) {
-                        if is_valid_utf8_string(s) && best_len.is_none() {
-                            best_len = Some(len);
-                        }
-                    }
+                if ro + len as usize <= rodata_data.len()
+                    && let Ok(s) = std::str::from_utf8(&rodata_data[ro..ro + len as usize])
+                    && is_valid_utf8_string(s)
+                    && best_len.is_none()
+                {
+                    best_len = Some(len);
                 }
             }
 
@@ -1567,19 +1575,21 @@ fn extract_amd64_stack_strings(
             if end > rodata_data.len() {
                 continue;
             }
-            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end]) {
-                if is_valid_utf8_string(s) && s.len() >= min_length && !seen.contains(s) {
-                    seen.insert(s.to_string());
-                    let final_kind = classify_string(s);
-                    strings.push(ExtractedString {
-                        value: s.to_string(),
-                        data_offset: str_addr,
-                        section: Some(".rodata".to_string()),
-                        method: StringMethod::InstructionPattern,
-                        kind: final_kind,
-                        ..Default::default()
-                    });
-                }
+            if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end])
+                && is_valid_utf8_string(s)
+                && s.len() >= min_length
+                && !seen.contains(s)
+            {
+                seen.insert(s.to_string());
+                let final_kind = classify_string(s);
+                strings.push(ExtractedString {
+                    value: s.to_string(),
+                    data_offset: str_addr,
+                    section: Some(".rodata".to_string()),
+                    method: StringMethod::InstructionPattern,
+                    kind: final_kind,
+                    ..Default::default()
+                });
             }
         }
 
@@ -1631,7 +1641,7 @@ mod tests {
     fn test_is_valid_utf8_string_mostly_printable() {
         // More than 50% printable should pass
         assert!(is_valid_utf8_string("ab\x01")); // 2/3 printable
-                                                 // Less than 50% should fail
+        // Less than 50% should fail
         assert!(!is_valid_utf8_string("\x01\x02\x03a")); // 1/4 printable
     }
 
@@ -1776,7 +1786,7 @@ mod tests {
         // Create code with a CALL instruction but no valid string pattern
         let mut text_data = vec![0x90u8; 100];
         text_data[50] = 0xE8; // CALL opcode
-                              // Rest is garbage offset
+        // Rest is garbage offset
 
         let rodata_data = b"Hello World";
 

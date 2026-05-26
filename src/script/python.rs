@@ -12,8 +12,8 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::decode_chain::DecodeStep;
 use super::DeobfuscationResult;
+use super::decode_chain::DecodeStep;
 
 // --- Regex patterns ---
 
@@ -290,10 +290,10 @@ fn try_aliased_import_chain(source: &str) -> Vec<DeobfuscationResult> {
 fn find_string_assignment<'a>(source: &'a str, varname: &str) -> Option<&'a str> {
     // Look for: varname = 'long_string'
     for cap in STRING_ASSIGN_RE.captures_iter(source) {
-        if let (Some(var), Some(value)) = (cap.get(1), cap.get(2)) {
-            if var.as_str() == varname {
-                return Some(value.as_str());
-            }
+        if let (Some(var), Some(value)) = (cap.get(1), cap.get(2))
+            && var.as_str() == varname
+        {
+            return Some(value.as_str());
         }
     }
     None
@@ -312,14 +312,12 @@ fn find_xor_key(
 
     // Find the integer constant assigned to that variable
     for line in source.lines() {
-        if let Some(cap) = INT_ASSIGN_RE.captures(line) {
-            if let (Some(var), Some(val)) = (cap.get(1), cap.get(2)) {
-                if var.as_str() == xor_var {
-                    if let Ok(key) = val.as_str().parse::<u8>() {
-                        return Some(key);
-                    }
-                }
-            }
+        if let Some(cap) = INT_ASSIGN_RE.captures(line)
+            && let (Some(var), Some(val)) = (cap.get(1), cap.get(2))
+            && var.as_str() == xor_var
+            && let Ok(key) = val.as_str().parse::<u8>()
+        {
+            return Some(key);
         }
     }
 

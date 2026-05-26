@@ -138,29 +138,29 @@ pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<Extracte
 
     for s in strings {
         // Try normal base64 decoding first
-        if s.kind == Some(StringKind::Base64) || is_likely_base64(&s.value) {
-            if let Some(decoded) = decode_base64_string(s) {
-                results.push(decoded);
-                continue;
-            }
+        if (s.kind == Some(StringKind::Base64) || is_likely_base64(&s.value))
+            && let Some(decoded) = decode_base64_string(s)
+        {
+            results.push(decoded);
+            continue;
         }
 
         // If that didn't work, try deobfuscating concatenation first
-        if let Some(deobfuscated) = deobfuscate_concatenation(&s.value) {
-            if is_likely_base64(&deobfuscated) {
-                // Create a temporary ExtractedString with deobfuscated content
-                let temp = ExtractedString {
-                    value: deobfuscated,
-                    data_offset: s.data_offset,
-                    section: s.section.clone(),
-                    method: s.method,
-                    kind: s.kind,
-                    ..Default::default()
-                };
+        if let Some(deobfuscated) = deobfuscate_concatenation(&s.value)
+            && is_likely_base64(&deobfuscated)
+        {
+            // Create a temporary ExtractedString with deobfuscated content
+            let temp = ExtractedString {
+                value: deobfuscated,
+                data_offset: s.data_offset,
+                section: s.section.clone(),
+                method: s.method,
+                kind: s.kind,
+                ..Default::default()
+            };
 
-                if let Some(decoded) = decode_base64_string(&temp) {
-                    results.push(decoded);
-                }
+            if let Some(decoded) = decode_base64_string(&temp) {
+                results.push(decoded);
             }
         }
     }
@@ -438,11 +438,7 @@ fn decode_unicode_escapes(s: &str) -> Option<String> {
         }
     }
 
-    if changed {
-        Some(result)
-    } else {
-        None
-    }
+    if changed { Some(result) } else { None }
 }
 
 /// Parse a hex escape sequence of the specified length.
@@ -828,12 +824,12 @@ fn is_likely_base85(s: &str) -> bool {
     // If it has delimiters, validate by attempting to decode
     if has_delimiters {
         let original_quality = string_quality_score(s);
-        if let Some(decoded) = decode_ascii85(s) {
-            if let Ok(decoded_str) = String::from_utf8(decoded) {
-                let decoded_quality = string_quality_score(&decoded_str);
-                // Decoded should be better quality (at least 5 points higher)
-                return decoded_quality > original_quality + 5;
-            }
+        if let Some(decoded) = decode_ascii85(s)
+            && let Ok(decoded_str) = String::from_utf8(decoded)
+        {
+            let decoded_quality = string_quality_score(&decoded_str);
+            // Decoded should be better quality (at least 5 points higher)
+            return decoded_quality > original_quality + 5;
         }
         // If decode fails or quality is worse, reject
         return false;
@@ -871,12 +867,12 @@ fn is_likely_base85(s: &str) -> bool {
 
     // Final validation: try decoding and check quality
     let original_quality = string_quality_score(s);
-    if let Some(decoded) = decode_ascii85(s) {
-        if let Ok(decoded_str) = String::from_utf8(decoded) {
-            let decoded_quality = string_quality_score(&decoded_str);
-            // Decoded should be better quality (at least 5 points higher)
-            return decoded_quality > original_quality + 5;
-        }
+    if let Some(decoded) = decode_ascii85(s)
+        && let Ok(decoded_str) = String::from_utf8(decoded)
+    {
+        let decoded_quality = string_quality_score(&decoded_str);
+        // Decoded should be better quality (at least 5 points higher)
+        return decoded_quality > original_quality + 5;
     }
 
     // If can't decode or quality is worse, it's not real base85
@@ -1178,11 +1174,13 @@ mod tests {
 
     #[test]
     fn test_hex_odd_length() {
-        assert!(decode_hex_strings(&[make_string(
-            "48656c6c6f20576f726c642",
-            Some(StringKind::HexEncoded)
-        )])
-        .is_empty());
+        assert!(
+            decode_hex_strings(&[make_string(
+                "48656c6c6f20576f726c642",
+                Some(StringKind::HexEncoded)
+            )])
+            .is_empty()
+        );
     }
 
     #[test]

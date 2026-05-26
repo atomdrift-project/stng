@@ -9,8 +9,8 @@ use crate::extraction::{extract_from_structures, find_string_structures};
 use crate::instr::{extract_inline_strings_amd64, extract_inline_strings_arm64};
 use crate::types::{BinaryInfo, ExtractedString, StringStruct};
 use goblin::elf::Elf;
-use goblin::mach::cputype::{CPU_TYPE_ARM64, CPU_TYPE_X86_64};
 use goblin::mach::MachO;
+use goblin::mach::cputype::{CPU_TYPE_ARM64, CPU_TYPE_X86_64};
 use goblin::pe::PE;
 use rayon::prelude::*;
 
@@ -46,16 +46,16 @@ impl GoStringExtractor {
 
         for seg in &macho.segments {
             let seg_name = seg.name().unwrap_or("");
-            if seg_name == "__TEXT" {
-                if let Ok(sections) = seg.sections() {
-                    for (section, section_data) in sections {
-                        let name = section.name().unwrap_or("");
-                        if name == "__rodata" {
-                            rodata_info = Some((section.addr, section_data));
-                        }
-                        if name == "__text" {
-                            text_info = Some((section.addr, section_data));
-                        }
+            if seg_name == "__TEXT"
+                && let Ok(sections) = seg.sections()
+            {
+                for (section, section_data) in sections {
+                    let name = section.name().unwrap_or("");
+                    if name == "__rodata" {
+                        rodata_info = Some((section.addr, section_data));
+                    }
+                    if name == "__text" {
+                        text_info = Some((section.addr, section_data));
                     }
                 }
             }

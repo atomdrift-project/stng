@@ -2,7 +2,7 @@
 //! Tests for ELF overlay/appended data detection (overlay.rs).
 
 use std::path::Path;
-use stng::{detect_elf_overlay, extract_overlay_strings, StringKind};
+use stng::{StringKind, detect_elf_overlay, extract_overlay_strings};
 
 fn read_hello_linux() -> Option<Vec<u8>> {
     let path = concat!(

@@ -2,7 +2,7 @@
 //! Tests for language and file type detection (detect.rs, binary.rs detection functions).
 
 use std::path::Path;
-use stng::script::detect::{detect_script_language, ScriptLanguage};
+use stng::script::detect::{ScriptLanguage, detect_script_language};
 use stng::{detect_language, is_go_binary, is_rust_binary, is_text_file};
 
 fn minimal_elf_header() -> Vec<u8> {

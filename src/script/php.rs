@@ -10,8 +10,8 @@ use base64::Engine;
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::decode_chain::DecodeStep;
 use super::DeobfuscationResult;
+use super::decode_chain::DecodeStep;
 
 /// eval(base64_decode("..."))
 #[allow(clippy::expect_used)]
@@ -175,8 +175,8 @@ mod tests {
     #[test]
     fn test_eval_gzinflate_base64() {
         // Create: "echo 'hello';" → raw deflate → base64
-        use flate2::write::DeflateEncoder;
         use flate2::Compression;
+        use flate2::write::DeflateEncoder;
         use std::io::Write;
 
         let payload = b"echo 'hello';";
@@ -194,8 +194,8 @@ mod tests {
     #[test]
     fn test_eval_gzuncompress_base64() {
         // Create: "echo 'hello';" → zlib compress → base64
-        use flate2::write::ZlibEncoder;
         use flate2::Compression;
+        use flate2::write::ZlibEncoder;
         use std::io::Write;
 
         let payload = b"echo 'hello';";

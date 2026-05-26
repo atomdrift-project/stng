@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use stng::{extract_strings_with_options, ExtractOptions, StringMethod};
+use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 
 /// Integration test against rtc.dll — a PE binary that uses XOR 0xC6 to hide
 /// dynamically-loaded DLL names and Windows API function names.

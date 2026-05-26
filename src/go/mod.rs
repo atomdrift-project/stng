@@ -11,5 +11,5 @@ mod extractor;
 
 // Re-export the main extractor
 pub(crate) use extractor::{
-    extract_null_separated_strings, extract_varint_prefixed_strings, GoStringExtractor,
+    GoStringExtractor, extract_null_separated_strings, extract_varint_prefixed_strings,
 };

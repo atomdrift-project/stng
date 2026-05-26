@@ -8,7 +8,7 @@
 
 use std::path::Path;
 use stng::{
-    extract_strings, extract_strings_with_options, goblin, ExtractOptions, StringKind, StringMethod,
+    ExtractOptions, StringKind, StringMethod, extract_strings, extract_strings_with_options, goblin,
 };
 
 fn macho_binary_path() -> Option<&'static str> {

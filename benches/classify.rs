@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo bench -p stng
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 fn bench_classify(c: &mut Criterion) {
     let mut g = c.benchmark_group("classify_string");

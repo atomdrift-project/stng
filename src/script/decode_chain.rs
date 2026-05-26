@@ -212,8 +212,8 @@ mod tests {
 
     #[test]
     fn test_zlib_step() {
-        use flate2::write::ZlibEncoder;
         use flate2::Compression;
+        use flate2::write::ZlibEncoder;
         use std::io::Write;
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(b"Hello World").ok();
@@ -237,8 +237,8 @@ mod tests {
 
     #[test]
     fn test_chain_base64_zlib() {
-        use flate2::write::ZlibEncoder;
         use flate2::Compression;
+        use flate2::write::ZlibEncoder;
         use std::io::Write;
 
         // Encode: "Hello World" → zlib → base64
@@ -255,8 +255,8 @@ mod tests {
 
     #[test]
     fn test_chain_base64_zlib_xor() {
-        use flate2::write::ZlibEncoder;
         use flate2::Compression;
+        use flate2::write::ZlibEncoder;
         use std::io::Write;
 
         // Encode: "import os" → XOR(134) → zlib → base64

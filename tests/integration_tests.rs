@@ -2,8 +2,8 @@
 //! Integration tests for stng library.
 
 use stng::{
-    detect_language, extract_strings, extract_strings_with_options, is_garbage, is_go_binary,
-    is_rust_binary, ExtractOptions, ExtractedString, StringKind, StringMethod,
+    ExtractOptions, ExtractedString, StringKind, StringMethod, detect_language, extract_strings,
+    extract_strings_with_options, is_garbage, is_go_binary, is_rust_binary,
 };
 
 // Test data: minimal ELF header for a 64-bit little-endian ELF
@@ -229,7 +229,7 @@ fn test_is_garbage_repeated_chars() {
 #[test]
 fn test_is_garbage_excessive_whitespace() {
     assert!(is_garbage("   a   ")); // Single char after trim
-                                    // "ab cd" after trim has proper content, may not be garbage
+    // "ab cd" after trim has proper content, may not be garbage
 }
 
 #[test]
@@ -334,10 +334,10 @@ mod real_binary_tests {
     fn get_real_binary() -> Option<Vec<u8>> {
         let paths = ["/bin/ls", "/usr/bin/ls", "/bin/cat", "/usr/bin/cat"];
         for path in paths {
-            if Path::new(path).exists() {
-                if let Ok(data) = std::fs::read(path) {
-                    return Some(data);
-                }
+            if Path::new(path).exists()
+                && let Ok(data) = std::fs::read(path)
+            {
+                return Some(data);
             }
         }
         None
@@ -472,10 +472,10 @@ mod go_binary_tests {
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string());
 
-        if let Some(path) = go_path {
-            if Path::new(&path).exists() {
-                return std::fs::read(&path).ok();
-            }
+        if let Some(path) = go_path
+            && Path::new(&path).exists()
+        {
+            return std::fs::read(&path).ok();
         }
 
         // Try standard locations
@@ -485,10 +485,10 @@ mod go_binary_tests {
             "/usr/bin/go",
         ];
         for path in paths {
-            if Path::new(path).exists() {
-                if let Ok(data) = std::fs::read(path) {
-                    return Some(data);
-                }
+            if Path::new(path).exists()
+                && let Ok(data) = std::fs::read(path)
+            {
+                return Some(data);
             }
         }
         None
@@ -594,14 +594,14 @@ mod rust_binary_tests {
                         let path = entry.path();
                         if path.is_file() {
                             // Skip very large binaries for faster tests
-                            if let Ok(meta) = std::fs::metadata(&path) {
-                                if meta.len() < 50_000_000 {
-                                    // < 50MB
-                                    if let Ok(data) = std::fs::read(&path) {
-                                        // Verify it's actually a Rust binary
-                                        if is_rust_binary(&data) {
-                                            return Some(data);
-                                        }
+                            if let Ok(meta) = std::fs::metadata(&path)
+                                && meta.len() < 50_000_000
+                            {
+                                // < 50MB
+                                if let Ok(data) = std::fs::read(&path) {
+                                    // Verify it's actually a Rust binary
+                                    if is_rust_binary(&data) {
+                                        return Some(data);
                                     }
                                 }
                             }
@@ -1490,7 +1490,7 @@ mod edge_case_tests {
         let mut data = vec![0u8; 512];
         // DOS header magic
         data[0..2].copy_from_slice(&[0x4D, 0x5A]); // MZ
-                                                   // PE offset at 0x3C
+        // PE offset at 0x3C
         data[0x3C..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
         // PE signature at 0x80
         data[0x80..0x84].copy_from_slice(&[0x50, 0x45, 0x00, 0x00]); // PE\0\0
@@ -1976,7 +1976,7 @@ mod shell_detection_tests {
 // Tests for extraction and overlay detection
 mod extract_from_tests {
     use stng::{
-        detect_elf_overlay, extract_overlay_strings, extract_strings_with_options, ExtractOptions,
+        ExtractOptions, detect_elf_overlay, extract_overlay_strings, extract_strings_with_options,
     };
 
     fn minimal_elf_with_strings(strings: &[&str]) -> Vec<u8> {
@@ -2038,7 +2038,7 @@ mod extract_from_tests {
 
         // Optional header
         data[0x98..0x9A].copy_from_slice(&[0x0B, 0x02]); // Magic: PE32+
-                                                         // SizeOfHeaders at offset 0x98 + 60 = 0xD4
+        // SizeOfHeaders at offset 0x98 + 60 = 0xD4
         data[0xD4..0xD8].copy_from_slice(&[0x00, 0x02, 0x00, 0x00]); // SizeOfHeaders: 512
 
         // Section header at 0x188 (after optional header)
@@ -2046,11 +2046,11 @@ mod extract_from_tests {
         data[0x188..0x190].copy_from_slice(b".text\0\0\0");
         // VirtualSize
         data[0x190..0x194].copy_from_slice(&[0x00, 0x02, 0x00, 0x00]); // 512
-                                                                       // VirtualAddress
+        // VirtualAddress
         data[0x194..0x198].copy_from_slice(&[0x00, 0x10, 0x00, 0x00]); // 0x1000
-                                                                       // SizeOfRawData
+        // SizeOfRawData
         data[0x198..0x19C].copy_from_slice(&[0x00, 0x02, 0x00, 0x00]); // 512
-                                                                       // PointerToRawData
+        // PointerToRawData
         data[0x19C..0x1A0].copy_from_slice(&[0x00, 0x02, 0x00, 0x00]); // 512
 
         // Section data starts at 512, ends at 1024
@@ -2274,7 +2274,7 @@ mod extract_from_tests {
 // Tests for real binaries in testdata
 mod testdata_binary_tests {
     use std::path::Path;
-    use stng::{extract_strings_with_options, ExtractOptions, StringKind};
+    use stng::{ExtractOptions, StringKind, extract_strings_with_options};
 
     #[test]
     fn test_linux_elf_imports() {
@@ -2429,7 +2429,7 @@ mod common_edge_cases {
     fn test_is_garbage_boundary_cases() {
         // Very short strings
         assert!(is_garbage("a")); // 1 char is garbage
-                                  // 2-3 char strings can be valid identifiers
+        // 2-3 char strings can be valid identifiers
         assert!(!is_garbage("ab"));
         assert!(!is_garbage("abc"));
 
@@ -2457,7 +2457,7 @@ mod common_edge_cases {
 
 // Tests for StringKind classification edge cases
 mod string_kind_tests {
-    use stng::{extract_strings, StringKind, StringMethod};
+    use stng::{StringKind, StringMethod, extract_strings};
 
     fn minimal_elf_with_string(s: &str) -> Vec<u8> {
         let mut data = vec![0u8; 1024];
@@ -2952,7 +2952,7 @@ mod severity_tests {
 
 /// XOR detection tests for compiled binaries
 mod xor_detection_tests {
-    use stng::{extract_strings_with_options, ExtractOptions, StringKind, StringMethod};
+    use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
     /// Helper to create XOR test data (same pattern as unit tests)
     fn make_xor_test_data(plaintext: &[u8], key: u8, offset: usize) -> Vec<u8> {
@@ -3197,7 +3197,7 @@ mod xor_detection_tests {
 #[cfg(test)]
 mod sockaddr_extraction_tests {
     use std::fs;
-    use stng::{extract_strings_with_options, ExtractOptions, StringKind, StringMethod};
+    use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
     #[test]
     fn test_kimwolf_installer_ip_extraction() {
@@ -3289,7 +3289,7 @@ mod sockaddr_extraction_tests {
 #[cfg(test)]
 mod string_deduplication_tests {
     use std::fs;
-    use stng::{extract_strings_with_options, ExtractOptions};
+    use stng::{ExtractOptions, extract_strings_with_options};
 
     #[test]
     fn test_overlapping_strings_keep_longest() {

@@ -84,7 +84,12 @@ fn test_crypto_hashes() {
     );
 
     // SHA512 (128 hex chars)
-    assert!(!is_garbage("ee26b0dd4af7e749aa1a8ee3c10ae9923f618980772e473f8819a5d4940e0db27ac185f8a0e1d5f84f88bc887fd67b143732c304cc5fa9ad8e6f57f50028a8ff"), "SHA512 hash");
+    assert!(
+        !is_garbage(
+            "ee26b0dd4af7e749aa1a8ee3c10ae9923f618980772e473f8819a5d4940e0db27ac185f8a0e1d5f84f88bc887fd67b143732c304cc5fa9ad8e6f57f50028a8ff"
+        ),
+        "SHA512 hash"
+    );
 
     // Uppercase hex
     assert!(
@@ -774,19 +779,25 @@ fn test_jwt_tokens() {
 
     // RFC 7519 example: HS256 "Joe" token.
     assert!(
-        !is_garbage("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"),
+        !is_garbage(
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        ),
         "full HS256 JWT"
     );
 
     // RS256 JWT (longer signature segment, all base64url).
     assert!(
-        !is_garbage("eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2V4YW1wbGUuYXV0aDAuY29tLyIsInN1YiI6ImF1dGgwfDEyMzQ1Njc4OTAiLCJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbS8iLCJleHAiOjE2NDE2NzgwMDB9.abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+        !is_garbage(
+            "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2V4YW1wbGUuYXV0aDAuY29tLyIsInN1YiI6ImF1dGgwfDEyMzQ1Njc4OTAiLCJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbS8iLCJleHAiOjE2NDE2NzgwMDB9.abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        ),
         "RS256 JWT"
     );
 
     // Hyphens and underscores (base64url without padding).
     assert!(
-        !is_garbage("eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiYWxpY2UtYm9iX3VzZXIifQ.xK-n_2aBcDeFgHiJkLmNoPqRsTuVwXyZ01234abc"),
+        !is_garbage(
+            "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiYWxpY2UtYm9iX3VzZXIifQ.xK-n_2aBcDeFgHiJkLmNoPqRsTuVwXyZ01234abc"
+        ),
         "JWT with base64url dashes/underscores"
     );
 

@@ -9,7 +9,7 @@
 
 use std::fs;
 use std::path::Path;
-use stng::{extract_strings_with_options, ExtractOptions, StringKind, StringMethod};
+use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
 #[test]
 fn test_imports_not_marked_as_codesig() {
@@ -88,8 +88,8 @@ fn test_only_base64_gets_codesig_hash_kind() {
         "Should find code signature hashes in /bin/ls"
     );
 
-    use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     for hash in &codesig_hashes {
         // Extract base64 part (before any hex preview)
@@ -172,14 +172,14 @@ fn test_linkedit_const_strings_selective_codesig() {
             }
         }
         // Sometimes has trailing digits/chars after Z
-        if s.len() >= 14 && s.contains('Z') {
-            if let Some(z_pos) = s.find('Z') {
-                if z_pos >= 12 {
-                    let before_z = &s[..z_pos];
-                    if before_z.chars().rev().take(12).all(|c| c.is_ascii_digit()) {
-                        return true;
-                    }
-                }
+        if s.len() >= 14
+            && s.contains('Z')
+            && let Some(z_pos) = s.find('Z')
+            && z_pos >= 12
+        {
+            let before_z = &s[..z_pos];
+            if before_z.chars().rev().take(12).all(|c| c.is_ascii_digit()) {
+                return true;
             }
         }
         // Certificate policy text
@@ -313,14 +313,14 @@ fn test_codesig_method_on_signatures() {
             }
         }
         // Sometimes has trailing digits/chars after Z
-        if s.len() >= 14 && s.contains('Z') {
-            if let Some(z_pos) = s.find('Z') {
-                if z_pos >= 12 {
-                    let before_z = &s[..z_pos];
-                    if before_z.chars().rev().take(12).all(|c| c.is_ascii_digit()) {
-                        return true;
-                    }
-                }
+        if s.len() >= 14
+            && s.contains('Z')
+            && let Some(z_pos) = s.find('Z')
+            && z_pos >= 12
+        {
+            let before_z = &s[..z_pos];
+            if before_z.chars().rev().take(12).all(|c| c.is_ascii_digit()) {
+                return true;
             }
         }
         // Certificate policy text
@@ -359,9 +359,7 @@ fn test_codesig_method_on_signatures() {
         assert!(
             is_valid,
             "String at offset 0x{:x} with CodeSignature method should be either CD hash, XML, or certificate: {:?} = '{}'",
-            s.data_offset,
-            s.kind,
-            s.value
+            s.data_offset, s.kind, s.value
         );
     }
 }
@@ -389,8 +387,8 @@ fn test_no_base64_kind_in_linkedit() {
     let opts = ExtractOptions::new(10);
     let strings = extract_strings_with_options(&data, &opts);
 
-    use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     // Base64 strings in __LINKEDIT that decode to SHA-1 (20 bytes) or SHA-256 (32 bytes)
     // are CD hashes and must be promoted to CodeSignatureHash. Base64 data that decodes

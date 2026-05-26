@@ -74,8 +74,7 @@ fn test_no_overlapping_xor_strings() {
                 assert!(
                     !is_same_content,
                     "Found overlapping XOR strings with same content:\n  [{:#x}-{:#x}] '{}'\n  [{:#x}-{:#x}] '{}'",
-                    s1_start, s1_end, s1.value,
-                    s2_start, s2_end, s2.value
+                    s1_start, s1_end, s1.value, s2_start, s2_end, s2.value
                 );
             }
         }
@@ -174,8 +173,7 @@ fn test_brew_agent_no_overlaps() {
             assert!(
                 !overlaps,
                 "Found overlapping XOR strings in brew_agent:\n  [{:#x}-{:#x}] '{}'\n  [{:#x}-{:#x}] '{}'",
-                s1_start, s1_end, s1.value,
-                s2_start, s2_end, s2.value
+                s1_start, s1_end, s1.value, s2_start, s2_end, s2.value
             );
         }
     }

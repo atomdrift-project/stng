@@ -44,7 +44,7 @@ fn test_text_file_byte_offsets_not_line_numbers() {
 fn test_decoded_string_inherits_correct_offset() {
     // Base64 on its own line
     let content = b"SGVsbG8gV29ybGQh\n"; // "Hello World!"
-                                         //              ^0
+    //              ^0
 
     let opts = ExtractOptions::new(4);
     let strings = stng::extract_strings_with_options(content, &opts);

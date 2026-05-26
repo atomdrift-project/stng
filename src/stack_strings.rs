@@ -235,23 +235,23 @@ impl<'a> StackStringExtractor<'a> {
                         // Load from memory to XMM (especially RIP-relative)
                         (OpKind::Register, OpKind::Memory) => {
                             let dst_reg = instr.op0_register();
-                            if (Register::XMM0..=Register::XMM15).contains(&dst_reg) {
-                                if let Some(data) = self.read_memory_for_instr(&instr, 1, 16) {
-                                    let mut arr = [0u8; 16];
-                                    arr.copy_from_slice(&data);
-                                    self.xmm_regs.insert(dst_reg, arr);
-                                }
+                            if (Register::XMM0..=Register::XMM15).contains(&dst_reg)
+                                && let Some(data) = self.read_memory_for_instr(&instr, 1, 16)
+                            {
+                                let mut arr = [0u8; 16];
+                                arr.copy_from_slice(&data);
+                                self.xmm_regs.insert(dst_reg, arr);
                             }
                         }
                         // Store from XMM to memory
                         (OpKind::Memory, OpKind::Register) => {
                             let src_reg = instr.op1_register();
-                            if (Register::XMM0..=Register::XMM15).contains(&src_reg) {
-                                if let Some(data) = self.xmm_regs.get(&src_reg).cloned() {
-                                    let base = instr.memory_base();
-                                    let disp = instr.memory_displacement64() as i64;
-                                    self.add_raw_blob(base, disp, data.to_vec(), instr_off);
-                                }
+                            if (Register::XMM0..=Register::XMM15).contains(&src_reg)
+                                && let Some(data) = self.xmm_regs.get(&src_reg).cloned()
+                            {
+                                let base = instr.memory_base();
+                                let disp = instr.memory_displacement64() as i64;
+                                self.add_raw_blob(base, disp, data.to_vec(), instr_off);
                             }
                         }
                         _ => {}
@@ -273,16 +273,16 @@ impl<'a> StackStringExtractor<'a> {
                         _ => None,
                     };
 
-                    if let Some(val) = imm_val {
-                        if let Some(s) = check_printable(&val, self.min_length.min(val.len())) {
-                            self.add_write(
-                                Register::None,
-                                instr_off as i64,
-                                s,
-                                instr_off,
-                                "alu_imm".into(),
-                            );
-                        }
+                    if let Some(val) = imm_val
+                        && let Some(s) = check_printable(&val, self.min_length.min(val.len()))
+                    {
+                        self.add_write(
+                            Register::None,
+                            instr_off as i64,
+                            s,
+                            instr_off,
+                            "alu_imm".into(),
+                        );
                     }
                 }
                 // --- 4. Control Flow (Finalize/Clear) ---
@@ -338,10 +338,10 @@ impl<'a> StackStringExtractor<'a> {
             let target_file_offset = target_vma.saturating_sub(self.image_base) as usize;
 
             let read_from = self.full_data.unwrap_or(self.data);
-            if let Some(end) = target_file_offset.checked_add(size) {
-                if end <= read_from.len() {
-                    return Some(read_from[target_file_offset..end].to_vec());
-                }
+            if let Some(end) = target_file_offset.checked_add(size)
+                && end <= read_from.len()
+            {
+                return Some(read_from[target_file_offset..end].to_vec());
             }
         }
         None
@@ -582,15 +582,15 @@ impl<'a> StackStringExtractor<'a> {
                             }
                         }
 
-                        if let Some((decoded, _)) = best {
-                            if pair_seen.insert((disp_lo, disp_hi, 0)) {
-                                pairs.push(Pair {
-                                    decoded,
-                                    disp_lo,
-                                    disp_hi,
-                                    instr_off: a.instr_off.min(b.instr_off),
-                                });
-                            }
+                        if let Some((decoded, _)) = best
+                            && pair_seen.insert((disp_lo, disp_hi, 0))
+                        {
+                            pairs.push(Pair {
+                                decoded,
+                                disp_lo,
+                                disp_hi,
+                                instr_off: a.instr_off.min(b.instr_off),
+                            });
                         }
                     }
                 }

@@ -4,13 +4,13 @@
 //! pipeline to validate, classify, and clean decoded strings.
 
 use super::key::{calculate_entropy, is_good_xor_key_candidate, score_xor_key_candidate};
-use super::scan::{extract_custom_xor_strings, XOR_PATTERNS};
+use super::scan::{XOR_PATTERNS, extract_custom_xor_strings};
 use super::validate::{
     has_known_path_prefix, is_locale_string, is_meaningful_string, is_printable_char, is_valid_ip,
     is_valid_port, is_valid_xor_string, looks_like_text,
 };
 use super::{MAX_AUTO_DETECT_SIZE, MAX_XOR_SCAN_SIZE, SKIP_XOR_KEYS};
-use crate::{classifier::classify_string, ExtractedString, StringKind, StringMethod};
+use crate::{ExtractedString, StringKind, StringMethod, classifier::classify_string};
 use rayon::prelude::*;
 use std::collections::HashSet;
 
@@ -429,27 +429,8 @@ pub(crate) fn extract_xor_strings(
         if info.is_wide {
             if let Some((decoded, start, _end)) =
                 expand_xor_wide_string(data, pos, info.key, min_length)
+                && let Some(kind) = classify_xor_string(&decoded)
             {
-                if let Some(kind) = classify_xor_string(&decoded) {
-                    let offset = start as u64;
-                    if seen.insert((offset, decoded.clone())) {
-                        results.push(ExtractedString {
-                            value: decoded,
-                            data_offset: offset,
-                            section: None,
-                            method: StringMethod::XorDecode,
-                            kind,
-                            source: Some(format!("xor:0x{:02X}:16LE", info.key)),
-                            fragments: None,
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-        } else if let Some((decoded, start, _end)) =
-            expand_xor_string(data, pos, info.key, min_length)
-        {
-            if let Some(kind) = classify_xor_string(&decoded) {
                 let offset = start as u64;
                 if seen.insert((offset, decoded.clone())) {
                     results.push(ExtractedString {
@@ -458,11 +439,28 @@ pub(crate) fn extract_xor_strings(
                         section: None,
                         method: StringMethod::XorDecode,
                         kind,
-                        source: Some(format!("xor:0x{:02X}", info.key)),
+                        source: Some(format!("xor:0x{:02X}:16LE", info.key)),
                         fragments: None,
                         ..Default::default()
                     });
                 }
+            }
+        } else if let Some((decoded, start, _end)) =
+            expand_xor_string(data, pos, info.key, min_length)
+            && let Some(kind) = classify_xor_string(&decoded)
+        {
+            let offset = start as u64;
+            if seen.insert((offset, decoded.clone())) {
+                results.push(ExtractedString {
+                    value: decoded,
+                    data_offset: offset,
+                    section: None,
+                    method: StringMethod::XorDecode,
+                    kind,
+                    source: Some(format!("xor:0x{:02X}", info.key)),
+                    fragments: None,
+                    ..Default::default()
+                });
             }
         }
     }
@@ -539,24 +537,24 @@ pub(crate) fn extract_multikey_xor_strings(
                     let len = i - start;
                     if len >= blind_min_len {
                         let s = String::from_utf8_lossy(&decoded_full[start..i]).to_string();
-                        if let Some(kind) = classify_xor_string(&s) {
-                            if seen.insert((start as u64, s.clone())) {
-                                let key_str = String::from_utf8_lossy(key_bytes);
-                                let key_preview = if key_str.chars().count() > 8 {
-                                    key_str.chars().take(8).collect::<String>()
-                                } else {
-                                    key_str.into_owned()
-                                };
-                                results.push(ExtractedString {
-                                    value: s,
-                                    data_offset: start as u64,
-                                    section: None,
-                                    method: StringMethod::XorDecode,
-                                    kind,
-                                    source: Some(format!("xor:blind:key:{key_preview}:s{shift}")),
-                                    ..Default::default()
-                                });
-                            }
+                        if let Some(kind) = classify_xor_string(&s)
+                            && seen.insert((start as u64, s.clone()))
+                        {
+                            let key_str = String::from_utf8_lossy(key_bytes);
+                            let key_preview = if key_str.chars().count() > 8 {
+                                key_str.chars().take(8).collect::<String>()
+                            } else {
+                                key_str.into_owned()
+                            };
+                            results.push(ExtractedString {
+                                value: s,
+                                data_offset: start as u64,
+                                section: None,
+                                method: StringMethod::XorDecode,
+                                kind,
+                                source: Some(format!("xor:blind:key:{key_preview}:s{shift}")),
+                                ..Default::default()
+                            });
                         }
                     }
                 } else {
@@ -596,27 +594,26 @@ pub(crate) fn extract_multikey_xor_strings(
             // But we can just use expand_multikey_xor_string which handles arbitrary alignment
             if let Some((decoded, start, _end)) =
                 expand_multikey_xor_string(data, pos, key_bytes, shift, min_length)
+                && let Some(kind) = classify_xor_string(&decoded)
             {
-                if let Some(kind) = classify_xor_string(&decoded) {
-                    let offset = start as u64;
-                    if seen.insert((offset, decoded.clone())) {
-                        let key_str = String::from_utf8_lossy(key_bytes);
-                        let key_preview = if key_str.chars().count() > 8 {
-                            key_str.chars().take(8).collect::<String>()
-                        } else {
-                            key_str.into_owned()
-                        };
-                        results.push(ExtractedString {
-                            value: decoded,
-                            data_offset: offset,
-                            section: None,
-                            method: StringMethod::XorDecode,
-                            kind,
-                            source: Some(format!("xor:key:{key_preview}")),
-                            fragments: None,
-                            ..Default::default()
-                        });
-                    }
+                let offset = start as u64;
+                if seen.insert((offset, decoded.clone())) {
+                    let key_str = String::from_utf8_lossy(key_bytes);
+                    let key_preview = if key_str.chars().count() > 8 {
+                        key_str.chars().take(8).collect::<String>()
+                    } else {
+                        key_str.into_owned()
+                    };
+                    results.push(ExtractedString {
+                        value: decoded,
+                        data_offset: offset,
+                        section: None,
+                        method: StringMethod::XorDecode,
+                        kind,
+                        source: Some(format!("xor:key:{key_preview}")),
+                        fragments: None,
+                        ..Default::default()
+                    });
                 }
             }
         }
@@ -734,60 +731,60 @@ pub(crate) fn scan_dotted_patterns(
 
             // Check for IP address (digits around dot)
             if prev.is_ascii_digit() && next.is_ascii_digit() {
-                if let Some((ip, start, _end)) = extract_ip_at_dot(data, pos, key) {
-                    if ip.len() >= min_length.saturating_sub(2) {
-                        let offset = start as u64;
-                        if seen.insert((offset, ip.clone())) {
-                            results.push(ExtractedString {
-                                value: ip,
-                                data_offset: offset,
-                                section: None,
-                                method: StringMethod::XorDecode,
-                                kind: Some(StringKind::IP),
-                                source: Some(format!("xor:0x{key:02X}")),
-                                fragments: None,
-                                ..Default::default()
-                            });
-                        }
-                    }
-                }
-
-                if let Some((ip_port, start, _end)) = extract_ip_port_at_pos(data, pos, key) {
-                    if ip_port.len() >= min_length {
-                        let offset = start as u64;
-                        if seen.insert((offset, ip_port.clone())) {
-                            results.push(ExtractedString {
-                                value: ip_port,
-                                data_offset: offset,
-                                section: None,
-                                method: StringMethod::XorDecode,
-                                kind: Some(StringKind::IPPort),
-                                source: Some(format!("xor:0x{key:02X}")),
-                                fragments: None,
-                                ..Default::default()
-                            });
-                        }
-                    }
-                }
-            }
-            // Check for hostname (alphanumeric around dot, like evil.com)
-            else if prev.is_ascii_alphanumeric() && next.is_ascii_alphanumeric() {
-                if let Some((hostname, start, _end)) =
-                    extract_hostname_at_dot(data, pos, key, min_length)
+                if let Some((ip, start, _end)) = extract_ip_at_dot(data, pos, key)
+                    && ip.len() >= min_length.saturating_sub(2)
                 {
                     let offset = start as u64;
-                    if seen.insert((offset, hostname.clone())) {
+                    if seen.insert((offset, ip.clone())) {
                         results.push(ExtractedString {
-                            value: hostname,
+                            value: ip,
                             data_offset: offset,
                             section: None,
                             method: StringMethod::XorDecode,
-                            kind: Some(StringKind::Hostname),
+                            kind: Some(StringKind::IP),
                             source: Some(format!("xor:0x{key:02X}")),
                             fragments: None,
                             ..Default::default()
                         });
                     }
+                }
+
+                if let Some((ip_port, start, _end)) = extract_ip_port_at_pos(data, pos, key)
+                    && ip_port.len() >= min_length
+                {
+                    let offset = start as u64;
+                    if seen.insert((offset, ip_port.clone())) {
+                        results.push(ExtractedString {
+                            value: ip_port,
+                            data_offset: offset,
+                            section: None,
+                            method: StringMethod::XorDecode,
+                            kind: Some(StringKind::IPPort),
+                            source: Some(format!("xor:0x{key:02X}")),
+                            fragments: None,
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            // Check for hostname (alphanumeric around dot, like evil.com)
+            else if prev.is_ascii_alphanumeric()
+                && next.is_ascii_alphanumeric()
+                && let Some((hostname, start, _end)) =
+                    extract_hostname_at_dot(data, pos, key, min_length)
+            {
+                let offset = start as u64;
+                if seen.insert((offset, hostname.clone())) {
+                    results.push(ExtractedString {
+                        value: hostname,
+                        data_offset: offset,
+                        section: None,
+                        method: StringMethod::XorDecode,
+                        kind: Some(StringKind::Hostname),
+                        source: Some(format!("xor:0x{key:02X}")),
+                        fragments: None,
+                        ..Default::default()
+                    });
                 }
             }
         }
@@ -1256,10 +1253,12 @@ pub(crate) fn extract_ip_port_at_pos(
     let ip_port_str = String::from_utf8(decoded).ok()?;
 
     // Validate IP:port format
-    if let Some((ip, port)) = ip_port_str.rsplit_once(':') {
-        if is_valid_ip(ip) && is_valid_port(port) && !looks_like_data_table(data, start, end) {
-            return Some((ip_port_str, start, end));
-        }
+    if let Some((ip, port)) = ip_port_str.rsplit_once(':')
+        && is_valid_ip(ip)
+        && is_valid_port(port)
+        && !looks_like_data_table(data, start, end)
+    {
+        return Some((ip_port_str, start, end));
     }
 
     None

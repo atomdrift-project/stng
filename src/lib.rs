@@ -82,11 +82,11 @@ pub use types::{
     StringKind, StringMethod, StringStruct,
 };
 
-pub use xor::{extract_incremental_xor_strings, MAX_XOR_SCAN_SIZE};
+pub use xor::{MAX_XOR_SCAN_SIZE, extract_incremental_xor_strings};
 
 // Internal — not part of the stable public API
 pub(crate) use go::{
-    extract_null_separated_strings, extract_varint_prefixed_strings, GoStringExtractor,
+    GoStringExtractor, extract_null_separated_strings, extract_varint_prefixed_strings,
 };
 pub use overlay::extract_overlay_strings;
 pub(crate) use rust::RustStringExtractor;
@@ -95,16 +95,16 @@ pub use validation::{is_garbage, is_garbage_with_context, is_garbage_with_kind};
 
 // Re-export goblin so library clients can parse binaries themselves
 pub use goblin;
+use goblin::Object;
+use goblin::mach::MachO;
 use goblin::mach::cputype::{
     CPU_TYPE_ARM, CPU_TYPE_ARM64, CPU_TYPE_POWERPC, CPU_TYPE_POWERPC64, CPU_TYPE_X86,
     CPU_TYPE_X86_64,
 };
-use goblin::mach::MachO;
-use goblin::Object;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // Import internal modules for use in this file
 use binary::{
@@ -448,12 +448,11 @@ fn apply_xor_scan(
             // don't miss strings that lack a trigger pattern (e.g. syscall names, log paths).
             let mut key_counts: HashMap<u8, usize> = HashMap::new();
             for r in &xor_results {
-                if let Some(src) = &r.source {
-                    if let Some(hex) = src.strip_prefix("xor:0x").and_then(|s| s.get(..2)) {
-                        if let Ok(k) = u8::from_str_radix(hex, 16) {
-                            *key_counts.entry(k).or_insert(0) += 1;
-                        }
-                    }
+                if let Some(src) = &r.source
+                    && let Some(hex) = src.strip_prefix("xor:0x").and_then(|s| s.get(..2))
+                    && let Ok(k) = u8::from_str_radix(hex, 16)
+                {
+                    *key_counts.entry(k).or_insert(0) += 1;
                 }
             }
             // Track keys that received a full extraction pass — their AC scan results
@@ -476,12 +475,11 @@ fn apply_xor_scan(
 
             // Skip AC-scan results for keys already covered by full extraction above.
             strings.extend(xor_results.into_iter().filter(|r| {
-                if let Some(src) = &r.source {
-                    if let Some(hex) = src.strip_prefix("xor:0x").and_then(|s| s.get(..2)) {
-                        if let Ok(k) = u8::from_str_radix(hex, 16) {
-                            return !fully_extracted_keys.contains(&k);
-                        }
-                    }
+                if let Some(src) = &r.source
+                    && let Some(hex) = src.strip_prefix("xor:0x").and_then(|s| s.get(..2))
+                    && let Ok(k) = u8::from_str_radix(hex, 16)
+                {
+                    return !fully_extracted_keys.contains(&k);
                 }
                 true
             }));
@@ -598,14 +596,14 @@ fn is_certificate_string(s: &str) -> bool {
         }
     }
     // Sometimes has trailing digits/chars after Z
-    if s.len() >= 14 && s.contains('Z') {
-        if let Some(z_pos) = s.find('Z') {
-            if z_pos >= 12 {
-                let before_z = &s[..z_pos];
-                if before_z.chars().rev().take(12).all(|c| c.is_ascii_digit()) {
-                    return true;
-                }
-            }
+    if s.len() >= 14
+        && s.contains('Z')
+        && let Some(z_pos) = s.find('Z')
+        && z_pos >= 12
+    {
+        let before_z = &s[..z_pos];
+        if before_z.chars().rev().take(12).all(|c| c.is_ascii_digit()) {
+            return true;
         }
     }
 
@@ -634,13 +632,11 @@ fn enrich_elf_sections(strings: &mut [ExtractedString], elf: &goblin::elf::Elf<'
             for sh in &elf.section_headers {
                 if s.data_offset >= sh.sh_offset
                     && s.data_offset < sh.sh_offset.saturating_add(sh.sh_size)
+                    && let Some(name) = elf.shdr_strtab.get_at(sh.sh_name)
+                    && !name.is_empty()
                 {
-                    if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
-                        if !name.is_empty() {
-                            s.section = Some(name.to_string());
-                            break;
-                        }
-                    }
+                    s.section = Some(name.to_string());
+                    break;
                 }
             }
         }
@@ -674,13 +670,13 @@ fn enrich_macho_sections(
     // Segment fileoff is relative to architecture, so add base_offset
     let mut linkedit_range: Option<(u64, u64)> = None;
     for segment in &macho.segments {
-        if let Ok(name) = segment.name() {
-            if name == "__LINKEDIT" {
-                let start = base_offset + segment.fileoff;
-                let end = start + segment.filesize;
-                linkedit_range = Some((start, end));
-                break;
-            }
+        if let Ok(name) = segment.name()
+            && name == "__LINKEDIT"
+        {
+            let start = base_offset + segment.fileoff;
+            let end = start + segment.filesize;
+            linkedit_range = Some((start, end));
+            break;
         }
     }
 
@@ -730,12 +726,13 @@ fn enrich_macho_sections(
                     // In header or load commands area
                     s.section = Some("load_commands".to_string());
                     s.architecture = Some(arch_name.to_string());
-                } else if let Some((start, end)) = linkedit_range {
-                    if s.data_offset >= start && s.data_offset < end {
-                        // In LINKEDIT but not in a specific section (symbol/string tables)
-                        s.section = Some("__LINKEDIT".to_string());
-                        s.architecture = Some(arch_name.to_string());
-                    }
+                } else if let Some((start, end)) = linkedit_range
+                    && s.data_offset >= start
+                    && s.data_offset < end
+                {
+                    // In LINKEDIT but not in a specific section (symbol/string tables)
+                    s.section = Some("__LINKEDIT".to_string());
+                    s.architecture = Some(arch_name.to_string());
                 }
             }
         }
@@ -1073,23 +1070,24 @@ fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_length: usize) 
         }
 
         // Try to decode as spaced ASCII
-        if let Some(decoded) = r2::decode_spaced_ascii(&s.value) {
-            if decoded.len() >= min_length && !seen.contains(&decoded) {
-                seen.insert(decoded.clone());
+        if let Some(decoded) = r2::decode_spaced_ascii(&s.value)
+            && decoded.len() >= min_length
+            && !seen.contains(&decoded)
+        {
+            seen.insert(decoded.clone());
 
-                // Create a new decoded string entry
-                let kind = classifier::classify_string(&decoded);
-                new_strings.push(ExtractedString {
-                    value: decoded,
-                    data_offset: s.data_offset,
-                    section: s.section.clone(),
-                    method: StringMethod::SpacedAscii,
-                    kind,
-                    raw: Some(s.value.clone()),
-                    architecture: s.architecture.clone(),
-                    ..Default::default()
-                });
-            }
+            // Create a new decoded string entry
+            let kind = classifier::classify_string(&decoded);
+            new_strings.push(ExtractedString {
+                value: decoded,
+                data_offset: s.data_offset,
+                section: s.section.clone(),
+                method: StringMethod::SpacedAscii,
+                kind,
+                raw: Some(s.value.clone()),
+                architecture: s.architecture.clone(),
+                ..Default::default()
+            });
         }
     }
 
@@ -2094,12 +2092,13 @@ fn extract_from_object(
         if !pre.is_empty() {
             strings.extend(pre.clone());
         }
-    } else if opts.use_r2 && data.len() <= 10 * 1024 * 1024 {
-        if let Some(ref path) = opts.path {
-            let connect_addrs = r2::extract_connect_addrs(path, data);
-            if !connect_addrs.is_empty() {
-                strings.extend(connect_addrs);
-            }
+    } else if opts.use_r2
+        && data.len() <= 10 * 1024 * 1024
+        && let Some(ref path) = opts.path
+    {
+        let connect_addrs = r2::extract_connect_addrs(path, data);
+        if !connect_addrs.is_empty() {
+            strings.extend(connect_addrs);
         }
     }
 
@@ -2134,52 +2133,52 @@ fn extract_from_object(
 
     // Upgrade strings in __LINKEDIT section related to code signatures
     for s in &mut strings {
-        if let Some(ref section) = s.section {
-            if section == "__LINKEDIT" {
-                // Base64 strings in __LINKEDIT that decode to SHA-1 (20 bytes) or
-                // SHA-256 (32 bytes) are CD hashes. Other base64 content (certificate
-                // data, etc.) decodes to different sizes and must not be promoted.
-                if s.kind == Some(StringKind::Base64) {
-                    let decoded_len = base64::Engine::decode(
-                        &base64::engine::general_purpose::STANDARD,
-                        s.value.trim(),
-                    )
-                    .map(|b| b.len())
-                    .unwrap_or(0);
-                    if decoded_len == 20 || decoded_len == 32 {
-                        s.kind = Some(StringKind::CodeSignatureHash);
-                        s.method = StringMethod::CodeSignature;
-                    }
-                }
-
-                // XML/plist strings in __LINKEDIT are part of code signature
-                if s.kind.is_none()
-                    && (s.value.starts_with("<?xml")
-                        || s.value.starts_with("<!DOCTYPE plist")
-                        || s.value.starts_with("<plist")
-                        || s.value.starts_with("<dict")
-                        || s.value.starts_with("</dict>")
-                        || s.value.starts_with("</plist>")
-                        || s.value.starts_with("<key>")
-                        || s.value.starts_with("<array>")
-                        || s.value.starts_with("</array>")
-                        || s.value.starts_with("<data>")
-                        || s.value.starts_with("</data>"))
-                {
+        if let Some(ref section) = s.section
+            && section == "__LINKEDIT"
+        {
+            // Base64 strings in __LINKEDIT that decode to SHA-1 (20 bytes) or
+            // SHA-256 (32 bytes) are CD hashes. Other base64 content (certificate
+            // data, etc.) decodes to different sizes and must not be promoted.
+            if s.kind == Some(StringKind::Base64) {
+                let decoded_len = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    s.value.trim(),
+                )
+                .map(|b| b.len())
+                .unwrap_or(0);
+                if decoded_len == 20 || decoded_len == 32 {
+                    s.kind = Some(StringKind::CodeSignatureHash);
                     s.method = StringMethod::CodeSignature;
                 }
+            }
 
-                // Certificate-related strings in __LINKEDIT (X.509 certificate chain)
-                if (s.kind.is_none() || s.kind == Some(StringKind::Base64))
-                    && is_certificate_string(&s.value)
-                {
-                    s.method = StringMethod::CodeSignature;
-                }
+            // XML/plist strings in __LINKEDIT are part of code signature
+            if s.kind.is_none()
+                && (s.value.starts_with("<?xml")
+                    || s.value.starts_with("<!DOCTYPE plist")
+                    || s.value.starts_with("<plist")
+                    || s.value.starts_with("<dict")
+                    || s.value.starts_with("</dict>")
+                    || s.value.starts_with("</plist>")
+                    || s.value.starts_with("<key>")
+                    || s.value.starts_with("<array>")
+                    || s.value.starts_with("</array>")
+                    || s.value.starts_with("<data>")
+                    || s.value.starts_with("</data>"))
+            {
+                s.method = StringMethod::CodeSignature;
+            }
 
-                // Bundle IDs (reverse domain notation) in __LINKEDIT are often app identifiers
-                if s.kind.is_none() && is_bundle_id(&s.value) {
-                    s.kind = Some(StringKind::AppId);
-                }
+            // Certificate-related strings in __LINKEDIT (X.509 certificate chain)
+            if (s.kind.is_none() || s.kind == Some(StringKind::Base64))
+                && is_certificate_string(&s.value)
+            {
+                s.method = StringMethod::CodeSignature;
+            }
+
+            // Bundle IDs (reverse domain notation) in __LINKEDIT are often app identifiers
+            if s.kind.is_none() && is_bundle_id(&s.value) {
+                s.kind = Some(StringKind::AppId);
             }
         }
     }
@@ -2230,10 +2229,10 @@ fn get_r2_strings(opts: &ExtractOptions) -> Option<Vec<ExtractedString>> {
     if let Some(ref pre) = opts.r2_strings {
         return Some(pre.clone());
     }
-    if opts.use_r2 {
-        if let Some(ref path) = opts.path {
-            return r2::extract_strings(path, opts.min_length, opts.use_cache);
-        }
+    if opts.use_r2
+        && let Some(ref path) = opts.path
+    {
+        return r2::extract_strings(path, opts.min_length, opts.use_cache);
     }
     None
 }
@@ -2277,7 +2276,7 @@ mod arch_propagation_tests {
         data[16..18].copy_from_slice(&[2, 0]); // e_type = ET_EXEC
         data[18..20].copy_from_slice(&e_machine.to_le_bytes());
         data[20..24].copy_from_slice(&[1, 0, 0, 0]); // e_version
-                                                     // e_phoff/e_shoff = 0; sizes 0 — minimal-but-parseable
+        // e_phoff/e_shoff = 0; sizes 0 — minimal-but-parseable
         data[52..54].copy_from_slice(&[64, 0]); // e_ehsize
         data
     }

@@ -78,11 +78,11 @@ pub fn deobfuscate_script(data: &[u8]) -> Vec<DeobfuscationResult> {
         all_results.extend(results);
 
         // Try to recurse into the largest decoded payload
-        if let Some(payload) = largest {
-            if payload.len() > 20 {
-                current_text = payload;
-                continue;
-            }
+        if let Some(payload) = largest
+            && payload.len() > 20
+        {
+            current_text = payload;
+            continue;
         }
         break;
     }

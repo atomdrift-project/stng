@@ -52,10 +52,11 @@ pub(super) fn classify_ip(s: &str) -> Option<StringKind> {
         let port_str = &port_part[1..];
 
         // Verify port is numeric and reasonable
-        if let Ok(port) = port_str.parse::<u16>() {
-            if port > 0 && is_ipv4(ip_part) {
-                return Some(StringKind::IPPort);
-            }
+        if let Ok(port) = port_str.parse::<u16>()
+            && port > 0
+            && is_ipv4(ip_part)
+        {
+            return Some(StringKind::IPPort);
         }
     }
 

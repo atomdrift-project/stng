@@ -69,10 +69,11 @@ pub(crate) fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<Extracted
         }
 
         // Try extracting from substrings if this looks like a variable assignment
-        if s.value.contains('=') && s.value.contains('"') {
-            if let Some(decoded) = extract_from_assignment(&s.value) {
-                results.push(create_decoded_string(s, decoded, "Assignment"));
-            }
+        if s.value.contains('=')
+            && s.value.contains('"')
+            && let Some(decoded) = extract_from_assignment(&s.value)
+        {
+            results.push(create_decoded_string(s, decoded, "Assignment"));
         }
     }
 
@@ -169,10 +170,11 @@ fn detect_substitutions(input: &str) -> Vec<(char, char)> {
 
     // Try other common substitutions if frequency is high
     for (from, to) in COMMON_SUBSTITUTIONS {
-        if let Some(&count) = candidates.get(from) {
-            if count > 2 && !substitutions.iter().any(|(f, _)| f == from) {
-                substitutions.push((*from, *to));
-            }
+        if let Some(&count) = candidates.get(from)
+            && count > 2
+            && !substitutions.iter().any(|(f, _)| f == from)
+        {
+            substitutions.push((*from, *to));
         }
     }
 

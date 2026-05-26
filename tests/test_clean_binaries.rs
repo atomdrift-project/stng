@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::path::Path;
-use stng::{extract_strings_with_options, ExtractOptions, StringKind};
+use stng::{ExtractOptions, StringKind, extract_strings_with_options};
 
 /// Test that /bin/ls has no obfuscated content.
 /// This is a clean system binary that should not trigger XOR or encoding detections.

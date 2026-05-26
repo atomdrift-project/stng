@@ -17,7 +17,7 @@
 
 use base64::Engine;
 use stng::{
-    classify_string, extract_strings_with_options, ExtractOptions, StringKind, StringMethod,
+    ExtractOptions, StringKind, StringMethod, classify_string, extract_strings_with_options,
 };
 
 #[test]

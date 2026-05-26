@@ -16,7 +16,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use stng::{extract_strings, ExtractedString};
+use stng::{ExtractedString, extract_strings};
 
 const SAMPLE: &str = "testdata/malware/zyravpn_tun2socks.exe";
 

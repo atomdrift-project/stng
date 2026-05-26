@@ -5,13 +5,22 @@
 // Use jemalloc on unix systems where it isn't the OS default (see Cargo.toml).
 // Built-in `--features jemalloc-prof` activates jemalloc's heap-profiling support
 // (`_RJEM_MALLOC_CONF=prof:true,...`) which cleave-tuna's memory-mode benches consume.
-#[cfg(all(unix, not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "illumos", target_os = "solaris"))))]
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "illumos",
+        target_os = "solaris"
+    ))
+))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -203,11 +212,11 @@ fn decode_unicode_escapes(s: &str) -> Vec<u8> {
                     // \xXX format (2 hex digits)
                     'x' => {
                         let hex: String = chars.by_ref().take(2).collect();
-                        if hex.len() == 2 {
-                            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                                result.push(byte);
-                                continue;
-                            }
+                        if hex.len() == 2
+                            && let Ok(byte) = u8::from_str_radix(&hex, 16)
+                        {
+                            result.push(byte);
+                            continue;
                         }
                         // Failed to parse, add literal characters
                         result.push(b'\\');
@@ -217,15 +226,15 @@ fn decode_unicode_escapes(s: &str) -> Vec<u8> {
                     // \uXXXX format (4 hex digits)
                     'u' => {
                         let hex: String = chars.by_ref().take(4).collect();
-                        if hex.len() == 4 {
-                            if let Ok(codepoint) = u16::from_str_radix(&hex, 16) {
-                                // Convert to UTF-8
-                                if let Some(ch) = char::from_u32(codepoint as u32) {
-                                    let mut buf = [0u8; 4];
-                                    let encoded = ch.encode_utf8(&mut buf);
-                                    result.extend_from_slice(encoded.as_bytes());
-                                    continue;
-                                }
+                        if hex.len() == 4
+                            && let Ok(codepoint) = u16::from_str_radix(&hex, 16)
+                        {
+                            // Convert to UTF-8
+                            if let Some(ch) = char::from_u32(codepoint as u32) {
+                                let mut buf = [0u8; 4];
+                                let encoded = ch.encode_utf8(&mut buf);
+                                result.extend_from_slice(encoded.as_bytes());
+                                continue;
                             }
                         }
                         // Failed to parse, add literal characters
@@ -262,11 +271,11 @@ fn decode_url_encoding(s: &str) -> Vec<u8> {
         if c == '%' {
             // Try to read two hex digits
             let hex: String = chars.by_ref().take(2).collect();
-            if hex.len() == 2 {
-                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                    result.push(byte);
-                    continue;
-                }
+            if hex.len() == 2
+                && let Ok(byte) = u8::from_str_radix(&hex, 16)
+            {
+                result.push(byte);
+                continue;
             }
             // Failed to parse, add literal characters
             result.push(b'%');
@@ -850,23 +859,23 @@ fn colorize_xml_line(line: &str) -> String {
     let mut output = line.to_string();
 
     // Colorize <key>...</key> content (entitlement names) in red
-    if let Some(key_start) = output.find("<key>") {
-        if let Some(key_end) = output.find("</key>") {
-            let before = &output[..key_start + 5];
-            let content = &output[key_start + 5..key_end];
-            let after = &output[key_end..];
-            output = format!("{before}{RED}{content}{RESET}{after}");
-        }
+    if let Some(key_start) = output.find("<key>")
+        && let Some(key_end) = output.find("</key>")
+    {
+        let before = &output[..key_start + 5];
+        let content = &output[key_start + 5..key_end];
+        let after = &output[key_end..];
+        output = format!("{before}{RED}{content}{RESET}{after}");
     }
 
     // Colorize <string>...</string> content (values) in yellow
-    if let Some(str_start) = output.find("<string>") {
-        if let Some(str_end) = output.find("</string>") {
-            let before = &output[..str_start + 8];
-            let content = &output[str_start + 8..str_end];
-            let after = &output[str_end..];
-            output = format!("{before}{CYAN}{content}{RESET}{after}");
-        }
+    if let Some(str_start) = output.find("<string>")
+        && let Some(str_end) = output.find("</string>")
+    {
+        let before = &output[..str_start + 8];
+        let content = &output[str_start + 8..str_end];
+        let after = &output[str_end..];
+        output = format!("{before}{CYAN}{content}{RESET}{after}");
     }
 
     output
@@ -1067,49 +1076,48 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
 
     if show_inline_preview {
         // Decode base64 strings and show plaintext/hex in brackets
-        if s.kind == Some(stng::StringKind::Base64) {
-            if let Ok(decoded) = BASE64.decode(s.value.trim()) {
-                if !decoded.is_empty() {
-                    let printable = decoded
-                        .iter()
-                        .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-                        .count();
+        if s.kind == Some(stng::StringKind::Base64)
+            && let Ok(decoded) = BASE64.decode(s.value.trim())
+            && !decoded.is_empty()
+        {
+            let printable = decoded
+                .iter()
+                .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                .count();
 
-                    // Show decoded content (text or hex)
-                    if printable > decoded.len() / 2 {
-                        // Mostly printable - show as text
-                        if let Ok(text) = String::from_utf8(decoded) {
-                            let text = text.trim();
-                            if !text.is_empty() {
-                                if use_color {
-                                    value = format!("{value} {DIM}→ {text}{RESET}");
-                                } else {
-                                    value = format!("{value} -> {text}");
-                                }
-                            }
-                        }
-                    } else {
-                        // Binary data - show as hex (especially useful for XOR-decoded base64)
-                        let hex_preview = if decoded.len() <= 16 {
-                            decoded
-                                .iter()
-                                .map(|b| format!("{b:02x}"))
-                                .collect::<String>()
-                        } else {
-                            format!(
-                                "{}...",
-                                decoded[..16]
-                                    .iter()
-                                    .map(|b| format!("{b:02x}"))
-                                    .collect::<String>()
-                            )
-                        };
+            // Show decoded content (text or hex)
+            if printable > decoded.len() / 2 {
+                // Mostly printable - show as text
+                if let Ok(text) = String::from_utf8(decoded) {
+                    let text = text.trim();
+                    if !text.is_empty() {
                         if use_color {
-                            value = format!("{value} {DIM}→ 0x{hex_preview}{RESET}");
+                            value = format!("{value} {DIM}→ {text}{RESET}");
                         } else {
-                            value = format!("{value} -> 0x{hex_preview}");
+                            value = format!("{value} -> {text}");
                         }
                     }
+                }
+            } else {
+                // Binary data - show as hex (especially useful for XOR-decoded base64)
+                let hex_preview = if decoded.len() <= 16 {
+                    decoded
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
+                } else {
+                    format!(
+                        "{}...",
+                        decoded[..16]
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>()
+                    )
+                };
+                if use_color {
+                    value = format!("{value} {DIM}→ 0x{hex_preview}{RESET}");
+                } else {
+                    value = format!("{value} -> 0x{hex_preview}");
                 }
             }
         }
@@ -1125,15 +1133,15 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
                 })
                 .collect();
 
-            if !decoded.is_empty() {
-                if let Ok(text) = String::from_utf8(decoded) {
-                    let text = text.trim();
-                    if !text.is_empty() {
-                        if use_color {
-                            value = format!("{value} {DIM}→ {text}{RESET}");
-                        } else {
-                            value = format!("{value} -> {text}");
-                        }
+            if !decoded.is_empty()
+                && let Ok(text) = String::from_utf8(decoded)
+            {
+                let text = text.trim();
+                if !text.is_empty() {
+                    if use_color {
+                        value = format!("{value} {DIM}→ {text}{RESET}");
+                    } else {
+                        value = format!("{value} -> {text}");
                     }
                 }
             }
@@ -1142,15 +1150,15 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         // Decode Unicode escape sequences
         if s.kind == Some(stng::StringKind::UnicodeEscaped) {
             let decoded = decode_unicode_escapes(&s.value);
-            if !decoded.is_empty() {
-                if let Ok(text) = String::from_utf8(decoded) {
-                    let text = text.trim();
-                    if !text.is_empty() {
-                        if use_color {
-                            value = format!("{value} {DIM}→ {text}{RESET}");
-                        } else {
-                            value = format!("{value} -> {text}");
-                        }
+            if !decoded.is_empty()
+                && let Ok(text) = String::from_utf8(decoded)
+            {
+                let text = text.trim();
+                if !text.is_empty() {
+                    if use_color {
+                        value = format!("{value} {DIM}→ {text}{RESET}");
+                    } else {
+                        value = format!("{value} -> {text}");
                     }
                 }
             }
@@ -1159,15 +1167,15 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         // Decode URL-encoded strings
         if s.kind == Some(stng::StringKind::UrlEncoded) {
             let decoded = decode_url_encoding(&s.value);
-            if !decoded.is_empty() {
-                if let Ok(text) = String::from_utf8(decoded) {
-                    let text = text.trim();
-                    if !text.is_empty() {
-                        if use_color {
-                            value = format!("{value} {DIM}→ {text}{RESET}");
-                        } else {
-                            value = format!("{value} -> {text}");
-                        }
+            if !decoded.is_empty()
+                && let Ok(text) = String::from_utf8(decoded)
+            {
+                let text = text.trim();
+                if !text.is_empty() {
+                    if use_color {
+                        value = format!("{value} {DIM}→ {text}{RESET}");
+                    } else {
+                        value = format!("{value} -> {text}");
                     }
                 }
             }

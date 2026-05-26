@@ -13,7 +13,7 @@
 //! which is how Go's pclntab serialises method names — survive the garbage
 //! filter.
 
-use stng::{extract_strings_with_options, ExtractOptions};
+use stng::{ExtractOptions, extract_strings_with_options};
 
 #[test]
 fn pascalcase_identifiers_survive_garbage_filter() {

