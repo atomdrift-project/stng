@@ -97,6 +97,12 @@ lto = true
 codegen-units = 1
 debug = true
 
+# Optimize test binaries. The crate's hot paths (byte scanning, XOR detection,
+# string validation) are ~5x slower at opt-level=0 and dominate test runtime,
+# so `cargo test` at -O0 takes ~95s versus ~17s with opt-level=2.
+[profile.test]
+opt-level = 2
+
 [profile.profiling]
 inherits = "release"
 strip = "none"
