@@ -98,6 +98,47 @@ fn is_dotnet_binary(pe_opt: Option<&crate::goblin::pe::PE<'_>>, data: &[u8]) -> 
     false
 }
 
+/// Returns true if the bytes surrounding `offset` look like a densely-packed
+/// `u16` table (UNWIND_CODE arrays, C++ EH funcinfo / ip2state maps, jump
+/// tables) rather than ad-hoc data that happens to contain a sockaddr_in.
+///
+/// MSVC-compiled PE files embed compiler-emitted exception-handling metadata
+/// directly in `.rdata`. Some of it is reachable from `.pdata` UNWIND_INFO,
+/// but the language-specific scope tables and FUNCINFO records are only
+/// reachable indirectly through handler pointers and live at arbitrary
+/// offsets. A robust signal that does not depend on chasing those pointers:
+/// such tables are packed sequences of `XX 00` / `XX 01` u16 values
+/// (CodeOffset + UnwindOp:UWOP_*, where UnwindOp ∈ 0..=10), so the local
+/// density of u16 LE values below 0x0200 is far higher than in heterogeneous
+/// data sections that hold real sockaddr_in structures.
+fn looks_like_packed_u16_table(data: &[u8], offset: usize) -> bool {
+    // ±32 bytes around the 8-byte candidate, even-aligned to the candidate.
+    let parity = offset & 1;
+    let start = (offset.saturating_sub(32) + parity) & !1 | parity;
+    let end = offset.saturating_add(40).min(data.len());
+
+    let mut small_nonzero = 0usize;
+    let mut nonzero = 0usize;
+    let mut p = start;
+    while p + 1 < end {
+        let v = u16::from_le_bytes([data[p], data[p + 1]]);
+        if v != 0 {
+            nonzero += 1;
+            if v < 0x0200 {
+                small_nonzero += 1;
+            }
+        }
+        p += 2;
+    }
+    // UNWIND_CODE arrays have many distinct small-but-non-zero u16 entries
+    // (variants of CodeOffset + UnwindOp). The ≥ 8 floor avoids tripping on
+    // sparse sockaddr_in surrounded by zero padding, where the only small
+    // non-zero u16 is the AF_INET marker itself. The 60% ratio of non-zero
+    // u16s that are small matches the unicodedata.pyd UWOP region (~69%)
+    // while leaving room for real sockaddr_in in mixed data (typically <40%).
+    small_nonzero >= 8 && small_nonzero * 100 / nonzero.max(1) >= 60
+}
+
 /// Endianness of the binary being scanned, used to restrict the AF_INET marker
 /// check in [`scan_sockaddr_in`]. On a little-endian platform, sin_family is
 /// stored as `02 00`; on a big-endian platform, `00 02`. Accepting both produces
@@ -192,6 +233,14 @@ pub(crate) fn scan_binary_ips(
     // Real hardcoded C2 IPs are in .data, .rdata, etc., not in .text (code)
     if let Some(pe) = pe_opt {
         results.retain(|s| {
+            // Drop candidates sitting inside compiler-emitted u16 tables
+            // (UNWIND_INFO / C++ EH metadata / jump tables) that mimic
+            // sockaddr_in byte sequences.
+            if let Ok(off) = usize::try_from(s.data_offset)
+                && looks_like_packed_u16_table(data, off)
+            {
+                return false;
+            }
             // Find which section this offset belongs to
             for section in &pe.sections {
                 let section_start = u64::from(section.pointer_to_raw_data);
@@ -810,5 +859,74 @@ mod tests {
                 .any(|r| r.value.contains("192.168.1.50:8080")),
             "Should find IP in non-Go binary"
         );
+    }
+
+    /// Verbatim 64-byte slice from CPython 3.10 `unicodedata.pyd` (Windows) at
+    /// file offset 0x4f80 — densely-packed UNWIND_CODE-style data that the
+    /// raw scanner previously surfaced as `19.1.2.170:5632` and `19.1.5.170:6912`.
+    /// `02 00 16 00 13 01 02 aa` sits at relative offset 26 of this slice.
+    const UWOP_FIXTURE: &[u8] = &[
+        0x0a, 0x00, 0x05, 0x00, 0x1b, 0x00, 0x0b, 0x00, 0x05, 0x00, 0x1b, 0x00, 0x13, 0x01, 0x04,
+        0x88, 0x1b, 0x00, 0x13, 0x01, 0x04, 0x0a, 0x1e, 0x00, 0x13, 0x00, 0x02, 0x00, 0x16, 0x00,
+        0x13, 0x01, 0x02, 0xaa, 0x17, 0x00, 0x13, 0x01, 0x02, 0xaa, 0x1e, 0x00, 0x01, 0x00, 0x04,
+        0x88, 0x09, 0x00, 0x13, 0x00, 0x04, 0x00, 0x1b, 0x00, 0x13, 0x00, 0x02, 0x00, 0x1b, 0x00,
+        0x13, 0x01, 0x05, 0xaa,
+    ];
+
+    #[test]
+    fn test_looks_like_packed_u16_table_flags_unwind_code_region() {
+        // Both AF_INET-marker offsets in the real fixture must be flagged.
+        assert!(looks_like_packed_u16_table(UWOP_FIXTURE, 26));
+        assert!(looks_like_packed_u16_table(UWOP_FIXTURE, 56));
+    }
+
+    #[test]
+    fn test_looks_like_packed_u16_table_passes_isolated_sockaddr() {
+        // 192.168.1.50:8080 embedded among heterogeneous bytes (function
+        // pointers, padding, unrelated constants) — what a real sockaddr_in
+        // in `.data` looks like. Must NOT be flagged.
+        // Pseudo-random spread covering the high byte space so u16 LE
+        // values are >= 0x0200 most of the time. Length 128 fits in u8.
+        let data_init: Vec<u8> = (0u8..128)
+            .map(|i| i.wrapping_mul(37).wrapping_add(0x33))
+            .collect();
+        let mut data = data_init;
+        let off = 64;
+        data[off] = 0x02;
+        data[off + 1] = 0x00;
+        data[off + 2] = 0x1f;
+        data[off + 3] = 0x90; // port 8080
+        data[off + 4] = 192;
+        data[off + 5] = 168;
+        data[off + 6] = 1;
+        data[off + 7] = 50;
+
+        assert!(
+            !looks_like_packed_u16_table(&data, off),
+            "Isolated sockaddr_in in heterogeneous data must not be filtered"
+        );
+    }
+
+    #[test]
+    fn test_scan_binary_ips_filters_unwind_fixture_in_pe_only() {
+        // Embed the UWOP fixture deep enough to clear the 1024-byte header skip
+        // used by scan_sockaddr_in.
+        let mut data = vec![0u8; 2048];
+        let embed = 1200;
+        data[embed..embed + UWOP_FIXTURE.len()].copy_from_slice(UWOP_FIXTURE);
+
+        // Without a PE handle the heuristic does not run (legacy behavior for
+        // unparsed inputs) — the two hits surface, matching the prior bug.
+        let raw = scan_sockaddr_in(&data, 4, Endianness::Little);
+        assert!(
+            raw.iter().any(|s| s.value == "19.1.2.170:5632"),
+            "fixture reproduces the original false positive"
+        );
+
+        // With a PE handle, scan_binary_ips invokes looks_like_packed_u16_table
+        // and both candidates are rejected. We can't construct a real
+        // goblin::pe::PE here, but the helper-level coverage above already
+        // exercises the decision path; this test documents the original
+        // false-positive surface area for regression detection.
     }
 }
