@@ -1985,7 +1985,10 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext<'_>) -
     // StackString, …) still run through `is_recognized_ioc` and the
     // statistical checks because those labels don't imply content
     // recognition — they indicate *provenance*.
-    if ctx.kind.is_some_and(crate::types::StringKind::is_classifier_output) {
+    if ctx
+        .kind
+        .is_some_and(crate::types::StringKind::is_classifier_output)
+    {
         return false;
     }
 

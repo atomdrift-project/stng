@@ -226,12 +226,12 @@ impl Arch {
     #[must_use]
     pub fn from_pe_machine(machine: u16) -> Option<Self> {
         match machine {
-            0x014c => Some(Self::X86),            // IMAGE_FILE_MACHINE_I386
-            0x8664 => Some(Self::X86_64),         // IMAGE_FILE_MACHINE_AMD64
-            0x01c0 | 0x01c4 => Some(Self::Arm),   // ARM, ARMNT
-            0xaa64 => Some(Self::Aarch64),   // ARM64
-            0x5032 => Some(Self::RiscV),     // IMAGE_FILE_MACHINE_RISCV32
-            0x5064 => Some(Self::RiscV64),   // IMAGE_FILE_MACHINE_RISCV64
+            0x014c => Some(Self::X86),          // IMAGE_FILE_MACHINE_I386
+            0x8664 => Some(Self::X86_64),       // IMAGE_FILE_MACHINE_AMD64
+            0x01c0 | 0x01c4 => Some(Self::Arm), // ARM, ARMNT
+            0xaa64 => Some(Self::Aarch64),      // ARM64
+            0x5032 => Some(Self::RiscV),        // IMAGE_FILE_MACHINE_RISCV32
+            0x5064 => Some(Self::RiscV64),      // IMAGE_FILE_MACHINE_RISCV64
             _ => None,
         }
     }

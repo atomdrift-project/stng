@@ -97,6 +97,16 @@ pub(super) fn is_good_xor_key_candidate(s: &str, entropy: f64) -> bool {
         return false;
     }
 
+    // A genuine XOR key draws its entropy from digit or symbol bytes; every
+    // real-world example does (e.g. "Moz&Wie;#t/6T!2y", "12GWAPCT1F0I1S14").
+    // A string of only ASCII letters — even mixed case — is overwhelmingly a
+    // plaintext identifier such as a .NET metadata name ("WrapNonExceptionThrows",
+    // "RuntimeCompatibilityAttribute"), not a key. Using one as a cycling key
+    // smears the binary into printable garbage and fabricates XOR findings.
+    if !has_digit && !has_special {
+        return false;
+    }
+
     // Reject sequential patterns (like "abcdefghijklmnopqrstuvwxyz")
     let bytes = s.as_bytes();
     let sequential_count = bytes
@@ -176,4 +186,30 @@ pub(super) fn score_xor_key_candidate(s: &str, entropy: f64) -> u32 {
     }
 
     score
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{calculate_entropy, is_good_xor_key_candidate};
+
+    fn is_candidate(s: &str) -> bool {
+        is_good_xor_key_candidate(s, calculate_entropy(s.as_bytes()))
+    }
+
+    #[test]
+    fn rejects_plaintext_dotnet_identifiers() {
+        // Pure-letter PascalCase metadata names must never be treated as XOR keys;
+        // doing so smears the binary into printable garbage tagged `xor`.
+        assert!(!is_candidate("WrapNonExceptionThrows"));
+        assert!(!is_candidate("RuntimeCompatibilityAttribute"));
+        assert!(!is_candidate("XmlSerializationWriter"));
+    }
+
+    #[test]
+    fn accepts_real_xor_keys() {
+        // Real-world keys carry entropy from digit or symbol bytes.
+        assert!(is_candidate("Moz&Wie;#t/6T!2y"));
+        assert!(is_candidate("12GWAPCT1F0I1S14"));
+        assert!(is_candidate("fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf"));
+    }
 }
