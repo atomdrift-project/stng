@@ -86,7 +86,14 @@ pub(super) fn classify_ip(s: &str) -> Option<StringKind> {
         let valid_ipv6 = s
             .chars()
             .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.');
-        if valid_ipv6 && s.len() >= 3 {
+        // Require at least one hextet of 2+ hex digits. Real IPv6 addresses
+        // carry a multi-digit prefix (2001, fe80, fc00, …) or interface
+        // identifier; forms made entirely of single-digit groups (e.g. "0::c",
+        // "4::e") are random binary noise, not credible IOCs.
+        let has_substantial_hextet = s
+            .split(':')
+            .any(|group| group.len() >= 2 && group.bytes().all(|b| b.is_ascii_hexdigit()));
+        if valid_ipv6 && has_substantial_hextet && s.len() >= 3 {
             return Some(StringKind::IP);
         }
     }

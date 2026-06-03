@@ -997,6 +997,20 @@ mod tests {
     }
 
     #[test]
+    fn test_classify_string_ipv6_detection() {
+        // Real IPv6 addresses carry a multi-digit hextet. classify_ip is only
+        // reached for digit-leading strings (see the guard in classify_string),
+        // so exercise digit-leading addresses here.
+        assert_eq!(classify_string("2001:db8::1"), Some(StringKind::IP));
+        assert_eq!(classify_string("2606:4700::1111"), Some(StringKind::IP));
+
+        // Single-digit-only colon noise (e.g. ImageMagick.Q16.msixbundle) is
+        // not a credible IPv6 IOC and must not be classified as IP
+        assert_ne!(classify_string("0::c"), Some(StringKind::IP));
+        assert_ne!(classify_string("4::e"), Some(StringKind::IP));
+    }
+
+    #[test]
     fn test_classify_string_shell_command_detection() {
         // Shell commands should be classified
         assert_eq!(
