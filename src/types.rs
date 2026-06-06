@@ -68,9 +68,13 @@ pub struct ExtractedString {
     #[serde(default)]
     pub architecture: Option<String>,
     /// Function metadata (for `FuncName` kind)
+    ///
+    /// Boxed because it is large (~72 bytes) and set on only a small fraction
+    /// of strings; inline it would bloat every `ExtractedString` in the
+    /// extraction-wide vectors.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
-    pub function_meta: Option<FunctionMetadata>,
+    pub function_meta: Option<Box<FunctionMetadata>>,
 }
 
 /// Metadata about a function (from binary analysis)

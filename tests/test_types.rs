@@ -584,14 +584,14 @@ fn test_extracted_string_with_all_fields() {
         section_executable: Some(false),
         section_writable: Some(true),
         architecture: Some("arm64".to_string()),
-        function_meta: Some(FunctionMetadata {
+        function_meta: Some(Box::new(FunctionMetadata {
             size: 256,
             basic_blocks: 4,
             branches: 6,
             instructions: 50,
             signature: Some("void func()".to_string()),
             noreturn: Some(false),
-        }),
+        })),
         ..Default::default()
     };
 

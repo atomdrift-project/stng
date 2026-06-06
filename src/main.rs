@@ -346,6 +346,20 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Serialize strings as pretty JSON directly to stdout.
+///
+/// Streaming via `to_writer_pretty` avoids materializing the entire JSON
+/// document as an intermediate `String` (which can rival the input file in
+/// size for string-dense binaries).
+fn print_json(strings: &[stng::ExtractedString]) -> Result<()> {
+    let stdout = io::stdout();
+    let mut out = io::BufWriter::new(stdout.lock());
+    serde_json::to_writer_pretty(&mut out, strings)?;
+    io::Write::write_all(&mut out, b"\n")?;
+    io::Write::flush(&mut out)?;
+    Ok(())
+}
+
 fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     // Handle cache flushing if requested
     if cli.flush_cache {
@@ -418,7 +432,7 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         // Continue to normal output handling below
         let use_color = !cli.no_color && !cli.json && io::stdout().is_terminal();
         if cli.json {
-            println!("{}", serde_json::to_string_pretty(&strings)?);
+            print_json(&strings)?;
             return Ok(());
         }
 
@@ -551,7 +565,7 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
 
     // Output results
     if cli.json {
-        println!("{}", serde_json::to_string_pretty(&strings)?);
+        print_json(&strings)?;
     } else if cli.simple {
         for s in &strings {
             println!("{}", s.value.trim_end_matches(|c: char| c.is_control()));

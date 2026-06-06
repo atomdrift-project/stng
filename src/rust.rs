@@ -528,34 +528,33 @@ impl RustStringExtractor {
         data: &[u8],
         section_name: Option<&str>,
     ) -> Vec<ExtractedString> {
-        // Convert bytes to text, marking non-printable bytes
-        let mut text = String::with_capacity(data.len());
-        for &b in data {
-            if (32..127).contains(&b) {
-                text.push(b as char);
-            } else if b == 10 {
-                // Newline is a real delimiter
-                text.push('\n');
-            } else if b == 0 {
-                text.push('\0');
-            } else {
-                // Non-printable marker
-                text.push('\x01');
+        // Collect segments with their byte offsets within `data`.
+        //
+        // A segment is a maximal run of printable ASCII (or newline, a real
+        // delimiter Rust keeps inside packed literals); every other byte
+        // splits. Such runs are pure ASCII, so they can be borrowed straight
+        // from `data` as &str — no intermediate copy of the section needed.
+        let is_segment_byte = |b: u8| b == b'\n' || (32..127).contains(&b);
+        let mut segments: Vec<(&str, u64)> = Vec::new();
+        let mut run_start: Option<usize> = None;
+        for (i, &b) in data.iter().enumerate() {
+            if is_segment_byte(b) {
+                if run_start.is_none() {
+                    run_start = Some(i);
+                }
+            } else if let Some(start) = run_start.take()
+                && i - start >= self.min_length
+                && let Ok(seg) = std::str::from_utf8(&data[start..i])
+            {
+                segments.push((seg, start as u64));
             }
         }
-
-        // Collect segments with their byte offsets within `data`.
-        // Each char in `text` maps 1:1 to one byte in `data`, so pointer
-        // arithmetic gives exact byte offsets for free.
-        let text_start = text.as_ptr() as usize;
-        let segments: Vec<(&str, u64)> = text
-            .split(['\0', '\x01'])
-            .filter(|s| s.len() >= self.min_length)
-            .map(|s| {
-                let offset = (s.as_ptr() as usize - text_start) as u64;
-                (s, offset)
-            })
-            .collect();
+        if let Some(start) = run_start
+            && data.len() - start >= self.min_length
+            && let Ok(seg) = std::str::from_utf8(&data[start..])
+        {
+            segments.push((seg, start as u64));
+        }
 
         // Process segments in parallel
         let all_strings: Vec<Vec<ExtractedString>> = segments

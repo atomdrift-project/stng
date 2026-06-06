@@ -158,16 +158,19 @@ pub fn extract_strings(
             if s.name.len() >= min_length && seen.insert(s.name.clone()) {
                 let kind = Some(classify_r2_symbol(&s.r#type, &s.bind));
                 let func_meta = if s.r#type == "FUNC" || s.r#type == "METH" {
-                    function_metadata.as_ref().and_then(|map| {
-                        map.get(&s.name).cloned().or_else(|| {
-                            let clean = s
-                                .name
-                                .strip_prefix("sym.")
-                                .or_else(|| s.name.strip_prefix("sym.imp."))
-                                .unwrap_or(&s.name);
-                            map.get(clean).cloned()
+                    function_metadata
+                        .as_ref()
+                        .and_then(|map| {
+                            map.get(&s.name).or_else(|| {
+                                let clean = s
+                                    .name
+                                    .strip_prefix("sym.")
+                                    .or_else(|| s.name.strip_prefix("sym.imp."))
+                                    .unwrap_or(&s.name);
+                                map.get(clean)
+                            })
                         })
-                    })
+                        .map(|meta| Box::new(meta.clone()))
                 } else {
                     None
                 };

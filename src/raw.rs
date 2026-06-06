@@ -32,6 +32,14 @@ pub(crate) fn extract_raw_strings(
     let mut strings = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
+    let context = PrintableRunContext {
+        min_length,
+        section,
+        segment_names_set: &segment_names_set,
+        section_info,
+        skip_ranges,
+    };
+
     // Strategy 1: Null-terminated strings
     let mut prev_end = 0usize;
     let mut strat1_runs = Vec::new();
@@ -62,75 +70,16 @@ pub(crate) fn extract_raw_strings(
                 continue;
             }
             strat1_runs.push((abs_start, &chunk[start..]));
-        }
-    }
-
-    use rayon::prelude::*;
-    let strat1_extracted: Vec<ExtractedString> = strat1_runs
-        .into_par_iter()
-        .filter_map(|(start, candidate)| {
-            if let Ok(s) = std::str::from_utf8(candidate) {
-                let trimmed = s.trim();
-                if trimmed.len() >= min_length {
-                    let kind = if segment_names_set.contains(trimmed) {
-                        Some(StringKind::Section)
-                    } else {
-                        classifier::classify_string(trimmed)
-                    };
-
-                    // Get section metadata if this is a section
-                    let (sec_size, sec_exec, sec_write) = if kind == Some(StringKind::Section) {
-                        section_info
-                            .get(trimmed)
-                            .map_or((None, None, None), |info| {
-                                (
-                                    Some(info.size),
-                                    Some(info.is_executable),
-                                    Some(info.is_writable),
-                                )
-                            })
-                    } else {
-                        (None, None, None)
-                    };
-
-                    return Some(ExtractedString {
-                        value: trimmed.to_string(),
-                        data_offset: start as u64,
-                        section: section.map(str::to_string),
-                        method: StringMethod::RawScan,
-                        kind,
-                        fragments: None,
-                        section_size: sec_size,
-                        section_executable: sec_exec,
-                        section_writable: sec_write,
-                        ..Default::default()
-                    });
-                }
+            if strat1_runs.len() >= RUN_BATCH {
+                classify_runs(&mut strat1_runs, context, false, &mut strings, &mut seen);
             }
-            None
-        })
-        .collect();
-
-    for s in strat1_extracted {
-        if seen.insert(s.value.clone()) {
-            strings.push(s);
         }
     }
+    classify_runs(&mut strat1_runs, context, false, &mut strings, &mut seen);
 
     // Strategy 2: Printable character runs (like traditional `strings`)
     // This catches strings that aren't null-terminated (common in JPEG, PDF, etc.)
-    extract_printable_runs(
-        data,
-        PrintableRunContext {
-            min_length,
-            section,
-            segment_names_set: &segment_names_set,
-            section_info,
-            skip_ranges,
-        },
-        &mut strings,
-        &mut seen,
-    );
+    extract_printable_runs(data, context, &mut strings, &mut seen);
 
     strings
 }
@@ -145,6 +94,12 @@ pub(crate) struct PrintableRunContext<'a> {
     pub(crate) section_info: &'a HashMap<String, crate::binary::SectionInfo>,
     pub(crate) skip_ranges: &'a [Range<usize>],
 }
+
+/// Runs are processed in batches of this many so the intermediate
+/// `(offset, slice)` vector stays bounded (~1.5 MB) regardless of how
+/// string-dense the input is. Each batch is still large enough to keep
+/// every core busy in the parallel classify stage.
+const RUN_BATCH: usize = 1 << 16;
 
 pub(crate) fn extract_printable_runs(
     data: &[u8],
@@ -165,6 +120,9 @@ pub(crate) fn extract_printable_runs(
         } else if let Some(start) = run_start {
             if i - start >= context.min_length && !in_skip_range(start, context.skip_ranges) {
                 runs.push((start, &data[start..i]));
+                if runs.len() >= RUN_BATCH {
+                    classify_runs(&mut runs, context, true, strings, seen);
+                }
             }
             run_start = None;
         }
@@ -177,9 +135,25 @@ pub(crate) fn extract_printable_runs(
         runs.push((start, &data[start..]));
     }
 
+    classify_runs(&mut runs, context, true, strings, seen);
+}
+
+/// Classify one batch of runs in parallel, then drain the batch into
+/// `strings`, deduplicating by value (first occurrence wins).
+///
+/// `demote_shebang` clears the `ShellCmd` kind for a shebang at offset 0
+/// (the file's interpreter declaration, not an embedded shell command);
+/// only the printable-run strategy applies that rule.
+fn classify_runs(
+    runs: &mut Vec<(usize, &[u8])>,
+    context: PrintableRunContext<'_>,
+    demote_shebang: bool,
+    strings: &mut Vec<ExtractedString>,
+    seen: &mut HashSet<String>,
+) {
     use rayon::prelude::*;
     let extracted: Vec<ExtractedString> = runs
-        .into_par_iter()
+        .par_drain(..)
         .filter_map(|(start, run)| {
             if let Ok(s) = std::str::from_utf8(run) {
                 let trimmed = s.trim();
@@ -192,7 +166,10 @@ pub(crate) fn extract_printable_runs(
 
                     // Shebangs at offset 0 are the file's interpreter declaration,
                     // not embedded shell commands.
-                    if start == 0 && kind == Some(StringKind::ShellCmd) && trimmed.starts_with("#!")
+                    if demote_shebang
+                        && start == 0
+                        && kind == Some(StringKind::ShellCmd)
+                        && trimmed.starts_with("#!")
                     {
                         kind = None;
                     }

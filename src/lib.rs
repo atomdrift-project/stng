@@ -1152,19 +1152,18 @@ fn extract_from_utf16_file(
         tracing::warn!("UTF-16 file has odd byte count, truncating last byte");
     }
 
-    let code_units: Vec<u16> = utf16_data
-        .chunks_exact(2)
-        .map(|chunk| {
-            if is_little_endian {
-                u16::from_le_bytes([chunk[0], chunk[1]])
-            } else {
-                u16::from_be_bytes([chunk[0], chunk[1]])
-            }
-        })
+    // Decode UTF-16 to UTF-8, streaming code units straight from the byte
+    // slice so the whole-file Vec<u16> intermediate is never materialized.
+    let code_units = utf16_data.chunks_exact(2).map(|chunk| {
+        if is_little_endian {
+            u16::from_le_bytes([chunk[0], chunk[1]])
+        } else {
+            u16::from_be_bytes([chunk[0], chunk[1]])
+        }
+    });
+    let decoded: String = char::decode_utf16(code_units)
+        .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
         .collect();
-
-    // Decode UTF-16 to UTF-8
-    let decoded = String::from_utf16_lossy(&code_units);
     let decoded_bytes = decoded.as_bytes();
 
     // Extract strings from the decoded UTF-8 content
@@ -1725,19 +1724,20 @@ fn extract_from_object(
                 // structure-based + inline-pattern extractors already cover
                 // those regions with correct boundaries.
                 let skip = elf_go_skip_ranges(elf, scan_data.len());
-                let known: HashSet<String> = strings.iter().map(|s| s.value.clone()).collect();
-                for s in extract_raw_strings(
+                let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+                let fresh: Vec<ExtractedString> = extract_raw_strings(
                     scan_data,
                     min_length,
                     None,
                     &segments,
                     &section_info,
                     &skip,
-                ) {
-                    if !known.contains(&s.value) {
-                        strings.push(s);
-                    }
-                }
+                )
+                .into_iter()
+                .filter(|s| !known.contains(s.value.as_str()))
+                .collect();
+                drop(known);
+                strings.extend(fresh);
             } else if has_rust {
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_elf(elf, scan_data));
