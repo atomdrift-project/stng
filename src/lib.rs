@@ -294,6 +294,50 @@ fn merge_imports(strings: &mut Vec<ExtractedString>, imports: Vec<ExtractedStrin
     strings.extend(new_imports);
 }
 
+/// Raw-scan every non-executable Mach-O section so string-literal sections the
+/// targeted extractor skips — notably `__objc_methname` — and the leading entry
+/// of each section still surface when radare2 is unavailable. Offsets stay
+/// section-relative (matching the targeted extractor and r2), and the section
+/// name is tagged so callers can correlate fragments by location. Executable
+/// sections are covered by the stack-string / disassembly passes, so raw-scanning
+/// their instruction bytes here would only add noise. Results are de-duplicated
+/// by value within this pass; callers merge them against what they already hold.
+fn scan_macho_sections(
+    data: &[u8],
+    min_length: usize,
+    segments: &[String],
+    section_info: &HashMap<String, binary::SectionInfo>,
+) -> Vec<ExtractedString> {
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for info in section_info.values() {
+        if info.is_executable || info.size == 0 {
+            continue;
+        }
+        // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only).
+        #[allow(clippy::cast_possible_truncation)]
+        let start = info.file_offset as usize;
+        #[allow(clippy::cast_possible_truncation)]
+        let end = start.saturating_add(info.size as usize);
+        let Some(section_bytes) = data.get(start..end) else {
+            continue;
+        };
+        for s in extract_raw_strings(
+            section_bytes,
+            min_length,
+            Some(info.name.as_str()),
+            segments,
+            section_info,
+            &[],
+        ) {
+            if seen.insert(s.value.clone()) {
+                out.push(s);
+            }
+        }
+    }
+    out
+}
+
 /// Apply Mach-O entitlements: remove overlapping strings, then append entitlement XML.
 fn apply_entitlements(
     strings: &mut Vec<ExtractedString>,
@@ -1109,6 +1153,13 @@ fn deduplicate_by_offset(mut strings: Vec<ExtractedString>) -> Vec<ExtractedStri
     strings.sort_unstable_by(|a, b| {
         a.data_offset
             .cmp(&b.data_offset)
+            // Mach-O offsets are section-relative, so the same relative offset
+            // recurs across sections (e.g. __cstring:0 vs __objc_methname:0).
+            // Including the section in the dedup key keeps distinct strings in
+            // different sections from collapsing into one. Other formats use
+            // file-absolute offsets with `section == None`, so their behaviour
+            // is unchanged.
+            .then_with(|| a.section.cmp(&b.section))
             .then_with(|| {
                 // Descending priority: higher priority first.
                 b.method.dedup_priority().cmp(&a.method.dedup_priority())
@@ -1119,7 +1170,7 @@ fn deduplicate_by_offset(mut strings: Vec<ExtractedString>) -> Vec<ExtractedStri
             })
     });
 
-    strings.dedup_by_key(|s| s.data_offset);
+    strings.dedup_by(|a, b| a.data_offset == b.data_offset && a.section == b.section);
     strings
 }
 
@@ -1548,25 +1599,44 @@ fn extract_from_object(
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_macho(macho, data));
             } else {
-                // Unknown Mach-O - use r2 if available
+                // Unknown Mach-O (C/C++/Objective-C/asm). Use r2 if available,
+                // then the targeted extractor, then an unconditional per-section
+                // scan. The targeted extractor only covers __cstring/__const/
+                // __text and silently skips other string-literal sections
+                // (notably __objc_methname); without the section scan those
+                // strings — and any IOC fragments split across literals — are
+                // lost whenever r2 is unavailable. ELF and Go already always run
+                // a raw scan for the same reason.
                 if let Some(r2_strings) = get_r2_strings(opts) {
                     strings.extend(r2_strings);
                 }
-                // Also do raw scan to catch anything r2 missed
                 let extractor = RustStringExtractor::new(min_length);
-                let rust_strings = extractor.extract_macho(macho, data);
-                if rust_strings.is_empty() {
-                    strings.extend(extract_raw_strings(
-                        data,
-                        min_length,
-                        None,
-                        &segments,
-                        &section_info,
-                        &[],
-                    ));
-                } else {
-                    strings.extend(rust_strings);
-                }
+                strings.extend(extractor.extract_macho(macho, data));
+                // Per-section scan first (section-tagged, section-relative
+                // offsets) so __objc_methname and the like are correlatable by
+                // location; whole-file scan second as a backstop for bytes
+                // outside any enumerated section (__LINKEDIT, padding, minimal
+                // layouts). Merge by value: the section-tagged copy wins and
+                // nothing already held by r2/the targeted extractor is duped.
+                let extra: Vec<ExtractedString> = {
+                    let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+                    let mut seen: HashSet<String> = HashSet::new();
+                    scan_macho_sections(data, min_length, &segments, &section_info)
+                        .into_iter()
+                        .chain(extract_raw_strings(
+                            data,
+                            min_length,
+                            None,
+                            &segments,
+                            &section_info,
+                            &[],
+                        ))
+                        .filter(|s| {
+                            !known.contains(s.value.as_str()) && seen.insert(s.value.clone())
+                        })
+                        .collect()
+                };
+                strings.extend(extra);
             }
             if !is_go_binary {
                 // Only disassemble executable sections — feeding the whole
