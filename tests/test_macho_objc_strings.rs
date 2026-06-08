@@ -78,6 +78,93 @@ fn objc_selectors_survive_without_r2() {
 }
 
 #[test]
+fn symbol_table_entries_are_typed_without_r2() {
+    let strings = native_strings();
+    let kind_of = |needle: &str| {
+        strings
+            .iter()
+            .find(|s| s.value == needle)
+            .unwrap_or_else(|| panic!("symbol {needle:?} present"))
+            .kind
+    };
+
+    // Native nlist walk classifies symbols the bind-info / export-trie views
+    // miss. These previously appeared only as untyped raw __LINKEDIT scan hits.
+    use stng::StringKind;
+    assert_eq!(kind_of("_popen"), Some(StringKind::Import));
+    assert_eq!(kind_of("_OBJC_CLASS_$_NSURL"), Some(StringKind::Import));
+    assert_eq!(
+        kind_of("_objc_msgSend$setHTTPBody:"),
+        Some(StringKind::FuncName)
+    );
+}
+
+#[test]
+fn caller_provides_symbols_skips_typing_but_keeps_strings() {
+    // When the caller owns symbol extraction (e.g. filefacts), stng must not
+    // redo the structured pass — but the names must still SURVIVE as strings so
+    // nothing is lost; only the typing is suppressed.
+    let data = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/testdata/macho/wallet_report_objc"
+    ))
+    .expect("read fixture");
+    let opts = ExtractOptions {
+        min_length: 4,
+        filter_garbage: false,
+        use_cache: false,
+        caller_provides_symbols: true,
+        ..Default::default()
+    };
+    let strings = extract_strings_with_options(&data, &opts);
+    let entry = |needle: &str| strings.iter().find(|s| s.value == needle);
+
+    // Still present (raw scan of __LINKEDIT), but no longer typed as an import.
+    let popen = entry("_popen").expect("`_popen` still present as a string");
+    assert_eq!(
+        popen.kind, None,
+        "structured import typing should be suppressed"
+    );
+    // Ordinary string-literal extraction is unaffected.
+    assert!(entry("find").is_some());
+    assert!(entry("setHTTPBody:").is_some());
+}
+
+#[test]
+fn from_object_matches_full_parse() {
+    // The pre-parsed entry point lets a caller (filefacts) parse the binary once
+    // and hand the goblin object to stng, skipping a second parse. Guard that it
+    // yields the same string set as the parse-it-yourself path, so the
+    // double-parse optimisation is behaviour-preserving.
+    let data = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/testdata/macho/wallet_report_objc"
+    ))
+    .expect("read fixture");
+    let opts = ExtractOptions {
+        min_length: 4,
+        filter_garbage: false,
+        use_cache: false,
+        ..Default::default()
+    };
+
+    let via_bytes = extract_strings_with_options(&data, &opts);
+    let object = stng::goblin::Object::parse(&data).expect("parse object");
+    let via_object = stng::extract_strings_from_object(&object, &data, &opts);
+
+    let set = |v: &[stng::ExtractedString]| {
+        v.iter()
+            .map(|s| s.value.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert_eq!(
+        set(&via_bytes),
+        set(&via_object),
+        "pre-parsed object path must extract the same strings"
+    );
+}
+
+#[test]
 fn fragments_are_locatable_by_section_and_offset() {
     let strings = native_strings();
 

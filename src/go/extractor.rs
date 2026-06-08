@@ -7,12 +7,13 @@
 
 use crate::extraction::{extract_from_structures, find_string_structures};
 use crate::instr::{extract_inline_strings_amd64, extract_inline_strings_arm64};
-use crate::types::{BinaryInfo, ExtractedString, StringStruct};
+use crate::types::{BinaryInfo, ExtractedString, StringMethod, StringStruct};
 use goblin::elf::Elf;
 use goblin::mach::MachO;
 use goblin::mach::cputype::{CPU_TYPE_ARM64, CPU_TYPE_X86_64};
 use goblin::pe::PE;
 use rayon::prelude::*;
+use std::collections::HashSet;
 
 use crate::classifier::classify_string;
 
@@ -22,6 +23,9 @@ use crate::classifier::classify_string;
 /// pairs in the binary), so we use a lower floor than the user-specified
 /// min_length to avoid dropping short but real strings like "gh" or "sh".
 const STRUCTURE_MIN_LENGTH: usize = 2;
+
+/// Upper bound for targeted scans over Go's packed string pool.
+const MAX_PACKED_RODATA_HEURISTIC_SIZE: usize = 4 * 1024 * 1024;
 
 /// Extracts strings from Go binaries using structure analysis.
 pub(crate) struct GoStringExtractor {
@@ -135,6 +139,26 @@ impl GoStringExtractor {
                     if s.value.len() >= struct_min {
                         strings.push(s);
                     }
+                }
+            }
+        }
+
+        // Go's Mach-O linker stores many literals in one packed printable
+        // `__rodata` pool. The generic raw scanner skips that section to avoid
+        // emitting giant concatenated runs, while pointer/length analysis can
+        // miss constants that are assembled at runtime. Recover only bounded
+        // high-signal substrings from the packed pool.
+        if rodata_data.len() <= MAX_PACKED_RODATA_HEURISTIC_SIZE {
+            let packed = extract_packed_rodata_literals(
+                rodata_data,
+                rodata_addr,
+                Some("__rodata"),
+                self.min_length,
+            );
+            let mut seen: HashSet<String> = strings.iter().map(|s| s.value.clone()).collect();
+            for s in packed {
+                if seen.insert(s.value.clone()) {
+                    strings.push(s);
                 }
             }
         }
@@ -357,6 +381,239 @@ impl GoStringExtractor {
     }
 }
 
+fn extract_packed_rodata_literals(
+    data: &[u8],
+    section_data_offset: u64,
+    section: Option<&str>,
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let mut sink = PackedLiteralSink::new(data, section_data_offset, section, min_length);
+
+    extract_url_literals(data, &mut sink);
+    extract_find_command_fragments(data, &mut sink);
+
+    sink.results
+}
+
+struct PackedLiteralSink<'a> {
+    section_data_offset: u64,
+    section: Option<&'a str>,
+    min_length: usize,
+    seen: HashSet<String>,
+    results: Vec<ExtractedString>,
+}
+
+impl<'a> PackedLiteralSink<'a> {
+    fn new(
+        _data: &'a [u8],
+        section_data_offset: u64,
+        section: Option<&'a str>,
+        min_length: usize,
+    ) -> Self {
+        Self {
+            section_data_offset,
+            section,
+            min_length,
+            seen: HashSet::new(),
+            results: Vec::new(),
+        }
+    }
+
+    fn add_candidate(&mut self, data: &[u8], start: usize, end: usize) {
+        if start >= end || end > data.len() {
+            return;
+        }
+
+        let Ok(value) = std::str::from_utf8(&data[start..end]) else {
+            return;
+        };
+        let value =
+            value.trim_matches(|c: char| c.is_ascii_whitespace() || matches!(c, '"' | '\''));
+        if value.len() < self.min_length || value.len() > 512 {
+            return;
+        }
+        if !self.seen.insert(value.to_string()) {
+            return;
+        }
+
+        self.results.push(ExtractedString {
+            value: value.to_string(),
+            data_offset: self.section_data_offset + start as u64,
+            section: self.section.map(str::to_string),
+            method: StringMethod::Heuristic,
+            kind: classify_string(value),
+            ..Default::default()
+        });
+    }
+}
+
+fn extract_url_literals(data: &[u8], sink: &mut PackedLiteralSink<'_>) {
+    const URL_SCHEMES: [&[u8]; 2] = [b"http://", b"https://"];
+
+    for scheme in URL_SCHEMES {
+        let mut cursor = 0;
+        while let Some(relative) = find_subslice(&data[cursor..], scheme) {
+            let start = cursor + relative;
+            let end = trim_url_end(data, start, scheme.len());
+            sink.add_candidate(data, start, end);
+            cursor = start + scheme.len();
+        }
+    }
+}
+
+fn extract_find_command_fragments(data: &[u8], sink: &mut PackedLiteralSink<'_>) {
+    const FIND_TRIGGER: &[u8] = b"-maxdepth";
+    const MAX_COMMAND_FRAGMENT: usize = 256;
+
+    let mut cursor = 0;
+    while let Some(relative) = find_subslice(&data[cursor..], FIND_TRIGGER) {
+        let start = cursor + relative;
+        let raw_end = command_fragment_end(data, start, MAX_COMMAND_FRAGMENT);
+        let Some(candidate) = std::str::from_utf8(&data[start..raw_end]).ok() else {
+            cursor = start + FIND_TRIGGER.len();
+            continue;
+        };
+        let candidate = trim_find_command_fragment(candidate);
+        if candidate_has_find_selector(candidate) {
+            let end = start + candidate.len();
+            sink.add_candidate(data, start, end);
+        }
+        cursor = start + FIND_TRIGGER.len();
+    }
+}
+
+fn trim_url_end(data: &[u8], start: usize, scheme_len: usize) -> usize {
+    let mut end = start;
+    while end < data.len() && is_url_byte(data[end]) {
+        end += 1;
+    }
+
+    let search_start = start.saturating_add(scheme_len);
+    if search_start < end
+        && let Some(relative) = find_subslice(&data[search_start..end], b"http2:")
+    {
+        end = search_start + relative;
+    }
+
+    while end > start
+        && matches!(
+            data[end - 1],
+            b'.' | b',' | b';' | b':' | b'?' | b'&' | b'='
+        )
+    {
+        end -= 1;
+    }
+
+    end
+}
+
+fn is_url_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'.' | b'_' | b':' | b'/' | b'@' | b'-' | b'?' | b'=' | b'&' | b'%' | b'#' | b'+'
+        )
+}
+
+fn command_fragment_end(data: &[u8], start: usize, max_len: usize) -> usize {
+    let hard_end = start.saturating_add(max_len).min(data.len());
+    let mut end = start;
+    while end < hard_end && is_command_fragment_byte(data[end]) {
+        end += 1;
+    }
+    end
+}
+
+fn is_command_fragment_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || byte.is_ascii_whitespace()
+        || matches!(
+            byte,
+            b'_' | b'.'
+                | b'-'
+                | b'/'
+                | b'*'
+                | b'"'
+                | b'\''
+                | b'|'
+                | b'>'
+                | b'<'
+                | b'&'
+                | b'='
+                | b'('
+                | b')'
+        )
+}
+
+fn trim_find_command_fragment(s: &str) -> &str {
+    if let Some(end) = end_after_head_limit(s) {
+        return &s[..end];
+    }
+    if let Some(pos) = s.find("2>/dev/null") {
+        return &s[..pos + "2>/dev/null".len()];
+    }
+    if let Some(pos) = long_hex_run_start(s) {
+        return s[..pos].trim_end();
+    }
+    s.trim_end()
+}
+
+fn end_after_head_limit(s: &str) -> Option<usize> {
+    let marker = if let Some(pos) = s.find("|head") {
+        (pos, "|head".len())
+    } else if let Some(pos) = s.find("| head") {
+        (pos, "| head".len())
+    } else {
+        return None;
+    };
+
+    let mut end = marker.0 + marker.1;
+    let bytes = s.as_bytes();
+    while end < bytes.len() && bytes[end].is_ascii_whitespace() {
+        end += 1;
+    }
+    if end < bytes.len() && bytes[end] == b'-' {
+        end += 1;
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+    }
+    Some(end)
+}
+
+fn long_hex_run_start(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut run_start = 0;
+    let mut run_len = 0;
+    for (i, byte) in bytes.iter().enumerate() {
+        if byte.is_ascii_hexdigit() {
+            if run_len == 0 {
+                run_start = i;
+            }
+            run_len += 1;
+            if run_len >= 32 {
+                return Some(run_start);
+            }
+        } else {
+            run_len = 0;
+        }
+    }
+    None
+}
+
+fn candidate_has_find_selector(s: &str) -> bool {
+    s.contains("-iname") || s.contains("-name") || s.contains("-exec")
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
 /// Extract strings from a Go pclntab `pkgnamestab`-style table.
 ///
 /// Go 1.18+ packs package paths and reflect type names in a table where
@@ -562,7 +819,11 @@ pub(crate) fn extract_null_separated_strings(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_null_separated_strings, extract_varint_prefixed_strings};
+    use super::{
+        extract_null_separated_strings, extract_packed_rodata_literals,
+        extract_varint_prefixed_strings,
+    };
+    use crate::types::{StringKind, StringMethod};
 
     #[test]
     fn detects_three_consecutive_varint_entries() {
@@ -610,5 +871,37 @@ mod tests {
         buf.push(0);
         let out = extract_null_separated_strings(&buf, 0, None, 4);
         assert!(out.is_empty(), "a single long entry shouldn't qualify");
+    }
+
+    #[test]
+    fn packed_rodata_recovers_bounded_url_from_concatenated_go_pool() {
+        let buf =
+            b"noisehttps://api.telegram.org/bot123456789:ABCDEF/sendMessagehttp2: server idle";
+
+        let out = extract_packed_rodata_literals(buf, 0x1000, Some("__rodata"), 4);
+
+        let url = out
+            .iter()
+            .find(|s| s.value == "https://api.telegram.org/bot123456789:ABCDEF/sendMessage")
+            .expect("telegram URL should be recovered without adjacent Go runtime text");
+        assert_eq!(url.method, StringMethod::Heuristic);
+        assert_eq!(url.kind, Some(StringKind::Url));
+        assert!(!out.iter().any(|s| s.value.contains("http2:")));
+    }
+
+    #[test]
+    fn packed_rodata_recovers_bounded_find_command_fragment() {
+        let buf = b"crypto/rsa: insecure -maxdepth 6 -iname \"*wallet*\" -o -iname \"*keystore*\" -o -iname \"id.json\" 2>/dev/null|head -30b3312d04f441d4ca5ec8e6d8c3ce3de5 more";
+
+        let out = extract_packed_rodata_literals(buf, 0x2000, Some("__rodata"), 4);
+
+        let command = "-maxdepth 6 -iname \"*wallet*\" -o -iname \"*keystore*\" -o -iname \"id.json\" 2>/dev/null|head -30";
+        let found = out
+            .iter()
+            .find(|s| s.value == command)
+            .expect("find command fragment should be recovered without trailing hex noise");
+        assert_eq!(found.method, StringMethod::Heuristic);
+        assert!(found.value.contains("id.json"));
+        assert!(!found.value.contains("b3312d04f"));
     }
 }

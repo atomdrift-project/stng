@@ -50,6 +50,88 @@ pub(crate) fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec
         }
     }
 
+    // Walk the static symbol table (nlist). imports()/exports() above only see
+    // dyld bind info and the export trie; the symbol table additionally carries
+    // undefined externals (`_popen`), Objective-C class references
+    // (`_OBJC_CLASS_$_…`) and local stub helpers (`_objc_msgSend$…`) that radare2
+    // surfaces but those two views miss. Without this they appear only as
+    // untyped raw-scan hits in the __LINKEDIT string table; classifying them by
+    // nlist type lets `merge_imports` retag those hits with a proper kind.
+    for (name, nlist) in macho.symbols().flatten() {
+        // Skip debug (STABS) entries — source paths and line info, not symbols.
+        if name.len() < min_length || nlist.is_stab() || !seen.insert(name.to_string()) {
+            continue;
+        }
+        let kind = if nlist.is_undefined() {
+            StringKind::Import
+        } else if nlist.is_global() {
+            StringKind::Export
+        } else {
+            StringKind::FuncName
+        };
+        // Undefined symbols have n_value == 0; merge_imports retags the located
+        // raw-scan hit and keeps its real offset, so the address here only
+        // matters for the rare symbol absent from the strtab scan.
+        let section = find_macho_section(macho, nlist.n_value);
+        let file_offset = macho_vaddr_to_file_offset(macho, nlist.n_value);
+        strings.push(ExtractedString {
+            value: name.to_string(),
+            data_offset: file_offset,
+            section,
+            method: StringMethod::Structure,
+            kind: Some(kind),
+            ..Default::default()
+        });
+    }
+
+    strings
+}
+
+/// Extract imports and exports from a PE binary.
+///
+/// goblin resolves the import directory (and bound imports) to `(name, dll)`
+/// pairs and the export directory to named exports; neither is recoverable by a
+/// raw byte scan when the names live behind RVA tables rather than as inline
+/// literals, which is why PE import names were previously absent without
+/// radare2. Each entry carries the resolving DLL as its source.
+pub(crate) fn extract_pe_imports(
+    pe: &goblin::pe::PE<'_>,
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let mut strings = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for import in &pe.imports {
+        if import.name.len() >= min_length && seen.insert(import.name.to_string()) {
+            strings.push(ExtractedString {
+                value: import.name.to_string(),
+                // u64 from usize: lossless on 64-bit hosts (this tool is 64-bit only).
+                data_offset: import.offset as u64,
+                section: None,
+                method: StringMethod::Structure,
+                kind: Some(StringKind::Import),
+                source: Some(import.dll.to_string()),
+                ..Default::default()
+            });
+        }
+    }
+
+    for export in &pe.exports {
+        if let Some(name) = export.name
+            && name.len() >= min_length
+            && seen.insert(name.to_string())
+        {
+            strings.push(ExtractedString {
+                value: name.to_string(),
+                data_offset: export.offset.unwrap_or(0) as u64,
+                section: None,
+                method: StringMethod::Structure,
+                kind: Some(StringKind::Export),
+                ..Default::default()
+            });
+        }
+    }
+
     strings
 }
 

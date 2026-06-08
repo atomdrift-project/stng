@@ -113,7 +113,7 @@ use binary::{
     macho_has_go_sections, pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
 };
 use binary_net::scan_binary_ips;
-use imports::{extract_elf_imports, extract_macho_imports};
+use imports::{extract_elf_imports, extract_macho_imports, extract_pe_imports};
 use raw::{extract_raw_strings, extract_wide_strings};
 
 /// Extract stack strings from every executable section whose byte range is
@@ -875,6 +875,17 @@ pub struct ExtractOptions {
     pub xor_scan_multi: bool,
     /// Use r2 result caching (default: true). Disable with --no-cache flag.
     pub use_cache: bool,
+    /// Skip stng's native import/export/symbol extraction. Default: false.
+    ///
+    /// Set this when the caller already parses the binary's symbol tables
+    /// itself (e.g. filefacts' `extract_symbols`) so the work isn't done
+    /// twice. stng emits no value back here because it only *produces*
+    /// symbol names — it doesn't consume them for string extraction — so the
+    /// efficient hint is suppression, not a data feed (unlike the rizin
+    /// fields below, whose data stng actually uses). Symbol names still
+    /// surface as raw `__LINKEDIT` / `.rdata` scan hits; only the structured,
+    /// typed import/export pass is skipped.
+    pub caller_provides_symbols: bool,
     /// Cancellation flag checked at phase boundaries (start of extraction,
     /// before XOR scan, between decoder passes).  When the flag becomes
     /// `true`, extraction returns whatever it has so far.
@@ -923,6 +934,7 @@ impl ExtractOptions {
             xor_min_length: xor::DEFAULT_XOR_MIN_LENGTH,
             xor_scan_multi: false,
             use_cache: true,
+            caller_provides_symbols: false,
             cancel: None,
             format_hint: FormatHint::Auto,
             rizin_boundaries: None,
@@ -1029,6 +1041,14 @@ impl ExtractOptions {
     #[must_use]
     pub fn with_cache(mut self, use_cache: bool) -> Self {
         self.use_cache = use_cache;
+        self
+    }
+
+    /// Skip native import/export/symbol extraction because the caller already
+    /// parses the symbol tables itself. See [`ExtractOptions::caller_provides_symbols`].
+    #[must_use]
+    pub fn with_caller_provides_symbols(mut self, provided: bool) -> Self {
+        self.caller_provides_symbols = provided;
         self
     }
 
@@ -1652,7 +1672,9 @@ fn extract_from_object(
                     macho, data, 0, min_length,
                 ));
             }
-            merge_imports(&mut strings, extract_macho_imports(macho, min_length));
+            if !opts.caller_provides_symbols {
+                merge_imports(&mut strings, extract_macho_imports(macho, min_length));
+            }
             apply_entitlements(&mut strings, macho, data, min_length);
         }
         Object::Mach(goblin::mach::Mach::Fat(fat)) => {
@@ -1745,7 +1767,9 @@ fn extract_from_object(
                 }
             }
             if let Some(ref macho) = first_macho {
-                merge_imports(&mut strings, extract_macho_imports(macho, min_length));
+                if !opts.caller_provides_symbols {
+                    merge_imports(&mut strings, extract_macho_imports(macho, min_length));
+                }
                 apply_entitlements(&mut strings, macho, data, min_length);
             }
         }
@@ -1919,7 +1943,9 @@ fn extract_from_object(
                 strings.extend(results);
             }
 
-            merge_imports(&mut strings, extract_elf_imports(elf, min_length));
+            if !opts.caller_provides_symbols {
+                merge_imports(&mut strings, extract_elf_imports(elf, min_length));
+            }
 
             // Filter out any strings that fall within the overlay region
             // (they'll be re-extracted with proper section="overlay" marking)
@@ -2109,6 +2135,12 @@ fn extract_from_object(
             strings.extend(net_strings);
             strings.extend(raw_strings);
             strings.extend(stack_strings);
+
+            // Recover imports/exports from the PE directories — names behind RVA
+            // tables that a raw byte scan can't reach (the radare2-only gap).
+            if !opts.caller_provides_symbols {
+                merge_imports(&mut strings, extract_pe_imports(pe, min_length));
+            }
 
             // Extract overlay/appended data (common malware technique)
             strings.extend(extract_overlay_strings(data, min_length));
