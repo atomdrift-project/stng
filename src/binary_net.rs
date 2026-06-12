@@ -139,6 +139,40 @@ fn looks_like_packed_u16_table(data: &[u8], offset: usize) -> bool {
     small_nonzero >= 8 && small_nonzero * 100 / nonzero.max(1) >= 60
 }
 
+/// Returns true if the bytes surrounding `offset` form a region with strong
+/// period-2 byte structure — a packed lookup/metadata table (Delphi/VCL RTTI,
+/// resource maps, encoded relocation tables) rather than heterogeneous data
+/// that happens to hold a real sockaddr_in.
+///
+/// Such tables are sequences of repeating 2-byte cells (`64 02 64 02 …`,
+/// `f0 02 f0 02 …`, `XX 10 XX 10 …`), so a high fraction of bytes equal the
+/// byte two positions earlier. Real sockaddr_in structures live among
+/// function pointers, zero padding, and unrelated constants, where non-zero
+/// period-2 self-similarity is essentially nil (measured 0% across
+/// heterogeneous, zero-padded, and pointer-mix layouts; the packed tables that
+/// produced false positives measured 38–56%). Zero bytes are excluded so that
+/// a zero-padded struct in `.bss`/`.data` is not mistaken for a periodic table.
+fn sits_in_periodic_table(data: &[u8], offset: usize) -> bool {
+    let start = offset.saturating_sub(32);
+    let end = offset.saturating_add(32).min(data.len());
+    if end < start + 3 {
+        return false;
+    }
+    let window = &data[start..end];
+
+    let mut matches = 0usize;
+    for i in 0..window.len() - 2 {
+        if window[i] != 0 && window[i] == window[i + 2] {
+            matches += 1;
+        }
+    }
+    let comparisons = window.len() - 2;
+
+    // 25% leaves a wide margin above the 0% seen in real data sections while
+    // sitting well below the 38% floor of the packed tables it targets.
+    matches * 100 / comparisons >= 25
+}
+
 /// Endianness of the binary being scanned, used to restrict the AF_INET marker
 /// check in [`scan_sockaddr_in`]. On a little-endian platform, sin_family is
 /// stored as `02 00`; on a big-endian platform, `00 02`. Accepting both produces
@@ -237,7 +271,7 @@ pub(crate) fn scan_binary_ips(
             // (UNWIND_INFO / C++ EH metadata / jump tables) that mimic
             // sockaddr_in byte sequences.
             if let Ok(off) = usize::try_from(s.data_offset)
-                && looks_like_packed_u16_table(data, off)
+                && (looks_like_packed_u16_table(data, off) || sits_in_periodic_table(data, off))
             {
                 return false;
             }
@@ -872,6 +906,77 @@ mod tests {
         0x88, 0x09, 0x00, 0x13, 0x00, 0x04, 0x00, 0x1b, 0x00, 0x13, 0x00, 0x02, 0x00, 0x1b, 0x00,
         0x13, 0x01, 0x05, 0xaa,
     ];
+
+    /// Verbatim 64-byte slices from the Inno Setup installer
+    /// `6fcd77d331dd9e9699a0f5ac623e2ac0.exe` at file offsets 0x1677f and
+    /// 0x16abd, centered on the AF_INET marker (relative offset 32). These are
+    /// Delphi/VCL packed metadata tables (`64 02 64 02`, `f0 02 f0 02`,
+    /// `XX 10 XX 10`) that the raw scanner surfaced as `11.16.15.16:3856` and
+    /// `19.89.9.89:784` — neither IP exists as ASCII anywhere in the file.
+    const PERIODIC_FIXTURE_A: &[u8] = &[
+        0x0e, 0x10, 0x0b, 0x10, 0x0b, 0x10, 0x0b, 0x10, 0x0b, 0x10, 0x0b, 0x10, 0x0b, 0x0f, 0x0e,
+        0x10, 0x0b, 0x10, 0x0b, 0xe0, 0x0e, 0x10, 0x0b, 0xf0, 0x0e, 0x64, 0x02, 0x64, 0x02, 0x64,
+        0x02, 0x64, 0x02, 0x00, 0x0f, 0x10, 0x0b, 0x10, 0x0f, 0x10, 0x0b, 0x20, 0x0f, 0x30, 0x0f,
+        0x40, 0x0f, 0x50, 0x0f, 0x59, 0x09, 0x60, 0x0f, 0x10, 0x0b, 0x70, 0x0f, 0x80, 0x0f, 0x34,
+        0x0e, 0x90, 0x0f, 0x34,
+    ];
+    const PERIODIC_FIXTURE_B: &[u8] = &[
+        0x12, 0x00, 0x13, 0x8d, 0x04, 0xf0, 0x02, 0x1b, 0x07, 0x56, 0x05, 0xfd, 0x02, 0xfd, 0x02,
+        0x64, 0x02, 0x64, 0x02, 0xf0, 0x02, 0xf0, 0x02, 0xf0, 0x02, 0xf0, 0x02, 0xf0, 0x02, 0xf0,
+        0x02, 0xf0, 0x02, 0x00, 0x03, 0x10, 0x13, 0x59, 0x09, 0x59, 0x09, 0x69, 0x09, 0xd0, 0x0d,
+        0xd0, 0x0d, 0xd0, 0x0d, 0x20, 0x13, 0x30, 0x13, 0x64, 0x02, 0x64, 0x02, 0x64, 0x02, 0x64,
+        0x02, 0x64, 0x02, 0x64,
+    ];
+
+    #[test]
+    fn test_sits_in_periodic_table_flags_real_false_positives() {
+        // AF_INET marker sits at relative offset 32 in both fixtures.
+        assert!(
+            sits_in_periodic_table(PERIODIC_FIXTURE_A, 32),
+            "11.16.15.16:3856 packed-table region must be flagged"
+        );
+        assert!(
+            sits_in_periodic_table(PERIODIC_FIXTURE_B, 32),
+            "19.89.9.89:784 packed-table region must be flagged"
+        );
+    }
+
+    #[test]
+    fn test_sits_in_periodic_table_passes_real_layouts() {
+        // Heterogeneous .data around a real sockaddr_in.
+        let mut hetero: Vec<u8> = (0u8..128)
+            .map(|i| i.wrapping_mul(37).wrapping_add(0x33))
+            .collect();
+        hetero[64..72].copy_from_slice(&[0x02, 0x00, 0x1f, 0x90, 192, 168, 1, 50]);
+        assert!(
+            !sits_in_periodic_table(&hetero, 64),
+            "heterogeneous sockaddr_in must not be flagged"
+        );
+
+        // Zero-padded struct in a BSS-like region — zeros must not count as
+        // periodicity.
+        let mut zeroed = vec![0u8; 128];
+        zeroed[64..72].copy_from_slice(&[0x02, 0x00, 0x1f, 0x90, 192, 168, 1, 50]);
+        assert!(
+            !sits_in_periodic_table(&zeroed, 64),
+            "zero-padded sockaddr_in must not be flagged"
+        );
+    }
+
+    #[test]
+    fn test_scan_raw_still_surfaces_periodic_fixtures_without_pe() {
+        // The periodicity guard runs only in the PE retain block (mirroring
+        // looks_like_packed_u16_table), so the raw scanner still reproduces the
+        // original false positives — documenting the surface the PE path filters.
+        let mut data = vec![0u8; 2048];
+        let embed = 1200;
+        data[embed..embed + PERIODIC_FIXTURE_A.len()].copy_from_slice(PERIODIC_FIXTURE_A);
+        let raw = scan_sockaddr_in(&data, 4, Endianness::Little);
+        assert!(
+            raw.iter().any(|s| s.value == "11.16.15.16:3856"),
+            "fixture reproduces the original false positive without a PE handle"
+        );
+    }
 
     #[test]
     fn test_looks_like_packed_u16_table_flags_unwind_code_region() {
