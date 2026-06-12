@@ -1712,6 +1712,24 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
         }
     }
 
+    // Reject strings dominated by a single character (e.g. repeated spaces XORed)
+    // This catches false positives like sequences of spaces being XORed into valid base64 chars.
+    let char_count = s.chars().count();
+    if char_count >= 16 {
+        let mut char_counts = std::collections::HashMap::new();
+        let mut max_count = 0;
+        for c in s.chars() {
+            let entry = char_counts.entry(c).or_insert(0);
+            *entry += 1;
+            if *entry > max_count {
+                max_count = *entry;
+            }
+        }
+        if max_count * 2 > char_count {
+            return None;
+        }
+    }
+
     // SECOND+: Check for encoded data formats directly
     // Base64, hex, and url-encoded strings don't pass linguistic checks but are high-value IOCs.
     // classify_string handles proper format validation (length, charset, structure).
