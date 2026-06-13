@@ -216,7 +216,7 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
     }
 
     // Classify before moving
-    let kind = classify_decoded_string(&decoded_str);
+    let kind = crate::classify_string(&decoded_str);
 
     // Create new ExtractedString with decoded content
     Some(ExtractedString {
@@ -283,7 +283,7 @@ fn decode_hex_string(s: &ExtractedString) -> Option<ExtractedString> {
     }
 
     // Classify before moving
-    let kind = classify_decoded_string(&decoded_str);
+    let kind = crate::classify_string(&decoded_str);
 
     Some(ExtractedString {
         value: decoded_str,
@@ -327,7 +327,7 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
     }
 
     // Classify before moving
-    let kind = classify_decoded_string(&decoded);
+    let kind = crate::classify_string(&decoded);
 
     Some(ExtractedString {
         value: decoded,
@@ -375,7 +375,7 @@ fn decode_unicode_escape_string(s: &ExtractedString) -> Option<ExtractedString> 
     }
 
     // Classify before moving
-    let kind = classify_decoded_string(&decoded);
+    let kind = crate::classify_string(&decoded);
 
     Some(ExtractedString {
         value: decoded,
@@ -600,7 +600,7 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
     }
 
     // Classify before moving
-    let kind = classify_decoded_string(&decoded_str);
+    let kind = crate::classify_string(&decoded_str);
 
     // Create new ExtractedString with decoded content
     Some(ExtractedString {
@@ -664,7 +664,7 @@ fn decode_base85_string(s: &ExtractedString) -> Option<ExtractedString> {
     }
 
     // Classify before moving
-    let kind = classify_decoded_string(&decoded_str);
+    let kind = crate::classify_string(&decoded_str);
 
     Some(ExtractedString {
         value: decoded_str,
@@ -877,11 +877,6 @@ fn is_likely_base85(s: &str) -> bool {
 
     // If can't decode or quality is worse, it's not real base85
     false
-}
-
-/// Classify a decoded string into an `Option<StringKind>`.
-fn classify_decoded_string(s: &str) -> Option<StringKind> {
-    crate::classifier::classify_string(s)
 }
 
 #[cfg(test)]

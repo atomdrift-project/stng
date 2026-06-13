@@ -1344,11 +1344,6 @@ fn append_script_deobfuscation(
 /// let strings = extract_strings_with_options(&data, &opts);
 /// ```
 #[must_use]
-pub fn build_id() -> &'static str {
-    "BUILD_XOR_V1"
-}
-
-#[must_use]
 pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
     extract_strings_inner(data, opts)
 }

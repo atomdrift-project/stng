@@ -4,7 +4,7 @@
 //! fragments, encoding schemes, and other security-relevant categories.
 
 mod code;
-mod encoding;
+pub mod encoding;
 mod network;
 
 use crate::types::StringKind;

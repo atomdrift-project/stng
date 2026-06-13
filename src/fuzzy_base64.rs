@@ -61,11 +61,11 @@ pub(crate) fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<Extracted
 
         // Try different extraction strategies
         if let Some(decoded) = try_deobfuscate_js_base64(&s.value) {
-            results.push(create_decoded_string(s, decoded, "JSObfuscation"));
+            results.push(create_decoded_string(s, decoded));
         }
 
         if let Some(decoded) = try_fuzzy_extract(&s.value) {
-            results.push(create_decoded_string(s, decoded, "FuzzyExtract"));
+            results.push(create_decoded_string(s, decoded));
         }
 
         // Try extracting from substrings if this looks like a variable assignment
@@ -73,7 +73,7 @@ pub(crate) fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<Extracted
             && s.value.contains('"')
             && let Some(decoded) = extract_from_assignment(&s.value)
         {
-            results.push(create_decoded_string(s, decoded, "Assignment"));
+            results.push(create_decoded_string(s, decoded));
         }
     }
 
@@ -185,9 +185,7 @@ fn detect_substitutions(input: &str) -> Vec<(char, char)> {
 ///
 /// Handles: `var x = "base64data..."`
 fn extract_from_assignment(input: &str) -> Option<FuzzyBase64Result> {
-    let assignment_re = &*ASSIGNMENT_RE;
-
-    for cap in assignment_re.captures_iter(input) {
+    for cap in ASSIGNMENT_RE.captures_iter(input) {
         if let Some(value) = cap.get(1) {
             // Try to deobfuscate this substring
             if let Some(result) = try_deobfuscate_js_base64(value.as_str()) {
@@ -341,11 +339,7 @@ fn is_meaningful_decoded(s: &str) -> bool {
 }
 
 /// Create a new ExtractedString from a decoded result
-fn create_decoded_string(
-    original: &ExtractedString,
-    result: FuzzyBase64Result,
-    _method_suffix: &str,
-) -> ExtractedString {
+fn create_decoded_string(original: &ExtractedString, result: FuzzyBase64Result) -> ExtractedString {
     // Determine the kind based on the decoded content
     let kind = if result.decoded.contains("http://") || result.decoded.contains("https://") {
         Some(StringKind::Url)

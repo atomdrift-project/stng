@@ -268,7 +268,7 @@ fn try_aliased_import_chain(source: &str) -> Vec<DeobfuscationResult> {
     }
 
     // Check for XOR — look for XOR lambda and find the key
-    if let Some(xor_key) = find_xor_key(source, &import_aliases) {
+    if let Some(xor_key) = find_xor_key(source) {
         steps.push(DecodeStep::Xor(xor_key));
     }
 
@@ -300,10 +300,7 @@ fn find_string_assignment<'a>(source: &'a str, varname: &str) -> Option<&'a str>
 }
 
 /// Find the XOR key from a lambda pattern and integer constant assignments.
-fn find_xor_key(
-    source: &str,
-    _import_aliases: &std::collections::HashMap<&str, &str>,
-) -> Option<u8> {
+fn find_xor_key(source: &str) -> Option<u8> {
     // Find XOR lambda: lambda ...: bytes([x ^ KEY_VAR for x in ...])
     let xor_var = XOR_LAMBDA_RE
         .captures(source)

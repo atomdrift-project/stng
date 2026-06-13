@@ -84,8 +84,6 @@ struct R2Symbol {
     section: Option<String>,
     #[serde(default)]
     r#type: String,
-    #[serde(default)]
-    bind: String,
 }
 
 #[must_use]
@@ -156,7 +154,11 @@ pub fn extract_strings(
                 continue;
             }
             if s.name.len() >= min_length && seen.insert(s.name.clone()) {
-                let kind = Some(classify_r2_symbol(&s.r#type, &s.bind));
+                let kind = Some(match s.r#type.as_str() {
+                    "FUNC" | "METH" => StringKind::FuncName,
+                    "FILE" => StringKind::FilePath,
+                    _ => StringKind::Ident,
+                });
                 let func_meta = if s.r#type == "FUNC" || s.r#type == "METH" {
                     function_metadata
                         .as_ref()
@@ -312,14 +314,6 @@ pub fn decode_spaced_ascii(s: &str) -> Option<String> {
         Some(result.trim().to_string())
     } else {
         None
-    }
-}
-
-fn classify_r2_symbol(type_str: &str, _bind: &str) -> StringKind {
-    match type_str {
-        "FUNC" | "METH" => StringKind::FuncName,
-        "FILE" => StringKind::FilePath,
-        _ => StringKind::Ident,
     }
 }
 
@@ -555,88 +549,45 @@ pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
         return Vec::new();
     }
     if let Some(sockaddr) = parse_sockaddr_from_disasm(&output, data) {
-        let ip = format!(
-            "{}.{}.{}.{}",
-            sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]
-        );
-        let val = if sockaddr.port > 0 {
-            format!("{}:{}", ip, sockaddr.port)
-        } else {
-            ip
-        };
-        if seen.insert(val.clone()) {
-            results.push(ExtractedString {
-                value: val,
-                data_offset: sockaddr.offset,
-                section: Some(".text".to_string()),
-                method: StringMethod::InstructionPattern,
-                kind: if sockaddr.port > 0 {
-                    Some(StringKind::IPPort)
-                } else {
-                    Some(StringKind::IP)
-                },
-                source: Some("connect()".to_string()),
-                ..Default::default()
-            });
+        let es = sockaddr_to_string(&sockaddr);
+        if seen.insert(es.value.clone()) {
+            results.push(es);
         }
+        results
     } else {
-        for sockaddr in find_sockaddr_in_binary(data) {
-            let ip = format!(
-                "{}.{}.{}.{}",
-                sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]
-            );
-            let val = if sockaddr.port > 0 {
-                format!("{}:{}", ip, sockaddr.port)
-            } else {
-                ip
-            };
-            if seen.insert(val.clone()) {
-                results.push(ExtractedString {
-                    value: val,
-                    data_offset: sockaddr.offset,
-                    section: Some(".text".to_string()),
-                    method: StringMethod::InstructionPattern,
-                    kind: if sockaddr.port > 0 {
-                        Some(StringKind::IPPort)
-                    } else {
-                        Some(StringKind::IP)
-                    },
-                    source: Some("connect()".to_string()),
-                    ..Default::default()
-                });
-            }
-        }
+        scan_binary_for_connect_addrs(data)
     }
-    results
+}
+
+/// Render a parsed sockaddr as an `ip` or `ip:port` ExtractedString.
+fn sockaddr_to_string(sockaddr: &SockaddrIn) -> ExtractedString {
+    let ip = format!(
+        "{}.{}.{}.{}",
+        sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]
+    );
+    let (value, kind) = if sockaddr.port > 0 {
+        (format!("{ip}:{}", sockaddr.port), Some(StringKind::IPPort))
+    } else {
+        (ip, Some(StringKind::IP))
+    };
+    ExtractedString {
+        value,
+        data_offset: sockaddr.offset,
+        section: Some(".text".to_string()),
+        method: StringMethod::InstructionPattern,
+        kind,
+        source: Some("connect()".to_string()),
+        ..Default::default()
+    }
 }
 
 fn scan_binary_for_connect_addrs(data: &[u8]) -> Vec<ExtractedString> {
     let mut results = Vec::new();
     let mut seen = HashSet::new();
     for sockaddr in find_sockaddr_in_binary(data) {
-        let ip = format!(
-            "{}.{}.{}.{}",
-            sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]
-        );
-        let val = if sockaddr.port > 0 {
-            format!("{}:{}", ip, sockaddr.port)
-        } else {
-            ip
-        };
-        if seen.insert(val.clone()) {
-            results.push(ExtractedString {
-                value: val,
-                data_offset: sockaddr.offset,
-                section: Some(".text".to_string()),
-                method: StringMethod::InstructionPattern,
-                kind: if sockaddr.port > 0 {
-                    Some(StringKind::IPPort)
-                } else {
-                    Some(StringKind::IP)
-                },
-                source: Some("connect()".to_string()),
-                ..Default::default()
-            });
+        let es = sockaddr_to_string(&sockaddr);
+        if seen.insert(es.value.clone()) {
+            results.push(es);
         }
     }
     results

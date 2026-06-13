@@ -217,36 +217,30 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
             (priority, std::cmp::Reverse(s.value.len()))
         });
 
-        let mut kept = Vec::new();
-        for candidate in all_results {
-            let cand_start = candidate.data_offset as usize;
-            let cand_end = cand_start + candidate.value.len();
-
-            // Check if this byte range overlaps with any kept string
-            let overlaps = kept.iter().any(|k: &ExtractedString| {
+        // A candidate's byte range overlaps a kept string when neither sits
+        // wholly before the other.
+        let overlaps_kept = |kept: &[ExtractedString], start: usize, end: usize| {
+            kept.iter().any(|k| {
                 let k_start = k.data_offset as usize;
                 let k_end = k_start + k.value.len();
-                !(cand_end <= k_start || cand_start >= k_end)
-            });
+                !(end <= k_start || start >= k_end)
+            })
+        };
 
-            if !overlaps {
+        let mut kept = Vec::new();
+        for candidate in all_results {
+            let start = candidate.data_offset as usize;
+            let end = start + candidate.value.len();
+            if !overlaps_kept(&kept, start, end) {
                 kept.push(candidate);
             }
         }
 
         // Merge with hint results and apply overlap removal to them too
         for hint in hint_results {
-            let hint_start = hint.data_offset as usize;
-            let hint_end = hint_start + hint.value.len();
-
-            // Check if this hint overlaps with any kept string
-            let overlaps = kept.iter().any(|k: &ExtractedString| {
-                let k_start = k.data_offset as usize;
-                let k_end = k_start + k.value.len();
-                !(hint_end <= k_start || hint_start >= k_end)
-            });
-
-            if !overlaps {
+            let start = hint.data_offset as usize;
+            let end = start + hint.value.len();
+            if !overlaps_kept(&kept, start, end) {
                 kept.push(hint);
             }
         }

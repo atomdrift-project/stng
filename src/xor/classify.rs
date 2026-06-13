@@ -180,8 +180,7 @@ fn value_is_key_echo(value_lower: &str, key_lower: &str) -> bool {
         return false;
     }
     key_bytes.windows(WIN).any(|w| {
-        w.iter().all(u8::is_ascii_alphanumeric)
-            && memchr::memmem::find(value_bytes, w).is_some()
+        w.iter().all(u8::is_ascii_alphanumeric) && memchr::memmem::find(value_bytes, w).is_some()
     })
 }
 
@@ -550,6 +549,14 @@ pub(crate) fn extract_multikey_xor_strings(
             continue;
         }
 
+        // Short, printable rendering of the key for the `source` provenance string.
+        let key_str = String::from_utf8_lossy(key_bytes);
+        let key_preview = if key_str.chars().count() > 8 {
+            key_str.chars().take(8).collect::<String>()
+        } else {
+            key_str.into_owned()
+        };
+
         // Blind Decode Fallback: For HIGH confidence keys, try all shifts of the key
         // to find short or split strings (which won't match Aho-Corasick patterns).
         for shift in 0..key_bytes.len() {
@@ -575,12 +582,6 @@ pub(crate) fn extract_multikey_xor_strings(
                         if let Some(kind) = classify_xor_string(&s)
                             && seen.insert((start as u64, s.clone()))
                         {
-                            let key_str = String::from_utf8_lossy(key_bytes);
-                            let key_preview = if key_str.chars().count() > 8 {
-                                key_str.chars().take(8).collect::<String>()
-                            } else {
-                                key_str.into_owned()
-                            };
                             results.push(ExtractedString {
                                 value: s,
                                 data_offset: start as u64,
@@ -633,12 +634,6 @@ pub(crate) fn extract_multikey_xor_strings(
             {
                 let offset = start as u64;
                 if seen.insert((offset, decoded.clone())) {
-                    let key_str = String::from_utf8_lossy(key_bytes);
-                    let key_preview = if key_str.chars().count() > 8 {
-                        key_str.chars().take(8).collect::<String>()
-                    } else {
-                        key_str.into_owned()
-                    };
                     results.push(ExtractedString {
                         value: decoded,
                         data_offset: offset,
@@ -2042,7 +2037,7 @@ mod tests {
         // shards across the output. Those shards must be recognized as key echoes.
         let key = "\"oauth2authorizationcode\": {";
         for garbage in [
-            "l 6w]d8authm",         // contains key shard "auth"
+            "l 6w]d8authm",          // contains key shard "auth"
             "8tt1tm2authfxczatilnl", // contains "auth", "atil" shards
             "p*%rtj8authorizc#!*<",  // contains "authoriz" shard
             "i<aht38authoriz",

@@ -387,7 +387,7 @@ fn extract_packed_rodata_literals(
     section: Option<&str>,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    let mut sink = PackedLiteralSink::new(data, section_data_offset, section, min_length);
+    let mut sink = PackedLiteralSink::new(section_data_offset, section, min_length);
 
     extract_url_literals(data, &mut sink);
     extract_find_command_fragments(data, &mut sink);
@@ -404,12 +404,7 @@ struct PackedLiteralSink<'a> {
 }
 
 impl<'a> PackedLiteralSink<'a> {
-    fn new(
-        _data: &'a [u8],
-        section_data_offset: u64,
-        section: Option<&'a str>,
-        min_length: usize,
-    ) -> Self {
+    fn new(section_data_offset: u64, section: Option<&'a str>, min_length: usize) -> Self {
         Self {
             section_data_offset,
             section,

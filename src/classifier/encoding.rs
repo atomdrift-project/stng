@@ -334,7 +334,7 @@ pub(super) fn is_unicode_escaped(s: &str) -> bool {
 }
 
 /// Decode Unicode escape sequences from a string
-pub(super) fn decode_unicode_escapes(s: &str) -> Vec<u8> {
+pub fn decode_unicode_escapes(s: &str) -> Vec<u8> {
     let mut result = Vec::new();
     let mut chars = s.chars();
 
@@ -480,7 +480,7 @@ pub(super) fn is_url_encoded(s: &str) -> bool {
 }
 
 /// Decode URL-encoded string (%XX format)
-pub(super) fn decode_url_encoding(s: &str) -> Vec<u8> {
+pub fn decode_url_encoding(s: &str) -> Vec<u8> {
     let mut result = Vec::new();
     let mut chars = s.chars();
 
@@ -645,33 +645,7 @@ pub(super) fn is_base58(s: &str) -> bool {
 
 /// Calculate string quality score (0-100). Higher scores = better quality text.
 pub(super) fn string_quality_score(s: &str) -> u32 {
-    if s.is_empty() {
-        return 0;
-    }
-
-    let mut alpha_count = 0usize;
-    let mut vowel_count = 0usize;
-    let mut printable_count = 0usize;
-
-    for c in s.chars() {
-        if c.is_ascii_alphabetic() {
-            alpha_count += 1;
-            if matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u') {
-                vowel_count += 1;
-            }
-        }
-        if c.is_ascii_graphic() || c == ' ' {
-            printable_count += 1;
-        }
-    }
-
-    let len = s.len();
-    let printable_ratio = (printable_count * 100) / len;
-    let vowel_ratio = (vowel_count * 100).checked_div(alpha_count).unwrap_or(0);
-
-    // Quality = weighted combination of printability and vowel ratio
-    // Good English text has ~40% vowels, ~90%+ printable
-    u32::try_from((printable_ratio * 7 + vowel_ratio * 3) / 10).unwrap_or(0)
+    text_quality_score(s.as_bytes()).0
 }
 
 /// Check if a string looks like Base85-encoded data (ASCII85 or Z85)
@@ -685,7 +659,7 @@ pub(super) fn is_base85(s: &str) -> bool {
     let has_delimiters = s.starts_with("<~") && s.ends_with("~>");
 
     // If it has proper delimiters and reasonable length, validate by decoding
-    if has_delimiters && s.len() >= 20 && s.len() < 10000 {
+    if has_delimiters && s.len() < 10000 {
         return validate_base85_by_decoding(s);
     }
 
