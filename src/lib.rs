@@ -833,17 +833,14 @@ fn suppress_version_info_ips(strings: &mut [ExtractedString], pe: &goblin::pe::P
 }
 /// Hint about the input shape so stng can skip pointless work.
 ///
-/// `Auto` (default) lets stng decide from the bytes.  Callers that already know
-/// the file type can pass `Binary` or `Text` to skip the text-probe and to
-/// suppress expensive analyses (XOR scan, stack strings) that produce nothing
-/// on text input.
+/// `Auto` (default) lets stng decide from the bytes. A caller that already knows
+/// the input is text can pass `Text` to suppress expensive binary-only analyses
+/// (XOR scan, stack strings) that produce nothing on text input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FormatHint {
     /// Let stng detect.
     #[default]
     Auto,
-    /// Binary (ELF / PE / Mach-O / unknown binary) — run every analysis.
-    Binary,
     /// Text / script — skip XOR scan and binary-only analyses.
     Text,
 }
@@ -1580,11 +1577,14 @@ fn extract_from_object(
     let mut strings = Vec::new();
     // Track if this is a Go binary - skip XOR scanning for Go (rarely obfuscated)
     let mut is_go_binary = false;
+    // Section metadata: computed once by whichever format branch runs below and
+    // reused for the XOR exclusion ranges at the end (was recomputed there).
+    let mut section_info = std::collections::HashMap::new();
 
     match object {
         Object::Mach(goblin::mach::Mach::Binary(macho)) => {
             let segments = collect_macho_segments(macho);
-            let section_info = collect_macho_section_info(macho);
+            section_info = collect_macho_section_info(macho);
             if macho_has_go_sections(macho) {
                 is_go_binary = true;
                 let extractor = GoStringExtractor::new(min_length);
@@ -1765,7 +1765,7 @@ fn extract_from_object(
         }
         Object::Elf(elf) => {
             let segments = collect_elf_segments(elf);
-            let section_info = collect_elf_section_info(elf);
+            section_info = collect_elf_section_info(elf);
 
             // Detect overlay first to avoid scanning it during normal extraction.
             // Reuse the already-parsed ELF — detect_elf_overlay(data) would re-parse.
@@ -1953,7 +1953,7 @@ fn extract_from_object(
                 .iter()
                 .map(|sec| binary::pe_section_name(&sec.name))
                 .collect();
-            let section_info = collect_pe_section_info(pe);
+            section_info = collect_pe_section_info(pe);
 
             // Check for Go. Stripped Go PE builds merge `go.buildinfo` /
             // `gopclntab` into `.rdata`, so also accept `.symtab` — Go is the
@@ -2158,17 +2158,9 @@ fn extract_from_object(
         }
     }
 
-    // XOR string detection
+    // XOR string detection. `section_info` was populated by the format branch
+    // above, so it doesn't need recomputing here.
     let is_pe = matches!(object, Object::PE(_));
-    let mut section_info = std::collections::HashMap::new();
-    match object {
-        Object::Mach(goblin::mach::Mach::Binary(m)) => {
-            section_info = binary::collect_macho_section_info(m)
-        }
-        Object::Elf(e) => section_info = binary::collect_elf_section_info(e),
-        Object::PE(p) => section_info = binary::collect_pe_section_info(p),
-        _ => {}
-    };
     let excluded_ranges = binary::code_ranges_from_sections(&section_info);
 
     if !is_go_binary || opts.xor_scan_multi || opts.xor_key.is_some() {

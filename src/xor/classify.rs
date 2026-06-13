@@ -726,85 +726,82 @@ pub(crate) fn scan_dotted_patterns(
     results: &mut Vec<ExtractedString>,
     seen: &mut HashSet<(u64, String)>,
 ) {
-    for key in 1u8..=255u8 {
-        if SKIP_XOR_KEYS.contains(&key) {
+    // Every byte is a '.' under exactly one key: `byte ^ '.'`. Derive that key
+    // per position in a single pass instead of rescanning the whole buffer once
+    // per candidate key (previously up to 255 memchr passes over `data`).
+    for pos in 1..data.len().saturating_sub(1) {
+        let raw = data[pos];
+        let key = raw ^ b'.';
+        if key == 0 || SKIP_XOR_KEYS.contains(&key) {
             continue;
         }
-
-        let xored_dot = b'.' ^ key;
 
         // When the raw byte for '.' is a common structured-data separator,
         // numeric CSV/XAML patterns (e.g. Margin="30,10,30,0") decode as
         // fake IP addresses. Skip these keys for dotted-pattern scanning.
-        if matches!(xored_dot, b',' | b';' | b'|' | b'\t') {
+        if matches!(raw, b',' | b';' | b'|' | b'\t') {
             continue;
         }
 
-        for pos in memchr::memchr_iter(xored_dot, data) {
-            if pos == 0 || pos + 1 >= data.len() {
-                continue;
-            }
+        let prev = data[pos - 1] ^ key;
+        let next = data[pos + 1] ^ key;
 
-            let prev = data[pos - 1] ^ key;
-            let next = data[pos + 1] ^ key;
-
-            // Check for IP address (digits around dot)
-            if prev.is_ascii_digit() && next.is_ascii_digit() {
-                if let Some((ip, start, _end)) = extract_ip_at_dot(data, pos, key)
-                    && ip.len() >= min_length.saturating_sub(2)
-                {
-                    let offset = start as u64;
-                    if seen.insert((offset, ip.clone())) {
-                        results.push(ExtractedString {
-                            value: ip,
-                            data_offset: offset,
-                            section: None,
-                            method: StringMethod::XorDecode,
-                            kind: Some(StringKind::IP),
-                            source: Some(format!("xor:0x{key:02X}")),
-                            fragments: None,
-                            ..Default::default()
-                        });
-                    }
-                }
-
-                if let Some((ip_port, start, _end)) = extract_ip_port_at_pos(data, pos, key)
-                    && ip_port.len() >= min_length
-                {
-                    let offset = start as u64;
-                    if seen.insert((offset, ip_port.clone())) {
-                        results.push(ExtractedString {
-                            value: ip_port,
-                            data_offset: offset,
-                            section: None,
-                            method: StringMethod::XorDecode,
-                            kind: Some(StringKind::IPPort),
-                            source: Some(format!("xor:0x{key:02X}")),
-                            fragments: None,
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-            // Check for hostname (alphanumeric around dot, like evil.com)
-            else if prev.is_ascii_alphanumeric()
-                && next.is_ascii_alphanumeric()
-                && let Some((hostname, start, _end)) =
-                    extract_hostname_at_dot(data, pos, key, min_length)
+        // Check for IP address (digits around dot)
+        if prev.is_ascii_digit() && next.is_ascii_digit() {
+            if let Some((ip, start, _end)) = extract_ip_at_dot(data, pos, key)
+                && ip.len() >= min_length.saturating_sub(2)
             {
                 let offset = start as u64;
-                if seen.insert((offset, hostname.clone())) {
+                if seen.insert((offset, ip.clone())) {
                     results.push(ExtractedString {
-                        value: hostname,
+                        value: ip,
                         data_offset: offset,
                         section: None,
                         method: StringMethod::XorDecode,
-                        kind: Some(StringKind::Hostname),
+                        kind: Some(StringKind::IP),
                         source: Some(format!("xor:0x{key:02X}")),
                         fragments: None,
                         ..Default::default()
                     });
                 }
+            }
+
+            if let Some((ip_port, start, _end)) = extract_ip_port_at_pos(data, pos, key)
+                && ip_port.len() >= min_length
+            {
+                let offset = start as u64;
+                if seen.insert((offset, ip_port.clone())) {
+                    results.push(ExtractedString {
+                        value: ip_port,
+                        data_offset: offset,
+                        section: None,
+                        method: StringMethod::XorDecode,
+                        kind: Some(StringKind::IPPort),
+                        source: Some(format!("xor:0x{key:02X}")),
+                        fragments: None,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        // Check for hostname (alphanumeric around dot, like evil.com)
+        else if prev.is_ascii_alphanumeric()
+            && next.is_ascii_alphanumeric()
+            && let Some((hostname, start, _end)) =
+                extract_hostname_at_dot(data, pos, key, min_length)
+        {
+            let offset = start as u64;
+            if seen.insert((offset, hostname.clone())) {
+                results.push(ExtractedString {
+                    value: hostname,
+                    data_offset: offset,
+                    section: None,
+                    method: StringMethod::XorDecode,
+                    kind: Some(StringKind::Hostname),
+                    source: Some(format!("xor:0x{key:02X}")),
+                    fragments: None,
+                    ..Default::default()
+                });
             }
         }
     }
