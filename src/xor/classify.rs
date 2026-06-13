@@ -449,38 +449,30 @@ pub(crate) fn extract_xor_strings(
         let mat: aho_corasick::Match = mat;
         let info = &pattern_info[mat.pattern().as_usize()];
         let pos = mat.start();
-        if info.is_wide {
-            if let Some((decoded, start, _end)) =
-                expand_xor_wide_string(data, pos, info.key, min_length)
-                && let Some(kind) = classify_xor_string(&decoded)
-            {
-                let offset = start as u64;
-                if seen.insert((offset, decoded.clone())) {
-                    results.push(ExtractedString {
-                        value: decoded,
-                        data_offset: offset,
-                        section: None,
-                        method: StringMethod::XorDecode,
-                        kind,
-                        source: Some(format!("xor:0x{:02X}:16LE", info.key)),
-                        fragments: None,
-                        ..Default::default()
-                    });
-                }
-            }
-        } else if let Some((decoded, start, _end)) =
+        // Wide (UTF-16LE) and narrow matches differ only in the expander and the
+        // provenance suffix; the recording is identical.
+        let expanded = if info.is_wide {
+            expand_xor_wide_string(data, pos, info.key, min_length)
+        } else {
             expand_xor_string(data, pos, info.key, min_length)
+        };
+        if let Some((decoded, start, _end)) = expanded
             && let Some(kind) = classify_xor_string(&decoded)
         {
             let offset = start as u64;
             if seen.insert((offset, decoded.clone())) {
+                let source = if info.is_wide {
+                    format!("xor:0x{:02X}:16LE", info.key)
+                } else {
+                    format!("xor:0x{:02X}", info.key)
+                };
                 results.push(ExtractedString {
                     value: decoded,
                     data_offset: offset,
                     section: None,
                     method: StringMethod::XorDecode,
                     kind,
-                    source: Some(format!("xor:0x{:02X}", info.key)),
+                    source: Some(source),
                     fragments: None,
                     ..Default::default()
                 });
