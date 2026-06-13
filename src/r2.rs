@@ -20,15 +20,13 @@ fn get_tool() -> Option<&'static str> {
         if Command::new("rizin")
             .arg("-v")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
         {
             Some("rizin")
         } else if Command::new("r2")
             .arg("-v")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
         {
             Some("r2")
         } else {
@@ -45,8 +43,9 @@ pub fn extract_string_boundaries(path: &str) -> Option<Vec<StringBoundary>> {
         return None;
     }
     let data_strings = run_tool_command(tool, path, "izzj")?;
-    if let Ok(json) = serde_json::from_str::<Vec<R2String>>(&data_strings) {
-        Some(
+    serde_json::from_str::<Vec<R2String>>(&data_strings)
+        .ok()
+        .map(|json| {
             json.iter()
                 .map(|s| StringBoundary {
                     offset: s.paddr,
@@ -56,11 +55,8 @@ pub fn extract_string_boundaries(path: &str) -> Option<Vec<StringBoundary>> {
                         s.string.len()
                     },
                 })
-                .collect(),
-        )
-    } else {
-        None
-    }
+                .collect()
+        })
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -665,7 +661,7 @@ fn extract_stack_off(line: &str) -> Option<u8> {
     None
 }
 fn is_z(ip: &[u8; 4]) -> bool {
-    ip.iter().all(|&b| b == 0) || ip[0] == 0 || ip[0] >= 224
+    ip[0] == 0 || ip[0] >= 224
 }
 fn find_sockaddr_in_binary(data: &[u8]) -> Vec<SockaddrIn> {
     let mut res = Vec::new();

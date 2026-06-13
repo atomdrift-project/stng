@@ -281,16 +281,9 @@ impl RustStringExtractor {
             strings.extend(inline_strings);
         }
 
-        // Deduplicate
+        // Deduplicate by value: insert() is false on a repeat, dropping it.
         let mut seen: HashSet<String> = HashSet::new();
-        strings.retain(|s| {
-            if seen.contains(&s.value) {
-                false
-            } else {
-                seen.insert(s.value.clone());
-                true
-            }
-        });
+        strings.retain(|s| seen.insert(s.value.clone()));
 
         strings
     }

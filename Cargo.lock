@@ -893,7 +893,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "terminal_size",
- "thiserror",
  "tikv-jemallocator",
  "tracing",
  "tracing-subscriber",

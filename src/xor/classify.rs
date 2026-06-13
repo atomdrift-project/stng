@@ -153,17 +153,6 @@ pub(crate) fn clean_url_trailing_garbage(url: &str) -> String {
     url.to_string()
 }
 
-/// Expand a multi-byte XOR'd string from a match position.
-/// The key cycles from key[0] at the start of the string, not from file offset 0.
-/// Auto-detect XOR key by trying candidate strings from the binary.
-///
-/// For small files (<512KB), tries the last 5 strings (excluding those with _ or starting with "cstr.")
-/// as potential XOR keys and returns the one that produces the most valid decoded strings.
-///
-/// # Arguments
-/// * `data` - Binary data to scan
-/// * `candidate_strings` - Pre-extracted strings to use as XOR key candidates
-/// * `min_length` - Minimum string length for decoded strings
 /// True if `value_lower` contains any 4-character alphanumeric window of
 /// `key_lower` — meaning the "decoded" string is just a garbled copy of the key
 /// (a self-XOR artifact), not genuine recovered plaintext. Both arguments must
@@ -257,7 +246,7 @@ pub(crate) fn auto_detect_xor_key(
 
     let mut promising_candidates = Vec::new();
     for (offset, candidate) in &candidates {
-        let key = candidate.as_bytes().to_vec();
+        let key = candidate.as_bytes();
         let decoded: Vec<u8> = quick_data
             .iter()
             .enumerate()
@@ -1139,11 +1128,9 @@ pub(crate) fn expand_xor_wide_string(
 }
 
 /// Try to extract a full IP address starting from a dot position.
-pub(crate) fn extract_ip_at_dot(
-    data: &[u8],
-    dot_pos: usize,
-    key: u8,
-) -> Option<(String, usize, usize)> {
+/// Walk backward from `dot_pos` over XOR'd ASCII digits and up to three dots to
+/// find where the dotted-decimal IP begins.
+fn ip_scan_start(data: &[u8], dot_pos: usize, key: u8) -> usize {
     let mut start = dot_pos;
     let mut dots_before = 0;
     while start > 0 {
@@ -1158,6 +1145,15 @@ pub(crate) fn extract_ip_at_dot(
         }
         start -= 1;
     }
+    start
+}
+
+pub(crate) fn extract_ip_at_dot(
+    data: &[u8],
+    dot_pos: usize,
+    key: u8,
+) -> Option<(String, usize, usize)> {
+    let start = ip_scan_start(data, dot_pos, key);
 
     let mut end = dot_pos + 1;
     let mut dots_after = 0;
@@ -1237,20 +1233,7 @@ pub(crate) fn extract_ip_port_at_pos(
     key: u8,
 ) -> Option<(String, usize, usize)> {
     // First find the IP part
-    let mut start = dot_pos;
-    let mut dots_before = 0;
-    while start > 0 {
-        let decoded = data[start - 1] ^ key;
-        if decoded == b'.' {
-            dots_before += 1;
-            if dots_before > 3 {
-                break;
-            }
-        } else if !decoded.is_ascii_digit() {
-            break;
-        }
-        start -= 1;
-    }
+    let start = ip_scan_start(data, dot_pos, key);
 
     // Find end of IP and check for colon
     let mut end = dot_pos + 1;
@@ -1552,7 +1535,8 @@ pub(crate) fn has_multiple_locales(s: &str) -> bool {
     false
 }
 
-/// Classify an XOR-decoded string. Returns None if it doesn't look interesting.
+/// Classify an XOR-decoded string. The nested `Option` is three-state:
+/// `None` = reject; `Some(None)` = keep, no specific kind; `Some(Some(k))` = keep as `k`.
 pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     // FIRST: Check for high-value IOCs that should bypass strict filtering.
     // These checks must come BEFORE is_partial_xor_decode to avoid false rejections

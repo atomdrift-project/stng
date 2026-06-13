@@ -36,7 +36,6 @@
 //! ```
 
 // Core modules
-mod error;
 mod extraction;
 mod types;
 mod validation;
@@ -75,7 +74,6 @@ mod fuzzy_base64;
 pub use binary::{is_go_binary, is_rust_binary};
 pub use classifier::classify_string;
 pub use detect::{detect_language, is_text_file};
-pub use error::{Result, StngError};
 pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
 pub use types::{
     Arch, BinaryInfo, ExtractedString, FunctionMetadata, OverlayInfo, Severity, StringContext,
@@ -200,11 +198,8 @@ fn strip_go_varint_prefixes(strings: &mut [ExtractedString]) {
         if !rest.iter().any(|&b| b == b'/' || b == b'.') {
             continue;
         }
-        // Safe to strip.
-        s.value = match std::str::from_utf8(rest) {
-            Ok(v) => v.to_string(),
-            Err(_) => continue,
-        };
+        // Safe to strip in place: byte 0 is ASCII, so byte 1 is a char boundary.
+        s.value.drain(..1);
         s.data_offset += 1;
     }
 }

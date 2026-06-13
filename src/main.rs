@@ -267,6 +267,29 @@ fn print_json(strings: &[stng::ExtractedString]) -> Result<()> {
     Ok(())
 }
 
+/// Render a section-info map as `name -> "(size, type)"` display strings.
+fn section_meta_map(
+    info: std::collections::HashMap<String, stng::binary::SectionInfo>,
+) -> std::collections::HashMap<String, String> {
+    info.into_iter()
+        .map(|(name, si)| {
+            let type_str = match (si.is_executable, si.is_writable) {
+                (true, true) => "TEXT+DATA",
+                (true, false) => "TEXT",
+                (false, _) => "DATA",
+            };
+            let size_str = if si.size < 1024 {
+                format!("{}b", si.size)
+            } else if si.size < 1024 * 1024 {
+                format!("{:.1}kb", si.size as f64 / 1024.0)
+            } else {
+                format!("{:.1}mb", si.size as f64 / (1024.0 * 1024.0))
+            };
+            (name, format!("({size_str}, {type_str})"))
+        })
+        .collect()
+}
+
 fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     // Handle cache flushing if requested
     if cli.flush_cache {
@@ -567,69 +590,14 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         // Build section metadata map directly from binary format
         let section_metadata: std::collections::HashMap<String, String> = {
             use goblin::Object;
+            use stng::binary::{
+                collect_elf_section_info, collect_macho_section_info, collect_pe_section_info,
+            };
             match Object::parse(&data) {
-                Ok(Object::PE(pe)) => {
-                    use stng::binary::collect_pe_section_info;
-                    let info = collect_pe_section_info(&pe);
-                    info.into_iter()
-                        .map(|(name, si)| {
-                            let type_str = match (si.is_executable, si.is_writable) {
-                                (true, true) => "TEXT+DATA",
-                                (true, false) => "TEXT",
-                                (false, _) => "DATA",
-                            };
-                            let size_str = if si.size < 1024 {
-                                format!("{}b", si.size)
-                            } else if si.size < 1024 * 1024 {
-                                format!("{:.1}kb", si.size as f64 / 1024.0)
-                            } else {
-                                format!("{:.1}mb", si.size as f64 / (1024.0 * 1024.0))
-                            };
-                            (name, format!("({}, {})", size_str, type_str))
-                        })
-                        .collect()
-                }
-                Ok(Object::Elf(elf)) => {
-                    use stng::binary::collect_elf_section_info;
-                    let info = collect_elf_section_info(&elf);
-                    info.into_iter()
-                        .map(|(name, si)| {
-                            let type_str = match (si.is_executable, si.is_writable) {
-                                (true, true) => "TEXT+DATA",
-                                (true, false) => "TEXT",
-                                (false, _) => "DATA",
-                            };
-                            let size_str = if si.size < 1024 {
-                                format!("{}b", si.size)
-                            } else if si.size < 1024 * 1024 {
-                                format!("{:.1}kb", si.size as f64 / 1024.0)
-                            } else {
-                                format!("{:.1}mb", si.size as f64 / (1024.0 * 1024.0))
-                            };
-                            (name, format!("({}, {})", size_str, type_str))
-                        })
-                        .collect()
-                }
+                Ok(Object::PE(pe)) => section_meta_map(collect_pe_section_info(&pe)),
+                Ok(Object::Elf(elf)) => section_meta_map(collect_elf_section_info(&elf)),
                 Ok(Object::Mach(goblin::mach::Mach::Binary(macho))) => {
-                    use stng::binary::collect_macho_section_info;
-                    let info = collect_macho_section_info(&macho);
-                    info.into_iter()
-                        .map(|(name, si)| {
-                            let type_str = match (si.is_executable, si.is_writable) {
-                                (true, true) => "TEXT+DATA",
-                                (true, false) => "TEXT",
-                                (false, _) => "DATA",
-                            };
-                            let size_str = if si.size < 1024 {
-                                format!("{}b", si.size)
-                            } else if si.size < 1024 * 1024 {
-                                format!("{:.1}kb", si.size as f64 / 1024.0)
-                            } else {
-                                format!("{:.1}mb", si.size as f64 / (1024.0 * 1024.0))
-                            };
-                            (name, format!("({}, {})", size_str, type_str))
-                        })
-                        .collect()
+                    section_meta_map(collect_macho_section_info(&macho))
                 }
                 _ => std::collections::HashMap::new(),
             }

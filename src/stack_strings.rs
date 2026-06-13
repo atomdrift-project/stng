@@ -551,7 +551,7 @@ impl<'a> StackStringExtractor<'a> {
                     disp_hi: i64,
                     instr_off: u64,
                 }
-                let mut pair_seen: HashSet<(i64, i64, u8)> = HashSet::new();
+                let mut pair_seen: HashSet<(i64, i64)> = HashSet::new();
                 let mut pairs: Vec<Pair> = Vec::new();
 
                 for (i, &idx_i) in indices.iter().enumerate() {
@@ -583,7 +583,7 @@ impl<'a> StackStringExtractor<'a> {
                         }
 
                         if let Some((decoded, _)) = best
-                            && pair_seen.insert((disp_lo, disp_hi, 0))
+                            && pair_seen.insert((disp_lo, disp_hi))
                         {
                             pairs.push(Pair {
                                 decoded,

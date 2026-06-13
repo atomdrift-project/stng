@@ -103,11 +103,11 @@ impl GoStringExtractor {
 
         // Filter by minimum length — use lower floor for structure-based strings
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
-        for s in structured {
-            if s.value.len() >= struct_min {
-                strings.push(s);
-            }
-        }
+        strings.extend(
+            structured
+                .into_iter()
+                .filter(|s| s.value.len() >= struct_min),
+        );
 
         // Extract inline strings from instructions (ARM64 or x86_64)
         // Use the same lower floor — instruction patterns (LEA+MOV with rodata
@@ -122,11 +122,11 @@ impl GoStringExtractor {
                     rodata_addr,
                     struct_min,
                 );
-                for s in inline_strings {
-                    if s.value.len() >= struct_min {
-                        strings.push(s);
-                    }
-                }
+                strings.extend(
+                    inline_strings
+                        .into_iter()
+                        .filter(|s| s.value.len() >= struct_min),
+                );
             } else if cpu_type == CPU_TYPE_X86_64 {
                 let inline_strings = extract_inline_strings_amd64(
                     text_data,
@@ -135,11 +135,11 @@ impl GoStringExtractor {
                     rodata_addr,
                     struct_min,
                 );
-                for s in inline_strings {
-                    if s.value.len() >= struct_min {
-                        strings.push(s);
-                    }
-                }
+                strings.extend(
+                    inline_strings
+                        .into_iter()
+                        .filter(|s| s.value.len() >= struct_min),
+                );
             }
         }
 
@@ -232,11 +232,11 @@ impl GoStringExtractor {
 
         // Filter by minimum length — use lower floor for structure-based strings
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
-        for s in structured {
-            if s.value.len() >= struct_min {
-                strings.push(s);
-            }
-        }
+        strings.extend(
+            structured
+                .into_iter()
+                .filter(|s| s.value.len() >= struct_min),
+        );
 
         // Extract inline strings from .text section
         // Use the same lower floor for instruction patterns (high confidence)
@@ -259,11 +259,11 @@ impl GoStringExtractor {
                 _ => Vec::new(),
             };
 
-            for s in inline_strings {
-                if s.value.len() >= struct_min {
-                    strings.push(s);
-                }
-            }
+            strings.extend(
+                inline_strings
+                    .into_iter()
+                    .filter(|s| s.value.len() >= struct_min),
+            );
         }
 
         strings
@@ -335,11 +335,11 @@ impl GoStringExtractor {
 
         // Filter by minimum length — use lower floor for structure-based strings
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
-        for s in structured {
-            if s.value.len() >= struct_min {
-                strings.push(s);
-            }
-        }
+        strings.extend(
+            structured
+                .into_iter()
+                .filter(|s| s.value.len() >= struct_min),
+        );
 
         strings
     }

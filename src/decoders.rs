@@ -27,6 +27,25 @@ pub(crate) const MIN_HEX_LENGTH: usize = 16;
 /// Maximum size for decoded output (to prevent memory exhaustion)
 pub(crate) const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
+/// Validate freshly decoded bytes as printable text, enforcing the size cap.
+///
+/// Pure-ASCII payloads (tabs/newlines allowed) skip UTF-8 re-validation since ASCII
+/// is always valid UTF-8; anything else must parse as UTF-8. Oversized or non-text
+/// payloads yield `None` so callers can `?` straight out.
+fn decoded_to_text(decoded: Vec<u8>) -> Option<String> {
+    if decoded.len() > MAX_DECODED_SIZE {
+        return None;
+    }
+    if decoded
+        .iter()
+        .all(|&b| b.is_ascii() && (!b.is_ascii_control() || b == b'\n' || b == b'\r' || b == b'\t'))
+    {
+        String::from_utf8(decoded).ok()
+    } else {
+        std::str::from_utf8(&decoded).ok().map(str::to_string)
+    }
+}
+
 /// Deobfuscate strings that use concatenation patterns.
 ///
 /// Many malware samples split encoded strings using concatenation to evade detection:
@@ -178,28 +197,7 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
     let decoded =
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s.value.trim()).ok()?;
 
-    // Check size limit
-    if decoded.len() > MAX_DECODED_SIZE {
-        return None;
-    }
-
-    // Validate decoded content (must be printable ASCII or valid UTF-8)
-    let decoded_str = if decoded
-        .iter()
-        .all(|&b| b.is_ascii() && (!b.is_ascii_control() || b == b'\n' || b == b'\r' || b == b'\t'))
-    {
-        // All printable ASCII — ASCII is always valid UTF-8, skip re-validation
-        match String::from_utf8(decoded) {
-            Ok(s) => s,
-            Err(_) => return None,
-        }
-    } else if let Ok(utf8_str) = std::str::from_utf8(&decoded) {
-        // Valid UTF-8
-        utf8_str.to_string()
-    } else {
-        // Not valid text - skip
-        return None;
-    };
+    let decoded_str = decoded_to_text(decoded)?;
 
     // Reject if decoded string is too short or just whitespace
     let trimmed = decoded_str.trim();
@@ -253,28 +251,7 @@ fn decode_hex_string(s: &ExtractedString) -> Option<ExtractedString> {
     // Decode hex
     let decoded = hex::decode(s.value.trim()).ok()?;
 
-    // Check size limit
-    if decoded.len() > MAX_DECODED_SIZE {
-        return None;
-    }
-
-    // Validate decoded content (must be printable ASCII or valid UTF-8)
-    let decoded_str = if decoded
-        .iter()
-        .all(|&b| b.is_ascii() && (!b.is_ascii_control() || b == b'\n' || b == b'\r' || b == b'\t'))
-    {
-        // All printable ASCII — ASCII is always valid UTF-8, skip re-validation
-        match String::from_utf8(decoded) {
-            Ok(s) => s,
-            Err(_) => return None,
-        }
-    } else if let Ok(utf8_str) = std::str::from_utf8(&decoded) {
-        // Valid UTF-8
-        utf8_str.to_string()
-    } else {
-        // Not valid text - skip
-        return None;
-    };
+    let decoded_str = decoded_to_text(decoded)?;
 
     // Reject if too short
     let trimmed = decoded_str.trim();
@@ -570,28 +547,7 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
         .or_else(|_| BASE32_NOPAD.decode(s.value.trim().as_bytes()))
         .ok()?;
 
-    // Check size limit
-    if decoded.len() > MAX_DECODED_SIZE {
-        return None;
-    }
-
-    // Validate decoded content (must be printable ASCII or valid UTF-8)
-    let decoded_str = if decoded
-        .iter()
-        .all(|&b| b.is_ascii() && (!b.is_ascii_control() || b == b'\n' || b == b'\r' || b == b'\t'))
-    {
-        // All printable ASCII — ASCII is always valid UTF-8, skip re-validation
-        match String::from_utf8(decoded) {
-            Ok(s) => s,
-            Err(_) => return None,
-        }
-    } else if let Ok(utf8_str) = std::str::from_utf8(&decoded) {
-        // Valid UTF-8
-        utf8_str.to_string()
-    } else {
-        // Not valid text - skip
-        return None;
-    };
+    let decoded_str = decoded_to_text(decoded)?;
 
     // Reject if decoded string is too short or just whitespace
     let trimmed = decoded_str.trim();
@@ -634,28 +590,7 @@ fn decode_base85_string(s: &ExtractedString) -> Option<ExtractedString> {
     let input = s.value.trim();
     let decoded = decode_ascii85(input)?;
 
-    // Check size limit
-    if decoded.len() > MAX_DECODED_SIZE {
-        return None;
-    }
-
-    // Validate decoded content (must be printable ASCII or valid UTF-8)
-    let decoded_str = if decoded
-        .iter()
-        .all(|&b| b.is_ascii() && (!b.is_ascii_control() || b == b'\n' || b == b'\r' || b == b'\t'))
-    {
-        // All printable ASCII — ASCII is always valid UTF-8, skip re-validation
-        match String::from_utf8(decoded) {
-            Ok(s) => s,
-            Err(_) => return None,
-        }
-    } else if let Ok(utf8_str) = std::str::from_utf8(&decoded) {
-        // Valid UTF-8
-        utf8_str.to_string()
-    } else {
-        // Not valid text - skip
-        return None;
-    };
+    let decoded_str = decoded_to_text(decoded)?;
 
     // Reject if decoded string is too short or just whitespace
     let trimmed = decoded_str.trim();

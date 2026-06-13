@@ -665,7 +665,17 @@ impl StringKind {
 
             Self::FuncName | Self::Export => Severity::Low,
 
-            _ => Severity::Info,
+            // Explicit (not `_`) so a newly added StringKind must choose a severity.
+            Self::MapKey
+            | Self::Arg
+            | Self::Ident
+            | Self::Garbage
+            | Self::CodeSignatureHash
+            | Self::AppleScript
+            | Self::PythonCode
+            | Self::JavaScriptCode
+            | Self::PhpCode
+            | Self::PowerShellCode => Severity::Info,
         }
     }
 

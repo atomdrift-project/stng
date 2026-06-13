@@ -50,7 +50,6 @@ data-encoding = "2.11"
 
 # Error handling
 anyhow = "1.0"
-thiserror = "2.0"
 
 # Hashing
 sha2 = { version = "0.10", features = ["asm"] }

@@ -417,7 +417,6 @@ pub(crate) fn extract_inline_strings_amd64(
                 rodata_addr,
                 rodata_end,
                 min_length,
-                None,
                 &mut strings,
                 &mut seen,
             );
@@ -521,8 +520,7 @@ fn extract_backward_strings(
                     Some((0x48, 0xC7, 0xC6)),
                 ) {
                     found_first_arg = true;
-                    if !seen.contains(&found) {
-                        seen.insert(found.clone());
+                    if seen.insert(found.clone()) {
                         let final_kind = classify_string(&found);
                         strings.push(ExtractedString {
                             value: found,
@@ -552,8 +550,7 @@ fn extract_backward_strings(
                     None,
                 ) {
                     found_key = true;
-                    if !seen.contains(&found) {
-                        seen.insert(found.clone());
+                    if seen.insert(found.clone()) {
                         let final_kind = if looks_like_key(&found) {
                             Some(StringKind::MapKey)
                         } else {
@@ -587,8 +584,7 @@ fn extract_backward_strings(
                     Some((0x48, 0xC7, 0xC3)),
                 ) {
                     found_go_arg1 = true;
-                    if !seen.contains(&found) {
-                        seen.insert(found.clone());
+                    if seen.insert(found.clone()) {
                         let final_kind = classify_string(&found);
                         strings.push(ExtractedString {
                             value: found,
@@ -618,8 +614,7 @@ fn extract_backward_strings(
                     Some((0x48, 0xC7, 0xC7)),
                 ) {
                     found_go_arg2 = true;
-                    if !seen.contains(&found) {
-                        seen.insert(found.clone());
+                    if seen.insert(found.clone()) {
                         let final_kind = classify_string(&found);
                         strings.push(ExtractedString {
                             value: found,
@@ -812,7 +807,6 @@ fn extract_amd64_value_string(
     rodata_addr: u64,
     rodata_end: u64,
     min_length: usize,
-    _kind: Option<StringKind>,
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
@@ -832,7 +826,7 @@ fn extract_amd64_value_string(
             && text_data[call_pos + offset + 2] == 0x40
             && text_data[call_pos + offset + 3] == 0x08
         {
-            // SAFETY: Bounds checked at line 668 (call_pos + offset + 8 <= text_data.len())
+            // SAFETY: the `call_pos + offset + 8 > text_data.len()` guard above bounds this slice.
             if let Ok(bytes) = text_data[call_pos + offset + 4..call_pos + offset + 8].try_into() {
                 str_len = u64::from(u32::from_le_bytes(bytes));
                 found_len = true;
@@ -855,7 +849,7 @@ fn extract_amd64_value_string(
             && text_data[call_pos + offset + 1] == 0x8D
             && text_data[call_pos + offset + 2] == 0x0D
         {
-            // SAFETY: Bounds checked at line 692 (call_pos + offset + 7 <= text_data.len())
+            // SAFETY: the `call_pos + offset + 7 > text_data.len()` guard above bounds this slice.
             let rip_offset = if let Ok(bytes) =
                 text_data[call_pos + offset + 3..call_pos + offset + 7].try_into()
             {
@@ -882,9 +876,8 @@ fn extract_amd64_value_string(
             if let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end])
                 && is_valid_utf8_string(s)
                 && s.len() >= min_length
-                && !seen.contains(s)
+                && seen.insert(s.to_string())
             {
-                seen.insert(s.to_string());
                 let final_kind = classify_string(s);
                 strings.push(ExtractedString {
                     value: s.to_string(),
@@ -1161,7 +1154,6 @@ mod tests {
             0x2000,
             0x2004,
             4,
-            None,
             &mut strings,
             &mut seen,
         );

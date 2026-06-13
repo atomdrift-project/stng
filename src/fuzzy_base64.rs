@@ -31,12 +31,6 @@ const JS_CONCAT_PATTERNS: &[&str] = &["' + '", "\" + \"", "' +  '", "\" +  \"", 
 /// Common character substitution patterns (placeholder -> real)
 const COMMON_SUBSTITUTIONS: &[(char, char)] = &[('A', '+'), ('9', '/'), ('_', '/'), ('-', '+')];
 
-/// Result of fuzzy base64 extraction
-#[derive(Debug)]
-pub(crate) struct FuzzyBase64Result {
-    pub(crate) decoded: String,
-}
-
 /// Extract and decode obfuscated base64 strings from extracted strings.
 ///
 /// This function attempts multiple strategies:
@@ -85,7 +79,7 @@ pub(crate) fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<Extracted
 /// Handles patterns like:
 /// - `"abc' + 'A' + 'def"` where 'A' should be '+'
 /// - `"xyz' + '9' + 'qrs"` where '9' should be '/'
-fn try_deobfuscate_js_base64(input: &str) -> Option<FuzzyBase64Result> {
+fn try_deobfuscate_js_base64(input: &str) -> Option<String> {
     // First, try to detect what the placeholder characters are
     let substitutions = detect_substitutions(input);
 
@@ -184,7 +178,7 @@ fn detect_substitutions(input: &str) -> Vec<(char, char)> {
 /// Extract base64 from variable assignment patterns.
 ///
 /// Handles: `var x = "base64data..."`
-fn extract_from_assignment(input: &str) -> Option<FuzzyBase64Result> {
+fn extract_from_assignment(input: &str) -> Option<String> {
     for cap in ASSIGNMENT_RE.captures_iter(input) {
         if let Some(value) = cap.get(1) {
             // Try to deobfuscate this substring
@@ -200,7 +194,7 @@ fn extract_from_assignment(input: &str) -> Option<FuzzyBase64Result> {
 /// Fuzzy extraction: find longest runs of mostly-base64 characters.
 ///
 /// This is useful when the base64 is corrupted or has interspersed garbage.
-fn try_fuzzy_extract(input: &str) -> Option<FuzzyBase64Result> {
+fn try_fuzzy_extract(input: &str) -> Option<String> {
     let mut best_segment = String::new();
     let mut current_segment = String::new();
 
@@ -261,16 +255,14 @@ fn is_base64_like(s: &str, min_purity: f32) -> bool {
 }
 
 /// Decode base64 with error tolerance
-fn decode_base64_fuzzy(input: &str) -> Option<FuzzyBase64Result> {
+fn decode_base64_fuzzy(input: &str) -> Option<String> {
     use base64::Engine;
 
     // Try standard base64 first
     if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(input) {
         match String::from_utf8(decoded_bytes) {
             Ok(decoded_str) if is_meaningful_decoded(&decoded_str) => {
-                return Some(FuzzyBase64Result {
-                    decoded: decoded_str,
-                });
+                return Some(decoded_str);
             }
             Ok(_) => {
                 // Valid UTF-8 but not meaningful; try lossy path with the same bytes
@@ -281,9 +273,7 @@ fn decode_base64_fuzzy(input: &str) -> Option<FuzzyBase64Result> {
                 let decoded_bytes = err.into_bytes();
                 let decoded_str = String::from_utf8_lossy(&decoded_bytes).into_owned();
                 if is_meaningful_decoded(&decoded_str) {
-                    return Some(FuzzyBase64Result {
-                        decoded: decoded_str,
-                    });
+                    return Some(decoded_str);
                 }
             }
         }
@@ -297,9 +287,7 @@ fn decode_base64_fuzzy(input: &str) -> Option<FuzzyBase64Result> {
         if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(&padded) {
             let decoded_str = String::from_utf8_lossy(&decoded_bytes).into_owned();
             if is_meaningful_decoded(&decoded_str) {
-                return Some(FuzzyBase64Result {
-                    decoded: decoded_str,
-                });
+                return Some(decoded_str);
             }
         }
     }
@@ -338,19 +326,19 @@ fn is_meaningful_decoded(s: &str) -> bool {
     has_spaces || has_common_words
 }
 
-/// Create a new ExtractedString from a decoded result
-fn create_decoded_string(original: &ExtractedString, result: FuzzyBase64Result) -> ExtractedString {
+/// Create a new ExtractedString from a decoded value.
+fn create_decoded_string(original: &ExtractedString, decoded: String) -> ExtractedString {
     // Determine the kind based on the decoded content
-    let kind = if result.decoded.contains("http://") || result.decoded.contains("https://") {
+    let kind = if decoded.contains("http://") || decoded.contains("https://") {
         Some(StringKind::Url)
-    } else if result.decoded.contains("powershell") || result.decoded.contains("cmd.exe") {
+    } else if decoded.contains("powershell") || decoded.contains("cmd.exe") {
         Some(StringKind::ShellCmd)
     } else {
         None
     };
 
     ExtractedString {
-        value: result.decoded,
+        value: decoded,
         data_offset: original.data_offset,
         section: original.section.clone(),
         method: StringMethod::Base64ObfuscatedDecode,
@@ -373,8 +361,8 @@ mod tests {
         // May not decode if requirements not met, that's OK
         if let Some(decoded) = result {
             assert!(
-                decoded.decoded.to_lowercase().contains("function")
-                    || decoded.decoded.to_lowercase().contains("powershell")
+                decoded.to_lowercase().contains("function")
+                    || decoded.to_lowercase().contains("powershell")
             );
         }
     }

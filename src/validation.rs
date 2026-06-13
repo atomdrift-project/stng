@@ -248,8 +248,8 @@ fn is_jwt_token(s: &str, len: usize) -> bool {
     if s.matches('.').count() != 2 || len < 50 {
         return false;
     }
-    let parts: Vec<&str> = s.split('.').collect();
-    if parts.len() != 3 || !parts.iter().all(|p| !p.is_empty()) {
+    // Exactly three segments guaranteed above; none may be empty.
+    if s.split('.').any(str::is_empty) {
         return false;
     }
     // Every real JWT header is `{"alg":...}` → base64url `eyJ`. The prefix

@@ -444,11 +444,15 @@ pub(crate) fn pe_rust_skip_ranges(
 #[must_use]
 pub(crate) fn find_macho_section(macho: &MachO<'_>, addr: u64) -> Option<String> {
     for seg in &macho.segments {
-        for (sec, _) in &seg.sections().ok()? {
+        // Skip an unreadable segment rather than abandoning the whole search.
+        let Ok(sections) = seg.sections() else {
+            continue;
+        };
+        for (sec, _) in &sections {
             let start = sec.addr;
             let end = start + sec.size;
             if addr >= start && addr < end {
-                return Some(sec.name().ok()?.to_string());
+                return sec.name().ok().map(str::to_string);
             }
         }
     }

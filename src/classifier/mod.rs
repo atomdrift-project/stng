@@ -92,12 +92,8 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
                 return None; // Skip - has consecutive dots
             }
 
-            // Split on @ to validate structure
-            let parts: Vec<&str> = s.split('@').collect();
-            if parts.len() == 2 {
-                let local = parts[0];
-                let domain = parts[1];
-
+            // Split on @ to validate structure (exactly one @ guaranteed above)
+            if let Some((local, domain)) = s.split_once('@') {
                 // Local part must exist, not be empty, and start with alphanumeric
                 let starts_with_alnum = local.chars().next().is_some_and(char::is_alphanumeric);
                 if !starts_with_alnum {
@@ -195,19 +191,14 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
     // `eyJ`. Requiring that prefix plus strict base64url chars in every
     // segment rules out arbitrary `foo/bar.Type.method` Go symbols.
     if s.matches('.').count() == 2 && len >= 50 && s.starts_with("eyJ") {
-        let parts: [&str; 3] = {
-            let mut it = s.split('.');
-            let header = it.next().unwrap_or("");
-            let payload = it.next().unwrap_or("");
-            let sig = it.next().unwrap_or("");
-            [header, payload, sig]
-        };
+        // Exactly three dot-separated segments (guaranteed above); each must be a
+        // non-empty base64url run.
         let is_base64url = |p: &str| {
             !p.is_empty()
                 && p.chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '='))
         };
-        if parts.iter().all(|p| is_base64url(p)) {
+        if s.split('.').all(is_base64url) {
             return Some(StringKind::JWT);
         }
     }

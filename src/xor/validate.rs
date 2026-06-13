@@ -747,10 +747,8 @@ pub(crate) fn is_locale_string(s: &str) -> bool {
 
 /// Check if a path starts with a known OS path prefix.
 pub(crate) fn has_known_path_prefix(path: &str) -> bool {
-    for prefix in KNOWN_PATH_PREFIXES {
-        if path.starts_with(prefix) {
-            return true;
-        }
+    if KNOWN_PATH_PREFIXES.iter().any(|p| path.starts_with(p)) {
+        return true;
     }
 
     // Also check for relative paths

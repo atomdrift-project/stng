@@ -405,6 +405,15 @@ fn is_printable_byte_for_file_xor(b: u8) -> bool {
     (0x80..=0xF7).contains(&b)
 }
 
+/// Short, printable rendering of a key for `source` provenance strings.
+fn key_preview(key: &[u8]) -> String {
+    if key.len() > 8 {
+        format!("{}...", String::from_utf8_lossy(&key[..8]))
+    } else {
+        String::from_utf8_lossy(key).into_owned()
+    }
+}
+
 /// Try XOR decoding at radare2 string boundary hints.
 /// These locations are where r2 found null-terminated strings, making them
 /// likely candidates for properly-terminated XOR'd strings.
@@ -469,11 +478,7 @@ fn extract_xor_strings_from_hints(
                 if let Some(kind) = kind_opt
                     && seen.insert((offset as u64, s.clone()))
                 {
-                    let key_preview = if key.len() > 8 {
-                        format!("{}...", String::from_utf8_lossy(&key[..8]))
-                    } else {
-                        String::from_utf8_lossy(key).into_owned()
-                    };
+                    let key_preview = key_preview(key);
 
                     results.push(ExtractedString {
                         value: s,
@@ -577,11 +582,7 @@ fn extract_custom_xor_strings_pattern_based_simple(
     excluded_ranges: &[(usize, usize)],
     enable_early_termination: bool,
 ) -> Vec<ExtractedString> {
-    let key_preview = if key.len() > 8 {
-        format!("{}...", String::from_utf8_lossy(&key[..8]))
-    } else {
-        String::from_utf8_lossy(key).into_owned()
-    };
+    let key_preview = key_preview(key);
 
     // Track number of valid strings found across all parallel threads for early termination
     let strings_found = AtomicUsize::new(0);
@@ -594,7 +595,7 @@ fn extract_custom_xor_strings_pattern_based_simple(
     // (potentially millions), and task dispatch/stealing overhead dominates. With min_len=4096,
     // each Rayon task processes a contiguous block of 4096 offsets, reducing task count to
     // data.len()/4096 ≈ a few hundred tasks for typical binaries.
-    let results: Vec<ExtractedString> = (0..data.len())
+    let mut results: Vec<ExtractedString> = (0..data.len())
         .into_par_iter()
         .with_min_len(4096)
         .filter_map(|pos| {
@@ -895,7 +896,6 @@ fn extract_custom_xor_strings_pattern_based_simple(
 
     // Restore position order so the caller's overlap-removal logic is deterministic.
     // (par_iter does not preserve insertion order.)
-    let mut results: Vec<ExtractedString> = results;
     results.sort_by_key(|s| s.data_offset);
 
     results
@@ -1127,7 +1127,7 @@ pub fn extract_incremental_xor_strings(
             // Derive candidate seed: data[offset+i] ^ (seed + i) = pattern[i]
             // seed + i = data[offset+i] ^ pattern[i]
             // seed = (data[offset+i] ^ pattern[i]).wrapping_sub(i as u8)
-            let seed = (data[offset] ^ pattern[0]).wrapping_sub(0);
+            let seed = data[offset] ^ pattern[0];
 
             // Skip trivial seed 0 (already handled by normal extraction)
             if seed == 0 {

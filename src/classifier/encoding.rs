@@ -334,6 +334,7 @@ pub(super) fn is_unicode_escaped(s: &str) -> bool {
 }
 
 /// Decode Unicode escape sequences from a string
+#[must_use]
 pub fn decode_unicode_escapes(s: &str) -> Vec<u8> {
     let mut result = Vec::new();
     let mut chars = s.chars();
@@ -480,6 +481,7 @@ pub(super) fn is_url_encoded(s: &str) -> bool {
 }
 
 /// Decode URL-encoded string (%XX format)
+#[must_use]
 pub fn decode_url_encoding(s: &str) -> Vec<u8> {
     let mut result = Vec::new();
     let mut chars = s.chars();
