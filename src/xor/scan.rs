@@ -17,7 +17,7 @@ use crate::validation;
 use crate::{ExtractedString, StringKind, StringMethod};
 use aho_corasick::AhoCorasick;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -217,21 +217,33 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
             (priority, std::cmp::Reverse(s.value.len()))
         });
 
-        // A candidate's byte range overlaps a kept string when neither sits
-        // wholly before the other.
-        let overlaps_kept = |kept: &[ExtractedString], start: usize, end: usize| {
-            kept.iter().any(|k| {
-                let k_start = k.data_offset as usize;
-                let k_end = k_start + k.value.len();
-                !(end <= k_start || start >= k_end)
-            })
+        // A candidate's byte range overlaps a kept string when neither sits wholly
+        // before the other. Kept intervals are non-overlapping by construction, so a
+        // new range can only collide with its nearest neighbour on each side — index
+        // them by start offset (`start -> end`) for O(log k) checks instead of O(k).
+        let mut kept = Vec::new();
+        let mut kept_intervals: BTreeMap<usize, usize> = BTreeMap::new();
+        let overlaps = |intervals: &BTreeMap<usize, usize>, start: usize, end: usize| {
+            // Nearest interval starting at or before `start`: collides if it reaches past `start`.
+            if let Some((_, &p_end)) = intervals.range(..=start).next_back()
+                && p_end > start
+            {
+                return true;
+            }
+            // Nearest interval starting after `start`: collides if it begins before `end`.
+            if let Some((&s_start, _)) = intervals.range(start..).next()
+                && s_start < end
+            {
+                return true;
+            }
+            false
         };
 
-        let mut kept = Vec::new();
         for candidate in all_results {
             let start = candidate.data_offset as usize;
             let end = start + candidate.value.len();
-            if !overlaps_kept(&kept, start, end) {
+            if !overlaps(&kept_intervals, start, end) {
+                kept_intervals.insert(start, end);
                 kept.push(candidate);
             }
         }
@@ -240,7 +252,8 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
         for hint in hint_results {
             let start = hint.data_offset as usize;
             let end = start + hint.value.len();
-            if !overlaps_kept(&kept, start, end) {
+            if !overlaps(&kept_intervals, start, end) {
+                kept_intervals.insert(start, end);
                 kept.push(hint);
             }
         }
@@ -507,10 +520,12 @@ fn is_high_quality_string(s: &ExtractedString) -> bool {
             | Some(StringKind::SuspiciousPath)
             | Some(StringKind::Url)
             | Some(StringKind::IP)
-    ) || {
-        let vl = s.value.to_ascii_lowercase();
-        vl.contains("ethereum") || vl.contains("bitcoin") || vl.contains("osascript")
-    } || s.value.len() >= 30 // Long strings are usually significant
+    ) || s.value.len() >= 30 // Long strings are usually significant
+        || {
+            // Only the short, unclassified residual reaches the (allocating) lowercase scan.
+            let vl = s.value.to_ascii_lowercase();
+            vl.contains("ethereum") || vl.contains("bitcoin") || vl.contains("osascript")
+        }
 }
 
 /// Check if a decoded string is likely just the XOR key itself (or fragments).

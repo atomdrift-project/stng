@@ -273,16 +273,15 @@ const COMMON_WORDS: &[&str] = &[
     "secret",
 ];
 
-/// Cached AhoCorasick automaton for COMMON_WORDS (all patterns stored lowercase).
+/// Cached case-insensitive AhoCorasick automaton for COMMON_WORDS.
 #[allow(clippy::expect_used)]
 pub(crate) fn get_common_words_automaton() -> &'static AhoCorasick {
     static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
     CACHE.get_or_init(|| {
-        let patterns: Vec<String> = COMMON_WORDS
-            .iter()
-            .map(|w| w.to_ascii_lowercase())
-            .collect();
-        AhoCorasick::new(&patterns).expect("static patterns")
+        AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build(COMMON_WORDS)
+            .expect("static patterns")
     })
 }
 
@@ -398,13 +397,13 @@ fn file_extension_automaton() -> &'static AhoCorasick {
     })
 }
 
-/// Count how many distinct COMMON_WORDS appear in `lower_s` (already lowercased).
+/// Count how many distinct COMMON_WORDS appear in `s` (matched case-insensitively).
 /// Stops counting after reaching `limit` to allow early exits in callers.
-pub(crate) fn count_common_word_matches(lower_s: &str, limit: usize) -> usize {
+pub(crate) fn count_common_word_matches(s: &str, limit: usize) -> usize {
     let ac = get_common_words_automaton();
     let mut matched = [false; COMMON_WORDS.len()];
     let mut count = 0;
-    for mat in ac.find_iter(lower_s) {
+    for mat in ac.find_iter(s) {
         let pid = mat.pattern().as_usize();
         if !matched[pid] {
             matched[pid] = true;
@@ -485,8 +484,7 @@ pub(crate) fn is_meaningful_string(s: &str) -> bool {
 
     // Check if string contains common words (case-insensitive matching via AhoCorasick).
     // We only need to know if count is 0, 1, or ≥2 so we stop scanning at 2.
-    let lower_s = s.to_ascii_lowercase();
-    let word_matches = count_common_word_matches(&lower_s, 2);
+    let word_matches = count_common_word_matches(s, 2);
 
     // Strong signal: 2+ common words = likely legitimate
     if word_matches >= 2 {

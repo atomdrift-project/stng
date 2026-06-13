@@ -4,7 +4,7 @@
 
 /// Case-insensitive ASCII substring search without allocation.
 #[inline]
-fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
+pub(super) fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
     haystack
         .windows(needle.len())
         .any(|w| w.eq_ignore_ascii_case(needle))
@@ -25,22 +25,25 @@ pub(super) fn is_cryptographic_hash(s: &str) -> bool {
         return false;
     }
 
-    // Decode and check printability - hashes decode to random bytes (<30% printable)
-    let decoded: Vec<u8> = (0..s.len())
-        .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-        .collect();
+    // Decode and check printability without allocating: each hex pair -> one byte.
+    // Hashes decode to random bytes (<50% printable); hex-encoded text is >70% printable.
+    let mut decoded_len = 0usize;
+    let mut printable = 0usize;
+    for i in (0..s.len()).step_by(2) {
+        if let Ok(b) = u8::from_str_radix(&s[i..i + 2], 16) {
+            decoded_len += 1;
+            if b.is_ascii_graphic() {
+                printable += 1;
+            }
+        }
+    }
 
-    if decoded.is_empty() {
+    if decoded_len == 0 {
         return false;
     }
 
-    let printable = decoded.iter().filter(|b| b.is_ascii_graphic()).count();
-
-    // Hashes typically have <50% printable bytes (random distribution)
-    // Hex-encoded text has >70% printable (mostly ASCII text)
-    // Use 50% threshold for safety margin
-    printable * 2 < decoded.len()
+    // Use 50% threshold for safety margin.
+    printable * 2 < decoded_len
 }
 
 /// Check if a string looks like base64-encoded data
@@ -159,54 +162,54 @@ pub(super) fn is_base64(s: &str) -> bool {
         }
     }
 
-    // Final check: if input looks like readable text and output is garbage, reject
-    // e.g., "IWorkItemQueriesExt2" (readable identifier) decodes to binary garbage
-    // Only apply when input has high vowel ratio (indicates real words, not random chars)
-    if let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s) {
-        let (input_quality, input_vowel_ratio) = text_quality_score(s.as_bytes());
+    // Strings with many repeated characters are encoded binary, not readable text
+    // (e.g. "TVqQAAMAAAAEAAAA" has many 'A's from null-byte padding). This uses only
+    // the input, so accept without paying for a base64 decode.
+    let max_char_count = bytes
+        .iter()
+        .fold([0u8; 256], |mut acc, &b| {
+            acc[b as usize] = acc[b as usize].saturating_add(1);
+            acc
+        })
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+    let max_char_ratio = (max_char_count as usize * 100) / bytes.len();
+    if max_char_ratio > 30 && bytes.len() >= 24 {
+        return true; // Likely encoded binary, not a readable identifier
+    }
 
-        // Skip check if input has many repeated characters (encoded binary, not readable text)
-        // e.g., "TVqQAAMAAAAEAAAA" has many 'A's from null bytes
-        let max_char_count = bytes
+    // The remaining disambiguation needs the decoded bytes: if the input reads like
+    // text but decodes to garbage, it's an identifier, not base64. A failed decode
+    // falls through to `true`, matching prior behavior.
+    let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s) else {
+        return true;
+    };
+    let (input_quality, input_vowel_ratio) = text_quality_score(s.as_bytes());
+
+    // For short strings (< 24 chars) with high character repetition AND few input
+    // vowels, verify the decoded output is mostly printable. This catches x86
+    // instruction patterns like "rtVHHtRHt2HtLHHu" where repeated opcodes (e.g.
+    // 'H' = REX prefix) inflate max_char_ratio but the decoded output is largely
+    // non-printable.
+    if max_char_ratio > 30 && bytes.len() < 24 && input_vowel_ratio < 10 {
+        let printable = decoded
             .iter()
-            .fold([0u8; 256], |mut acc, &b| {
-                acc[b as usize] = acc[b as usize].saturating_add(1);
-                acc
-            })
-            .into_iter()
-            .max()
-            .unwrap_or(0);
-        let max_char_ratio = (max_char_count as usize * 100) / bytes.len();
-        if max_char_ratio > 30 && bytes.len() >= 24 {
-            return true; // Likely encoded binary, not a readable identifier
+            .filter(|&&b| b.is_ascii_graphic() || b == b' ')
+            .count();
+        if printable * 2 < decoded.len() {
+            return false;
         }
+    }
 
-        // For short strings (< 24 chars) with high character repetition AND
-        // few input vowels, verify the decoded output is mostly printable.
-        // This catches x86 instruction patterns like "rtVHHtRHt2HtLHHu" where
-        // repeated opcodes (e.g. 'H' = REX prefix) inflate max_char_ratio but
-        // the decoded output is largely non-printable.
-        // Strings with many vowels (like "TVqQAAMAAAAEAAAA") skip this check
-        // since the repetition comes from null-byte padding in real encoded data.
-        if max_char_ratio > 30 && bytes.len() < 24 && input_vowel_ratio < 10 {
-            let printable = decoded
-                .iter()
-                .filter(|&&b| b.is_ascii_graphic() || b == b' ')
-                .count();
-            if printable * 2 < decoded.len() {
-                return false;
-            }
-        }
+    // Only check quality comparison if input looks like natural language.
+    // Real identifiers have ~30%+ vowels; random base64-ish strings have ~20%.
+    if input_vowel_ratio >= 28 {
+        let (output_quality, _) = text_quality_score(&decoded);
 
-        // Only check quality comparison if input looks like natural language
-        // Real identifiers have ~30%+ vowels; random base64-ish strings have ~20%
-        if input_vowel_ratio >= 28 {
-            let (output_quality, _) = text_quality_score(&decoded);
-
-            // If input is more readable than output, it's likely an identifier, not base64
-            if input_quality > output_quality {
-                return false;
-            }
+        // If input is more readable than output, it's likely an identifier, not base64.
+        if input_quality > output_quality {
+            return false;
         }
     }
 
@@ -261,23 +264,27 @@ pub(super) fn is_hex_encoded(s: &str) -> bool {
         return false;
     }
 
-    // Decode and check if mostly printable ASCII
-    let decoded: Vec<u8> = (0..s.len())
-        .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-        .collect();
+    // Decode in one pass without allocating: track printability and distinct byte
+    // values together (each hex pair -> one byte).
+    let mut decoded_len = 0usize;
+    let mut printable = 0usize;
+    let mut distinct = [false; 256];
+    for i in (0..s.len()).step_by(2) {
+        if let Ok(b) = u8::from_str_radix(&s[i..i + 2], 16) {
+            decoded_len += 1;
+            if b.is_ascii_graphic() || b.is_ascii_whitespace() {
+                printable += 1;
+            }
+            distinct[b as usize] = true;
+        }
+    }
 
-    if decoded.is_empty() {
+    if decoded_len == 0 {
         return false;
     }
 
-    let printable = decoded
-        .iter()
-        .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-        .count();
-
     // At least 70% printable
-    if printable * 10 <= decoded.len() * 7 {
+    if printable * 10 <= decoded_len * 7 {
         return false;
     }
 
@@ -285,10 +292,6 @@ pub(super) fn is_hex_encoded(s: &str) -> bool {
     // identical (e.g. `4444...` → `DDDDDDDD`, a Go runtime memory poison) or
     // which use fewer than 3 distinct byte values. Real hex-encoded text or
     // code has more variety than that.
-    let mut distinct = [false; 256];
-    for &b in &decoded {
-        distinct[b as usize] = true;
-    }
     let distinct_count = distinct.iter().filter(|&&b| b).count();
     distinct_count >= 3
 }
@@ -413,22 +416,26 @@ pub(super) fn is_url_encoded(s: &str) -> bool {
     let mut valid_percent_count = 0;
     let mut total_percent_count = 0;
     let mut control_char_count = 0;
-    let chars: Vec<char> = s.chars().collect();
+    // `%` and hex digits are ASCII, so byte scanning matches char scanning here
+    // (multi-byte chars match neither `%` nor `is_ascii_hexdigit`).
+    let bytes = s.as_bytes();
 
     let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '%' {
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
             total_percent_count += 1;
             // Check if followed by two hex digits
-            if i + 2 < chars.len()
-                && chars[i + 1].is_ascii_hexdigit()
-                && chars[i + 2].is_ascii_hexdigit()
+            if i + 2 < bytes.len()
+                && bytes[i + 1].is_ascii_hexdigit()
+                && bytes[i + 2].is_ascii_hexdigit()
             {
                 valid_percent_count += 1;
 
                 // Check what this decodes to
-                let hex: String = [chars[i + 1], chars[i + 2]].iter().collect();
-                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                if let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                    .ok()
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+                {
                     // Control characters (0x00-0x1F except tab/newline/carriage return, and 0x7F)
                     // are unusual in real URL encoding and common in C format strings
                     // (e.g., %02d where %02 decodes to STX)

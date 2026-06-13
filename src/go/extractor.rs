@@ -155,9 +155,17 @@ impl GoStringExtractor {
                 Some("__rodata"),
                 self.min_length,
             );
-            let mut seen: HashSet<String> = strings.iter().map(|s| s.value.clone()).collect();
-            for s in packed {
-                if seen.insert(s.value.clone()) {
+            // Borrow existing values (no per-string clone). Collect the genuinely new
+            // literals first so the borrow on `strings` is released before we extend it.
+            let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+            let fresh: Vec<ExtractedString> = packed
+                .into_iter()
+                .filter(|s| !existing.contains(s.value.as_str()))
+                .collect();
+            drop(existing);
+            let mut batch_seen: HashSet<String> = HashSet::new();
+            for s in fresh {
+                if batch_seen.insert(s.value.clone()) {
                     strings.push(s);
                 }
             }
@@ -604,9 +612,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+    memchr::memmem::find(haystack, needle)
 }
 
 /// Extract strings from a Go pclntab `pkgnamestab`-style table.

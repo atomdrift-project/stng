@@ -45,6 +45,23 @@ static MINER_POOL: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new(["pool.", "nanopool", "minergate"]).expect("valid pool patterns")
 });
 
+/// Literal shell-command indicators, batched into one Aho-Corasick pass
+/// (replaces eight independent `contains` scans in `is_shell_command_string`).
+#[allow(clippy::expect_used)]
+static SHELL_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        "osascript",
+        "bash",
+        "/bin/sh",
+        "/bin/bash",
+        "2>&1",
+        "<<",
+        "2>/dev/null",
+        "2>",
+    ])
+    .expect("valid shell indicator patterns")
+});
+
 /// IOC substring patterns batched into one Aho-Corasick automaton.
 ///
 /// `is_recognized_ioc` historically did ~11 independent `s.contains(...)`
@@ -436,14 +453,7 @@ fn is_comma_separated_list(s: &str, len: usize) -> bool {
 }
 
 fn is_shell_command_string(s: &str) -> bool {
-    let has_shell_indicator = s.contains("osascript")
-        || s.contains("bash")
-        || s.contains("/bin/sh")
-        || s.contains("/bin/bash")
-        || s.contains("2>&1")
-        || s.contains("<<")
-        || s.contains("2>/dev/null")
-        || s.contains("2>")
+    let has_shell_indicator = SHELL_INDICATORS.is_match(s)
         || (s.contains(" sh ") || s.starts_with("sh ") || s.ends_with(" sh"));
     if !has_shell_indicator {
         return false;
@@ -1189,44 +1199,33 @@ fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
         Whitespace,
     }
 
-    let char_classes: Vec<CharClass> = s
-        .chars()
-        .map(|c| {
-            if c.is_ascii_uppercase() {
-                CharClass::Upper
-            } else if c.is_ascii_lowercase() {
-                CharClass::Lower
-            } else if c.is_ascii_digit() {
-                CharClass::Digit
-            } else if c.is_whitespace() {
-                CharClass::Whitespace
-            } else {
-                CharClass::Special
-            }
-        })
-        .collect();
-
-    let mut transitions = 0;
-    let mut run_lengths: Vec<usize> = Vec::new();
-    let mut current_run_length = 1;
-
-    for i in 1..char_classes.len() {
-        if char_classes[i] == char_classes[i - 1] {
-            current_run_length += 1;
+    // Stream the class-run metrics in one pass: every char belongs to exactly one
+    // run, and runs are separated by transitions, so there are `transitions + 1`
+    // runs covering `char_count` characters (len >= 6 guarantees char_count >= 1).
+    let mut transitions = 0usize;
+    let mut char_count = 0usize;
+    let mut prev_class: Option<CharClass> = None;
+    for c in s.chars() {
+        let class = if c.is_ascii_uppercase() {
+            CharClass::Upper
+        } else if c.is_ascii_lowercase() {
+            CharClass::Lower
+        } else if c.is_ascii_digit() {
+            CharClass::Digit
+        } else if c.is_whitespace() {
+            CharClass::Whitespace
         } else {
+            CharClass::Special
+        };
+        char_count += 1;
+        if prev_class.is_some_and(|p| p != class) {
             transitions += 1;
-            run_lengths.push(current_run_length);
-            current_run_length = 1;
         }
+        prev_class = Some(class);
     }
-    run_lengths.push(current_run_length);
 
-    let total_run_chars: usize = run_lengths.iter().sum();
-    let avg_run_length = if run_lengths.is_empty() {
-        0.0
-    } else {
-        total_run_chars as f32 / run_lengths.len() as f32
-    };
+    let num_runs = transitions + 1;
+    let avg_run_length = char_count as f32 / num_runs as f32;
 
     let max_class_count = stats
         .upper

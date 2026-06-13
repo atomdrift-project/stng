@@ -2,8 +2,37 @@
 //!
 //! Detects Python, JavaScript, PHP, AppleScript, and shell command patterns.
 
+use super::encoding::contains_ignore_ascii_case;
 use aho_corasick::AhoCorasick;
 use std::sync::LazyLock;
+
+/// AppleScript source indicators (matched case-insensitively).
+#[allow(clippy::expect_used)]
+static APPLESCRIPT_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build([
+            "tell application",
+            "path to desktop",
+            "path to documents",
+            "every file of",
+            "whose name extension",
+            "posix file",
+            "end tell",
+            "do shell script",
+            " dialog",
+            "choose file",
+            "choose folder",
+            "duplicate ",
+            " to posix file",
+            "repeat with",
+            "end repeat",
+            " as alias",
+            " with replacing",
+            "set volume",
+        ])
+        .expect("valid applescript patterns")
+});
 
 /// Error-message patterns used to reject format-string placeholders that look
 /// like shell commands (e.g. "Error: could not {0} the {1}").
@@ -286,43 +315,17 @@ pub(super) fn is_applescript(s: &str) -> bool {
         return false;
     }
 
-    let lower = s.to_ascii_lowercase();
-
-    // AppleScript indicators
-    let patterns = [
-        "tell application",
-        "path to desktop",
-        "path to documents",
-        "every file of",
-        "whose name extension",
-        "posix file",
-        "end tell",
-        "do shell script",
-        " dialog",
-        "choose file",
-        "choose folder",
-        "duplicate ",
-        " to posix file",
-        "repeat with",
-        "end repeat",
-        " as alias",
-        " with replacing",
-        "set volume",
-    ];
-
-    for pattern in &patterns {
-        if lower.contains(pattern) {
-            return true;
-        }
+    if APPLESCRIPT_PATTERNS.is_match(s.as_bytes()) {
+        return true;
     }
 
-    // "set " only if it appears at word boundaries and is followed by assignment
-    if (lower.starts_with("set ")
-        || lower.contains("\nset ")
-        || lower.contains("\tset ")
-        || lower.contains(" set "))
-        && (lower.contains(" to ") || lower.contains('='))
-    {
+    // "set " only if it appears at word boundaries and is followed by assignment.
+    let bytes = s.as_bytes();
+    let has_set = bytes.get(..4).is_some_and(|p| p.eq_ignore_ascii_case(b"set "))
+        || contains_ignore_ascii_case(bytes, b"\nset ")
+        || contains_ignore_ascii_case(bytes, b"\tset ")
+        || contains_ignore_ascii_case(bytes, b" set ");
+    if has_set && (contains_ignore_ascii_case(bytes, b" to ") || s.contains('=')) {
         return true;
     }
 
