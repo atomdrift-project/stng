@@ -290,8 +290,9 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
         return None;
     }
 
-    // URL decode
-    let decoded = urlencoding::decode(&s.value).ok()?.to_string();
+    // URL decode (into_owned reuses the String when decode allocated one,
+    // instead of copying the Cow's contents again).
+    let decoded = urlencoding::decode(&s.value).ok()?.into_owned();
 
     // Must be different from original (actually encoded)
     if decoded == s.value {
@@ -443,39 +444,37 @@ fn is_likely_base64(s: &str) -> bool {
         return false;
     }
 
-    let base64_chars = s
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '/' || *c == '=')
-        .count();
+    // Single pass: count base64-alphabet chars, the leading run of lowercase
+    // (to reject lowerCamelCase identifiers), and which case/digit classes
+    // appear. (Previously three separate passes over the string.)
+    let mut base64_chars = 0usize;
+    let mut consecutive_lower_at_start = 0;
+    let mut leading_run_done = false;
+    let mut has_upper = false;
+    let mut has_lower = false;
+    let mut has_digit = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' {
+            base64_chars += 1;
+        }
+        if c.is_ascii_lowercase() {
+            has_lower = true;
+            if !leading_run_done {
+                consecutive_lower_at_start += 1;
+            }
+        } else {
+            leading_run_done = true;
+            if c.is_ascii_uppercase() {
+                has_upper = true;
+            } else if c.is_ascii_digit() {
+                has_digit = true;
+            }
+        }
+    }
 
     // If >= 80% base64 characters, likely encoded
     if (base64_chars as f32 / s.len() as f32) < 0.8 {
         return false;
-    }
-
-    // Must have mixed case and digits (not just CamelCase identifiers)
-    let mut has_upper = false;
-    let mut has_lower = false;
-    let mut has_digit = false;
-    let mut consecutive_lower_at_start = 0;
-
-    // Count consecutive lowercase at start
-    for c in s.chars() {
-        if c.is_ascii_lowercase() {
-            consecutive_lower_at_start += 1;
-        } else {
-            break;
-        }
-    }
-
-    for c in s.chars() {
-        if c.is_ascii_uppercase() {
-            has_upper = true;
-        } else if c.is_ascii_lowercase() {
-            has_lower = true;
-        } else if c.is_ascii_digit() {
-            has_digit = true;
-        }
     }
 
     // Reject lowerCamelCase identifiers (4+ consecutive lowercase at start)

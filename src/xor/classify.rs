@@ -942,6 +942,16 @@ pub(crate) fn extract_hostname_at_dot(
 /// Maximum expansion distance in each direction from match position.
 const MAX_EXPAND_DISTANCE: usize = 200;
 
+/// Distinct byte count in an 8-slot ring buffer, allocation-free. Used to
+/// detect low-entropy (near-constant) regions while expanding an XOR run —
+/// cheaper than collecting an 8-element `HashSet` on every expansion step.
+fn distinct_bytes(buf: &[u8; 8]) -> usize {
+    buf.iter()
+        .enumerate()
+        .filter(|&(i, b)| !buf[..i].contains(b))
+        .count()
+}
+
 /// Expand outward from a match position to find the full XOR'd string.
 pub(crate) fn expand_xor_string(
     data: &[u8],
@@ -972,12 +982,9 @@ pub(crate) fn expand_xor_string(
         // Track recent chars to detect low-entropy regions
         recent_backward[backward_idx % 8] = decoded;
         backward_idx += 1;
-        if backward_idx >= 8 {
-            let unique: HashSet<u8> = recent_backward.iter().copied().collect();
-            if unique.len() <= 2 {
-                // We've hit a low-entropy region - stop expansion
-                break;
-            }
+        if backward_idx >= 8 && distinct_bytes(&recent_backward) <= 2 {
+            // We've hit a low-entropy region - stop expansion
+            break;
         }
         start -= 1;
     }
@@ -993,12 +1000,9 @@ pub(crate) fn expand_xor_string(
         }
         recent_forward[forward_idx % 8] = decoded;
         forward_idx += 1;
-        if forward_idx >= 8 {
-            let unique: HashSet<u8> = recent_forward.iter().copied().collect();
-            if unique.len() <= 2 {
-                // Stop expansion but don't backtrack - let trim_low_entropy handle the suffix
-                break;
-            }
+        if forward_idx >= 8 && distinct_bytes(&recent_forward) <= 2 {
+            // Stop expansion but don't backtrack - let trim_low_entropy handle the suffix
+            break;
         }
         end += 1;
     }

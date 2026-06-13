@@ -321,7 +321,9 @@ pub(super) fn is_applescript(s: &str) -> bool {
 
     // "set " only if it appears at word boundaries and is followed by assignment.
     let bytes = s.as_bytes();
-    let has_set = bytes.get(..4).is_some_and(|p| p.eq_ignore_ascii_case(b"set "))
+    let has_set = bytes
+        .get(..4)
+        .is_some_and(|p| p.eq_ignore_ascii_case(b"set "))
         || contains_ignore_ascii_case(bytes, b"\nset ")
         || contains_ignore_ascii_case(bytes, b"\tset ")
         || contains_ignore_ascii_case(bytes, b" set ");
