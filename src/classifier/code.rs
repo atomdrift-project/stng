@@ -141,6 +141,22 @@ pub(super) fn is_python_code(s: &str) -> bool {
     if s.contains("eval(") {
         matches += 1;
     }
+    // `__import__(...)` is the dynamic-import builtin — unambiguously Python and
+    // a staple of `python -c` obfuscation (`getattr(__import__('os'),'system')`).
+    if s.contains("__import__") {
+        matches += 2;
+    }
+    // Python stdlib execution modules / builtins that one-liner droppers lean on
+    // even without an `import os; os.system` pair.
+    if s.contains("subprocess") {
+        matches += 1;
+    }
+    if s.contains("getattr(") {
+        matches += 1;
+    }
+    if s.contains("lambda ") {
+        matches += 1;
+    }
     if s.contains("sys.") {
         matches += 1;
     }
@@ -605,4 +621,38 @@ pub(super) fn is_shell_command(s: &str) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod python_oneliner_tests {
+    use super::is_python_code;
+
+    /// Obfuscated `python -c` one-liner bodies must classify as Python so the
+    /// embedded-code detector re-analyzes them and Python rules run.
+    #[test]
+    fn obfuscated_python_oneliners_are_python() {
+        for s in [
+            "getattr(__import__('os'), 'sy'+'stem')('bun install bad-pkg')",
+            "eval('__import__(\\'os\\').system(\\'bun install bad-pkg\\')')",
+            "(o:=__import__('os')).system('bun install bad-pkg')",
+            "(lambda o: o.system('bun install bad-pkg'))(__import__('os'))",
+            "import subprocess; subprocess.run('bun install bad-pkg', shell=True)",
+            "exec(__import__('base64').b64decode('aW1wb3J0IG9z'))",
+            "import os; os.system('gkp-dab llatsni nub'[::-1])",
+        ] {
+            assert!(is_python_code(s), "should classify as Python: {s}");
+        }
+    }
+
+    /// Guard against over-classifying non-Python strings.
+    #[test]
+    fn non_python_strings_are_not_python() {
+        for s in [
+            "the quick brown fox jumps over the lazy dog today",
+            "https://example.com/path/to/resource?query=value",
+            "SELECT * FROM users WHERE id = 1 AND name = 'bob'",
+        ] {
+            assert!(!is_python_code(s), "should NOT classify as Python: {s}");
+        }
+    }
 }
