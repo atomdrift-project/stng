@@ -283,10 +283,47 @@ pub(crate) fn decode_url_strings(strings: &[ExtractedString]) -> Vec<ExtractedSt
         .collect()
 }
 
+/// True if any `%XX` escape decodes to an unreserved character (ASCII
+/// alphanumeric). Legitimate URL encoding only escapes reserved/unsafe
+/// characters; percent-encoding an alphanumeric (`%75` = `u`) is the signature
+/// of deliberate obfuscation, not normal URL syntax.
+fn encodes_unreserved_char(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%'
+            && let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            )
+        {
+            #[allow(clippy::cast_possible_truncation)]
+            let decoded = (hi * 16 + lo) as u8;
+            if decoded.is_ascii_alphanumeric() {
+                return true;
+            }
+            i += 3;
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Attempt to decode a single URL-encoded string.
 fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
     // Must contain at least one % escape sequence
     if !s.value.contains('%') {
+        return None;
+    }
+
+    // A URL's percent-encoding is legitimate syntax, not an encoded payload:
+    // `…?title=Special%3ASearch` or `#:~:text=Function%3A%20foo` decode to the
+    // same readable URL, hiding nothing. Skip when the string carries a URL
+    // scheme and only escapes reserved characters; decode it only when an
+    // *unreserved* char is percent-encoded (`%75` = `u`), the signature of
+    // deliberate obfuscation that legitimate URL encoders never produce.
+    if s.value.contains("://") && !encodes_unreserved_char(&s.value) {
         return None;
     }
 
@@ -863,6 +900,33 @@ mod tests {
         let result = decode_url_string(&input).unwrap();
         assert_eq!(result.value, "Hello World! + More");
         assert_eq!(result.method, StringMethod::UrlDecode);
+    }
+
+    #[test]
+    fn test_url_with_normal_encoding_not_decoded_as_payload() {
+        // A real URL whose percent-encoding only covers reserved chars (`:`,
+        // space) is normal URL syntax, not an encoded payload — even when the
+        // extracted string carries source context (`x = "..."`) and is therefore
+        // classified UrlEncoded rather than Url. It must not produce a payload.
+        let url = ExtractedString {
+            value:
+                "x = \"https://sourceware.org/gdb.html#:~:text=Function%3A%20to_string%20(self)\""
+                    .to_string(),
+            data_offset: 0,
+            section: None,
+            method: StringMethod::RawScan,
+            kind: Some(StringKind::UrlEncoded),
+            ..Default::default()
+        };
+        assert!(decode_url_string(&url).is_none());
+        assert!(decode_url_strings(std::slice::from_ref(&url)).is_empty());
+
+        // But a URL that percent-encodes alphanumerics (obfuscation) is decoded.
+        let obfuscated = ExtractedString {
+            value: "https://evil.example/?d=%75%6e%61%6d%65%20-a".to_string(), // uname -a
+            ..url.clone()
+        };
+        assert!(decode_url_string(&obfuscated).is_some());
     }
 
     #[test]

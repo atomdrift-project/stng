@@ -434,15 +434,10 @@ fn scan_sockaddr_in(
         // those coincidental matches without rejecting genuine socket literals.
         // If the struct is truncated by end-of-data the padding cannot be
         // confirmed, so reject to be safe (consistent with the section filter).
-        let sin_zero_end = i + 16;
-        if sin_zero_end > data.len() {
+        let Some(sin_zero) = data.get(i + 8..i + 16) else {
             continue;
-        }
-        let sin_zero_zeros = data[i + 8..sin_zero_end]
-            .iter()
-            .filter(|&&b| b == 0)
-            .count();
-        if sin_zero_zeros < 6 {
+        };
+        if sin_zero.iter().filter(|&&b| b == 0).count() < 6 {
             continue;
         }
 
@@ -479,13 +474,12 @@ mod tests {
     /// `sin_zero` tail — the layout `scan_sockaddr_in` now requires. `le_marker`
     /// selects the marker byte order (`02 00` little-endian vs `00 02` big-endian).
     fn put_sockaddr_in(data: &mut [u8], off: usize, le_marker: bool, port: u16, ip: [u8; 4]) {
-        let (m0, m1) = if le_marker {
-            (0x02, 0x00)
+        let marker = if le_marker {
+            [0x02, 0x00]
         } else {
-            (0x00, 0x02)
+            [0x00, 0x02]
         };
-        data[off] = m0;
-        data[off + 1] = m1;
+        data[off..off + 2].copy_from_slice(&marker);
         data[off + 2..off + 4].copy_from_slice(&port.to_be_bytes());
         data[off + 4..off + 8].copy_from_slice(&ip);
         data[off + 8..off + 16].fill(0); // sin_zero
