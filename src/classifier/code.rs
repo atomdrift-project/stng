@@ -120,6 +120,13 @@ pub(super) fn is_python_code(s: &str) -> bool {
         return false;
     }
 
+    // HTML/Svelte/Vue component markup can contain `class ` attributes and
+    // method-like expressions such as `onclick(...)` or `rgba(...)`. Those are
+    // not embedded Python payloads.
+    if looks_like_component_markup(s) {
+        return false;
+    }
+
     let mut matches = 0;
 
     // Strong Python indicators (word boundaries matter)
@@ -176,6 +183,34 @@ pub(super) fn is_python_code(s: &str) -> bool {
 
     // Require at least 2 matches to reduce false positives
     matches >= 2
+}
+
+fn looks_like_component_markup(s: &str) -> bool {
+    let trimmed = s.trim_start();
+    if !(trimmed.starts_with('<') && s.contains('>')) {
+        return false;
+    }
+
+    let markup_markers = [
+        "<script",
+        "</script",
+        "<style",
+        "</style",
+        "<template",
+        "</template",
+        "<svelte:",
+        "<div",
+        "</div",
+        "<span",
+        "</span",
+        "<button",
+        "</button",
+        " class=",
+        "class=\"",
+        "class='",
+    ];
+
+    markup_markers.iter().any(|marker| s.contains(marker))
 }
 
 /// Check if a string looks like JavaScript code
@@ -651,6 +686,7 @@ mod python_oneliner_tests {
             "the quick brown fox jumps over the lazy dog today",
             "https://example.com/path/to/resource?query=value",
             "SELECT * FROM users WHERE id = 1 AND name = 'bob'",
+            "<script>\n  let count = 0;\n</script>\n<button class=\"primary\" onclick={() => count += 1}>Click</button>",
         ] {
             assert!(!is_python_code(s), "should NOT classify as Python: {s}");
         }
