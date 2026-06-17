@@ -7,7 +7,7 @@ OUT_DIR = out
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release check-cargo install test test-unit lint fmt clean ci help bench-build sampled-benchmark heap-build heap-benchmark tuna tuna-once
+.PHONY: all build debug release check-cargo install install-precommit test test-unit lint fmt clean ci help bench-build sampled-benchmark heap-build heap-benchmark tuna tuna-once
 
 # Default target
 all: build
@@ -21,6 +21,7 @@ help: ## Show this help
 	@echo "  debug       - Build in debug mode"
 	@echo "  release     - Build in release mode"
 	@echo "  install     - Build release and install to PATH"
+	@echo "  install-precommit - Install git pre-commit hook (test + lint + override check)"
 	@echo "  test        - Run all tests (unit + integration)"
 	@echo "  test-unit   - Run only unit tests (skip integration tests)"
 	@echo "  fmt         - Format all code with rustfmt"
@@ -86,6 +87,13 @@ install: release ## Install binary to first writeable location
 		cp $(OUT_DIR)/$(BINARY) "$$HOME/.cargo/bin/$(BINARY)"; \
 		echo "✓ Installed to $$HOME/.cargo/bin/$(BINARY)"; \
 	fi
+
+install-precommit: ## Install the git pre-commit hook
+	@hooks_dir="$$(git rev-parse --git-path hooks)"; \
+	mkdir -p "$$hooks_dir"; \
+	cp scripts/pre-commit "$$hooks_dir/pre-commit"; \
+	chmod +x "$$hooks_dir/pre-commit"; \
+	echo "✓ Pre-commit hook installed to $$hooks_dir/pre-commit"
 
 test: ## Run all tests (unit + integration)
 	@echo "Running all tests..."

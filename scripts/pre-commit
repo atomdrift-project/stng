@@ -1,0 +1,57 @@
+#!/bin/sh
+# stng pre-commit hook.
+#
+# Refuses the commit unless:
+#   1. Cargo.toml has no local dependency overrides (path deps or [patch]
+#      sections) that would pin against a sibling working tree.
+#   2. `make test` passes.
+#   3. `make lint` passes.
+#
+# Install with: make install-precommit
+
+set -e
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+# 1. No local overrides in Cargo.toml.
+#
+# Path dependencies and [patch] tables point at sibling checkouts and must
+# never land in a commit. Target paths under [lib]/[[bin]] are legitimate and
+# deliberately ignored: a path key is only an override inside a *dependencies
+# table or a [patch...] section.
+echo "Checking Cargo.toml for local overrides..."
+overrides=$(awk '
+	/^[[:space:]]*\[/ {
+		section = $0
+		sub(/^[[:space:]]*\[+/, "", section)
+		sub(/\]+.*$/, "", section)
+		if (section ~ /^patch/) {
+			printf "  %d: [%s]\n", NR, section
+		}
+		next
+	}
+	/^[[:space:]]*#/ { next }
+	/^[[:space:]]*path[[:space:]]*=/ || /[{,][[:space:]]*path[[:space:]]*=/ {
+		if (section ~ /dependencies$/ || section ~ /^patch/) {
+			printf "  %d: %s\n", NR, $0
+		}
+	}
+' Cargo.toml)
+
+if [ -n "$overrides" ]; then
+	echo "Error: Cargo.toml contains local overrides; remove before committing:" >&2
+	echo "$overrides" >&2
+	exit 1
+fi
+echo "✓ No local overrides"
+echo ""
+
+# 2. Tests.
+make test
+
+# 3. Lint.
+make lint
+
+echo ""
+echo "✓ Pre-commit checks passed"
