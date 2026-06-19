@@ -78,6 +78,55 @@ static SHELL_PIPE_COMMANDS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     .expect("valid pipe-command patterns")
 });
 
+/// Trigger substrings for Python detection. A positive `is_python_code` result
+/// always requires at least two of the `matches += 1` checks below to fire, and
+/// every one of those checks needs one of these substrings — so a string
+/// containing none of them cannot be Python. A single Aho-Corasick scan rejects
+/// such strings (the overwhelming majority, e.g. Go symbol-table entries) in
+/// place of ~20 sequential `contains` probes.
+#[allow(clippy::expect_used)]
+static PYTHON_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        "import ",
+        "from ",
+        "def ",
+        "class ",
+        "exec(",
+        "eval(",
+        "__import__",
+        "subprocess",
+        "getattr(",
+        "lambda ",
+        "sys.",
+        "os.path",
+        "os.system",
+        "os.environ",
+        "os.name",
+        "os.getcwd",
+        "__name__",
+    ])
+    .expect("valid python indicators")
+});
+
+/// Trigger substrings for JavaScript detection. As with [`PYTHON_INDICATORS`],
+/// a match needs at least two of the keyword checks, each of which requires one
+/// of these substrings, so a single scan can reject everything else.
+#[allow(clippy::expect_used)]
+static JAVASCRIPT_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        "function ",
+        "const ",
+        "let ",
+        "var ",
+        "require(",
+        "document.",
+        "window.",
+        "console.log",
+        "=>",
+    ])
+    .expect("valid javascript indicators")
+});
+
 /// Check if a string looks like Python code
 pub(super) fn is_python_code(s: &str) -> bool {
     let len = s.len();
@@ -87,10 +136,9 @@ pub(super) fn is_python_code(s: &str) -> bool {
         return false;
     }
 
-    // Quick rejection: Python code must contain certain characters
-    let bytes = s.as_bytes();
-    let has_python_indicators = bytes.iter().any(|&b| matches!(b, b'(' | b':' | b'.'));
-    if !has_python_indicators {
+    // Quick rejection: reject any string lacking a Python trigger substring.
+    // See [`PYTHON_INDICATORS`] for why this preserves every positive match.
+    if !PYTHON_INDICATORS.is_match(s) {
         return false;
     }
 
@@ -222,12 +270,9 @@ pub(super) fn is_javascript_code(s: &str) -> bool {
         return false;
     }
 
-    // Quick rejection: JavaScript code must contain certain characters
-    let bytes = s.as_bytes();
-    let has_js_indicators = bytes
-        .iter()
-        .any(|&b| matches!(b, b'(' | b'{' | b'=' | b'.'));
-    if !has_js_indicators {
+    // Quick rejection: reject any string lacking a JavaScript trigger
+    // substring. See [`JAVASCRIPT_INDICATORS`] for why this is loss-free.
+    if !JAVASCRIPT_INDICATORS.is_match(s) {
         return false;
     }
 

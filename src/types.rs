@@ -17,7 +17,7 @@ pub struct StringStruct {
 }
 
 /// Represents a fragment of a multi-part string (e.g., stack strings from multiple instructions)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StringFragment {
     /// File offset where this fragment's data is located
     pub offset: u64,
@@ -29,7 +29,7 @@ pub struct StringFragment {
 }
 
 /// An extracted string with metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractedString {
     /// The string value
     pub value: String,
@@ -78,7 +78,7 @@ pub struct ExtractedString {
 }
 
 /// Metadata about a function (from binary analysis)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionMetadata {
     /// Function size in bytes
     pub size: u64,
@@ -309,7 +309,7 @@ impl<'a> StringContext<'a> {
 /// Method used to extract the string.
 ///
 /// Indicates the extraction technique, which affects confidence and context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StringMethod {
     /// Found via pointer+length structure analysis

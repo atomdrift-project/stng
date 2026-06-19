@@ -349,6 +349,69 @@ impl GoStringExtractor {
                 .filter(|s| s.value.len() >= struct_min),
         );
 
+        // Extract inline strings referenced from `.text` (LEA + MOV-length).
+        // Go x86-64/arm64 code points at packed `.rdata` literals this way, and
+        // the {ptr,len} structure scan above misses them — which is why format
+        // strings such as `dd if=/dev/zero of=%s bs=446 count=1` surface only
+        // inside rizin's merged blobs. Mirrors the ELF and Mach-O paths.
+        let text_info = pe.sections.iter().find_map(|section| {
+            if crate::binary::pe_section_name(&section.name) != ".text" {
+                return None;
+            }
+            let start = section.pointer_to_raw_data as usize;
+            let end = start.checked_add(section.size_of_raw_data as usize)?;
+            let text = data.get(start..end)?;
+            Some((u64::from(section.virtual_address) + image_base, text))
+        });
+        if let Some((text_va, text_data)) = text_info {
+            let inline_strings = match pe.header.coff_header.machine {
+                goblin::pe::header::COFF_MACHINE_ARM64 => extract_inline_strings_arm64(
+                    text_data,
+                    text_va,
+                    rodata_data,
+                    rodata_va,
+                    struct_min,
+                ),
+                goblin::pe::header::COFF_MACHINE_X86_64 => extract_inline_strings_amd64(
+                    text_data,
+                    text_va,
+                    rodata_data,
+                    rodata_va,
+                    struct_min,
+                ),
+                _ => Vec::new(),
+            };
+            strings.extend(
+                inline_strings
+                    .into_iter()
+                    .filter(|s| s.value.len() >= struct_min),
+            );
+        }
+
+        // Recover bounded high-signal literals (URLs, find-command fragments)
+        // from the packed `.rdata` pool, which the generic raw scanner skips to
+        // avoid emitting one giant concatenated run.
+        if rodata_data.len() <= MAX_PACKED_RODATA_HEURISTIC_SIZE {
+            let packed = extract_packed_rodata_literals(
+                rodata_data,
+                rodata_va,
+                Some(".rodata"),
+                self.min_length,
+            );
+            let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+            let fresh: Vec<ExtractedString> = packed
+                .into_iter()
+                .filter(|s| !existing.contains(s.value.as_str()))
+                .collect();
+            drop(existing);
+            let mut batch_seen: HashSet<String> = HashSet::new();
+            for s in fresh {
+                if batch_seen.insert(s.value.clone()) {
+                    strings.push(s);
+                }
+            }
+        }
+
         strings
     }
 
