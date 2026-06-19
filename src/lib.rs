@@ -1108,6 +1108,29 @@ pub fn extract_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     extract_strings_with_options(data, &ExtractOptions::new(min_length))
 }
 
+/// Apply every string decoder (base64, embedded base64, fuzzy base64, base32,
+/// base85, hex, URL, and unicode-escape) to already-extracted strings and return
+/// the newly decoded results.
+///
+/// Decoding runs on the *text* of each string, so it is filetype-agnostic: the
+/// same pass that recovers base64-encoded PowerShell from a PE also recovers a
+/// base64-over-UTF-16LE blob sitting in a plain `.txt` or `.json`. Both the
+/// internal extraction pipeline and the CLI's line-based text path funnel through
+/// here so coverage stays identical across inputs.
+#[must_use]
+pub fn decode_encoded_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+    let mut decoded = Vec::new();
+    decoded.extend(decoders::decode_base64_strings(strings));
+    decoded.extend(decoders::extract_embedded_base64(strings));
+    decoded.extend(fuzzy_base64::extract_fuzzy_base64(strings));
+    decoded.extend(decoders::decode_base32_strings(strings));
+    decoded.extend(decoders::decode_base85_strings(strings));
+    decoded.extend(decoders::decode_hex_strings(strings));
+    decoded.extend(decoders::decode_url_strings(strings));
+    decoded.extend(decoders::decode_unicode_escape_strings(strings));
+    decoded
+}
+
 /// Decode spaced ASCII strings in place.
 ///
 /// This handles strings like "V a r F i l e I n f o" -> "VarFileInfo"
@@ -1241,15 +1264,7 @@ fn extract_from_utf16_file(
 
     // Apply decoders (base64, hex, URL-encoding, etc.) to the extracted strings
     // This allows us to find base64-encoded PowerShell, hex-encoded URLs, etc.
-    let mut decoded_strings = Vec::new();
-    decoded_strings.extend(decoders::decode_base64_strings(&raw_strings));
-    decoded_strings.extend(decoders::extract_embedded_base64(&raw_strings));
-    decoded_strings.extend(fuzzy_base64::extract_fuzzy_base64(&raw_strings));
-    decoded_strings.extend(decoders::decode_base32_strings(&raw_strings));
-    decoded_strings.extend(decoders::decode_base85_strings(&raw_strings));
-    decoded_strings.extend(decoders::decode_hex_strings(&raw_strings));
-    decoded_strings.extend(decoders::decode_url_strings(&raw_strings));
-    decoded_strings.extend(decoders::decode_unicode_escape_strings(&raw_strings));
+    let decoded_strings = decode_encoded_strings(&raw_strings);
 
     // Update the method for all extracted strings to indicate they came from UTF-16 decoding
     // (but preserve the method for decoded strings - they should show Base64Decode, etc.)

@@ -335,6 +335,13 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
             byte_offset += line.len() as u64 + 1;
         }
 
+        // Apply the generic decoders so encoded payloads embedded in plain text
+        // — base64, hex, URL, base32/85, and notably base64-over-UTF-16LE as
+        // Windows emits — are surfaced regardless of filetype, not just when a
+        // recognized script-obfuscation pattern is present.
+        let decoded = stng::decode_encoded_strings(&strings);
+        strings.extend(decoded);
+
         // Script deobfuscation: decode hidden payloads from obfuscated scripts
         let deob_results = stng::script::deobfuscate_script(&data);
         for result in deob_results {

