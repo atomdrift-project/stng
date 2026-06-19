@@ -663,6 +663,54 @@ fn is_certificate_string(s: &str) -> bool {
     false
 }
 
+/// Extract XOR-obfuscated stack-pair strings from a Go ELF binary's `.text`
+/// section, returning only `XorStackPair` matches with file-relative offsets.
+///
+/// Pulled out of the Go ELF branch so it can run as one lane of the parallel
+/// scan join alongside the raw-string, wide-string, and network-IP passes.
+fn extract_go_text_xor_strings(
+    elf: &goblin::elf::Elf<'_>,
+    scan_data: &[u8],
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    // Compute image base from the first PT_LOAD segment for VA translation.
+    let image_base = elf
+        .program_headers
+        .iter()
+        .find(|ph| ph.p_type == goblin::elf::program_header::PT_LOAD)
+        .map(|ph| ph.p_vaddr.saturating_sub(ph.p_offset))
+        .unwrap_or(0);
+
+    let Some((text_start, text_vma, text)) = elf
+        .section_headers
+        .iter()
+        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("") == ".text")
+        .and_then(|sh| {
+            // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only)
+            #[allow(clippy::cast_possible_truncation)]
+            let start = sh.sh_offset as usize;
+            #[allow(clippy::cast_possible_truncation)]
+            let end = start.saturating_add(sh.sh_size as usize);
+            let text = scan_data.get(start..end)?;
+            Some((start, sh.sh_addr, text))
+        })
+    else {
+        return Vec::new();
+    };
+
+    // Use the context-aware version to resolve RIP-relative XMM loads.
+    let mut xor_results =
+        extract_stack_strings_with_context(text, min_length, scan_data, text_vma, image_base);
+    // Adjust data_offset to file-relative position.
+    for r in &mut xor_results {
+        r.data_offset += text_start as u64;
+    }
+    xor_results
+        .into_iter()
+        .filter(|s| s.method == StringMethod::XorStackPair)
+        .collect()
+}
+
 /// Enrich strings with section information based on their file offsets (ELF)
 fn enrich_elf_sections(strings: &mut [ExtractedString], elf: &goblin::elf::Elf<'_>) {
     for s in strings {
@@ -1809,34 +1857,84 @@ fn extract_from_object(
 
             if has_go {
                 is_go_binary = true;
-                let extractor = GoStringExtractor::new(min_length);
-                strings.extend(extractor.extract_elf(elf, scan_data));
 
-                // Raw scan fallback: Go shared libraries (cgo) store many strings
-                // in .noptrdata, .strtab, .symtab etc. that the structure-based
-                // extractor misses because it only targets .rodata.  Run a raw
-                // scan and merge strings not already found by structure analysis.
-                //
-                // Skip raw-scanning .rodata and .gopclntab themselves: Go packs
-                // strings back-to-back without null terminators, so a raw scan
-                // would emit the entire blob as one merged garbage string. The
-                // structure-based + inline-pattern extractors already cover
-                // those regions with correct boundaries.
+                // Go ELF extraction is five independent passes over `scan_data`:
+                //   1. structure-based Go string extraction (.rodata/.gopclntab)
+                //   2. raw-string fallback for cgo strings the structure pass
+                //      misses (.noptrdata, .strtab, .symtab, …). Skip-scanning
+                //      .rodata/.gopclntab avoids emitting Go's null-less packed
+                //      blobs as one giant garbage string.
+                //   3. UTF-16 wide-string scan
+                //   4. network-IP scan
+                //   5. .text XOR-pair extraction
+                // None of them depend on another's output, so run all five
+                // concurrently. The raw fallback is normally pruned of strings
+                // the structure pass already found; that `known`-set filter is a
+                // value comparison applied *after* the join, so it no longer
+                // forces the structure pass to complete first. Results are
+                // appended in the original sequential order, leaving downstream
+                // deduplication unaffected.
                 let skip = elf_go_skip_ranges(elf, scan_data.len());
-                let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-                let fresh: Vec<ExtractedString> = extract_raw_strings(
-                    scan_data,
-                    min_length,
-                    None,
-                    &segments,
-                    &section_info,
-                    &skip,
-                )
-                .into_iter()
-                .filter(|s| !known.contains(s.value.as_str()))
-                .collect();
+                let (go_strings, (raw_all, (wide_res, (ip_res, stack_res)))) = rayon::join(
+                    || GoStringExtractor::new(min_length).extract_elf(elf, scan_data),
+                    || {
+                        rayon::join(
+                            || {
+                                extract_raw_strings(
+                                    scan_data,
+                                    min_length,
+                                    None,
+                                    &segments,
+                                    &section_info,
+                                    &skip,
+                                )
+                            },
+                            || {
+                                rayon::join(
+                                    || {
+                                        extract_wide_strings(
+                                            scan_data,
+                                            min_length,
+                                            None,
+                                            &segments,
+                                            &section_info,
+                                            &skip,
+                                        )
+                                    },
+                                    || {
+                                        rayon::join(
+                                            || {
+                                                scan_binary_ips(
+                                                    scan_data,
+                                                    min_length,
+                                                    elf.header.e_machine,
+                                                    Some(elf),
+                                                    None,
+                                                )
+                                            },
+                                            || {
+                                                extract_go_text_xor_strings(
+                                                    elf, scan_data, min_length,
+                                                )
+                                            },
+                                        )
+                                    },
+                                )
+                            },
+                        )
+                    },
+                );
+                let known: HashSet<&str> = go_strings.iter().map(|s| s.value.as_str()).collect();
+                let fresh: Vec<ExtractedString> = raw_all
+                    .into_iter()
+                    .filter(|s| !known.contains(s.value.as_str()))
+                    .collect();
                 drop(known);
+                strings.extend(go_strings);
                 strings.extend(fresh);
+                strings.extend(wide_res);
+                strings.extend(ip_res);
+                strings.extend(stack_res);
             } else if has_rust {
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_elf(elf, scan_data));
@@ -1855,71 +1953,29 @@ fn extract_from_object(
                 ));
             }
 
-            // Extract UTF-16LE wide strings (less common in ELF but can occur, especially in malware)
-            // For Go binaries, skip the same regions to avoid spurious wide-string hits in packed rodata.
-            let wide_skip: Vec<std::ops::Range<usize>> = if is_go_binary {
-                elf_go_skip_ranges(elf, scan_data.len())
-            } else {
-                Vec::new()
-            };
-            strings.extend(extract_wide_strings(
-                scan_data,
-                min_length,
-                None,
-                &segments,
-                &section_info,
-                &wide_skip,
-            ));
+            // Wide strings, network IPs, and stack strings for non-Go ELF.
+            // Go ELF runs these concurrently with its raw-string fallback above.
+            if !is_go_binary {
+                // Extract UTF-16LE wide strings (less common in ELF but can
+                // occur, especially in malware).
+                strings.extend(extract_wide_strings(
+                    scan_data,
+                    min_length,
+                    None,
+                    &segments,
+                    &section_info,
+                    &[],
+                ));
 
-            // Extract binary network data (IPs and ports in network byte order)
-            strings.extend(scan_binary_ips(
-                scan_data,
-                min_length,
-                elf.header.e_machine,
-                Some(elf),
-                None,
-            ));
+                // Extract binary network data (IPs and ports in network byte order)
+                strings.extend(scan_binary_ips(
+                    scan_data,
+                    min_length,
+                    elf.header.e_machine,
+                    Some(elf),
+                    None,
+                ));
 
-            if is_go_binary {
-                // For Go binaries, run XOR-pair extraction on the .text section only.
-                //
-                // Compute image base from the first PT_LOAD segment for VA translation.
-                let image_base = elf
-                    .program_headers
-                    .iter()
-                    .find(|ph| ph.p_type == goblin::elf::program_header::PT_LOAD)
-                    .map(|ph| ph.p_vaddr.saturating_sub(ph.p_offset))
-                    .unwrap_or(0);
-
-                let text_data = elf
-                    .section_headers
-                    .iter()
-                    .find(|sh| elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("") == ".text")
-                    .and_then(|sh| {
-                        // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only)
-                        #[allow(clippy::cast_possible_truncation)]
-                        let start = sh.sh_offset as usize;
-                        #[allow(clippy::cast_possible_truncation)]
-                        let end = start.saturating_add(sh.sh_size as usize);
-                        let text = scan_data.get(start..end)?;
-                        Some((start, sh.sh_addr, text))
-                    });
-                if let Some((text_start, text_vma, text)) = text_data {
-                    // Use the context-aware version to resolve RIP-relative XMM loads
-                    let mut xor_results = extract_stack_strings_with_context(
-                        text, min_length, scan_data, text_vma, image_base,
-                    );
-                    // Adjust data_offset to file-relative position.
-                    for r in &mut xor_results {
-                        r.data_offset += text_start as u64;
-                    }
-                    strings.extend(
-                        xor_results
-                            .into_iter()
-                            .filter(|s| s.method == StringMethod::XorStackPair),
-                    );
-                }
-            } else {
                 // Only scan executable sections for stack strings to avoid wasting time on data
                 // Parallelize section scanning using Rayon
                 let results: Vec<ExtractedString> = elf
@@ -2288,18 +2344,35 @@ fn extract_from_object(
     let t_dec = std::time::Instant::now();
     let mut decoded = Vec::new();
     if !opts.is_cancelled() {
-        decoded.extend(decoders::decode_base64_strings(&strings));
-        decoded.extend(decoders::extract_embedded_base64(&strings));
-        decoded.extend(fuzzy_base64::extract_fuzzy_base64(&strings));
-    }
-    if !opts.is_cancelled() {
-        decoded.extend(decoders::decode_base32_strings(&strings));
-        decoded.extend(decoders::decode_base85_strings(&strings));
-        decoded.extend(decoders::decode_hex_strings(&strings));
-    }
-    if !opts.is_cancelled() {
-        decoded.extend(decoders::decode_url_strings(&strings));
-        decoded.extend(decoders::decode_unicode_escape_strings(&strings));
+        // The eight decoders are independent passes over `strings`; run them
+        // concurrently. Results are concatenated in the original pass order so
+        // downstream offset/value deduplication is unaffected.
+        let (g1, (g2, g3)) = rayon::join(
+            || {
+                let mut v = decoders::decode_base64_strings(&strings);
+                v.extend(decoders::extract_embedded_base64(&strings));
+                v.extend(fuzzy_base64::extract_fuzzy_base64(&strings));
+                v
+            },
+            || {
+                rayon::join(
+                    || {
+                        let mut v = decoders::decode_base32_strings(&strings);
+                        v.extend(decoders::decode_base85_strings(&strings));
+                        v.extend(decoders::decode_hex_strings(&strings));
+                        v
+                    },
+                    || {
+                        let mut v = decoders::decode_url_strings(&strings);
+                        v.extend(decoders::decode_unicode_escape_strings(&strings));
+                        v
+                    },
+                )
+            },
+        );
+        decoded.extend(g1);
+        decoded.extend(g2);
+        decoded.extend(g3);
     }
 
     // Add decoded strings to the main list
@@ -2310,7 +2383,15 @@ fn extract_from_object(
     tracing::debug!("TIME: Classification took {:?}", t_dec.elapsed());
 
     if opts.filter_garbage {
-        strings.retain(passes_garbage_filter);
+        // The garbage heuristic is the single most expensive post-extraction
+        // pass (it runs `is_garbage_with_context` over every candidate). Each
+        // verdict is independent, so evaluate them in parallel. `into_par_iter`
+        // + `filter` + `collect` preserves the original order, matching the
+        // sequential `retain` it replaces.
+        strings = std::mem::take(&mut strings)
+            .into_par_iter()
+            .filter(passes_garbage_filter)
+            .collect();
     }
 
     strip_go_varint_prefixes(&mut strings);
