@@ -89,14 +89,12 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
             let mut seen = HashSet::new();
             let initial_count = strings.len();
             let segment_names_set = HashSet::new();
-            let section_info = std::collections::HashMap::new();
             extract_printable_runs(
                 overlay_data,
                 PrintableRunContext {
                     min_length,
                     section: Some("overlay"),
                     segment_names_set: &segment_names_set,
-                    section_info: &section_info,
                     skip_ranges: &[],
                 },
                 &mut strings,

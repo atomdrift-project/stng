@@ -125,20 +125,9 @@ fn test_macho_import_strings_have_library_field() {
         return; // Skip if no imports (e.g. static binary or different binary format)
     }
 
-    // At least some Mach-O imports should carry the dylib name in the source field
-    let with_source: Vec<_> = imports.iter().filter(|s| s.source.is_some()).collect();
-    assert!(
-        !with_source.is_empty(),
-        "Mach-O imports should have source (dylib) field set; \
-         found {} imports, {} with source set",
-        imports.len(),
-        with_source.len()
-    );
-
+    // Imports should carry a non-empty symbol name.
     for s in &imports {
-        if let Some(lib) = &s.source {
-            assert!(!lib.is_empty(), "Source name should not be an empty string");
-        }
+        assert!(!s.value.is_empty(), "Import name should not be empty");
     }
 }
 

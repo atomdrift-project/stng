@@ -20,14 +20,6 @@ fn test_dynamichub_arm64_stack_xor_system_arg() {
         .expect("missing ARM64 stack-XOR decoded system() argument");
 
     assert_eq!(decoded.method, StringMethod::XorStackPair);
-    assert!(
-        decoded
-            .source
-            .as_deref()
-            .is_some_and(|source| source.contains("arm64 stack xor")),
-        "decoded source should identify ARM64 stack-XOR extraction, got {:?}",
-        decoded.source
-    );
 
     let xor_key = results
         .iter()

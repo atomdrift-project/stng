@@ -353,7 +353,6 @@ fn decode_stack_arg_with_candidate_pads(
                     section: section_name.map(str::to_string),
                     method: StringMethod::XorStackPair,
                     kind: Some(StringKind::XorKey),
-                    source: Some("arm64 stack xor key near system".to_string()),
                     ..Default::default()
                 });
             }
@@ -363,7 +362,6 @@ fn decode_stack_arg_with_candidate_pads(
                 section: section_name.map(str::to_string),
                 method: StringMethod::XorStackPair,
                 kind,
-                source: Some("arm64 stack xor near system".to_string()),
                 ..Default::default()
             });
         }
@@ -438,7 +436,6 @@ fn decode_recent_stack_blobs_with_pads(
                     data_offset: instr_off,
                     section: section_name.map(str::to_string),
                     method: StringMethod::XorStackPair,
-                    source: Some("arm64 stack xor blob".to_string()),
                     ..Default::default()
                 });
             }

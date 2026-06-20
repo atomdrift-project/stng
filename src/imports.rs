@@ -13,8 +13,6 @@ pub(crate) fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec
     if let Ok(imports) = macho.imports() {
         for import in imports {
             if import.name.len() >= min_length && seen.insert(import.name.to_string()) {
-                // Strip the leading path from dylib, e.g., "/usr/lib/libSystem.B.dylib" -> "libSystem.B.dylib"
-                let lib = import.dylib.rsplit('/').next().unwrap_or(import.dylib);
                 let section = find_macho_section(macho, import.address);
                 // Convert virtual address to file offset
                 let file_offset = macho_vaddr_to_file_offset(macho, import.address);
@@ -24,7 +22,6 @@ pub(crate) fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec
                     section,
                     method: StringMethod::Structure,
                     kind: Some(StringKind::Import),
-                    source: Some(lib.to_string()),
                     ..Default::default()
                 });
             }
@@ -110,7 +107,6 @@ pub(crate) fn extract_pe_imports(
                 section: None,
                 method: StringMethod::Structure,
                 kind: Some(StringKind::Import),
-                source: Some(import.dll.to_string()),
                 ..Default::default()
             });
         }
@@ -156,25 +152,14 @@ pub(crate) fn extract_elf_imports(
 
         // UNDEF symbols with non-zero st_value or GLOBAL binding are imports
         // GLOBAL/WEAK symbols with defined section are exports
-        let (kind, source) = if sym.st_shndx == 0 {
+        let kind = if sym.st_shndx == 0 {
             // Undefined - this is an import
-            // Try to find the source library from verneed
-            let lib = elf
-                .verneed
-                .iter()
-                .flat_map(goblin::elf::VerneedSection::iter)
-                .find(|vn| {
-                    vn.iter()
-                        .any(|aux| elf.dynstrtab.get_at(aux.vna_name) == Some(name))
-                })
-                .and_then(|vn| elf.dynstrtab.get_at(vn.vn_file))
-                .map(std::string::ToString::to_string);
-            (Some(StringKind::Import), lib)
+            Some(StringKind::Import)
         } else if sym.st_bind() == goblin::elf::sym::STB_GLOBAL
             || sym.st_bind() == goblin::elf::sym::STB_WEAK
         {
             // Defined global/weak symbol - this is an export
-            (Some(StringKind::Export), None)
+            Some(StringKind::Export)
         } else {
             continue;
         };
@@ -193,7 +178,6 @@ pub(crate) fn extract_elf_imports(
             section,
             method: StringMethod::Structure,
             kind,
-            source,
             ..Default::default()
         });
     }

@@ -74,22 +74,17 @@ fn test_no_incremental_xor_false_positives() {
     let opts = ExtractOptions::new(4).with_xor(Some(8));
     let extracted = extract_strings_with_options(&data, &opts);
 
-    let incremental: Vec<(&str, &str)> = extracted
+    let xor_decoded: Vec<&str> = extracted
         .iter()
         .filter(|s| s.method == StringMethod::XorDecode)
-        .filter_map(|s| {
-            s.source
-                .as_deref()
-                .filter(|src| src.contains("incremental"))
-                .map(|src| (s.value.as_str(), src))
-        })
+        .map(|s| s.value.as_str())
         .collect();
 
     assert!(
-        incremental.is_empty(),
-        "Clean Go PE should not trigger the incremental XOR scanner; found {} strings: {:?}",
-        incremental.len(),
-        incremental,
+        xor_decoded.is_empty(),
+        "Clean Go PE should not trigger the XOR scanner; found {} strings: {:?}",
+        xor_decoded.len(),
+        xor_decoded,
     );
 }
 

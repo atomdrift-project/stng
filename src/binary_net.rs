@@ -457,7 +457,6 @@ fn scan_sockaddr_in(
             section: None,
             method: StringMethod::RawScan,
             kind: Some(StringKind::IPPort),
-            source: Some("sockaddr_in".to_string()),
             ..Default::default()
         });
     }
@@ -501,7 +500,6 @@ mod tests {
         );
         assert_eq!(found.unwrap().data_offset, 270);
         assert_eq!(found.unwrap().kind, Some(StringKind::IPPort));
-        assert_eq!(found.unwrap().source, Some("sockaddr_in".to_string()));
     }
 
     #[test]

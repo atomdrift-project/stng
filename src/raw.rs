@@ -23,7 +23,9 @@ pub(crate) fn extract_raw_strings(
     min_length: usize,
     section: Option<&str>,
     segment_names: &[String],
-    section_info: &HashMap<String, crate::binary::SectionInfo>,
+    // Retained for call-site compatibility; section metadata is no longer
+    // stored per-string, so this is unused.
+    _section_info: &HashMap<String, crate::binary::SectionInfo>,
     skip_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
     // Build a set of known segment/section names for quick lookup
@@ -33,7 +35,6 @@ pub(crate) fn extract_raw_strings(
         min_length,
         section,
         segment_names_set: &segment_names_set,
-        section_info,
         skip_ranges,
     };
 
@@ -110,7 +111,6 @@ pub(crate) struct PrintableRunContext<'a> {
     pub(crate) min_length: usize,
     pub(crate) section: Option<&'a str>,
     pub(crate) segment_names_set: &'a HashSet<&'a str>,
-    pub(crate) section_info: &'a HashMap<String, crate::binary::SectionInfo>,
     pub(crate) skip_ranges: &'a [Range<usize>],
 }
 
@@ -193,22 +193,6 @@ fn classify_runs(
                         kind = None;
                     }
 
-                    // Get section metadata if this is a section
-                    let (sec_size, sec_exec, sec_write) = if kind == Some(StringKind::Section) {
-                        context
-                            .section_info
-                            .get(trimmed)
-                            .map_or((None, None, None), |info| {
-                                (
-                                    Some(info.size),
-                                    Some(info.is_executable),
-                                    Some(info.is_writable),
-                                )
-                            })
-                    } else {
-                        (None, None, None)
-                    };
-
                     return Some(ExtractedString {
                         value: trimmed.to_string(),
                         data_offset: start as u64,
@@ -216,10 +200,6 @@ fn classify_runs(
                         method: StringMethod::RawScan,
                         kind,
                         fragments: None,
-                        section_size: sec_size,
-                        section_executable: sec_exec,
-                        section_writable: sec_write,
-                        ..Default::default()
                     });
                 }
             }
@@ -244,7 +224,7 @@ pub(crate) fn extract_wide_strings(
     min_length: usize,
     section: Option<&str>,
     segment_names: &[String],
-    section_info: &HashMap<String, crate::binary::SectionInfo>,
+    _section_info: &HashMap<String, crate::binary::SectionInfo>,
     skip_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
     let segment_names_set: HashSet<&str> = segment_names.iter().map(String::as_str).collect();
@@ -335,20 +315,6 @@ pub(crate) fn extract_wide_strings(
             classifier::classify_string(trimmed)
         };
 
-        let (sec_size, sec_exec, sec_write) = if kind == Some(StringKind::Section) {
-            section_info
-                .get(trimmed)
-                .map_or((None, None, None), |info| {
-                    (
-                        Some(info.size),
-                        Some(info.is_executable),
-                        Some(info.is_writable),
-                    )
-                })
-        } else {
-            (None, None, None)
-        };
-
         seen.insert(trimmed.to_string());
         strings.push(ExtractedString {
             value: trimmed.to_string(),
@@ -357,10 +323,6 @@ pub(crate) fn extract_wide_strings(
             method: StringMethod::WideString,
             kind,
             fragments: None,
-            section_size: sec_size,
-            section_executable: sec_exec,
-            section_writable: sec_write,
-            ..Default::default()
         });
     }
 

@@ -117,21 +117,9 @@ exec(compile(result, '<>', 'exec'))
         strings
             .iter()
             .filter(|s| s.method == StringMethod::ScriptDecode)
-            .map(|s| (&s.value, &s.source))
+            .map(|s| &s.value)
             .collect::<Vec<_>>()
     );
-
-    // Verify the source/provenance includes the chain description
-    let decoded_with_source = strings
-        .iter()
-        .find(|s| s.method == StringMethod::ScriptDecode && s.source.is_some());
-    if let Some(s) = decoded_with_source {
-        let source = s.source.as_ref().unwrap();
-        assert!(
-            source.contains("python"),
-            "Source should mention 'python', got: {source}"
-        );
-    }
 }
 
 #[test]
@@ -671,16 +659,6 @@ fn test_real_world_tahmin_uygulamasi() {
             s.method == StringMethod::ScriptDecode && s.value.contains("_isRussianSystem")
         }),
         "Should find _isRussianSystem function in decoded payload"
-    );
-
-    // Verify source/provenance is set
-    let with_source: Vec<_> = script_decoded
-        .iter()
-        .filter(|s| s.source.is_some())
-        .collect();
-    assert!(
-        !with_source.is_empty(),
-        "ScriptDecode strings should have source/provenance set"
     );
 }
 

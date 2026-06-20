@@ -351,7 +351,6 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
             let base_offset = data.len() as u64 + 1 + result.offset as u64;
             for mut s in payload_strings {
                 s.method = stng::StringMethod::ScriptDecode;
-                s.source = Some(result.chain_description.clone());
                 s.kind = stng::classify_string(&s.value);
                 s.data_offset += base_offset;
                 strings.push(s);
@@ -623,7 +622,8 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
 
         for s in &strings {
             let section = s.section.as_deref();
-            let arch = s.architecture.as_deref();
+            // Architecture is no longer tracked per-string; never groups headers.
+            let arch: Option<&str> = None;
 
             // Print section header when section or architecture changes
             // Track as tuple (section, arch) to detect when either changes
@@ -955,11 +955,6 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
     let clean_value = s.value.trim_end_matches(|c: char| c.is_control());
     let mut value = clean_value.to_string();
 
-    // Append section metadata if this is a section
-    if let Some(metadata) = s.section_metadata_str() {
-        value = format!("{} {}", value, metadata);
-    }
-
     // For encoded strings that haven't been decoded separately, show preview inline
     // Skip inline preview if this is a decoded string (to avoid duplication)
     let show_inline_preview = !matches!(
@@ -1078,91 +1073,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         }
     }
 
-    // Add source info (imports, XOR keys) and handle raw form for decoded strings
-    let display_value = if let Some(ref src) = s.source {
-        if s.method == stng::StringMethod::XorDecode {
-            // For XOR-decoded strings:
-            // - Custom keys (xor:key:...): don't show (displayed in header)
-            // - Auto-detected keys (xor:0x...): show the key
-            if src.starts_with("xor:key:") {
-                // Custom XOR key - already shown in header, don't repeat
-                value
-            } else if let Some(key) = src.strip_prefix("xor:") {
-                // Auto-detected XOR key - show it
-                if use_color {
-                    format!("{value} {DIM}[{key}]{RESET}")
-                } else {
-                    format!("{value} [{key}]")
-                }
-            } else {
-                value
-            }
-        } else {
-            // For imports, show with arrow
-            if use_color {
-                format!("{value} {DIM}<- {src}{RESET}")
-            } else {
-                format!("{value} <- {src}")
-            }
-        }
-    } else if let Some(ref raw) = s.raw {
-        // For decoded strings with raw form (base64, spaced, wide)
-        if s.method == stng::StringMethod::Base64Decode {
-            // For embedded base64, show the original encoded string
-            if use_color {
-                format!("  ↳ {value} {DIM}(from {raw}){RESET}")
-            } else {
-                format!("  ↳ {value} (from {raw})")
-            }
-        } else {
-            // For spaced/wide strings, the method tag is sufficient - don't show verbose raw form
-            value
-        }
-    } else {
-        value
-    };
-
-    // Add function metadata for interesting functions
-    let display_value = if s.kind == Some(stng::StringKind::FuncName) {
-        if let Some(ref meta) = s.function_meta {
-            // Check if function is "interesting" - worth showing metadata
-            let is_interesting = meta.basic_blocks >= 5  // Complex branching
-                || meta.branches >= 3                     // Multiple branches
-                || meta.size > 300                        // Large function
-                || meta.noreturn == Some(true); // Never returns
-
-            if is_interesting {
-                let mut metadata_parts = Vec::new();
-
-                // Always show size and basic blocks for interesting functions
-                metadata_parts.push(format!("{}b", meta.size));
-                metadata_parts.push(format!("{}bb", meta.basic_blocks));
-
-                // Show branches if any
-                if meta.branches > 0 {
-                    metadata_parts.push(format!("{}br", meta.branches));
-                }
-
-                // Show noreturn flag
-                if meta.noreturn == Some(true) {
-                    metadata_parts.push("noret".to_string());
-                }
-
-                let metadata_str = metadata_parts.join("·");
-                if use_color {
-                    format!("{display_value} {DIM}[{metadata_str}]{RESET}")
-                } else {
-                    format!("{display_value} [{metadata_str}]")
-                }
-            } else {
-                display_value
-            }
-        } else {
-            display_value
-        }
-    } else {
-        display_value
-    };
+    let display_value = value;
 
     // Calculate available width for string content
     // Prefix format: "  " (2) + offset (8) + " " (1) + method (8) + " " (1) + classification (12) + " " (1) = 33 chars

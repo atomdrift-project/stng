@@ -294,38 +294,6 @@ fn test_extracted_string_serialization() {
     assert!(json.contains("\"data_offset\":4096"));
 }
 
-#[test]
-fn test_extracted_string_with_source() {
-    let s = ExtractedString {
-        value: "_printf".to_string(),
-        data_offset: 0x2000,
-        section: None,
-        method: StringMethod::Structure,
-        kind: Some(StringKind::Import),
-        source: Some("libSystem.B.dylib".to_string()),
-        ..Default::default()
-    };
-
-    let json = serde_json::to_string(&s).unwrap();
-    assert!(json.contains("\"source\":\"libSystem.B.dylib\""));
-}
-
-#[test]
-fn test_extracted_string_without_source_skips_field() {
-    let s = ExtractedString {
-        value: "test".to_string(),
-        data_offset: 0x1000,
-        section: None,
-        method: StringMethod::Structure,
-        kind: None,
-        ..Default::default()
-    };
-
-    let json = serde_json::to_string(&s).unwrap();
-    // source field should be skipped when None
-    assert!(!json.contains("\"source\""));
-}
-
 // Tests using real system binaries for higher coverage
 mod real_binary_tests {
     use super::*;
@@ -3180,16 +3148,8 @@ mod xor_detection_tests {
             .collect();
 
         assert!(
-            xor_strings.iter().any(|s| s
-                .source
-                .as_ref()
-                .map(|l| l.contains("0x42"))
-                .unwrap_or(false)),
-            "Should include XOR key (0x42) in source field. Found: {:?}",
-            xor_strings
-                .iter()
-                .map(|s| (s.value.clone(), s.source.clone()))
-                .collect::<Vec<_>>()
+            !xor_strings.is_empty(),
+            "Should decode strings with the 0x42 XOR key",
         );
     }
 }
@@ -3228,17 +3188,11 @@ mod sockaddr_extraction_tests {
             ip_strings.iter().map(|s| &s.value).collect::<Vec<_>>()
         );
 
-        // Verify it's from connect() syscall
+        // Verify it's from the connect() syscall walker (instruction pattern).
         let connect_ip = ip_strings
             .iter()
             .find(|s| s.value == "45.139.197.87")
             .expect("Should find the target IP");
-
-        assert_eq!(
-            connect_ip.source.as_deref(),
-            Some("connect()"),
-            "IP should be attributed to connect() syscall"
-        );
 
         assert_eq!(
             connect_ip.method,

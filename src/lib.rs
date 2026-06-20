@@ -76,7 +76,7 @@ pub use classifier::classify_string;
 pub use detect::{detect_language, is_text_file};
 pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
 pub use types::{
-    Arch, BinaryInfo, ExtractedString, FunctionMetadata, OverlayInfo, Severity, StringContext,
+    Arch, BinaryInfo, ExtractedString, OverlayInfo, Severity, StringContext, StringFragment,
     StringKind, StringMethod, StringStruct,
 };
 
@@ -95,10 +95,6 @@ pub use validation::{is_garbage, is_garbage_with_context, is_garbage_with_kind};
 pub use goblin;
 use goblin::Object;
 use goblin::mach::MachO;
-use goblin::mach::cputype::{
-    CPU_TYPE_ARM, CPU_TYPE_ARM64, CPU_TYPE_POWERPC, CPU_TYPE_POWERPC64, CPU_TYPE_X86,
-    CPU_TYPE_X86_64,
-};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -267,25 +263,21 @@ fn passes_garbage_filter(s: &ExtractedString) -> bool {
     let ctx = crate::types::StringContext {
         kind: s.kind,
         section: s.section.as_deref(),
-        arch: s
-            .architecture
-            .as_deref()
-            .and_then(crate::types::Arch::from_name),
+        // Arch hint was only ever stamped *after* this filter ran (or not at
+        // all on the main path), so it was always `None` here in practice.
+        arch: None,
     };
     !validation::is_garbage_with_context(&s.value, &ctx)
 }
 
 /// Merge a set of imports into the strings list.
-/// Updates kind/source for strings already present, then appends new ones.
+/// Updates kind for strings already present, then appends new ones.
 fn merge_imports(strings: &mut Vec<ExtractedString>, imports: Vec<ExtractedString>) {
-    let import_map: HashMap<&str, (Option<StringKind>, Option<&str>)> = imports
-        .iter()
-        .map(|s| (s.value.as_str(), (s.kind, s.source.as_deref())))
-        .collect();
+    let import_map: HashMap<&str, Option<StringKind>> =
+        imports.iter().map(|s| (s.value.as_str(), s.kind)).collect();
     for s in strings.iter_mut() {
-        if let Some(&(kind, src)) = import_map.get(s.value.as_str()) {
+        if let Some(&kind) = import_map.get(s.value.as_str()) {
             s.kind = kind;
-            s.source = src.map(ToString::to_string);
         }
     }
     // Collect new imports first so that `seen` (which borrows `strings`) is
@@ -482,9 +474,7 @@ fn apply_xor_scan(
                     section: None,
                     method: StringMethod::XorDecode,
                     kind: Some(StringKind::XorKey),
-                    source: None,
                     fragments: None,
-                    ..Default::default()
                 });
             }
             strings.extend(xor::extract_custom_xor_strings_with_hints(
@@ -498,15 +488,21 @@ fn apply_xor_scan(
         } else {
             let xor_results = xor::extract_xor_strings(data, opts.xor_min_length, is_pe);
 
+            // Every `extract_xor_strings` result is a single-byte XOR decode, so
+            // its key is recoverable from the data without a stored tag:
+            // `value[0] == data[offset] ^ key`, hence `key = data[offset] ^ value[0]`
+            // (holds for the wide/16LE path too — the first char's low byte).
+            let xor_key_of = |r: &ExtractedString| -> Option<u8> {
+                let off = usize::try_from(r.data_offset).ok()?;
+                Some(data.get(off)? ^ r.value.as_bytes().first()?)
+            };
+
             // If the pattern scan found 2+ strings encoded with the same single-byte key,
             // that key is in use throughout the binary. Do a full extraction pass so we
             // don't miss strings that lack a trigger pattern (e.g. syscall names, log paths).
             let mut key_counts: HashMap<u8, usize> = HashMap::new();
             for r in &xor_results {
-                if let Some(src) = &r.source
-                    && let Some(hex) = src.strip_prefix("xor:0x").and_then(|s| s.get(..2))
-                    && let Ok(k) = u8::from_str_radix(hex, 16)
-                {
+                if let Some(k) = xor_key_of(r) {
                     *key_counts.entry(k).or_insert(0) += 1;
                 }
             }
@@ -529,15 +525,11 @@ fn apply_xor_scan(
             }
 
             // Skip AC-scan results for keys already covered by full extraction above.
-            strings.extend(xor_results.into_iter().filter(|r| {
-                if let Some(src) = &r.source
-                    && let Some(hex) = src.strip_prefix("xor:0x").and_then(|s| s.get(..2))
-                    && let Ok(k) = u8::from_str_radix(hex, 16)
-                {
-                    return !fully_extracted_keys.contains(&k);
-                }
-                true
-            }));
+            strings.extend(
+                xor_results
+                    .into_iter()
+                    .filter(|r| xor_key_of(r).is_none_or(|k| !fully_extracted_keys.contains(&k))),
+            );
         }
 
         // Always run incremental XOR detection if enabled - it might complement regular XOR
@@ -819,15 +811,6 @@ fn enrich_macho_sections(
     macho: &goblin::mach::MachO<'_>,
     base_offset: u64,
 ) {
-    let arch_name = match macho.header.cputype {
-        CPU_TYPE_X86_64 => "x86_64",
-        CPU_TYPE_ARM64 => "arm64",
-        CPU_TYPE_X86 => "x86",
-        CPU_TYPE_ARM => "arm",
-        CPU_TYPE_POWERPC => "ppc",
-        CPU_TYPE_POWERPC64 => "ppc64",
-        _ => "unknown",
-    };
     // Calculate Mach-O header regions (relative to architecture start)
     // Header is 32 bytes for 64-bit, 28 bytes for 32-bit
     let header_size: u64 = if macho.is_64 { 32 } else { 28 };
@@ -877,7 +860,6 @@ fn enrich_macho_sections(
 
                     if matches_absolute || matches_relative {
                         s.section = Some(section.name().unwrap_or("(unknown)").to_string());
-                        s.architecture = Some(arch_name.to_string());
                         found = true;
                         break;
                     }
@@ -892,14 +874,12 @@ fn enrich_macho_sections(
                 if s.data_offset >= base_offset && s.data_offset < load_cmds_end {
                     // In header or load commands area
                     s.section = Some("load_commands".to_string());
-                    s.architecture = Some(arch_name.to_string());
                 } else if let Some((start, end)) = linkedit_range
                     && s.data_offset >= start
                     && s.data_offset < end
                 {
                     // In LINKEDIT but not in a specific section (symbol/string tables)
                     s.section = Some("__LINKEDIT".to_string());
-                    s.architecture = Some(arch_name.to_string());
                 }
             }
         }
@@ -1019,10 +999,6 @@ pub struct ExtractOptions {
     /// the caller (expose) own the rizin invocation and feed the
     /// resulting metadata down into stng without a second subprocess.
     pub rizin_boundaries: Option<Vec<r2::StringBoundary>>,
-    /// Pre-extracted rizin function metadata, keyed by function name.
-    /// When set, stng uses this in place of an `aflj` spawn for
-    /// function-context lookups.
-    pub rizin_function_metadata: Option<HashMap<String, FunctionMetadata>>,
     /// Pre-extracted connect-address strings (sockaddr_in literals
     /// resolved through rizin's disassembly walker). When set, stng
     /// merges these into the output instead of spawning rizin to
@@ -1058,7 +1034,6 @@ impl ExtractOptions {
             cancel: None,
             format_hint: FormatHint::Auto,
             rizin_boundaries: None,
-            rizin_function_metadata: None,
             rizin_connect_addrs: None,
             rizin_xor_candidates: None,
         }
@@ -1073,14 +1048,6 @@ impl ExtractOptions {
     #[must_use]
     pub fn with_rizin_boundaries(mut self, b: Vec<r2::StringBoundary>) -> Self {
         self.rizin_boundaries = Some(b);
-        self
-    }
-
-    /// Supply pre-extracted rizin function metadata keyed by name.
-    /// When set, stng uses this instead of running `aflj` itself.
-    #[must_use]
-    pub fn with_rizin_function_metadata(mut self, m: HashMap<String, FunctionMetadata>) -> Self {
-        self.rizin_function_metadata = Some(m);
         self
     }
 
@@ -1291,8 +1258,6 @@ fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_length: usize) 
                 section: s.section.clone(),
                 method: StringMethod::SpacedAscii,
                 kind,
-                raw: Some(s.value.clone()),
-                architecture: s.architecture.clone(),
                 ..Default::default()
             });
         }
@@ -1446,7 +1411,6 @@ fn append_script_deobfuscation(
         let base_offset = data.len() as u64 + 1 + result.offset as u64;
         for s in &mut payload_strings {
             s.method = StringMethod::ScriptDecode;
-            s.source = Some(result.chain_description.clone());
             s.kind = classifier::classify_string(&s.value);
             s.data_offset += base_offset;
         }
@@ -1645,61 +1609,7 @@ pub fn extract_strings_from_object(
     if is_text_file(data) {
         append_script_deobfuscation(&mut strings, data, opts);
     }
-    // Auto-tag the binary's architecture on every string that doesn't
-    // already carry one (fat Mach-O slices set per-slice arch during
-    // extraction; everything else is uniform). Downstream filters use
-    // this to scope arch-specific rules — e.g. the x86 push/pop
-    // save-sequence detector skips ARM / RISC-V binaries automatically.
-    apply_object_arch(&mut strings, object);
     deduplicate_by_offset(strings)
-}
-
-/// Detect the binary's CPU architecture from its parsed `Object` and
-/// stamp it on every extracted string that doesn't already have one.
-/// Strings from fat Mach-O are kept as-is (each slice already set
-/// `architecture`); single-arch binaries get the uniform value.
-fn apply_object_arch(strings: &mut [ExtractedString], object: &Object<'_>) {
-    let arch = match object {
-        Object::Elf(elf) => crate::types::Arch::from_elf_machine(elf.header.e_machine),
-        Object::PE(pe) => crate::types::Arch::from_pe_machine(pe.header.coff_header.machine),
-        Object::Mach(goblin::mach::Mach::Binary(macho)) => {
-            crate::types::Arch::from_macho_cputype(macho.header.cputype)
-        }
-        // Fat Mach-O: per-slice arch is set during extraction; nothing
-        // to do here.  Other formats (Archive, COFF, ...) don't carry
-        // a uniform machine field so we leave arch unset.
-        _ => None,
-    };
-    let Some(arch_name) = arch.map(arch_name_for_filter) else {
-        return;
-    };
-    for s in strings {
-        if s.architecture.is_none() {
-            s.architecture = Some(arch_name.to_string());
-        }
-    }
-}
-
-/// Canonical name used in the `ExtractedString::architecture` string
-/// field. Round-trips through `Arch::from_name` so downstream filters
-/// can recover the typed `Arch` without a parsing dance.
-fn arch_name_for_filter(arch: crate::types::Arch) -> &'static str {
-    use crate::types::Arch;
-    match arch {
-        Arch::X86 => "x86",
-        Arch::X86_64 => "x86_64",
-        Arch::Arm => "arm",
-        Arch::Aarch64 => "arm64",
-        Arch::Mips => "mips",
-        Arch::Mips64 => "mips64",
-        Arch::PowerPc => "ppc",
-        Arch::PowerPc64 => "ppc64",
-        Arch::RiscV => "riscv",
-        Arch::RiscV64 => "riscv64",
-        Arch::Sparc => "sparc",
-        Arch::Wasm => "wasm",
-        Arch::Other => "other",
-    }
 }
 
 /// Extract strings from a pre-parsed binary object.
@@ -2513,141 +2423,4 @@ fn get_r2_strings(opts: &ExtractOptions) -> Option<Vec<ExtractedString>> {
         return r2::extract_strings(path, opts.min_length, opts.use_cache);
     }
     None
-}
-
-#[cfg(test)]
-mod arch_propagation_tests {
-    //! Tests for `apply_object_arch` — the auto-detection glue that
-    //! tags every extracted string with the binary's CPU architecture
-    //! so downstream filters (notably the x86 push/pop save-sequence
-    //! detector) scope themselves correctly.
-
-    use super::*;
-    use crate::types::{Arch, ExtractedString, StringMethod};
-
-    fn dummy_string(value: &str) -> ExtractedString {
-        ExtractedString {
-            value: value.to_string(),
-            data_offset: 0,
-            section: None,
-            method: StringMethod::RawScan,
-            kind: None,
-            raw: None,
-            source: None,
-            fragments: None,
-            section_size: None,
-            section_executable: None,
-            section_writable: None,
-            architecture: None,
-            function_meta: None,
-        }
-    }
-
-    /// 64-bit little-endian ELF header with the given `e_machine`.
-    /// The body is zero-padded out to a size goblin will parse.
-    fn elf64_header(e_machine: u16) -> Vec<u8> {
-        let mut data = vec![0u8; 4096];
-        data[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
-        data[4] = 2; // EI_CLASS = 64-bit
-        data[5] = 1; // EI_DATA = little-endian
-        data[6] = 1; // EI_VERSION
-        data[16..18].copy_from_slice(&[2, 0]); // e_type = ET_EXEC
-        data[18..20].copy_from_slice(&e_machine.to_le_bytes());
-        data[20..24].copy_from_slice(&[1, 0, 0, 0]); // e_version
-        // e_phoff/e_shoff = 0; sizes 0 — minimal-but-parseable
-        data[52..54].copy_from_slice(&[64, 0]); // e_ehsize
-        data
-    }
-
-    #[test]
-    fn applies_x86_64_arch_for_amd64_elf() {
-        let bytes = elf64_header(62); // EM_X86_64
-        let object = Object::parse(&bytes).expect("parse ELF");
-
-        let mut strings = vec![dummy_string("hello"), dummy_string("world")];
-        apply_object_arch(&mut strings, &object);
-
-        for s in &strings {
-            assert_eq!(s.architecture.as_deref(), Some("x86_64"));
-            assert_eq!(
-                Arch::from_name(s.architecture.as_deref().unwrap()),
-                Some(Arch::X86_64),
-            );
-        }
-    }
-
-    #[test]
-    fn applies_aarch64_arch_for_arm64_elf() {
-        let bytes = elf64_header(183); // EM_AARCH64
-        let object = Object::parse(&bytes).expect("parse ELF");
-
-        let mut strings = vec![dummy_string("AVAUATSH")];
-        apply_object_arch(&mut strings, &object);
-
-        assert_eq!(strings[0].architecture.as_deref(), Some("arm64"));
-    }
-
-    #[test]
-    fn preserves_existing_arch_set_by_extractor() {
-        // Fat Mach-O slices set per-slice arch during extraction; the
-        // post-pass must NOT overwrite them with the parent object's
-        // arch (which is the same for the host but could differ for
-        // unusual slice layouts).
-        let bytes = elf64_header(62); // EM_X86_64
-        let object = Object::parse(&bytes).expect("parse ELF");
-
-        let mut s = dummy_string("preset");
-        s.architecture = Some("arm64".into()); // pretend an extractor already set it
-        let mut strings = vec![s];
-
-        apply_object_arch(&mut strings, &object);
-
-        assert_eq!(
-            strings[0].architecture.as_deref(),
-            Some("arm64"),
-            "auto-detect must not overwrite existing arch labels",
-        );
-    }
-
-    #[test]
-    fn unknown_machine_leaves_arch_unset() {
-        // EM_M32 = 1 — historic, not in our arch table. Auto-detect
-        // returns None; strings stay arch-less and downstream filters
-        // run their global heuristic.
-        let bytes = elf64_header(1);
-        let object = Object::parse(&bytes).expect("parse ELF");
-
-        let mut strings = vec![dummy_string("foo")];
-        apply_object_arch(&mut strings, &object);
-
-        assert!(strings[0].architecture.is_none());
-    }
-
-    #[test]
-    fn round_trips_through_arch_from_name() {
-        // Names emitted by `arch_name_for_filter` must be parseable by
-        // `Arch::from_name` so downstream filters recover the typed
-        // value.  Pin the contract.
-        for arch in [
-            Arch::X86,
-            Arch::X86_64,
-            Arch::Arm,
-            Arch::Aarch64,
-            Arch::Mips,
-            Arch::Mips64,
-            Arch::PowerPc,
-            Arch::PowerPc64,
-            Arch::RiscV,
-            Arch::RiscV64,
-            Arch::Sparc,
-            Arch::Wasm,
-        ] {
-            let name = arch_name_for_filter(arch);
-            assert_eq!(
-                Arch::from_name(name),
-                Some(arch),
-                "round-trip failed for {arch:?} via name '{name}'",
-            );
-        }
-    }
 }

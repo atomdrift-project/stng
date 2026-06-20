@@ -158,47 +158,6 @@ fn test_extract_strings_caching() {
     let _ = fs::remove_file(temp_path);
 }
 
-/// Test extract_function_metadata with large file (should skip)
-#[test]
-fn test_extract_function_metadata_large_file() {
-    // Files > 2MB should be skipped
-    let file_size: u64 = 3 * 1024 * 1024;
-    let temp_path = create_temp_file(
-        "r2_func_large",
-        &vec![0u8; usize::try_from(file_size).unwrap()],
-    );
-    let file_path = temp_path.to_str().unwrap();
-
-    let result = stng::r2::extract_function_metadata(file_path, file_size, false);
-
-    // Should return None for files > 2MB
-    assert!(result.is_none(), "Should skip files larger than 2MB");
-
-    let _ = fs::remove_file(temp_path);
-}
-
-/// Test extract_function_metadata with small file
-#[test]
-fn test_extract_function_metadata_small_file() {
-    let file_size = 1024;
-    let temp_path = create_temp_file("r2_func_small", &vec![0u8; file_size]);
-    let file_path = temp_path.to_str().unwrap();
-
-    let result = stng::r2::extract_function_metadata(file_path, file_size as u64, false);
-
-    // May return None if r2/rizin not available or no functions found
-    // Just verify it doesn't panic
-    if let Some(metadata) = result {
-        // Verify structure if functions were found
-        for (name, meta) in metadata {
-            assert!(!name.is_empty(), "Function name should not be empty");
-            let _ = meta.size; // size is u64, always non-negative
-        }
-    }
-
-    let _ = fs::remove_file(temp_path);
-}
-
 /// Test is_available doesn't panic
 #[test]
 fn test_is_available_no_panic() {
@@ -336,7 +295,6 @@ fn test_xor_key_info_structure() {
         confidence: XorConfidence::High,
         reference_count: 5,
         offset: 0x1000,
-        source: "test".to_string(),
     };
 
     assert_eq!(key_info.key, Some(b"test_key".to_vec()));

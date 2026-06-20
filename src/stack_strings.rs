@@ -84,7 +84,7 @@ struct StackStringExtractor<'a> {
     section_vma: u64,
     image_base: u64,
     // Register state: (Value, Instruction Offset, Flavor)
-    regs: HashMap<Register, (String, u64, String)>,
+    regs: HashMap<Register, (String, u64)>,
     // Raw (non-printable) immediate bytes held in registers, kept for XOR pairing.
     raw_regs: HashMap<Register, Vec<u8>>,
     // XMM register state: raw bytes (16 bytes each) for SSE operations.
@@ -100,7 +100,6 @@ struct StackWrite {
     string: String,
     disp: i64,
     instr_off: u64,
-    flavor: String,
 }
 
 #[derive(Debug, Clone)]
@@ -160,11 +159,6 @@ impl<'a> StackStringExtractor<'a> {
                         | (OpKind::Register, OpKind::Immediate64)
                         | (OpKind::Register, OpKind::Immediate32to64) => {
                             let reg = instr.op0_register();
-                            let imm_len = if op1_kind == OpKind::Immediate64 {
-                                8
-                            } else {
-                                4
-                            };
                             // Extract immediate bytes directly from the instruction's data if possible,
                             // or use iced's value. Using raw bytes is safer for printable check.
                             let imm_val = if op1_kind == OpKind::Immediate64 {
@@ -174,8 +168,7 @@ impl<'a> StackStringExtractor<'a> {
                             };
 
                             if let Some(s) = check_printable(&imm_val, self.min_length) {
-                                let flavor = if imm_len == 8 { "movabs" } else { "mov_r32" };
-                                self.regs.insert(reg, (s, instr_off, flavor.into()));
+                                self.regs.insert(reg, (s, instr_off));
                                 self.raw_regs.remove(&reg);
                             } else {
                                 self.regs.remove(&reg);
@@ -190,7 +183,7 @@ impl<'a> StackStringExtractor<'a> {
                             let imm_val = instr.immediate32().to_le_bytes();
 
                             if let Some(s) = check_printable(&imm_val, 4) {
-                                self.add_write(base, disp, s, instr_off, "mov_mem_imm32".into());
+                                self.add_write(base, disp, s, instr_off);
                             } else {
                                 self.add_raw_blob(base, disp, imm_val.to_vec(), instr_off);
                             }
@@ -201,13 +194,7 @@ impl<'a> StackStringExtractor<'a> {
                             let disp = instr.memory_displacement64() as i64;
                             let b = instr.immediate8();
                             if b.is_ascii_graphic() || b == b' ' {
-                                self.add_write(
-                                    base,
-                                    disp,
-                                    (b as char).to_string(),
-                                    instr_off,
-                                    "stack_array".into(),
-                                );
+                                self.add_write(base, disp, (b as char).to_string(), instr_off);
                             }
                         }
                         // mov [mem], reg
@@ -216,8 +203,8 @@ impl<'a> StackStringExtractor<'a> {
                             let disp = instr.memory_displacement64() as i64;
                             let src_reg = instr.op1_register();
 
-                            if let Some((s, _off, flavor)) = self.regs.get(&src_reg).cloned() {
-                                self.add_write(base, disp, s, instr_off, flavor);
+                            if let Some((s, _off)) = self.regs.get(&src_reg).cloned() {
+                                self.add_write(base, disp, s, instr_off);
                             }
                             if let Some(raw) = self.raw_regs.get(&src_reg).cloned() {
                                 self.add_raw_blob(base, disp, raw, instr_off);
@@ -276,13 +263,7 @@ impl<'a> StackStringExtractor<'a> {
                     if let Some(val) = imm_val
                         && let Some(s) = check_printable(&val, self.min_length.min(val.len()))
                     {
-                        self.add_write(
-                            Register::None,
-                            instr_off as i64,
-                            s,
-                            instr_off,
-                            "alu_imm".into(),
-                        );
+                        self.add_write(Register::None, instr_off as i64, s, instr_off);
                     }
                 }
                 // --- 4. Control Flow (Finalize/Clear) ---
@@ -347,12 +328,11 @@ impl<'a> StackStringExtractor<'a> {
         None
     }
 
-    fn add_write(&mut self, base: Register, disp: i64, s: String, instr_off: u64, flavor: String) {
+    fn add_write(&mut self, base: Register, disp: i64, s: String, instr_off: u64) {
         self.writes.entry(base).or_default().push(StackWrite {
             string: s,
             disp,
             instr_off,
-            flavor,
         });
     }
 
@@ -383,11 +363,10 @@ impl<'a> StackStringExtractor<'a> {
                 data_offset: first.instr_off,
                 method: StringMethod::StackString,
                 kind: Some(StringKind::StackString),
-                fragments: Some(vec![StringFragment {
+                fragments: Some(Box::new(vec![StringFragment {
                     offset: first.instr_off,
                     length: 0, // updated below
-                    flavor: Some(first.flavor),
-                }]),
+                }])),
                 ..Default::default()
             };
             // Set first fragment length correctly
@@ -408,7 +387,6 @@ impl<'a> StackStringExtractor<'a> {
                             frags.push(StringFragment {
                                 offset: w.instr_off,
                                 length: w.string.len(),
-                                flavor: Some(w.flavor),
                             });
                         }
                         current_end_disp = w.disp + w.string.len() as i64;
@@ -422,7 +400,6 @@ impl<'a> StackStringExtractor<'a> {
                                 frags.push(StringFragment {
                                     offset: w.instr_off,
                                     length: w.string.len(),
-                                    flavor: Some(w.flavor),
                                 });
                             }
                             current_end_disp = w.disp + w.string.len() as i64;
@@ -436,11 +413,10 @@ impl<'a> StackStringExtractor<'a> {
                         data_offset: w.instr_off,
                         method: StringMethod::StackString,
                         kind: Some(StringKind::StackString),
-                        fragments: Some(vec![StringFragment {
+                        fragments: Some(Box::new(vec![StringFragment {
                             offset: w.instr_off,
                             length: string_len,
-                            flavor: Some(w.flavor),
-                        }]),
+                        }])),
                         ..Default::default()
                     };
                     current_end_disp = w.disp + string_len as i64;
@@ -518,7 +494,7 @@ impl<'a> StackStringExtractor<'a> {
             fragments: if merged_fragments.is_empty() {
                 None
             } else {
-                Some(merged_fragments)
+                Some(Box::new(merged_fragments))
             },
             ..Default::default()
         }

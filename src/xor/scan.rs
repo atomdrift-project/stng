@@ -378,9 +378,6 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
 
                     let offset = run_start as u64;
                     if seen.insert((offset, s.clone())) {
-                        // Use hex format consistent with the AC scan path ("xor:0xNN").
-                        let source_tag = format!("xor:0x{:02X}", key[0]);
-
                         // Clean up URLs by removing trailing garbage
                         let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
                             clean_url_trailing_garbage(&s)
@@ -394,9 +391,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                             section: None,
                             method: StringMethod::XorDecode,
                             kind,
-                            source: Some(source_tag),
                             fragments: None,
-                            ..Default::default()
                         });
                     }
                 }
@@ -491,17 +486,13 @@ fn extract_xor_strings_from_hints(
                 if let Some(kind) = kind_opt
                     && seen.insert((offset as u64, s.clone()))
                 {
-                    let key_preview = key_preview(key);
-
                     results.push(ExtractedString {
                         value: s,
                         data_offset: offset as u64,
                         section: None,
                         method: StringMethod::XorDecode,
                         kind,
-                        source: Some(format!("xor:key:{key_preview}@hint")),
                         fragments: None,
-                        ..Default::default()
                     });
                 }
             }
@@ -902,9 +893,7 @@ fn extract_custom_xor_strings_pattern_based_simple(
                 section: None,
                 method: StringMethod::XorDecode,
                 kind,
-                source: Some(format!("xor:key:{}", key_preview)),
                 fragments: None,
-                ..Default::default()
             })
         })
         .collect();
@@ -1039,8 +1028,6 @@ pub(crate) fn extract_rolling_xor_with_known_plaintext(
                 let region = &data[region_start..region_end];
                 covered_ranges.push((region_start, region_end));
 
-                let key_hex = hex::encode(&candidate_key[..key_len]);
-
                 let mut pos = 0;
                 let mut decoded_bytes = Vec::with_capacity(128);
                 while pos < region.len() {
@@ -1082,9 +1069,7 @@ pub(crate) fn extract_rolling_xor_with_known_plaintext(
                             section: None,
                             method: StringMethod::XorDecode,
                             kind,
-                            source: Some(format!("xor:rolling:{}", key_hex)),
                             fragments: None,
-                            ..Default::default()
                         });
                     }
                 }
@@ -1227,12 +1212,7 @@ pub fn extract_incremental_xor_strings(
                                             section: None,
                                             method: StringMethod::XorDecode,
                                             kind: Some(kind),
-                                            source: Some(format!(
-                                                "xor:incremental:seed0x{:02x}",
-                                                seed
-                                            )),
                                             fragments: None,
-                                            ..Default::default()
                                         });
                                     }
                                     break;
@@ -1252,12 +1232,7 @@ pub fn extract_incremental_xor_strings(
                                                 section: None,
                                                 method: StringMethod::XorDecode,
                                                 kind: Some(kind),
-                                                source: Some(format!(
-                                                    "xor:incremental:seed0x{:02x}",
-                                                    seed
-                                                )),
                                                 fragments: None,
-                                                ..Default::default()
                                             });
                                         }
                                     }

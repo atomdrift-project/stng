@@ -23,9 +23,6 @@ pub struct StringFragment {
     pub offset: u64,
     /// Length of this fragment in bytes
     pub length: usize,
-    /// The specific instruction flavor (e.g., "movabs", "`stack_array`")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flavor: Option<String>,
 }
 
 /// An extracted string with metadata.
@@ -41,59 +38,13 @@ pub struct ExtractedString {
     pub method: StringMethod,
     /// Semantic kind of the string (None means no specific classification)
     pub kind: Option<StringKind>,
-    /// Original pre-decoded form (for spaced, base64, wide, etc.)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw: Option<String>,
-    /// Context/source: library name, XOR key, or extraction source
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    /// For multi-part strings (`StackString`), tracks all source fragments
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub fragments: Option<Vec<StringFragment>>,
-    /// For Section strings, stores size and type metadata
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub section_size: Option<u64>,
-    /// For Section strings, whether the section is executable
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub section_executable: Option<bool>,
-    /// For Section strings, whether the section is writable
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub section_writable: Option<bool>,
-    /// Architecture (for Mach-O fat binaries: `x86_64`, `arm64`, etc.)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub architecture: Option<String>,
-    /// Function metadata (for `FuncName` kind)
-    ///
-    /// Boxed because it is large (~72 bytes) and set on only a small fraction
-    /// of strings; inline it would bloat every `ExtractedString` in the
-    /// extraction-wide vectors.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub function_meta: Option<Box<FunctionMetadata>>,
-}
-
-/// Metadata about a function (from binary analysis)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FunctionMetadata {
-    /// Function size in bytes
-    pub size: u64,
-    /// Number of basic blocks
-    pub basic_blocks: u64,
-    /// Number of branches/edges
-    pub branches: u64,
-    /// Number of instructions
-    pub instructions: u64,
-    /// Function signature (with args)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signature: Option<String>,
-    /// Whether function returns
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub noreturn: Option<bool>,
+    /// Source fragments for multi-part (`StackString`) values — boxed because
+    /// it is set on well under 1% of strings, and an extraction holds ~100k+
+    /// transient `ExtractedString`s at peak, so an inline `Option<Vec<_>>`
+    /// (24 B on every string) dominated peak RSS. Behind `Option<Box<_>>` the
+    /// common case is 8 bytes and the rare case pays one allocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragments: Option<Box<Vec<StringFragment>>>,
 }
 
 impl Default for ExtractedString {
@@ -104,48 +55,8 @@ impl Default for ExtractedString {
             section: None,
             method: StringMethod::RawScan,
             kind: None,
-            raw: None,
-            source: None,
             fragments: None,
-            section_size: None,
-            section_executable: None,
-            section_writable: None,
-            architecture: None,
-            function_meta: None,
         }
-    }
-}
-
-impl ExtractedString {
-    /// Get formatted section metadata if this is a section string
-    #[must_use]
-    pub fn section_metadata_str(&self) -> Option<String> {
-        if self.kind != Some(StringKind::Section) {
-            return None;
-        }
-
-        let size = self.section_size?;
-        let is_exec = self.section_executable.unwrap_or(false);
-        let is_write = self.section_writable.unwrap_or(false);
-
-        // Format size
-        #[allow(clippy::cast_precision_loss)]
-        let size_str = if size < 1024 {
-            format!("{size}b")
-        } else if size < 1024 * 1024 {
-            format!("{:.1}kb", size as f64 / 1024.0)
-        } else {
-            format!("{:.1}mb", size as f64 / (1024.0 * 1024.0))
-        };
-
-        // Format type
-        let type_str = match (is_exec, is_write) {
-            (true, true) => "TEXT+DATA",
-            (true, false) => "TEXT",
-            (false, _) => "DATA",
-        };
-
-        Some(format!("({size_str}, {type_str})"))
     }
 }
 
@@ -830,6 +741,7 @@ impl BinaryInfo {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
@@ -925,7 +837,6 @@ mod tests {
             section: Some("section".to_string()),
             method: StringMethod::Structure,
             kind: None,
-            source: Some("lib".to_string()),
             ..Default::default()
         };
 
@@ -933,7 +844,6 @@ mod tests {
         assert_eq!(s.value, cloned.value);
         assert_eq!(s.data_offset, cloned.data_offset);
         assert_eq!(s.section, cloned.section);
-        assert_eq!(s.source, cloned.source);
     }
 
     #[test]

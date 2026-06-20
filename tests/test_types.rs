@@ -4,8 +4,7 @@
 //! Tests core type definitions, methods, serialization, and edge cases.
 
 use stng::{
-    ExtractedString, FunctionMetadata, OverlayInfo, Severity, StringKind, StringMethod,
-    StringStruct,
+    ExtractedString, OverlayInfo, Severity, StringFragment, StringKind, StringMethod, StringStruct,
 };
 
 // ===== ExtractedString Tests =====
@@ -18,149 +17,7 @@ fn test_extracted_string_default() {
     assert_eq!(s.section, None);
     assert_eq!(s.method, StringMethod::RawScan);
     assert_eq!(s.kind, None);
-    assert_eq!(s.source, None);
     assert_eq!(s.fragments, None);
-    assert_eq!(s.section_size, None);
-    assert_eq!(s.section_executable, None);
-    assert_eq!(s.section_writable, None);
-    assert_eq!(s.architecture, None);
-    assert_eq!(s.function_meta, None);
-}
-
-#[test]
-fn test_section_metadata_str_not_section_kind() {
-    let s = ExtractedString {
-        value: "test".to_string(),
-        kind: None,
-        section_size: Some(1024),
-        section_executable: Some(true),
-        section_writable: Some(false),
-        ..Default::default()
-    };
-
-    // Should return None if not a Section kind
-    assert_eq!(s.section_metadata_str(), None);
-}
-
-#[test]
-fn test_section_metadata_str_missing_size() {
-    let s = ExtractedString {
-        value: ".text".to_string(),
-        kind: Some(StringKind::Section),
-        section_size: None,
-        ..Default::default()
-    };
-
-    // Should return None if size is missing
-    assert_eq!(s.section_metadata_str(), None);
-}
-
-#[test]
-fn test_section_metadata_str_bytes() {
-    let s = ExtractedString {
-        value: ".text".to_string(),
-        kind: Some(StringKind::Section),
-        section_size: Some(512), // < 1024
-        section_executable: Some(true),
-        section_writable: Some(false),
-        ..Default::default()
-    };
-
-    let meta = s.section_metadata_str().unwrap();
-    assert_eq!(meta, "(512b, TEXT)");
-}
-
-#[test]
-fn test_section_metadata_str_kilobytes() {
-    let s = ExtractedString {
-        value: ".data".to_string(),
-        kind: Some(StringKind::Section),
-        section_size: Some(2048), // 2kb
-        section_executable: Some(false),
-        section_writable: Some(true),
-        ..Default::default()
-    };
-
-    let meta = s.section_metadata_str().unwrap();
-    assert_eq!(meta, "(2.0kb, DATA)");
-}
-
-#[test]
-fn test_section_metadata_str_megabytes() {
-    let s = ExtractedString {
-        value: ".rodata".to_string(),
-        kind: Some(StringKind::Section),
-        section_size: Some(5 * 1024 * 1024), // 5mb
-        section_executable: Some(false),
-        section_writable: Some(false),
-        ..Default::default()
-    };
-
-    let meta = s.section_metadata_str().unwrap();
-    assert_eq!(meta, "(5.0mb, DATA)");
-}
-
-#[test]
-fn test_section_metadata_str_text_exec_only() {
-    let s = ExtractedString {
-        value: ".text".to_string(),
-        kind: Some(StringKind::Section),
-        section_size: Some(1024),
-        section_executable: Some(true),
-        section_writable: Some(false),
-        ..Default::default()
-    };
-
-    let meta = s.section_metadata_str().unwrap();
-    assert!(meta.contains("TEXT"));
-    assert!(!meta.contains("DATA"));
-}
-
-#[test]
-fn test_section_metadata_str_data_write_only() {
-    let s = ExtractedString {
-        value: ".data".to_string(),
-        kind: Some(StringKind::Section),
-        section_size: Some(1024),
-        section_executable: Some(false),
-        section_writable: Some(true),
-        ..Default::default()
-    };
-
-    let meta = s.section_metadata_str().unwrap();
-    assert!(meta.contains("DATA"));
-    assert!(!meta.contains("TEXT+DATA"));
-}
-
-#[test]
-fn test_section_metadata_str_text_plus_data() {
-    let s = ExtractedString {
-        value: ".weird".to_string(),
-        kind: Some(StringKind::Section),
-        section_size: Some(1024),
-        section_executable: Some(true),
-        section_writable: Some(true),
-        ..Default::default()
-    };
-
-    let meta = s.section_metadata_str().unwrap();
-    assert!(meta.contains("TEXT+DATA"));
-}
-
-#[test]
-fn test_section_metadata_str_default_permissions() {
-    let s = ExtractedString {
-        value: ".bss".to_string(),
-        kind: Some(StringKind::Section),
-        section_size: Some(1024),
-        section_executable: None,
-        section_writable: None,
-        ..Default::default()
-    };
-
-    // Should default to (false, false) -> DATA
-    let meta = s.section_metadata_str().unwrap();
-    assert!(meta.contains("DATA"));
 }
 
 // ===== StringKind::severity() Tests =====
@@ -331,68 +188,6 @@ fn test_short_name_macho() {
 
 // ===== FunctionMetadata Tests =====
 
-#[test]
-fn test_function_metadata_construction() {
-    let meta = FunctionMetadata {
-        size: 1024,
-        basic_blocks: 10,
-        branches: 15,
-        instructions: 200,
-        signature: Some("int foo(char*, int)".to_string()),
-        noreturn: Some(false),
-    };
-
-    assert_eq!(meta.size, 1024);
-    assert_eq!(meta.basic_blocks, 10);
-    assert_eq!(meta.branches, 15);
-    assert_eq!(meta.instructions, 200);
-    assert_eq!(meta.signature, Some("int foo(char*, int)".to_string()));
-    assert_eq!(meta.noreturn, Some(false));
-}
-
-#[test]
-fn test_function_metadata_clone() {
-    let meta = FunctionMetadata {
-        size: 512,
-        basic_blocks: 5,
-        branches: 8,
-        instructions: 100,
-        signature: None,
-        noreturn: Some(true),
-    };
-
-    let cloned = meta.clone();
-    assert_eq!(meta.size, cloned.size);
-    assert_eq!(meta.basic_blocks, cloned.basic_blocks);
-    assert_eq!(meta.branches, cloned.branches);
-    assert_eq!(meta.instructions, cloned.instructions);
-    assert_eq!(meta.signature, cloned.signature);
-    assert_eq!(meta.noreturn, cloned.noreturn);
-}
-
-#[test]
-fn test_function_metadata_equality() {
-    let meta1 = FunctionMetadata {
-        size: 100,
-        basic_blocks: 2,
-        branches: 3,
-        instructions: 50,
-        signature: Some("test".to_string()),
-        noreturn: None,
-    };
-
-    let meta2 = FunctionMetadata {
-        size: 100,
-        basic_blocks: 2,
-        branches: 3,
-        instructions: 50,
-        signature: Some("test".to_string()),
-        noreturn: None,
-    };
-
-    assert_eq!(meta1, meta2);
-}
-
 // ===== OverlayInfo Tests =====
 
 #[test]
@@ -443,8 +238,6 @@ fn test_extracted_string_serialization() {
         section: Some(".text".to_string()),
         method: StringMethod::Structure,
         kind: Some(StringKind::FuncName),
-        source: Some("libc.so".to_string()),
-        architecture: Some("x86_64".to_string()),
         ..Default::default()
     };
 
@@ -452,8 +245,6 @@ fn test_extracted_string_serialization() {
     assert!(json.contains("test_value"));
     assert!(json.contains("4660")); // 0x1234 in decimal
     assert!(json.contains(".text"));
-    assert!(json.contains("libc.so"));
-    assert!(json.contains("x86_64"));
 }
 
 #[test]
@@ -469,26 +260,6 @@ fn test_extracted_string_serialization_skip_none() {
     assert!(!json.contains("library"));
     assert!(!json.contains("fragments"));
     assert!(!json.contains("architecture"));
-}
-
-#[test]
-fn test_function_metadata_serialization() {
-    let meta = FunctionMetadata {
-        size: 1024,
-        basic_blocks: 10,
-        branches: 15,
-        instructions: 200,
-        signature: Some("test_func".to_string()),
-        noreturn: Some(false),
-    };
-
-    let json = serde_json::to_string(&meta).unwrap();
-    assert!(json.contains("1024"));
-    assert!(json.contains("10"));
-    assert!(json.contains("15"));
-    assert!(json.contains("200"));
-    assert!(json.contains("test_func"));
-    assert!(json.contains("false"));
 }
 
 // ===== StringStruct Tests =====
@@ -551,27 +322,6 @@ fn test_string_struct_hash() {
 // ===== Edge Cases =====
 
 #[test]
-fn test_section_metadata_str_boundary_sizes() {
-    // Test exactly at 1kb boundary
-    let s1kb = ExtractedString {
-        value: "test".to_string(),
-        kind: Some(StringKind::Section),
-        section_size: Some(1024),
-        ..Default::default()
-    };
-    assert_eq!(s1kb.section_metadata_str().unwrap(), "(1.0kb, DATA)");
-
-    // Test exactly at 1mb boundary
-    let s1mb = ExtractedString {
-        value: "test".to_string(),
-        kind: Some(StringKind::Section),
-        section_size: Some(1024 * 1024),
-        ..Default::default()
-    };
-    assert_eq!(s1mb.section_metadata_str().unwrap(), "(1.0mb, DATA)");
-}
-
-#[test]
 fn test_extracted_string_with_all_fields() {
     let s = ExtractedString {
         value: "complex_string".to_string(),
@@ -579,29 +329,16 @@ fn test_extracted_string_with_all_fields() {
         section: Some(".data".to_string()),
         method: StringMethod::StackString,
         kind: Some(StringKind::StackString),
-        source: Some("lib.so".to_string()),
-        section_size: Some(4096),
-        section_executable: Some(false),
-        section_writable: Some(true),
-        architecture: Some("arm64".to_string()),
-        function_meta: Some(Box::new(FunctionMetadata {
-            size: 256,
-            basic_blocks: 4,
-            branches: 6,
-            instructions: 50,
-            signature: Some("void func()".to_string()),
-            noreturn: Some(false),
-        })),
-        ..Default::default()
+        fragments: Some(Box::new(vec![StringFragment {
+            offset: 0x5000,
+            length: 14,
+        }])),
     };
 
     assert_eq!(s.value, "complex_string");
     assert_eq!(s.data_offset, 0x5000);
     assert!(s.section.is_some());
-    assert!(s.source.is_some());
-    assert!(s.section_size.is_some());
-    assert!(s.architecture.is_some());
-    assert!(s.function_meta.is_some());
+    assert!(s.fragments.is_some());
 }
 
 #[test]

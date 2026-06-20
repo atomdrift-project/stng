@@ -1,7 +1,7 @@
 //! Optional rizin/radare2 integration for smarter string extraction.
 pub mod cache;
 use crate::classifier::classify_string;
-use crate::{ExtractedString, FunctionMetadata, StringKind, StringMethod};
+use crate::{ExtractedString, StringKind, StringMethod};
 use cache::R2Cache;
 use std::collections::HashSet;
 use std::process::Command;
@@ -123,7 +123,6 @@ pub fn extract_strings(
                             section: Some(s.section.clone()),
                             method: StringMethod::SpacedAscii,
                             kind,
-                            raw: Some(s.string.clone()),
                             ..Default::default()
                         });
                     }
@@ -141,7 +140,6 @@ pub fn extract_strings(
             }
         }
     }
-    let function_metadata = extract_function_metadata(path, file_size, use_cache);
     if let Some(symbols) = symbols_result
         && let Ok(json) = serde_json::from_str::<Vec<R2Symbol>>(&symbols)
     {
@@ -155,30 +153,12 @@ pub fn extract_strings(
                     "FILE" => StringKind::FilePath,
                     _ => StringKind::Ident,
                 });
-                let func_meta = if s.r#type == "FUNC" || s.r#type == "METH" {
-                    function_metadata
-                        .as_ref()
-                        .and_then(|map| {
-                            map.get(&s.name).or_else(|| {
-                                let clean = s
-                                    .name
-                                    .strip_prefix("sym.")
-                                    .or_else(|| s.name.strip_prefix("sym.imp."))
-                                    .unwrap_or(&s.name);
-                                map.get(clean)
-                            })
-                        })
-                        .map(|meta| Box::new(meta.clone()))
-                } else {
-                    None
-                };
                 strings.push(ExtractedString {
                     value: s.name,
                     data_offset: s.paddr,
                     section: s.section,
                     method: StringMethod::R2Symbol,
                     kind,
-                    function_meta: func_meta,
                     ..Default::default()
                 });
             }
@@ -189,57 +169,6 @@ pub fn extract_strings(
     } else {
         Some(strings)
     }
-}
-
-#[must_use]
-pub fn extract_function_metadata(
-    path: &str,
-    file_size: u64,
-    use_cache: bool,
-) -> Option<std::collections::HashMap<String, FunctionMetadata>> {
-    if file_size > 2 * 1024 * 1024 {
-        return None;
-    }
-    let tool = get_tool()?;
-    let functions_json = run_tool_command_with_cache(tool, path, "aa; aflj", use_cache)?;
-    #[derive(serde::Deserialize)]
-    struct R2Function {
-        name: String,
-        #[serde(default)]
-        size: u64,
-        #[serde(default)]
-        nbbs: u64,
-        #[serde(default)]
-        edges: u64,
-        #[serde(default)]
-        ninstrs: u64,
-        #[serde(default)]
-        signature: Option<String>,
-        #[serde(default)]
-        noreturn: bool,
-    }
-    let functions: Vec<R2Function> = serde_json::from_str(&functions_json).ok()?;
-    let mut metadata_map = std::collections::HashMap::new();
-    for func in functions {
-        let clean = func
-            .name
-            .strip_prefix("sym.")
-            .or_else(|| func.name.strip_prefix("sym.imp."))
-            .unwrap_or(&func.name)
-            .to_string();
-        metadata_map.insert(
-            clean,
-            FunctionMetadata {
-                size: func.size,
-                basic_blocks: func.nbbs,
-                branches: func.edges,
-                instructions: func.ninstrs,
-                signature: func.signature,
-                noreturn: if func.noreturn { Some(true) } else { None },
-            },
-        );
-    }
-    Some(metadata_map)
 }
 
 fn run_tool_command(tool: &str, path: &str, cmd: &str) -> Option<String> {
@@ -326,7 +255,6 @@ pub struct XorKeyInfo {
     pub confidence: XorConfidence,
     pub reference_count: usize,
     pub offset: u64,
-    pub source: String,
 }
 
 fn calculate_entropy(data: &[u8]) -> f64 {
@@ -421,7 +349,6 @@ pub fn extract_binary_xor_candidates(path: &str, data: &[u8]) -> Vec<ExtractedSt
                         section: Some(section.name.clone()),
                         method: StringMethod::Heuristic,
                         kind: Some(StringKind::XorKey),
-                        raw: Some(hex::encode(chunk)),
                         ..Default::default()
                     });
                     seen.insert(offset);
@@ -492,7 +419,6 @@ pub fn verify_xor_keys(
                         length: len,
                         confidence: XorConfidence::High,
                         reference_count: 1,
-                        source: format!("xor_lea_prox_{len}@0x{lea_addr:x}"),
                     });
                 }
                 seen_keys.insert(paddr);
@@ -511,7 +437,6 @@ pub fn verify_xor_keys(
             confidence: XorConfidence::Low,
             reference_count: 1,
             offset: c.data_offset,
-            source: "string_candidate".to_string(),
         });
     }
     for ir in instr_results {
@@ -572,7 +497,6 @@ fn sockaddr_to_string(sockaddr: &SockaddrIn) -> ExtractedString {
         section: Some(".text".to_string()),
         method: StringMethod::InstructionPattern,
         kind,
-        source: Some("connect()".to_string()),
         ..Default::default()
     }
 }

@@ -54,13 +54,4 @@ fn test_elf_rootkit_xor_detection() {
         .find(|r| r.value == "ld.so.preload")
         .expect("ld.so.preload not found");
     assert_eq!(ld_so.method, StringMethod::XorDecode);
-    assert!(
-        ld_so
-            .source
-            .as_ref()
-            .map(|s| s.contains("FE"))
-            .unwrap_or(false),
-        "ld.so.preload source should indicate 0xFE key, got: {:?}",
-        ld_so.source
-    );
 }

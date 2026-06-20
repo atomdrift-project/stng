@@ -126,11 +126,7 @@ mod tests {
         let data = make_xor_test_data(plaintext, key, 20);
         let results = extract_xor_strings(&data, 10, false);
         assert!(
-            results.iter().any(|r| r.value == "http://evil.com"
-                && r.source
-                    .as_ref()
-                    .map(|l| l.contains("0x42"))
-                    .unwrap_or(false)),
+            results.iter().any(|r| r.value == "http://evil.com"),
             "Should find URL with XOR key 0x42. Results: {:?}",
             results
         );
@@ -143,11 +139,7 @@ mod tests {
         let data = make_xor_test_data(plaintext, key, 30);
         let results = extract_xor_strings(&data, 8, false);
         assert!(
-            results.iter().any(|r| r.value == "192.168.1.100"
-                && r.source
-                    .as_ref()
-                    .map(|l| l.contains("0x5A"))
-                    .unwrap_or(false)),
+            results.iter().any(|r| r.value == "192.168.1.100"),
             "Should find IP with XOR key 0x5A. Results: {:?}",
             results
         );
@@ -160,11 +152,7 @@ mod tests {
         let data = make_xor_test_data(plaintext, key, 25);
         let results = extract_xor_strings(&data, 8, false);
         assert!(
-            results.iter().any(|r| r.value == "10.0.0.1:8080"
-                && r.source
-                    .as_ref()
-                    .map(|l| l.contains("0x3C"))
-                    .unwrap_or(false)),
+            results.iter().any(|r| r.value == "10.0.0.1:8080"),
             "IP:port should be detected with XOR key 0x3C. Results: {:?}",
             results
         );
@@ -177,11 +165,7 @@ mod tests {
         let data = make_xor_test_data(plaintext, key, 10);
         let results = extract_xor_strings(&data, 10, false);
         assert!(
-            results.iter().any(|r| r.value == "/etc/passwd"
-                && r.source
-                    .as_ref()
-                    .map(|l| l.contains("0xAB"))
-                    .unwrap_or(false)),
+            results.iter().any(|r| r.value == "/etc/passwd"),
             "Should find path with XOR key 0xAB. Results: {:?}",
             results
         );
@@ -194,11 +178,7 @@ mod tests {
         let data = make_xor_test_data(plaintext, key, 20);
         let results = extract_xor_strings(&data, 10, false);
         assert!(
-            results.iter().any(|r| r.value == "password=secret123"
-                && r.source
-                    .as_ref()
-                    .map(|l| l.contains("0x77"))
-                    .unwrap_or(false)),
+            results.iter().any(|r| r.value == "password=secret123"),
             "Should find password string with XOR key 0x77. Results: {:?}",
             results
         );
@@ -223,13 +203,9 @@ mod tests {
         let key: u8 = 0x20;
         let data = make_xor_test_data(plaintext, key, 20);
         let results = extract_xor_strings(&data, 6, false);
-        // Should not find this as it's a false positive
+        // Key 0x20 is skipped, so the plaintext must not be recovered.
         assert!(
-            !results.iter().any(|r| r
-                .source
-                .as_ref()
-                .map(|l| l.contains("0x20"))
-                .unwrap_or(false)),
+            !results.iter().any(|r| r.value == "GOROOT OBJECT"),
             "Should skip key 0x20. Results: {:?}",
             results
         );
@@ -242,11 +218,7 @@ mod tests {
         let data = make_xor_test_data(plaintext, key, 20);
         let results = extract_xor_strings(&data, 10, false);
         assert!(
-            results.iter().any(|r| r.value == "evil.malware.com"
-                && r.source
-                    .as_ref()
-                    .map(|l| l.contains("0x55"))
-                    .unwrap_or(false)),
+            results.iter().any(|r| r.value == "evil.malware.com"),
             "Hostname should be detected with XOR key 0x55. Results: {:?}",
             results
         );
@@ -272,11 +244,7 @@ mod tests {
 
         let results = extract_xor_strings(&data, 10, false);
         assert!(
-            results.iter().any(|r| r.value.contains("Mozilla")
-                && r.source
-                    .as_ref()
-                    .map(|l| l.contains("0x42"))
-                    .unwrap_or(false)),
+            results.iter().any(|r| r.value.contains("Mozilla")),
             "Mozilla user agent should be detected with XOR key 0x42. Results: {:?}",
             results
         );
@@ -311,11 +279,7 @@ mod tests {
         assert!(
             results
                 .iter()
-                .any(|r| r.value == "http://malware.example.com"
-                    && r.source
-                        .as_ref()
-                        .map(|l| l.contains("0x42"))
-                        .unwrap_or(false)),
+                .any(|r| r.value == "http://malware.example.com"),
             "Custom single-byte XOR should decode URL. Results: {:?}",
             results
         );
@@ -336,11 +300,7 @@ mod tests {
         assert!(
             results
                 .iter()
-                .any(|r| r.value == "secret password: admin123"
-                    && r.source
-                        .as_ref()
-                        .map(|l| l.contains("key:KEY"))
-                        .unwrap_or(false)),
+                .any(|r| r.value == "secret password: admin123"),
             "Custom multi-byte XOR should decode password. Results: {:?}",
             results
         );
@@ -362,11 +322,7 @@ mod tests {
         assert!(
             results
                 .iter()
-                .any(|r| r.value == "https://c2server.evil.com/api/"
-                    && r.source
-                        .as_ref()
-                        .map(|l| l.contains("key:KEYDATA"))
-                        .unwrap_or(false)),
+                .any(|r| r.value == "https://c2server.evil.com/api/"),
             "Custom string XOR key should decode C2 URL. Results: {:?}",
             results
         );
@@ -404,11 +360,7 @@ mod tests {
 
         let results = extract_custom_xor_strings(&xored, key, 8, false);
         assert!(
-            results.iter().any(|r| r.value.contains("192.168.1.100")
-                && r.source
-                    .as_ref()
-                    .map(|l| l.contains("key:SECRET"))
-                    .unwrap_or(false)),
+            results.iter().any(|r| r.value.contains("192.168.1.100")),
             "Custom XOR should detect IP addresses with context. Results: {:?}",
             results
         );
@@ -427,11 +379,7 @@ mod tests {
 
         let results = extract_custom_xor_strings(&xored, key, 4, false);
         assert!(
-            results.iter().any(|r| r.value == "/bin/bash"
-                && r.source
-                    .as_ref()
-                    .map(|l| l.contains("key:XOR"))
-                    .unwrap_or(false)),
+            results.iter().any(|r| r.value == "/bin/bash"),
             "Custom XOR should detect paths. Results: {:?}",
             results
         );
@@ -988,9 +936,8 @@ mod tests {
                 eprintln!("\nStrings found in region 0x4b100-0x4b200:");
                 for r in &in_region {
                     eprintln!(
-                        "  0x{:05x} {:20} {:?}",
+                        "  0x{:05x} {:?}",
                         r.data_offset,
-                        r.source.as_deref().unwrap_or(""),
                         &r.value[..r.value.len().min(60)]
                     );
                 }

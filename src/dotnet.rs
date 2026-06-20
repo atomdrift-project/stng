@@ -269,7 +269,6 @@ fn parse_us_heap(heap: &[u8], file_base_offset: u64, min_length: usize) -> Vec<E
                         section: Some("#US".to_string()),
                         method: StringMethod::Structure,
                         kind,
-                        source: Some("dotnet:#US".to_string()),
                         ..Default::default()
                     });
                 }
@@ -409,7 +408,6 @@ mod tests {
         let results = parse_us_heap(&heap, 0, 4);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].value, "Test");
-        assert_eq!(results[0].source, Some("dotnet:#US".to_string()));
     }
 
     #[test]

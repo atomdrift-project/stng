@@ -181,7 +181,6 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
                                     section: s.section.clone(),
                                     method: StringMethod::Base64Decode,
                                     kind: crate::classify_string(trimmed),
-                                    raw: Some(b64_str.to_string()),
                                     ..Default::default()
                                 });
                             }
@@ -1161,14 +1160,7 @@ mod tests {
             section: None,
             method: StringMethod::RawScan,
             kind,
-            raw: None,
-            source: None,
             fragments: None,
-            section_size: None,
-            section_executable: None,
-            section_writable: None,
-            architecture: None,
-            function_meta: None,
         }
     }
 
@@ -1422,7 +1414,6 @@ mod tests {
         assert_eq!(results.len(), 1, "Should extract one embedded base64");
         assert_eq!(results[0].value, "Hello World!");
         assert_eq!(results[0].method, StringMethod::Base64Decode);
-        assert_eq!(results[0].raw, Some("SGVsbG8gV29ybGQh".to_string()));
     }
 
     #[test]

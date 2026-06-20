@@ -461,20 +461,13 @@ pub(crate) fn extract_xor_strings(
         {
             let offset = start as u64;
             if seen.insert((offset, decoded.clone())) {
-                let source = if info.is_wide {
-                    format!("xor:0x{:02X}:16LE", info.key)
-                } else {
-                    format!("xor:0x{:02X}", info.key)
-                };
                 results.push(ExtractedString {
                     value: decoded,
                     data_offset: offset,
                     section: None,
                     method: StringMethod::XorDecode,
                     kind,
-                    source: Some(source),
                     fragments: None,
-                    ..Default::default()
                 });
             }
         }
@@ -530,14 +523,6 @@ pub(crate) fn extract_multikey_xor_strings(
             continue;
         }
 
-        // Short, printable rendering of the key for the `source` provenance string.
-        let key_str = String::from_utf8_lossy(key_bytes);
-        let key_preview = if key_str.chars().count() > 8 {
-            key_str.chars().take(8).collect::<String>()
-        } else {
-            key_str.into_owned()
-        };
-
         // Blind Decode Fallback: For HIGH confidence keys, try all shifts of the key
         // to find short or split strings (which won't match Aho-Corasick patterns).
         for shift in 0..key_bytes.len() {
@@ -569,7 +554,6 @@ pub(crate) fn extract_multikey_xor_strings(
                                 section: None,
                                 method: StringMethod::XorDecode,
                                 kind,
-                                source: Some(format!("xor:blind:key:{key_preview}:s{shift}")),
                                 ..Default::default()
                             });
                         }
@@ -621,9 +605,7 @@ pub(crate) fn extract_multikey_xor_strings(
                         section: None,
                         method: StringMethod::XorDecode,
                         kind,
-                        source: Some(format!("xor:key:{key_preview}")),
                         fragments: None,
-                        ..Default::default()
                     });
                 }
             }
@@ -751,9 +733,7 @@ pub(crate) fn scan_dotted_patterns(
                         section: None,
                         method: StringMethod::XorDecode,
                         kind: Some(StringKind::IP),
-                        source: Some(format!("xor:0x{key:02X}")),
                         fragments: None,
-                        ..Default::default()
                     });
                 }
             }
@@ -769,9 +749,7 @@ pub(crate) fn scan_dotted_patterns(
                         section: None,
                         method: StringMethod::XorDecode,
                         kind: Some(StringKind::IPPort),
-                        source: Some(format!("xor:0x{key:02X}")),
                         fragments: None,
-                        ..Default::default()
                     });
                 }
             }
@@ -790,9 +768,7 @@ pub(crate) fn scan_dotted_patterns(
                     section: None,
                     method: StringMethod::XorDecode,
                     kind: Some(StringKind::Hostname),
-                    source: Some(format!("xor:0x{key:02X}")),
                     fragments: None,
-                    ..Default::default()
                 });
             }
         }
