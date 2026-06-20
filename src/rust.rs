@@ -72,7 +72,15 @@ impl RustStringExtractor {
     ///
     /// Rust stores &str slice structures (ptr+len) in `__DATA_CONST`,
     /// while the actual string data is in `__TEXT,__const` or `__cstring`.
-    pub(crate) fn extract_macho(&self, macho: &MachO<'_>, _data: &[u8]) -> Vec<ExtractedString> {
+    /// Extract strings from a Mach-O binary.
+    ///
+    /// Each phase below records the string's *virtual address* (PHASE 1/4 from a
+    /// pointer or instruction operand, PHASE 3 from the section base, PHASE 2
+    /// lifted onto the section's VA). A final pass converts every VA to a file
+    /// offset, because every offset stng reports indexes the file. `file_base`
+    /// rebases a fat slice's offsets onto the whole fat file; it is 0 for a thin
+    /// binary, where `macho`'s load commands already carry file-relative offsets.
+    pub(crate) fn extract_macho(&self, macho: &MachO<'_>, file_base: u64) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         let info = BinaryInfo::from_macho(macho.is_64);
 
@@ -148,13 +156,20 @@ impl RustStringExtractor {
         }
 
         // PHASE 2: Raw extraction from __cstring (null-terminated strings)
-        if let Some((_, cstring_data)) = cstring_info {
+        if let Some((cstring_addr, cstring_data)) = cstring_info {
             let raw = self.extract_raw_strings(cstring_data, Some("__cstring"));
             let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
             let new_strings: Vec<_> = raw
                 .into_iter()
                 .filter(|s| {
                     s.value.len() >= self.min_length && !existing.contains(s.value.as_str())
+                })
+                .map(|mut s| {
+                    // extract_raw_strings offsets are relative to the __cstring
+                    // slice; lift onto the section's VA so the VA->file pass below
+                    // resolves them like every other phase.
+                    s.data_offset += cstring_addr;
+                    s
                 })
                 .collect();
             strings.extend(new_strings);
@@ -233,6 +248,14 @@ impl RustStringExtractor {
                 };
                 strings.extend(new_inline);
             }
+        }
+
+        // Every phase recorded a virtual address; resolve each to a file offset.
+        // `macho_vaddr_to_file_offset` walks the slice's own load commands, and
+        // `file_base` rebases a fat slice's result onto the whole file (0 thin).
+        for s in &mut strings {
+            s.data_offset =
+                file_base + crate::binary::macho_vaddr_to_file_offset(macho, s.data_offset);
         }
 
         strings
@@ -1047,7 +1070,7 @@ mod tests {
         let mut macho_data = vec![0u8; 4096];
         macho_data[0..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
         if let Ok(macho) = MachO::parse(&macho_data, 0) {
-            let strings = extractor.extract_macho(&macho, &macho_data);
+            let strings = extractor.extract_macho(&macho, 0);
             assert!(strings.len() < 10);
         }
     }
@@ -1131,7 +1154,7 @@ mod tests {
                 && data[0..4] == [0xcf, 0xfa, 0xed, 0xfe]
                 && let Ok(macho) = MachO::parse(&data, 0)
             {
-                let strings = extractor.extract_macho(&macho, &data);
+                let strings = extractor.extract_macho(&macho, 0);
                 if !strings.is_empty() {
                     for s in &strings {
                         assert!(s.value.len() >= 4);

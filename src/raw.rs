@@ -29,9 +29,6 @@ pub(crate) fn extract_raw_strings(
     // Build a set of known segment/section names for quick lookup
     let segment_names_set: HashSet<&str> = segment_names.iter().map(String::as_str).collect();
 
-    let mut strings = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-
     let context = PrintableRunContext {
         min_length,
         section,
@@ -40,46 +37,68 @@ pub(crate) fn extract_raw_strings(
         skip_ranges,
     };
 
-    // Strategy 1: Null-terminated strings
-    let mut prev_end = 0usize;
-    let mut strat1_runs = Vec::new();
-    for null_pos in memchr_iter(0, data) {
-        let chunk = &data[prev_end..null_pos];
-        let chunk_start = prev_end;
-        prev_end = null_pos + 1;
+    // The two scan strategies are independent full passes over `data`, so run
+    // them concurrently. Each keeps its own dedup set; the merge below replays
+    // the original shared-`seen` ordering — Strategy 1 wins ties, and Strategy 2
+    // only contributes values Strategy 1 didn't already find.
+    let ((mut strings, seen1), strings2) = rayon::join(
+        || {
+            // Strategy 1: Null-terminated strings
+            let mut strings = Vec::new();
+            let mut seen: HashSet<String> = HashSet::new();
+            let mut prev_end = 0usize;
+            let mut strat1_runs = Vec::new();
+            for null_pos in memchr_iter(0, data) {
+                let chunk = &data[prev_end..null_pos];
+                let chunk_start = prev_end;
+                prev_end = null_pos + 1;
 
-        if chunk.len() < min_length {
-            continue;
-        }
+                if chunk.len() < min_length {
+                    continue;
+                }
 
-        // Find the last contiguous printable run that ends at the chunk boundary
-        // Scan backwards from the end to stop early.
-        let mut run_len = 0;
-        for &b in chunk.iter().rev() {
-            if b.is_ascii_graphic() || b.is_ascii_whitespace() {
-                run_len += 1;
-            } else {
-                break;
+                // Find the last contiguous printable run that ends at the chunk
+                // boundary. Scan backwards from the end to stop early.
+                let mut run_len = 0;
+                for &b in chunk.iter().rev() {
+                    if b.is_ascii_graphic() || b.is_ascii_whitespace() {
+                        run_len += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if run_len >= min_length {
+                    let start = chunk.len() - run_len;
+                    let abs_start = chunk_start + start;
+                    if in_skip_range(abs_start, skip_ranges) {
+                        continue;
+                    }
+                    strat1_runs.push((abs_start, &chunk[start..]));
+                    if strat1_runs.len() >= RUN_BATCH {
+                        classify_runs(&mut strat1_runs, context, false, &mut strings, &mut seen);
+                    }
+                }
             }
-        }
+            classify_runs(&mut strat1_runs, context, false, &mut strings, &mut seen);
+            (strings, seen)
+        },
+        || {
+            // Strategy 2: Printable character runs (like traditional `strings`).
+            // Catches strings that aren't null-terminated (common in JPEG, PDF).
+            let mut strings = Vec::new();
+            let mut seen: HashSet<String> = HashSet::new();
+            extract_printable_runs(data, context, &mut strings, &mut seen);
+            strings
+        },
+    );
 
-        if run_len >= min_length {
-            let start = chunk.len() - run_len;
-            let abs_start = chunk_start + start;
-            if in_skip_range(abs_start, skip_ranges) {
-                continue;
-            }
-            strat1_runs.push((abs_start, &chunk[start..]));
-            if strat1_runs.len() >= RUN_BATCH {
-                classify_runs(&mut strat1_runs, context, false, &mut strings, &mut seen);
-            }
-        }
-    }
-    classify_runs(&mut strat1_runs, context, false, &mut strings, &mut seen);
-
-    // Strategy 2: Printable character runs (like traditional `strings`)
-    // This catches strings that aren't null-terminated (common in JPEG, PDF, etc.)
-    extract_printable_runs(data, context, &mut strings, &mut seen);
+    // Merge: keep every Strategy 2 string whose value Strategy 1 didn't produce.
+    strings.extend(
+        strings2
+            .into_iter()
+            .filter(|s| !seen1.contains(s.value.as_str())),
+    );
 
     strings
 }

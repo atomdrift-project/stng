@@ -5,6 +5,7 @@
 
 use crate::{ExtractedString, StringKind, StringMethod};
 use data_encoding::{BASE32, BASE32_NOPAD};
+use rayon::prelude::*;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -139,55 +140,58 @@ pub(crate) fn deobfuscate_concatenation(s: &str) -> Option<String> {
 /// Unlike `decode_base64_strings` which decodes entire strings that are base64,
 /// this function extracts base64 substrings from within larger strings.
 pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<ExtractedString> {
-    let mut results = Vec::new();
+    // Each input string can yield several embedded payloads; `flat_map_iter`
+    // parallelises across strings while keeping each string's per-capture order.
+    strings
+        .par_iter()
+        .flat_map_iter(|s| {
+            let mut local = Vec::new();
+            for cap in EMBEDDED_B64_RE.captures_iter(&s.value) {
+                if let Some(b64_match) = cap.get(1) {
+                    let b64_str = b64_match.as_str();
 
-    for s in strings {
-        for cap in EMBEDDED_B64_RE.captures_iter(&s.value) {
-            if let Some(b64_match) = cap.get(1) {
-                let b64_str = b64_match.as_str();
-
-                // Skip if it's the entire string (handled by decode_base64_strings)
-                if b64_str == s.value {
-                    continue;
-                }
-
-                // Must be valid base64 length (multiple of 4)
-                if b64_str.len() % 4 != 0 {
-                    continue;
-                }
-
-                // Try to decode it
-                if let Ok(decoded) =
-                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64_str)
-                {
-                    // Check size limit
-                    if decoded.len() > MAX_DECODED_SIZE {
+                    // Skip if it's the entire string (handled by decode_base64_strings)
+                    if b64_str == s.value {
                         continue;
                     }
 
-                    // Validate it's printable text (UTF-8 or wide UTF-16LE).
-                    if let Some(decoded_str) = decoded_to_text(decoded) {
-                        let trimmed = decoded_str.trim();
+                    // Must be valid base64 length (multiple of 4)
+                    if b64_str.len() % 4 != 0 {
+                        continue;
+                    }
 
-                        // Must be meaningful (at least 4 chars after trim)
-                        if trimmed.len() >= 4 {
-                            results.push(ExtractedString {
-                                value: trimmed.to_string(),
-                                data_offset: s.data_offset,
-                                section: s.section.clone(),
-                                method: StringMethod::Base64Decode,
-                                kind: crate::classify_string(trimmed),
-                                raw: Some(b64_str.to_string()),
-                                ..Default::default()
-                            });
+                    // Try to decode it
+                    if let Ok(decoded) =
+                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64_str)
+                    {
+                        // Check size limit
+                        if decoded.len() > MAX_DECODED_SIZE {
+                            continue;
+                        }
+
+                        // Validate it's printable text (UTF-8 or wide UTF-16LE).
+                        if let Some(decoded_str) = decoded_to_text(decoded) {
+                            let trimmed = decoded_str.trim();
+
+                            // Must be meaningful (at least 4 chars after trim)
+                            if trimmed.len() >= 4 {
+                                local.push(ExtractedString {
+                                    value: trimmed.to_string(),
+                                    data_offset: s.data_offset,
+                                    section: s.section.clone(),
+                                    method: StringMethod::Base64Decode,
+                                    kind: crate::classify_string(trimmed),
+                                    raw: Some(b64_str.to_string()),
+                                    ..Default::default()
+                                });
+                            }
                         }
                     }
                 }
             }
-        }
-    }
-
-    results
+            local
+        })
+        .collect()
 }
 
 /// Decode base64-encoded strings from a list of extracted strings.
@@ -195,38 +199,36 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
 /// Returns a vector of newly decoded strings with `StringMethod::Base64Decode`.
 /// Also attempts to deobfuscate concatenated strings first.
 pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
-    let mut results = Vec::new();
-
-    for s in strings {
-        // Try normal base64 decoding first
-        if (s.kind == Some(StringKind::Base64) || is_likely_base64(&s.value))
-            && let Some(decoded) = decode_base64_string(s)
-        {
-            results.push(decoded);
-            continue;
-        }
-
-        // If that didn't work, try deobfuscating concatenation first
-        if let Some(deobfuscated) = deobfuscate_concatenation(&s.value)
-            && is_likely_base64(&deobfuscated)
-        {
-            // Create a temporary ExtractedString with deobfuscated content
-            let temp = ExtractedString {
-                value: deobfuscated,
-                data_offset: s.data_offset,
-                section: s.section.clone(),
-                method: s.method,
-                kind: s.kind,
-                ..Default::default()
-            };
-
-            if let Some(decoded) = decode_base64_string(&temp) {
-                results.push(decoded);
+    strings
+        .par_iter()
+        .filter_map(|s| {
+            // Try normal base64 decoding first
+            if (s.kind == Some(StringKind::Base64) || is_likely_base64(&s.value))
+                && let Some(decoded) = decode_base64_string(s)
+            {
+                return Some(decoded);
             }
-        }
-    }
 
-    results
+            // If that didn't work, try deobfuscating concatenation first
+            if let Some(deobfuscated) = deobfuscate_concatenation(&s.value)
+                && is_likely_base64(&deobfuscated)
+            {
+                // Create a temporary ExtractedString with deobfuscated content
+                let temp = ExtractedString {
+                    value: deobfuscated,
+                    data_offset: s.data_offset,
+                    section: s.section.clone(),
+                    method: s.method,
+                    kind: s.kind,
+                    ..Default::default()
+                };
+
+                return decode_base64_string(&temp);
+            }
+
+            None
+        })
+        .collect()
 }
 
 /// Attempt to decode a single base64 string.
@@ -281,13 +283,9 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
 ///
 /// Returns a vector of newly decoded strings with `StringMethod::HexDecode`.
 pub(crate) fn decode_hex_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
-    let candidates: Vec<_> = strings
-        .iter()
+    strings
+        .par_iter()
         .filter(|s| s.kind == Some(StringKind::HexEncoded) || is_likely_hex(&s.value))
-        .collect();
-
-    candidates
-        .into_iter()
         .filter_map(decode_hex_string)
         .collect()
 }
@@ -327,7 +325,7 @@ fn decode_hex_string(s: &ExtractedString) -> Option<ExtractedString> {
 /// Returns a vector of newly decoded strings with `StringMethod::UrlDecode`.
 pub(crate) fn decode_url_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
-        .iter()
+        .par_iter()
         .filter(|s| s.kind == Some(StringKind::UrlEncoded) || is_likely_url_encoded(&s.value))
         .filter_map(decode_url_string)
         .collect()
@@ -409,7 +407,7 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
 /// Returns a vector of newly decoded strings with `StringMethod::UnicodeEscapeDecode`.
 pub(crate) fn decode_unicode_escape_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
-        .iter()
+        .par_iter()
         .filter(|s| {
             s.kind == Some(StringKind::UnicodeEscaped)
                 || s.value.contains("\\x")
@@ -615,7 +613,7 @@ fn is_likely_url_encoded(s: &str) -> bool {
 /// Returns a vector of newly decoded strings with `StringMethod::Base32Decode`.
 pub(crate) fn decode_base32_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
-        .iter()
+        .par_iter()
         .filter(|s| s.kind == Some(StringKind::Base32) || is_likely_base32(&s.value))
         .filter_map(decode_base32_string)
         .collect()
@@ -660,7 +658,7 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
 /// Returns a vector of newly decoded strings with `StringMethod::Base85Decode`.
 pub(crate) fn decode_base85_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
-        .iter()
+        .par_iter()
         .filter(|s| s.kind == Some(StringKind::Base85) || is_likely_base85(&s.value))
         .filter_map(decode_base85_string)
         .collect()

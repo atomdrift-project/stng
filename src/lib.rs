@@ -291,9 +291,11 @@ fn merge_imports(strings: &mut Vec<ExtractedString>, imports: Vec<ExtractedStrin
 
 /// Raw-scan every non-executable Mach-O section so string-literal sections the
 /// targeted extractor skips — notably `__objc_methname` — and the leading entry
-/// of each section still surface when radare2 is unavailable. Offsets stay
-/// section-relative (matching the targeted extractor and r2), and the section
-/// name is tagged so callers can correlate fragments by location. Executable
+/// of each section still surface when radare2 is unavailable. Each section is
+/// scanned as a slice, so the raw scanner yields section-relative offsets; they
+/// are rebased to the section's file offset before being emitted, because every
+/// offset stng reports indexes the file, never a section. The section name is
+/// tagged so callers can still correlate fragments by location. Executable
 /// sections are covered by the stack-string / disassembly passes, so raw-scanning
 /// their instruction bytes here would only add noise. Results are de-duplicated
 /// by value within this pass; callers merge them against what they already hold.
@@ -317,7 +319,7 @@ fn scan_macho_sections(
         let Some(section_bytes) = data.get(start..end) else {
             continue;
         };
-        for s in extract_raw_strings(
+        for mut s in extract_raw_strings(
             section_bytes,
             min_length,
             Some(info.name.as_str()),
@@ -325,6 +327,9 @@ fn scan_macho_sections(
             section_info,
             &[],
         ) {
+            // The raw scanner offsets are relative to `section_bytes`; lift them
+            // to the file by adding the section's file offset.
+            s.data_offset += start as u64;
             if seen.insert(s.value.clone()) {
                 out.push(s);
             }
@@ -709,6 +714,70 @@ fn extract_go_text_xor_strings(
         .into_iter()
         .filter(|s| s.method == StringMethod::XorStackPair)
         .collect()
+}
+
+/// Recover Go symbol names from an ELF `.gopclntab` section.
+///
+/// `.gopclntab` holds the funcnametab (NUL-separated function names like
+/// `main.Size2Bytes`) and pkgnamestab (varint-length-prefixed package paths).
+/// Those entries are referenced by 4-byte offsets, not `{ptr,len}` headers, so
+/// the structure scanner can't reach them, and [`elf_go_skip_ranges`] keeps the
+/// raw scanner out of the section to avoid emitting its packed pcdata/funcdata
+/// tables as garbage runs. This targeted pass (3+ consecutive valid entries)
+/// recovers the names without the noise — mirroring the Go PE path.
+fn extract_elf_pclntab_strings(
+    elf: &goblin::elf::Elf<'_>,
+    scan_data: &[u8],
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let Some(sh) = elf
+        .section_headers
+        .iter()
+        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name) == Some(".gopclntab"))
+    else {
+        return Vec::new();
+    };
+
+    let Ok(start) = usize::try_from(sh.sh_offset) else {
+        return Vec::new();
+    };
+    let Ok(size) = usize::try_from(sh.sh_size) else {
+        return Vec::new();
+    };
+    let end = start.saturating_add(size).min(scan_data.len());
+    let Some(section_bytes) = scan_data.get(start..end) else {
+        return Vec::new();
+    };
+
+    let t_pcln = std::time::Instant::now();
+    // funcnametab is NUL-separated; pkgnamestab is varint-length-prefixed.
+    // Scan for both concurrently — the varint pass is fully hidden behind the
+    // larger funcname pass and recovers package paths the latter can't.
+    let (varints, mut nulls) = rayon::join(
+        || {
+            extract_varint_prefixed_strings(
+                section_bytes,
+                start as u64,
+                Some(".gopclntab"),
+                min_length,
+            )
+        },
+        || {
+            extract_null_separated_strings(
+                section_bytes,
+                start as u64,
+                Some(".gopclntab"),
+                min_length,
+            )
+        },
+    );
+    nulls.extend(varints);
+    tracing::debug!(
+        "TIME: Go ELF .gopclntab scan took {:?} ({} symbols)",
+        t_pcln.elapsed(),
+        nulls.len()
+    );
+    nulls
 }
 
 /// Enrich strings with section information based on their file offsets (ELF)
@@ -1236,13 +1305,6 @@ fn deduplicate_by_offset(mut strings: Vec<ExtractedString>) -> Vec<ExtractedStri
     strings.sort_unstable_by(|a, b| {
         a.data_offset
             .cmp(&b.data_offset)
-            // Mach-O offsets are section-relative, so the same relative offset
-            // recurs across sections (e.g. __cstring:0 vs __objc_methname:0).
-            // Including the section in the dedup key keeps distinct strings in
-            // different sections from collapsing into one. Other formats use
-            // file-absolute offsets with `section == None`, so their behaviour
-            // is unchanged.
-            .then_with(|| a.section.cmp(&b.section))
             .then_with(|| {
                 // Descending priority: higher priority first.
                 b.method.dedup_priority().cmp(&a.method.dedup_priority())
@@ -1253,7 +1315,11 @@ fn deduplicate_by_offset(mut strings: Vec<ExtractedString>) -> Vec<ExtractedStri
             })
     });
 
-    strings.dedup_by(|a, b| a.data_offset == b.data_offset && a.section == b.section);
+    // Every offset is file-relative (Mach-O section/VA offsets are rebased at the
+    // source), so a file offset names exactly one location: keying the dedup on
+    // the offset alone collapses true duplicates without the section tag that a
+    // section-relative layout once needed to avoid cross-section `:0` collisions.
+    strings.dedup_by(|a, b| a.data_offset == b.data_offset);
     strings
 }
 
@@ -1651,7 +1717,8 @@ fn extract_from_object(
             if macho_has_go_sections(macho) {
                 is_go_binary = true;
                 let extractor = GoStringExtractor::new(min_length);
-                strings.extend(extractor.extract_macho(macho, data));
+                // Thin binary: the slice is the whole file, so no slice base.
+                strings.extend(extractor.extract_macho(macho, 0));
 
                 // Raw scan fallback for Go shared libraries / cgo binaries.
                 // Skip raw-scanning the Go string-blob sections — strings there
@@ -1670,7 +1737,8 @@ fn extract_from_object(
                 strings.extend(new_raw);
             } else if binary::macho_is_rust(macho) {
                 let extractor = RustStringExtractor::new(min_length);
-                strings.extend(extractor.extract_macho(macho, data));
+                // Thin binary: the slice is the whole file, so no slice base.
+                strings.extend(extractor.extract_macho(macho, 0));
             } else {
                 // Unknown Mach-O (C/C++/Objective-C/asm). Use r2 if available,
                 // then the targeted extractor, then an unconditional per-section
@@ -1684,10 +1752,11 @@ fn extract_from_object(
                     strings.extend(r2_strings);
                 }
                 let extractor = RustStringExtractor::new(min_length);
-                strings.extend(extractor.extract_macho(macho, data));
-                // Per-section scan first (section-tagged, section-relative
-                // offsets) so __objc_methname and the like are correlatable by
-                // location; whole-file scan second as a backstop for bytes
+                // Thin binary: the slice is the whole file, so no slice base.
+                strings.extend(extractor.extract_macho(macho, 0));
+                // Per-section scan first (section-tagged, file-relative offsets)
+                // so __objc_methname and the like are correlatable by their
+                // section; whole-file scan second as a backstop for bytes
                 // outside any enumerated section (__LINKEDIT, padding, minimal
                 // layouts). Merge by value: the section-tagged copy wins and
                 // nothing already held by r2/the targeted extractor is duped.
@@ -1737,15 +1806,23 @@ fn extract_from_object(
             let mut segments = Vec::new();
             let mut section_info = std::collections::HashMap::new();
             let mut first_macho: Option<MachO<'_>> = None;
-            for arch_result in fat {
+            // Fat-header offsets of each slice within the whole file, so a slice's
+            // strings can be rebased onto the file (a slice's own load commands are
+            // slice-relative). Indexed in lockstep with the iteration below.
+            let arch_offsets: Vec<u64> = fat
+                .arches()
+                .map(|a| a.iter().map(|x| u64::from(x.offset)).collect())
+                .unwrap_or_default();
+            for (idx, arch_result) in fat.into_iter().enumerate() {
                 if let Ok(goblin::mach::SingleArch::MachO(macho)) = arch_result {
+                    let slice_base = arch_offsets.get(idx).copied().unwrap_or(0);
                     segments = collect_macho_segments(&macho);
                     section_info = collect_macho_section_info(&macho);
                     if macho_has_go_sections(&macho) {
                         is_go = true;
                         is_go_binary = true;
                         let extractor = GoStringExtractor::new(min_length);
-                        strings.extend(extractor.extract_macho(&macho, data));
+                        strings.extend(extractor.extract_macho(&macho, slice_base));
 
                         // See macho_has_go_sections branch above for why we
                         // skip-scan the Go string-blob sections.
@@ -1769,7 +1846,7 @@ fn extract_from_object(
                     } else if binary::macho_is_rust(&macho) {
                         is_rust = true;
                         let extractor = RustStringExtractor::new(min_length);
-                        strings.extend(extractor.extract_macho(&macho, data));
+                        strings.extend(extractor.extract_macho(&macho, slice_base));
                     }
                     first_macho = Some(macho);
                     break;
@@ -1858,16 +1935,19 @@ fn extract_from_object(
             if has_go {
                 is_go_binary = true;
 
-                // Go ELF extraction is five independent passes over `scan_data`:
-                //   1. structure-based Go string extraction (.rodata/.gopclntab)
-                //   2. raw-string fallback for cgo strings the structure pass
+                // Go ELF extraction is six independent passes over `scan_data`:
+                //   1. structure-based Go string extraction (.rodata)
+                //   2. pclntab symbol recovery (funcnametab/pkgnamestab in
+                //      .gopclntab) — names the structure and raw passes can't
+                //      reach because the section is skip-scanned below.
+                //   3. raw-string fallback for cgo strings the structure pass
                 //      misses (.noptrdata, .strtab, .symtab, …). Skip-scanning
                 //      .rodata/.gopclntab avoids emitting Go's null-less packed
                 //      blobs as one giant garbage string.
-                //   3. UTF-16 wide-string scan
-                //   4. network-IP scan
-                //   5. .text XOR-pair extraction
-                // None of them depend on another's output, so run all five
+                //   4. UTF-16 wide-string scan
+                //   5. network-IP scan
+                //   6. .text XOR-pair extraction
+                // None of them depend on another's output, so run all six
                 // concurrently. The raw fallback is normally pruned of strings
                 // the structure pass already found; that `known`-set filter is a
                 // value comparison applied *after* the join, so it no longer
@@ -1875,55 +1955,61 @@ fn extract_from_object(
                 // appended in the original sequential order, leaving downstream
                 // deduplication unaffected.
                 let skip = elf_go_skip_ranges(elf, scan_data.len());
-                let (go_strings, (raw_all, (wide_res, (ip_res, stack_res)))) = rayon::join(
-                    || GoStringExtractor::new(min_length).extract_elf(elf, scan_data),
-                    || {
-                        rayon::join(
-                            || {
-                                extract_raw_strings(
-                                    scan_data,
-                                    min_length,
-                                    None,
-                                    &segments,
-                                    &section_info,
-                                    &skip,
-                                )
-                            },
-                            || {
-                                rayon::join(
-                                    || {
-                                        extract_wide_strings(
-                                            scan_data,
-                                            min_length,
-                                            None,
-                                            &segments,
-                                            &section_info,
-                                            &skip,
-                                        )
-                                    },
-                                    || {
-                                        rayon::join(
-                                            || {
-                                                scan_binary_ips(
-                                                    scan_data,
-                                                    min_length,
-                                                    elf.header.e_machine,
-                                                    Some(elf),
-                                                    None,
-                                                )
-                                            },
-                                            || {
-                                                extract_go_text_xor_strings(
-                                                    elf, scan_data, min_length,
-                                                )
-                                            },
-                                        )
-                                    },
-                                )
-                            },
-                        )
-                    },
-                );
+                let (go_strings, (pcln_res, (raw_all, (wide_res, (ip_res, stack_res))))) =
+                    rayon::join(
+                        || GoStringExtractor::new(min_length).extract_elf(elf, scan_data),
+                        || {
+                            rayon::join(
+                                || extract_elf_pclntab_strings(elf, scan_data, min_length),
+                                || {
+                                    rayon::join(
+                                        || {
+                                            extract_raw_strings(
+                                                scan_data,
+                                                min_length,
+                                                None,
+                                                &segments,
+                                                &section_info,
+                                                &skip,
+                                            )
+                                        },
+                                        || {
+                                            rayon::join(
+                                                || {
+                                                    extract_wide_strings(
+                                                        scan_data,
+                                                        min_length,
+                                                        None,
+                                                        &segments,
+                                                        &section_info,
+                                                        &skip,
+                                                    )
+                                                },
+                                                || {
+                                                    rayon::join(
+                                                        || {
+                                                            scan_binary_ips(
+                                                                scan_data,
+                                                                min_length,
+                                                                elf.header.e_machine,
+                                                                Some(elf),
+                                                                None,
+                                                            )
+                                                        },
+                                                        || {
+                                                            extract_go_text_xor_strings(
+                                                                elf, scan_data, min_length,
+                                                            )
+                                                        },
+                                                    )
+                                                },
+                                            )
+                                        },
+                                    )
+                                },
+                            )
+                        },
+                    );
                 let known: HashSet<&str> = go_strings.iter().map(|s| s.value.as_str()).collect();
                 let fresh: Vec<ExtractedString> = raw_all
                     .into_iter()
@@ -1931,6 +2017,7 @@ fn extract_from_object(
                     .collect();
                 drop(known);
                 strings.extend(go_strings);
+                strings.extend(pcln_res);
                 strings.extend(fresh);
                 strings.extend(wide_res);
                 strings.extend(ip_res);

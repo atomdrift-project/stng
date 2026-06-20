@@ -39,7 +39,13 @@ impl GoStringExtractor {
 
     /// Extract strings from a Mach-O binary.
     #[must_use]
-    pub(crate) fn extract_macho(&self, macho: &MachO<'_>, _data: &[u8]) -> Vec<ExtractedString> {
+    /// Extract strings from a Go Mach-O binary.
+    ///
+    /// Structure, inline-instruction, and packed-pool extraction all record the
+    /// string's virtual address; a final pass converts each to a file offset so
+    /// every emitted offset indexes the file. `file_base` rebases a fat slice's
+    /// offsets onto the whole fat file (0 for a thin binary).
+    pub(crate) fn extract_macho(&self, macho: &MachO<'_>, file_base: u64) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         // Mach-O is always little-endian on modern systems (x86_64, ARM64)
         let info = BinaryInfo::from_macho(macho.is_64);
@@ -169,6 +175,12 @@ impl GoStringExtractor {
                     strings.push(s);
                 }
             }
+        }
+
+        // Every phase recorded a virtual address; resolve each to a file offset.
+        for s in &mut strings {
+            s.data_offset =
+                file_base + crate::binary::macho_vaddr_to_file_offset(macho, s.data_offset);
         }
 
         strings

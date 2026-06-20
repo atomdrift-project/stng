@@ -21,19 +21,22 @@ use stng::{ExtractOptions, extract_strings_with_options};
 /// raw-byte scan with garbage filtering off and **no radare2** (default
 /// `ExtractOptions` leaves `use_r2 == false`), so the test is hermetic and
 /// exercises the native parser only.
-fn native_strings() -> Vec<stng::ExtractedString> {
-    let data = std::fs::read(concat!(
+fn fixture_bytes() -> Vec<u8> {
+    std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/testdata/macho/wallet_report_objc"
     ))
-    .expect("read fixture");
+    .expect("read fixture")
+}
+
+fn native_strings() -> Vec<stng::ExtractedString> {
     let opts = ExtractOptions {
         min_length: 4,
         filter_garbage: false,
         use_cache: false,
         ..Default::default()
     };
-    extract_strings_with_options(&data, &opts)
+    extract_strings_with_options(&fixture_bytes(), &opts)
 }
 
 #[test]
@@ -166,16 +169,24 @@ fn from_object_matches_full_parse() {
 
 #[test]
 fn fragments_are_locatable_by_section_and_offset() {
+    let data = fixture_bytes();
     let strings = native_strings();
 
-    // `find` lives at the very start of __cstring; correlation by location
-    // depends on both the section tag and the section-relative offset.
+    // `find` lives at the very start of __cstring. Its offset is the file offset
+    // of those bytes — never a section-relative 0 — so the bytes there read back
+    // as `find`. (This fixture has __PAGEZERO, so vmaddr != fileoff: a VA-based
+    // or section-relative offset would land far from the string.)
     let find = strings
         .iter()
         .find(|s| s.value == "find")
         .expect("`find` present");
     assert_eq!(find.section.as_deref(), Some("__cstring"));
-    assert_eq!(find.data_offset, 0, "`find` is the first __cstring entry");
+    let off = usize::try_from(find.data_offset).unwrap();
+    assert_eq!(
+        data.get(off..off + 4),
+        Some(&b"find"[..]),
+        "`find` offset {off:#x} must index the file, not its section"
+    );
 
     // A selector must be tagged to its own section, not collapsed into another.
     let selector = strings
@@ -183,4 +194,93 @@ fn fragments_are_locatable_by_section_and_offset() {
         .find(|s| s.value == "setHTTPBody:")
         .expect("selector present");
     assert_eq!(selector.section.as_deref(), Some("__objc_methname"));
+}
+
+/// The load-bearing invariant for every downstream consumer (filefacts, cleave,
+/// their traits): a string's `data_offset` indexes the *file*, never a Mach-O
+/// section or a virtual address. For any literal-byte extraction method the
+/// proof is direct — the bytes at the offset must equal the string itself.
+///
+/// This fixture is a thin arm64 executable with a `__PAGEZERO`, so vmaddr differs
+/// from fileoff by 0x1_0000_0000: a VA-based offset lands gigabytes past EOF, and
+/// a section-relative offset lands thousands of bytes away. Either regression
+/// fails the byte compare below, across `__cstring`, `__objc_methname`, and the
+/// rest, no matter which extractor produced the string.
+#[test]
+fn literal_string_offsets_index_the_file() {
+    use stng::StringMethod;
+
+    let data = fixture_bytes();
+    let strings = native_strings();
+
+    // Methods whose `value` is a verbatim copy of bytes in the file (not decoded,
+    // XORed, or reconstructed). For these, `data[off..off+len]` must be the value.
+    let is_literal = |m: StringMethod| {
+        matches!(
+            m,
+            StringMethod::RawScan
+                | StringMethod::Structure
+                | StringMethod::Heuristic
+                | StringMethod::InstructionPattern
+        )
+    };
+
+    let mut verified = 0usize;
+    // Track the two sections whose offsets were section-relative before the fix,
+    // so the test proves both repaired paths emit file-relative offsets.
+    let mut cstring_verified = 0usize;
+    let mut methname_verified = 0usize;
+    for s in strings.iter().filter(|s| is_literal(s.method)) {
+        let off = usize::try_from(s.data_offset).unwrap_or(usize::MAX);
+        let needle = s.value.as_bytes();
+        let end = off.saturating_add(needle.len());
+        assert!(
+            end <= data.len(),
+            "{:?} via {:?}: offset {off:#x} runs past EOF ({} bytes) — offset is a \
+             virtual address or slice-relative, not file-relative",
+            s.value,
+            s.method,
+            data.len()
+        );
+
+        // The raw scanner records the start of an untrimmed run, so a value with
+        // leading whitespace can sit a few bytes after `off`. Allow that small
+        // slack; it is still decisive — a wrong offset misses by far more.
+        let window_end = end.saturating_add(4).min(data.len());
+        let window = &data[off..window_end];
+        let skip = window
+            .iter()
+            .take_while(|b| b.is_ascii_whitespace())
+            .count();
+        let matches = window.get(skip..skip + needle.len()) == Some(needle);
+        assert!(
+            matches,
+            "{:?} via {:?}: bytes at file offset {off:#x} are {:?}, not the string — \
+             the offset does not index the file",
+            s.value,
+            s.method,
+            String::from_utf8_lossy(window),
+        );
+        verified += 1;
+        match s.section.as_deref() {
+            Some("__cstring") => cstring_verified += 1,
+            Some("__objc_methname") => methname_verified += 1,
+            _ => {}
+        }
+    }
+
+    // Guard against the check silently passing because nothing was literal, and
+    // require coverage of both formerly-broken sections.
+    assert!(
+        verified > 50,
+        "expected to verify many literal-string offsets, only checked {verified}"
+    );
+    assert!(
+        cstring_verified > 0,
+        "no __cstring literal strings verified — the formerly section-relative path is uncovered"
+    );
+    assert!(
+        methname_verified > 0,
+        "no __objc_methname literal strings verified — the formerly section-relative path is uncovered"
+    );
 }

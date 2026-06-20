@@ -127,6 +127,64 @@ static JAVASCRIPT_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     .expect("valid javascript indicators")
 });
 
+/// Command prefixes (with trailing space, or absolute interpreter paths) that
+/// mark a string as a shell command. Shared by [`is_shell_command`] and the
+/// Aho-Corasick gate below so the two never drift.
+const SHELL_CMD_PREFIXES: &[&str] = &[
+    "sed ",
+    "rm ",
+    "kill ",
+    "chmod ",
+    "chown ",
+    "wget ",
+    "curl ",
+    "bash ",
+    "sh ",
+    "/bin/sh",
+    "/bin/bash",
+    "nc ",
+    "ncat ",
+    "python ",
+    "perl ",
+    "ruby ",
+    "php ",
+    "echo ",
+    "cat ",
+    "mkdir ",
+    "cp ",
+    "mv ",
+    "touch ",
+    "tar ",
+    "gzip ",
+    "gunzip ",
+    "base64 ",
+    "openssl ",
+    "dd ",
+    "mount ",
+    "umount ",
+    "iptables ",
+    "systemctl ",
+    "service ",
+    "crontab ",
+    "useradd ",
+    "userdel ",
+    "passwd ",
+    "sudo ",
+    "su ",
+    "chroot ",
+    "nohup ",
+    "setsid ",
+    "eval ",
+];
+
+/// Gate for the [`is_shell_command`] prefix probe. A command match needs one of
+/// `SHELL_CMD_PREFIXES` as a substring (via `starts_with` or a space-preceded
+/// `find`), so if this single scan finds none, the ~40 per-prefix searches can
+/// be skipped entirely — the common case for binary symbol-table strings.
+#[allow(clippy::expect_used)]
+static SHELL_CMD_PREFIX_AC: LazyLock<AhoCorasick> =
+    LazyLock::new(|| AhoCorasick::new(SHELL_CMD_PREFIXES).expect("valid shell cmd prefixes"));
+
 /// Check if a string looks like Python code
 pub(super) fn is_python_code(s: &str) -> bool {
     let len = s.len();
@@ -611,92 +669,50 @@ pub(super) fn is_shell_command(s: &str) -> bool {
         }
     }
 
-    // Common command prefixes with arguments
-    // Note: "exec " removed - too many false positives with "exec format error" etc.
-    let cmd_prefixes = [
-        "sed ",
-        "rm ",
-        "kill ",
-        "chmod ",
-        "chown ",
-        "wget ",
-        "curl ",
-        "bash ",
-        "sh ",
-        "/bin/sh",
-        "/bin/bash",
-        "nc ",
-        "ncat ",
-        "python ",
-        "perl ",
-        "ruby ",
-        "php ",
-        "echo ",
-        "cat ",
-        "mkdir ",
-        "cp ",
-        "mv ",
-        "touch ",
-        "tar ",
-        "gzip ",
-        "gunzip ",
-        "base64 ",
-        "openssl ",
-        "dd ",
-        "mount ",
-        "umount ",
-        "iptables ",
-        "systemctl ",
-        "service ",
-        "crontab ",
-        "useradd ",
-        "userdel ",
-        "passwd ",
-        "sudo ",
-        "su ",
-        "chroot ",
-        "nohup ",
-        "setsid ",
-        "eval ",
-    ];
-
-    for prefix in cmd_prefixes {
-        if s.starts_with(prefix) {
-            // Special case: "service " at start should be followed by command words
-            if prefix == "service "
-                && let Some(after) = s.strip_prefix(prefix)
+    // Common command prefixes with arguments (see SHELL_CMD_PREFIXES). One
+    // Aho-Corasick scan gates the per-prefix probe loop: if no command token
+    // appears anywhere, neither `starts_with` nor the space-preceded `find` can
+    // match, so the ~40 substring searches are skipped — the common case for
+    // symbol-table strings.
+    if SHELL_CMD_PREFIX_AC.is_match(s) {
+        for &prefix in SHELL_CMD_PREFIXES {
+            if s.starts_with(prefix) {
+                // Special case: "service " at start should be followed by command words
+                if prefix == "service "
+                    && let Some(after) = s.strip_prefix(prefix)
+                {
+                    let is_command = after.starts_with("start")
+                        || after.starts_with("stop")
+                        || after.starts_with("restart")
+                        || after.starts_with("status")
+                        || after.starts_with("enable")
+                        || after.starts_with("disable");
+                    if !is_command {
+                        continue;
+                    }
+                }
+                return true;
+            }
+            // Check for " prefix" pattern without allocation
+            if let Some(pos) = s.find(prefix)
+                && pos > 0
+                && s.as_bytes()[pos - 1] == b' '
             {
-                let is_command = after.starts_with("start")
-                    || after.starts_with("stop")
-                    || after.starts_with("restart")
-                    || after.starts_with("status")
-                    || after.starts_with("enable")
-                    || after.starts_with("disable");
-                if !is_command {
-                    continue;
+                // Special case: "service " should be followed by command words, not "provider" etc.
+                if prefix == "service " {
+                    let after = &s[pos + prefix.len()..];
+                    let is_command = after.starts_with("start")
+                        || after.starts_with("stop")
+                        || after.starts_with("restart")
+                        || after.starts_with("status")
+                        || after.starts_with("enable")
+                        || after.starts_with("disable");
+                    if !is_command {
+                        continue;
+                    }
                 }
+                return true;
             }
-            return true;
-        }
-        // Check for " prefix" pattern without allocation
-        if let Some(pos) = s.find(prefix)
-            && pos > 0
-            && s.as_bytes()[pos - 1] == b' '
-        {
-            // Special case: "service " should be followed by command words, not "provider" etc.
-            if prefix == "service " {
-                let after = &s[pos + prefix.len()..];
-                let is_command = after.starts_with("start")
-                    || after.starts_with("stop")
-                    || after.starts_with("restart")
-                    || after.starts_with("status")
-                    || after.starts_with("enable")
-                    || after.starts_with("disable");
-                if !is_command {
-                    continue;
-                }
-            }
-            return true;
         }
     }
 

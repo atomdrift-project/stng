@@ -8,6 +8,20 @@ pub mod encoding;
 mod network;
 
 use crate::types::StringKind;
+use aho_corasick::AhoCorasick;
+use std::sync::LazyLock;
+
+/// Ransomware note markers. A string is a candidate only if it contains one of
+/// these, so a single Aho-Corasick scan replaces three sequential `contains`
+/// probes run on every classified string.
+#[allow(clippy::expect_used)]
+static RANSOM_INDICATORS: LazyLock<AhoCorasick> =
+    LazyLock::new(|| AhoCorasick::new(["ENCRYPTED", "DECRYPT", "RANSOM"]).expect("valid markers"));
+
+/// LDAP/AD path markers — necessary-condition gate for the precise check below.
+#[allow(clippy::expect_used)]
+static LDAP_INDICATORS: LazyLock<AhoCorasick> =
+    LazyLock::new(|| AhoCorasick::new(["LDAP://", "CN=", "DC="]).expect("valid markers"));
 
 /// Classify a general string by its content.
 /// Note: Section names are detected via goblin, not pattern matching here.
@@ -226,8 +240,11 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
         return Some(StringKind::XSSPayload);
     }
 
-    // LDAP/AD paths
-    if s.contains("LDAP://") || (s.contains("CN=") && s.contains("DC=")) {
+    // LDAP/AD paths. The AC gate skips the precise check for the common case
+    // where none of LDAP://, CN=, DC= appear.
+    if LDAP_INDICATORS.is_match(s)
+        && (s.contains("LDAP://") || (s.contains("CN=") && s.contains("DC=")))
+    {
         return Some(StringKind::LDAPPath);
     }
 
@@ -237,7 +254,7 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
     }
 
     // Ransomware patterns
-    if s.contains("ENCRYPTED") || s.contains("DECRYPT") || s.contains("RANSOM") {
+    if RANSOM_INDICATORS.is_match(s) {
         let uppercase_count = s.bytes().filter(u8::is_ascii_uppercase).count();
         if uppercase_count * 100 / len > 50 {
             return Some(StringKind::RansomNote);

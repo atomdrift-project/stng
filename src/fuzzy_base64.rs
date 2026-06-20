@@ -7,6 +7,7 @@
 //! - Partial corruption
 
 use crate::types::{ExtractedString, StringKind, StringMethod};
+use rayon::prelude::*;
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -39,39 +40,45 @@ const COMMON_SUBSTITUTIONS: &[(char, char)] = &[('A', '+'), ('9', '/'), ('_', '/
 /// 3. Extract base64 runs from noisy data
 /// 4. Decode with error tolerance
 pub(crate) fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<ExtractedString> {
-    let mut results = Vec::new();
+    // A string can yield up to three decodings; `flat_map_iter` parallelises
+    // across strings while preserving each string's strategy order.
+    strings
+        .par_iter()
+        .flat_map_iter(|s| {
+            let mut local = Vec::new();
 
-    for s in strings {
-        // Skip if already decoded or too short
-        if s.value.len() < MIN_BASE64_SEGMENT {
-            continue;
-        }
+            // Skip if already decoded or too short
+            if s.value.len() < MIN_BASE64_SEGMENT {
+                return local;
+            }
 
-        // Skip XorDecode strings: their base64 value is already decoded by decode_base64_strings.
-        // The XorDecode representation (showing the base64 payload) must be preserved in output.
-        if s.method == StringMethod::XorDecode {
-            continue;
-        }
+            // Skip XorDecode strings: their base64 value is already decoded by
+            // decode_base64_strings. The XorDecode representation (showing the
+            // base64 payload) must be preserved in output.
+            if s.method == StringMethod::XorDecode {
+                return local;
+            }
 
-        // Try different extraction strategies
-        if let Some(decoded) = try_deobfuscate_js_base64(&s.value) {
-            results.push(create_decoded_string(s, decoded));
-        }
+            // Try different extraction strategies
+            if let Some(decoded) = try_deobfuscate_js_base64(&s.value) {
+                local.push(create_decoded_string(s, decoded));
+            }
 
-        if let Some(decoded) = try_fuzzy_extract(&s.value) {
-            results.push(create_decoded_string(s, decoded));
-        }
+            if let Some(decoded) = try_fuzzy_extract(&s.value) {
+                local.push(create_decoded_string(s, decoded));
+            }
 
-        // Try extracting from substrings if this looks like a variable assignment
-        if s.value.contains('=')
-            && s.value.contains('"')
-            && let Some(decoded) = extract_from_assignment(&s.value)
-        {
-            results.push(create_decoded_string(s, decoded));
-        }
-    }
+            // Try extracting from substrings if this looks like a variable assignment
+            if s.value.contains('=')
+                && s.value.contains('"')
+                && let Some(decoded) = extract_from_assignment(&s.value)
+            {
+                local.push(create_decoded_string(s, decoded));
+            }
 
-    results
+            local
+        })
+        .collect()
 }
 
 /// Attempt to deobfuscate JavaScript-style base64 obfuscation.

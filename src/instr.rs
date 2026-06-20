@@ -13,8 +13,14 @@ use std::collections::HashSet;
 
 /// Extracts inline strings from ARM64 executable code.
 ///
-/// Scans for BL (branch with link) instructions and looks backwards for
-/// ADRP+ADD patterns (string address) and MOV/ORR patterns (string length).
+/// Scans for BL (branch-with-link) instructions and looks backward for the
+/// `ADRP+ADD` that computes a rodata pointer plus the `MOVZ`/`ORR` immediate
+/// that loads its length.
+///
+/// As on AMD64, the pointer and length land in whatever register pair the ABI
+/// assigns for that call — `runtime.stringtoslicebyte` passes them in x1/x2, not
+/// the x0/x1 or x2/x3 a fixed list would expect — so this accepts any `ADRP+ADD`
+/// into rodata followed by a length load into a *different* register.
 pub(crate) fn extract_inline_strings_arm64(
     text_data: &[u8],
     text_addr: u64,
@@ -27,10 +33,9 @@ pub(crate) fn extract_inline_strings_arm64(
 
     let rodata_end = rodata_addr + rodata_data.len() as u64;
 
-    // Scan through __text looking for BL instructions (ARM64 instructions are 4 bytes)
+    // ARM64 instructions are a fixed 4 bytes.
     let mut i = 0;
     while i + 4 <= text_data.len() {
-        // SAFETY: Loop condition ensures we have 4 bytes
         let inst = u32::from_le_bytes([
             text_data[i],
             text_data[i + 1],
@@ -38,44 +43,20 @@ pub(crate) fn extract_inline_strings_arm64(
             text_data[i + 3],
         ]);
 
-        // Check for BL (branch with link) instruction: 0x94xxxxxx
-        if (inst & 0xFC000000) != 0x94000000 {
-            i += 4;
-            continue;
+        // BL (branch with link): 0x94xxxxxx
+        if (inst & 0xFC000000) == 0x94000000 {
+            extract_arm64_inline_string(
+                i,
+                text_data,
+                text_addr,
+                rodata_data,
+                rodata_addr,
+                rodata_end,
+                min_length,
+                &mut strings,
+                &mut seen,
+            );
         }
-
-        // Found a BL - extract string patterns for different register pairs
-        // R0/R1 - first argument (common for function calls)
-        extract_arm64_string_pattern(
-            i,
-            text_data,
-            text_addr,
-            rodata_data,
-            rodata_addr,
-            rodata_end,
-            0, // address register
-            1, // length register
-            min_length,
-            Some(StringKind::Arg),
-            &mut strings,
-            &mut seen,
-        );
-
-        // R2/R3 - second argument (map keys in runtime.mapassign_faststr)
-        extract_arm64_string_pattern(
-            i,
-            text_data,
-            text_addr,
-            rodata_data,
-            rodata_addr,
-            rodata_end,
-            2,
-            3,
-            min_length,
-            Some(StringKind::MapKey),
-            &mut strings,
-            &mut seen,
-        );
 
         i += 4;
     }
@@ -83,113 +64,79 @@ pub(crate) fn extract_inline_strings_arm64(
     strings
 }
 
-/// Extract a string from ARM64 ADRP+ADD+MOV pattern targeting specific registers.
+/// Recover the inline string(s) loaded ahead of a BL call site.
+///
+/// Walks backward for `ADRP Rd, page; ADD Rd, Rd, #lo12` (the rodata pointer)
+/// and reads the immediately following `MOVZ`/`ORR` as the length — Go emits the
+/// length right after the address. The length register must differ from `Rd`
+/// (a length MOV into the pointer register would clobber it), and
+/// [`decode_arm64_string`] validates the slice, so an unrelated MOV is rejected.
 #[allow(clippy::too_many_arguments)]
-fn extract_arm64_string_pattern(
+fn extract_arm64_inline_string(
     bl_pos: usize,
     text_data: &[u8],
     text_addr: u64,
     rodata_data: &[u8],
     rodata_addr: u64,
     rodata_end: u64,
-    addr_reg: u32,
-    len_reg: u32,
     min_length: usize,
-    _kind: Option<StringKind>,
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
-    let max_lookback = bl_pos.min(20 * 4);
+    let word = |o: usize| {
+        u32::from_le_bytes([
+            text_data[o],
+            text_data[o + 1],
+            text_data[o + 2],
+            text_data[o + 3],
+        ])
+    };
 
-    let mut lookback = 8;
+    // Need room for ADRP, ADD, and the length MOV before the BL.
+    let max_lookback = bl_pos.min(20 * 4);
+    let mut lookback = 12;
     while lookback <= max_lookback {
         let pos = bl_pos - lookback;
         if pos + 12 > text_data.len() {
-            break;
-        }
-
-        // SAFETY: bounds checked above (pos + 12 <= text_data.len())
-        let inst1 = u32::from_le_bytes([
-            text_data[pos],
-            text_data[pos + 1],
-            text_data[pos + 2],
-            text_data[pos + 3],
-        ]);
-        let inst2 = u32::from_le_bytes([
-            text_data[pos + 4],
-            text_data[pos + 5],
-            text_data[pos + 6],
-            text_data[pos + 7],
-        ]);
-
-        // Check for ADRP Rx
-        let target_reg = inst1 & 0x1F;
-        let is_adrp = ((inst1 & 0x9F000000) == 0x90000000) && target_reg == addr_reg;
-
-        if !is_adrp {
             lookback += 4;
             continue;
         }
 
-        // Check for ADD Rx, Rx, #imm
-        let is_add = ((inst2 & 0xFF000000) == 0x91000000)
-            && ((inst2 & 0x1F) == addr_reg)
-            && (((inst2 >> 5) & 0x1F) == addr_reg);
+        let inst1 = word(pos);
+        let inst2 = word(pos + 4);
+        let inst3 = word(pos + 8);
 
-        if !is_add {
-            lookback += 4;
-            continue;
-        }
+        // ADRP Rd, page ; ADD Rd, Rd, #imm12 — same Rd in both.
+        let addr_reg = inst1 & 0x1F;
+        let is_adrp = (inst1 & 0x9F000000) == 0x90000000;
+        let is_add = (inst2 & 0xFF000000) == 0x91000000
+            && (inst2 & 0x1F) == addr_reg
+            && ((inst2 >> 5) & 0x1F) == addr_reg;
+        // MOVZ Rn, #imm or ORR Rn, XZR, #bitmask (the length) into a register
+        // other than the pointer.
+        let len_reg = inst3 & 0x1F;
+        let is_len = ((inst3 & 0xB2000000) == 0xB2000000 || (inst3 & 0xFF000000) == 0xD2000000)
+            && len_reg != addr_reg;
 
-        // Search for MOV/ORR Ry within next few instructions
-        let mut inst3 = 0u32;
-        let mut found_mov = false;
-
-        let mut offset = 8;
-        while offset <= 20 && pos + offset + 4 <= text_data.len() {
-            // SAFETY: Loop condition checks bounds
-            let inst3_candidate = u32::from_le_bytes([
-                text_data[pos + offset],
-                text_data[pos + offset + 1],
-                text_data[pos + offset + 2],
-                text_data[pos + offset + 3],
-            ]);
-            let reg_num = inst3_candidate & 0x1F;
-
-            // Check for ORR or MOVD targeting length register
-            let is_mov = ((inst3_candidate & 0xB2000000) == 0xB2000000
-                || (inst3_candidate & 0xFF000000) == 0xD2000000)
-                && reg_num == len_reg;
-
-            if is_mov {
-                inst3 = inst3_candidate;
-                found_mov = true;
-                break;
-            }
-            offset += 4;
-        }
-
-        if !found_mov {
-            lookback += 4;
-            continue;
-        }
-
-        // Decode and extract the string
-        if let Some((s, str_addr)) = decode_arm64_string(
-            inst1,
-            inst2,
-            inst3,
-            pos,
-            text_addr,
-            rodata_data,
-            rodata_addr,
-            rodata_end,
-        ) && s.len() >= min_length
-            && !seen.contains(&s)
+        if is_adrp
+            && is_add
+            && is_len
+            && let Some((s, str_addr)) = decode_arm64_string(
+                inst1,
+                inst2,
+                inst3,
+                pos,
+                text_addr,
+                rodata_data,
+                rodata_addr,
+                rodata_end,
+            )
+            && s.len() >= min_length
+            && seen.insert(s.clone())
         {
-            seen.insert(s.clone());
-            // Use content-based classification, but prefer MapKey hint from register position
-            let final_kind = if _kind == Some(StringKind::MapKey) && looks_like_key(&s) {
+            // Preserve the map-access hint: runtime map lookups load the key in
+            // x2 and its length in x3.
+            let kind = if addr_reg == 2 && len_reg == 3 && looks_like_key(&s) {
                 Some(StringKind::MapKey)
             } else {
                 classify_string(&s)
@@ -199,12 +146,12 @@ fn extract_arm64_string_pattern(
                 data_offset: str_addr,
                 section: Some(".rodata".to_string()),
                 method: StringMethod::InstructionPattern,
-                kind: final_kind,
+                kind,
                 ..Default::default()
             });
         }
 
-        return;
+        lookback += 4;
     }
 }
 
@@ -434,18 +381,17 @@ pub(crate) fn extract_inline_strings_amd64(
         .collect()
 }
 
-/// Consolidated backward scan for all five AMD64 backward-scanning patterns.
+/// Backward scan from a CALL site for inline string loads.
 ///
-/// Instead of five independent backward scans from each CALL site, this performs
-/// a single scan backward (up to 120 bytes) and checks all LEA patterns at each
-/// position. This reduces redundant memory accesses and branch mispredictions.
-///
-/// Patterns consolidated:
-/// - first_arg:    LEA RDI (48 8D 3D) + MOV ESI (0xBE) or MOV RSI (48 C7 C6)
-/// - key_string:   LEA RSI (48 8D 35) + MOV EDX (0xBA)
-/// - go_arg1:      LEA RAX (48 8D 05) + MOV EBX (0xBB) or MOV RBX (48 C7 C3)
-/// - go_arg2:      LEA RCX (48 8D 0D) + MOV EDI (0xBF) or MOV RDI (48 C7 C7)
-/// - stack_strings: LEA Rxx [RIP+disp] (48/4C 8D [modrm&0xC7==0x05]) + MOV [RSP+N] imm
+/// Go materializes a string constant at its use site as a RIP-relative `LEA`
+/// (the data pointer) paired with an immediate `MOV` (the length), in whatever
+/// registers the ABI assigns for that call. Enumerating specific register pairs
+/// silently drops every load whose length lands in an unlisted register — e.g.
+/// `[]byte(scriptConst)` whose length goes to ECX — so instead this accepts ANY
+/// rip-relative LEA into rodata followed by an immediate length load into a
+/// *different* register, validating the resulting slice as a printable string.
+/// A stack-stored length (`MOV $len, disp(RSP)`) is the fallback for strings
+/// spilled into a struct on the stack.
 #[allow(clippy::too_many_arguments)]
 fn extract_backward_strings(
     call_pos: usize,
@@ -458,333 +404,171 @@ fn extract_backward_strings(
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
-    // Use 120 as max lookback to cover stack_strings range
-    let max_lookback = call_pos.min(120);
-
-    // Track which register patterns have been found (early return per pattern)
-    let mut found_first_arg = false; // 0x3D
-    let mut found_key = false; // 0x35
-    let mut found_go_arg1 = false; // 0x05
-    let mut found_go_arg2 = false; // 0x0D
-
-    // Scan backward from call_pos
-    let scan_start = call_pos.saturating_sub(max_lookback);
+    // 120 bytes back covers a string spilled to the stack ahead of its CALL.
+    let scan_start = call_pos.saturating_sub(call_pos.min(120));
     let mut pos = scan_start;
 
     while pos + 7 <= call_pos {
-        // Quick check: does this look like a REX.W LEA?
+        // REX.W LEA r64, [rip+disp32]: (48|4C) 8D [mod=00, rm=101] disp32.
         let rex = text_data[pos];
-        if (rex != 0x48 && rex != 0x4C) || pos + 7 > text_data.len() {
+        if (rex != 0x48 && rex != 0x4C) || text_data[pos + 1] != 0x8D {
             pos += 1;
             continue;
         }
-        if text_data[pos + 1] != 0x8D {
-            pos += 1;
-            continue;
-        }
-
         let modrm = text_data[pos + 2];
-
-        // Check if this is a RIP-relative LEA (mod=00, rm=101)
         if (modrm & 0xC7) != 0x05 {
             pos += 1;
             continue;
         }
 
-        // Decode the RIP-relative offset
         let offset = i32::from_le_bytes([
             text_data[pos + 3],
             text_data[pos + 4],
             text_data[pos + 5],
             text_data[pos + 6],
         ]);
-        let rip_addr = text_addr + (pos + 7) as u64;
-        let str_addr = rip_addr.wrapping_add_signed(i64::from(offset));
+        let str_addr = (text_addr + (pos + 7) as u64).wrapping_add_signed(i64::from(offset));
 
-        // For specific register patterns (REX.W=0x48, exact modrm byte):
-        // Only process within the 50-byte lookback range for non-stack patterns
-        let lookback = call_pos - pos;
-
-        if rex == 0x48 && lookback <= 50 {
-            // first_arg: 48 8D 3D (LEA RDI)
-            if modrm == 0x3D && !found_first_arg {
-                if let Some(found) = try_extract_register_string(
-                    pos,
-                    text_data,
-                    str_addr,
-                    rodata_data,
-                    rodata_addr,
-                    rodata_end,
-                    min_length,
-                    0xBE,
-                    Some((0x48, 0xC7, 0xC6)),
-                ) {
-                    found_first_arg = true;
-                    if seen.insert(found.clone()) {
-                        let final_kind = classify_string(&found);
-                        strings.push(ExtractedString {
-                            value: found,
-                            data_offset: str_addr,
-                            section: Some(".rodata".to_string()),
-                            method: StringMethod::InstructionPattern,
-                            kind: final_kind,
-                            ..Default::default()
-                        });
-                    }
-                }
-                pos += 7;
-                continue;
-            }
-
-            // key_string: 48 8D 35 (LEA RSI)
-            if modrm == 0x35 && !found_key {
-                if let Some(found) = try_extract_register_string(
-                    pos,
-                    text_data,
-                    str_addr,
-                    rodata_data,
-                    rodata_addr,
-                    rodata_end,
-                    min_length,
-                    0xBA,
-                    None,
-                ) {
-                    found_key = true;
-                    if seen.insert(found.clone()) {
-                        let final_kind = if looks_like_key(&found) {
-                            Some(StringKind::MapKey)
-                        } else {
-                            classify_string(&found)
-                        };
-                        strings.push(ExtractedString {
-                            value: found,
-                            data_offset: str_addr,
-                            section: Some(".rodata".to_string()),
-                            method: StringMethod::InstructionPattern,
-                            kind: final_kind,
-                            ..Default::default()
-                        });
-                    }
-                }
-                pos += 7;
-                continue;
-            }
-
-            // go_arg1: 48 8D 05 (LEA RAX)
-            if modrm == 0x05 && !found_go_arg1 {
-                if let Some(found) = try_extract_register_string(
-                    pos,
-                    text_data,
-                    str_addr,
-                    rodata_data,
-                    rodata_addr,
-                    rodata_end,
-                    min_length,
-                    0xBB,
-                    Some((0x48, 0xC7, 0xC3)),
-                ) {
-                    found_go_arg1 = true;
-                    if seen.insert(found.clone()) {
-                        let final_kind = classify_string(&found);
-                        strings.push(ExtractedString {
-                            value: found,
-                            data_offset: str_addr,
-                            section: Some(".rodata".to_string()),
-                            method: StringMethod::InstructionPattern,
-                            kind: final_kind,
-                            ..Default::default()
-                        });
-                    }
-                }
-                pos += 7;
-                continue;
-            }
-
-            // go_arg2: 48 8D 0D (LEA RCX)
-            if modrm == 0x0D && !found_go_arg2 {
-                if let Some(found) = try_extract_register_string(
-                    pos,
-                    text_data,
-                    str_addr,
-                    rodata_data,
-                    rodata_addr,
-                    rodata_end,
-                    min_length,
-                    0xBF,
-                    Some((0x48, 0xC7, 0xC7)),
-                ) {
-                    found_go_arg2 = true;
-                    if seen.insert(found.clone()) {
-                        let final_kind = classify_string(&found);
-                        strings.push(ExtractedString {
-                            value: found,
-                            data_offset: str_addr,
-                            section: Some(".rodata".to_string()),
-                            method: StringMethod::InstructionPattern,
-                            kind: final_kind,
-                            ..Default::default()
-                        });
-                    }
-                }
-                pos += 7;
-                continue;
-            }
-        }
-
-        // stack_strings: any RIP-relative LEA (48/4C 8D [modrm&0xC7==0x05]) pointing into rodata
-        // Uses wider search for length in MOV [RSP+N] pattern
         if str_addr >= rodata_addr && str_addr < rodata_end {
-            let search_start = pos.saturating_sub(20);
-            let search_end = (pos + 30).min(call_pos);
-
-            let mut best_len: Option<u64> = None;
-
-            let mut j = search_start;
-            while j < search_end {
-                if j + 4 > text_data.len() || text_data[j] != 0x48 || text_data[j + 1] != 0xC7 {
-                    j += 1;
-                    continue;
-                }
-
-                let imm_offset = if text_data[j + 2] == 0x44 && text_data[j + 3] == 0x24 {
-                    if j + 9 > text_data.len() {
-                        j += 1;
-                        continue;
-                    }
-                    j + 5
-                } else if text_data[j + 2] == 0x84 && text_data[j + 3] == 0x24 {
-                    if j + 12 > text_data.len() {
-                        j += 1;
-                        continue;
-                    }
-                    j + 8
+            // LEA destination (reg field + REX.R): a length MOV into this same
+            // register would clobber the pointer, so it is never the length.
+            let lea_dest = ((modrm >> 3) & 0x07) | ((rex & 0x04) << 1);
+            if let Some((value, len_reg)) = find_inline_length_string(
+                pos,
+                call_pos,
+                text_data,
+                str_addr,
+                rodata_data,
+                rodata_addr,
+                rodata_end,
+                min_length,
+                lea_dest,
+            ) && seen.insert(value.clone())
+            {
+                // Preserve the map-access hint: `LEA RSI, key; MOV EDX, keylen`
+                // precedes a runtime map lookup. Otherwise classify by content.
+                let kind = if lea_dest == 6 && len_reg == Some(2) && looks_like_key(&value) {
+                    Some(StringKind::MapKey)
                 } else {
-                    j += 1;
-                    continue;
+                    classify_string(&value)
                 };
-
-                let len = u64::from(u32::from_le_bytes([
-                    text_data[imm_offset],
-                    text_data[imm_offset + 1],
-                    text_data[imm_offset + 2],
-                    text_data[imm_offset + 3],
-                ]));
-
-                if len > 0 && len <= 1000 && str_addr + len <= rodata_end {
-                    let ro = (str_addr - rodata_addr) as usize;
-                    if ro + len as usize <= rodata_data.len()
-                        && let Ok(s) = std::str::from_utf8(&rodata_data[ro..ro + len as usize])
-                        && is_valid_utf8_string(s)
-                        && best_len.is_none()
-                    {
-                        best_len = Some(len);
-                    }
-                }
-
-                j += 1;
-            }
-
-            if let Some(str_len) = best_len {
-                let rodata_offset = (str_addr - rodata_addr) as usize;
-                if let Some(end) = rodata_offset.checked_add(str_len as usize)
-                    && end <= rodata_data.len()
-                    && let Ok(s) = std::str::from_utf8(&rodata_data[rodata_offset..end])
-                    && is_valid_utf8_string(s)
-                    && s.len() >= min_length
-                    && !seen.contains(s)
-                {
-                    seen.insert(s.to_string());
-                    let final_kind = classify_string(s);
-                    strings.push(ExtractedString {
-                        value: s.to_string(),
-                        data_offset: str_addr,
-                        section: Some(".rodata".to_string()),
-                        method: StringMethod::InstructionPattern,
-                        kind: final_kind,
-                        ..Default::default()
-                    });
-                }
+                strings.push(ExtractedString {
+                    value,
+                    data_offset: str_addr,
+                    section: Some(".rodata".to_string()),
+                    method: StringMethod::InstructionPattern,
+                    kind,
+                    ..Default::default()
+                });
             }
         }
 
-        pos += 7; // skip past this LEA
+        pos += 7; // past this LEA
     }
 }
 
-/// Try to extract a string for a register-based LEA pattern.
+/// Locate the length operand for a string `LEA` and return the validated string
+/// plus the register the length was loaded into (`None` for a stack length).
 ///
-/// Searches forward from the LEA position for a length instruction matching
-/// either a single-byte opcode (MOVL) or a 3-byte opcode (MOVQ).
+/// Go emits the pointer `LEA` and an immediate-length `MOV` as a pair. This
+/// scans the instructions just after the LEA for `MOV r32, imm32`
+/// (`[41] B8+r id`) or `MOV r64, imm32` (`(48|4C) C7 C0+r id`), then falls back
+/// to a stack store `MOV $len, disp(RSP)`. A length whose slice is non-printable
+/// or runs past rodata is skipped, so the first length yielding a valid string wins.
 #[allow(clippy::too_many_arguments)]
-fn try_extract_register_string(
-    pos: usize,
+fn find_inline_length_string(
+    lea_pos: usize,
+    call_pos: usize,
     text_data: &[u8],
     str_addr: u64,
     rodata_data: &[u8],
     rodata_addr: u64,
     rodata_end: u64,
     min_length: usize,
-    movl_opcode: u8,
-    movq_prefix: Option<(u8, u8, u8)>,
-) -> Option<String> {
-    if str_addr < rodata_addr || str_addr >= rodata_end {
-        return None;
-    }
-
-    let mut str_len = 0u64;
-    let mut found_len = false;
-
-    for off in 7..=20 {
-        if pos + off + 5 > text_data.len() {
-            break;
+    lea_dest: u8,
+) -> Option<(String, Option<u8>)> {
+    let validate = |len: u64| -> Option<String> {
+        if len == 0 || len > 1000 || str_addr + len > rodata_end {
+            return None;
         }
+        let start = (str_addr - rodata_addr) as usize;
+        let s = std::str::from_utf8(rodata_data.get(start..start + len as usize)?).ok()?;
+        (is_valid_utf8_string(s) && s.len() >= min_length).then(|| s.to_string())
+    };
 
-        // MOVL $imm32, Exx (single byte opcode)
-        if text_data[pos + off] == movl_opcode {
-            str_len = u64::from(u32::from_le_bytes([
-                text_data[pos + off + 1],
-                text_data[pos + off + 2],
-                text_data[pos + off + 3],
-                text_data[pos + off + 4],
-            ]));
-            found_len = true;
-            break;
+    // Go emits the length `MOV` immediately after the pointer `LEA` (the LEA is
+    // 7 bytes). Matching only that slot — rather than scanning a window — avoids
+    // latching onto an unrelated later `MOV` whose immediate would over-run the
+    // string into the next packed literal, which is the dominant false positive.
+    if let Some((reg, len)) = decode_mov_imm32(text_data, lea_pos + 7)
+        && reg != lea_dest
+        && let Some(s) = validate(len)
+    {
+        return Some((s, Some(reg)));
+    }
+
+    // Fallback: length stored to the stack (`MOV $len, disp(RSP)`), how a string
+    // placed in a stack-allocated struct materializes its header.
+    let search_end = (lea_pos + 30).min(call_pos);
+    let mut j = lea_pos.saturating_sub(20);
+    while j + 4 <= text_data.len() && j < search_end {
+        if text_data[j] != 0x48 || text_data[j + 1] != 0xC7 {
+            j += 1;
+            continue;
         }
-
-        // MOVQ $imm32, Rxx (3-byte prefix)
-        if let Some((b0, b1, b2)) = movq_prefix
-            && pos + off + 7 <= text_data.len()
-            && text_data[pos + off] == b0
-            && text_data[pos + off + 1] == b1
-            && text_data[pos + off + 2] == b2
-        {
-            str_len = u64::from(u32::from_le_bytes([
-                text_data[pos + off + 3],
-                text_data[pos + off + 4],
-                text_data[pos + off + 5],
-                text_data[pos + off + 6],
-            ]));
-            found_len = true;
-            break;
+        let imm_offset = if text_data[j + 2] == 0x44 && text_data[j + 3] == 0x24 {
+            j + 5 // MOV $imm32, disp8(RSP)
+        } else if text_data[j + 2] == 0x84 && text_data[j + 3] == 0x24 {
+            j + 8 // MOV $imm32, disp32(RSP)
+        } else {
+            j += 1;
+            continue;
+        };
+        if let Some(&[b0, b1, b2, b3]) = text_data.get(imm_offset..imm_offset + 4) {
+            let len = u64::from(u32::from_le_bytes([b0, b1, b2, b3]));
+            if let Some(s) = validate(len) {
+                return Some((s, None));
+            }
         }
+        j += 1;
     }
 
-    if !found_len || str_len == 0 || str_len > 1000 {
-        return None;
-    }
+    None
+}
 
-    let rodata_offset = (str_addr - rodata_addr) as usize;
-    let end = rodata_offset.checked_add(str_len as usize)?;
-    if end > rodata_data.len() {
-        return None;
-    }
-
-    let s = std::str::from_utf8(&rodata_data[rodata_offset..end]).ok()?;
-    if is_valid_utf8_string(s) && s.len() >= min_length {
-        Some(s.to_string())
+/// Decode a `MOV` of a 32-bit immediate into a general register at `p`.
+///
+/// Handles `MOV r32, imm32` (`B8+r id`, optionally `41`-prefixed for r8d–r15d)
+/// and `MOV r64, imm32` (`(48|4C) C7 C0+r id`). Returns `(register, immediate)`.
+fn decode_mov_imm32(text_data: &[u8], p: usize) -> Option<(u8, u64)> {
+    let first = *text_data.get(p)?;
+    // MOV r32, imm32 — opcode B8+r, with optional REX.B for r8d–r15d.
+    let (op_pos, reg_hi): (usize, u8) = if first == 0x41 {
+        (p + 1, 0x08)
     } else {
-        None
+        (p, 0x00)
+    };
+    let op = *text_data.get(op_pos)?;
+    if (0xB8..=0xBF).contains(&op) {
+        let imm = text_data.get(op_pos + 1..op_pos + 5)?;
+        return Some((
+            (op - 0xB8) | reg_hi,
+            u64::from(u32::from_le_bytes(imm.try_into().ok()?)),
+        ));
     }
+    // MOV r64, imm32 (sign-extended): (48|4C) C7 C0+r.
+    if (first == 0x48 || first == 0x4C) && *text_data.get(p + 1)? == 0xC7 {
+        let modrm = *text_data.get(p + 2)?;
+        if (0xC0..=0xC7).contains(&modrm) {
+            let imm = text_data.get(p + 3..p + 7)?;
+            let reg_hi: u8 = if first == 0x4C { 0x08 } else { 0x00 };
+            return Some((
+                (modrm - 0xC0) | reg_hi,
+                u64::from(u32::from_le_bytes(imm.try_into().ok()?)),
+            ));
+        }
+    }
+    None
 }
 
 /// Extract value string from after CALL (LEAQ + MOVQ pattern).
@@ -1293,5 +1077,49 @@ mod tests {
                 min_len
             );
         }
+    }
+
+    /// Regression: a string materialized as `LEA RBX, <rodata>; MOV ECX, len`
+    /// (the shape Go emits for `[]byte(constant)`, e.g. the GhostDog script)
+    /// must be recovered. The length lands in ECX, which no fixed register-pair
+    /// list covered, so this whole class of literals was previously dropped.
+    #[test]
+    fn test_amd64_non_arg_register_pair() {
+        // 48 8D 1D F9 0F 00 00  LEA RBX, [rip+0xFF9]   -> 0x101000
+        // B9 10 00 00 00        MOV ECX, 16            (length, not in ESI/EDX/EBX/EDI)
+        // E8 00 00 00 00        CALL
+        // Trailing NOPs so the CALL site clears the scanner's end-of-text guard.
+        let text = vec![
+            0x48, 0x8D, 0x1D, 0xF9, 0x0F, 0x00, 0x00, 0xB9, 0x10, 0x00, 0x00, 0x00, 0xE8, 0x00,
+            0x00, 0x00, 0x00, 0x90, 0x90, 0x90, 0x90,
+        ];
+        let mut rodata = vec![0u8; 0x40];
+        rodata[0..16].copy_from_slice(b"echo hello world");
+        let results = extract_inline_strings_amd64(&text, 0x100000, &rodata, 0x101000, 4);
+        assert!(
+            results.iter().any(|s| s.value == "echo hello world"),
+            "LEA RBX + MOV ECX length pair should be recovered, got {:?}",
+            results.iter().map(|s| &s.value).collect::<Vec<_>>(),
+        );
+    }
+
+    /// Regression: the ARM64 equivalent — `ADRP x1; ADD x1; MOVZ x2, len` — the
+    /// register pair `runtime.stringtoslicebyte` uses, outside the old x0/x1 and
+    /// x2/x3 cases.
+    #[test]
+    fn test_arm64_non_arg_register_pair() {
+        // ADRP x1, +0x10 pages ; ADD x1, x1, #0 ; MOVZ x2, #16 ; BL
+        let text = vec![
+            0x81, 0x00, 0x00, 0x90, 0x21, 0x00, 0x00, 0x91, 0x02, 0x02, 0x80, 0xD2, 0x00, 0x00,
+            0x00, 0x94,
+        ];
+        let mut rodata = vec![0u8; 0x40];
+        rodata[0..16].copy_from_slice(b"echo hello world");
+        let results = extract_inline_strings_arm64(&text, 0x100000, &rodata, 0x110000, 4);
+        assert!(
+            results.iter().any(|s| s.value == "echo hello world"),
+            "ADRP x1 + MOVZ x2 length pair should be recovered, got {:?}",
+            results.iter().map(|s| &s.value).collect::<Vec<_>>(),
+        );
     }
 }
