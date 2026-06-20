@@ -335,10 +335,14 @@ pub(crate) fn extract_inline_strings_amd64(
         .map(|(i, _)| i)
         .collect();
 
-    // Process CALL sites in parallel
-    let all_strings: Vec<Vec<ExtractedString>> = call_positions
+    // Process CALL sites in parallel. `flat_map_iter` streams each site's
+    // (usually empty) result straight into the collection; collecting into a
+    // `Vec<Vec<_>>` would instead retain one Vec header per CALL site, and a
+    // multi-MB `.text` has hundreds of thousands of `0xE8` bytes — ~10 MB of
+    // empty headers for a few thousand real strings.
+    let mut result: Vec<ExtractedString> = call_positions
         .par_iter()
-        .map(|&i| {
+        .flat_map_iter(|&i| {
             let mut strings = Vec::new();
             let mut seen = HashSet::new();
 
@@ -372,13 +376,10 @@ pub(crate) fn extract_inline_strings_amd64(
         })
         .collect();
 
-    // Flatten and deduplicate
+    // Deduplicate by value, preserving first-seen order.
     let mut seen: HashSet<String> = HashSet::new();
-    all_strings
-        .into_iter()
-        .flatten()
-        .filter(|s| seen.insert(s.value.clone()))
-        .collect()
+    result.retain(|s| seen.insert(s.value.clone()));
+    result
 }
 
 /// Backward scan from a CALL site for inline string loads.

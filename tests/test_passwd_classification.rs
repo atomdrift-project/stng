@@ -19,8 +19,7 @@ _nsurlsessiond:*:242:242:NSURLSession Daemon:/var/db/nsurlsessiond:/usr/bin/fals
     fs::write(test_file, content).expect("failed to write test file");
 
     // Run stng on the file
-    let output = Command::new("cargo")
-        .args(["run", "--release", "--bin", "stng", "--"])
+    let output = Command::new(env!("CARGO_BIN_EXE_stng"))
         .arg(test_file)
         .output()
         .expect("failed to execute stng");
@@ -65,8 +64,7 @@ path to desktop folder
     fs::write(test_file, content).expect("failed to write test file");
 
     // Run stng on the file
-    let output = Command::new("cargo")
-        .args(["run", "--release", "--bin", "stng", "--"])
+    let output = Command::new(env!("CARGO_BIN_EXE_stng"))
         .arg(test_file)
         .output()
         .expect("failed to execute stng");

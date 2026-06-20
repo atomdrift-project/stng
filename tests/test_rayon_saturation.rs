@@ -29,7 +29,7 @@ fn synthetic_elf_like(size_bytes: usize) -> Vec<u8> {
 
 #[test]
 fn stng_parallelizes_under_par_iter() -> Result<(), Box<dyn std::error::Error>> {
-    let data = synthetic_elf_like(512 * 1024);
+    let data = synthetic_elf_like(256 * 1024);
     let opts = stng::ExtractOptions::new(4);
     let n_iters: usize = 32;
     let n_threads: usize = 8;

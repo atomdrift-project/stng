@@ -823,7 +823,15 @@ pub(crate) fn extract_null_separated_strings(
     const MAX_ENTRY_LEN: usize = 80;
 
     fn entry_at(data: &[u8], pos: usize) -> Option<(usize, &[u8])> {
-        let nul = pos + memchr::memchr(0, data.get(pos..)?)?;
+        // An entry is at most MAX_ENTRY_LEN bytes before its NUL, so only scan
+        // that far for the terminator. On NUL-sparse pclntab pc-tables the
+        // terminator can be thousands of bytes away; scanning the whole gap
+        // from every starting byte makes the outer loop O(n²). Capping the
+        // probe is exact — a NUL beyond the window would yield an over-long
+        // entry that the length check below rejects anyway.
+        let window = data.get(pos..)?;
+        let limit = (MAX_ENTRY_LEN + 1).min(window.len());
+        let nul = pos + memchr::memchr(0, &window[..limit])?;
         let bytes = &data[pos..nul];
         if bytes.is_empty() || bytes.len() > MAX_ENTRY_LEN {
             return None;

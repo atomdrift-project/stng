@@ -5,8 +5,7 @@ use std::fs;
 use std::process::Command;
 
 fn run_stng(args: &[&str]) -> String {
-    let output = Command::new("cargo")
-        .args(["run", "--release", "--bin", "stng", "--"])
+    let output = Command::new(env!("CARGO_BIN_EXE_stng"))
         .args(args)
         .output()
         .expect("failed to execute stng");
@@ -15,8 +14,7 @@ fn run_stng(args: &[&str]) -> String {
 }
 
 fn run_stng_stderr(args: &[&str]) -> String {
-    let output = Command::new("cargo")
-        .args(["run", "--release", "--bin", "stng", "--"])
+    let output = Command::new(env!("CARGO_BIN_EXE_stng"))
         .args(args)
         .output()
         .expect("failed to execute stng");
@@ -156,8 +154,7 @@ fn test_empty_file() {
     fs::write(test_file, "").expect("failed to write test file");
 
     // Run command and capture both stdout and stderr
-    let output_result = Command::new("cargo")
-        .args(["run", "--release", "--bin", "stng", "--"])
+    let output_result = Command::new(env!("CARGO_BIN_EXE_stng"))
         .arg(test_file)
         .output()
         .expect("failed to execute stng");
