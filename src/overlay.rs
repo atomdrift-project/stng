@@ -93,7 +93,6 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
                 overlay_data,
                 PrintableRunContext {
                     min_length,
-                    section: Some("overlay"),
                     segment_names_set: &segment_names_set,
                     skip_ranges: &[],
                 },

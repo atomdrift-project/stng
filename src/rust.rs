@@ -195,7 +195,6 @@ impl RustStringExtractor {
                     .map(|s| ExtractedString {
                         value: s.value,
                         data_offset: text_const_addr + s.data_offset,
-                        section: s.section,
                         method: StringMethod::Heuristic,
                         kind: s.kind,
                         ..Default::default()
@@ -215,7 +214,7 @@ impl RustStringExtractor {
             .flatten()
             .collect();
 
-            for (section_addr, section_data, section_name) in targets {
+            for (section_addr, section_data, _section_name) in targets {
                 let inline_strings = match macho.header.cputype() {
                     CPU_TYPE_ARM64 => extract_inline_strings_arm64(
                         text_data,
@@ -240,10 +239,6 @@ impl RustStringExtractor {
                     inline_strings
                         .into_iter()
                         .filter(|s| !existing.contains(s.value.as_str()))
-                        .map(|mut s| {
-                            s.section = Some(section_name.to_string());
-                            s
-                        })
                         .collect()
                 };
                 strings.extend(new_inline);
@@ -496,7 +491,11 @@ impl RustStringExtractor {
     }
 
     /// Extract raw strings as fallback.
-    fn extract_raw_strings(&self, data: &[u8], section_name: Option<&str>) -> Vec<ExtractedString> {
+    fn extract_raw_strings(
+        &self,
+        data: &[u8],
+        _section_name: Option<&str>,
+    ) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         let mut current = Vec::new();
@@ -513,7 +512,6 @@ impl RustStringExtractor {
                         strings.push(ExtractedString {
                             value: trimmed.to_string(),
                             data_offset: start_offset as u64,
-                            section: section_name.map(str::to_string),
                             method: StringMethod::RawScan,
                             kind: classify_string(trimmed),
                             ..Default::default()
@@ -708,7 +706,7 @@ impl RustStringExtractor {
         &self,
         s: &str,
         data_offset: u64,
-        section_name: Option<&str>,
+        _section_name: Option<&str>,
         strings: &mut Vec<ExtractedString>,
         seen: &mut HashSet<String>,
     ) {
@@ -737,7 +735,6 @@ impl RustStringExtractor {
         strings.push(ExtractedString {
             value: trimmed.to_string(),
             data_offset,
-            section: section_name.map(str::to_string),
             method: StringMethod::Heuristic,
             kind: classify_string(trimmed),
             ..Default::default()
@@ -1198,36 +1195,6 @@ mod tests {
                 );
             }
             assert!(strings.len() < 50);
-        }
-    }
-
-    #[test]
-    fn test_section_metadata() {
-        let extractor = RustStringExtractor::new(4);
-        if let Ok(data) = std::fs::read("/bin/ls")
-            && let Ok(elf) = goblin::elf::Elf::parse(&data)
-        {
-            let strings = extractor.extract_elf(&elf, &data);
-            if !strings.is_empty() {
-                let with_sections = strings.iter().filter(|s| s.section.is_some()).count();
-                assert!(
-                    with_sections > 0,
-                    "At least some strings should have section metadata"
-                );
-                for s in &strings {
-                    if let Some(section) = &s.section {
-                        assert!(!section.is_empty());
-                        assert!(
-                            section.starts_with('.')
-                                || section.starts_with("__")
-                                || section == "rodata"
-                                || section == "text",
-                            "Unexpected section name: {}",
-                            section
-                        );
-                    }
-                }
-            }
         }
     }
 

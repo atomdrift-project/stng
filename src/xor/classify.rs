@@ -464,7 +464,6 @@ pub(crate) fn extract_xor_strings(
                 results.push(ExtractedString {
                     value: decoded,
                     data_offset: offset,
-                    section: None,
                     method: StringMethod::XorDecode,
                     kind,
                     fragments: None,
@@ -551,7 +550,6 @@ pub(crate) fn extract_multikey_xor_strings(
                             results.push(ExtractedString {
                                 value: s,
                                 data_offset: start as u64,
-                                section: None,
                                 method: StringMethod::XorDecode,
                                 kind,
                                 ..Default::default()
@@ -602,7 +600,6 @@ pub(crate) fn extract_multikey_xor_strings(
                     results.push(ExtractedString {
                         value: decoded,
                         data_offset: offset,
-                        section: None,
                         method: StringMethod::XorDecode,
                         kind,
                         fragments: None,
@@ -730,7 +727,6 @@ pub(crate) fn scan_dotted_patterns(
                     results.push(ExtractedString {
                         value: ip,
                         data_offset: offset,
-                        section: None,
                         method: StringMethod::XorDecode,
                         kind: Some(StringKind::IP),
                         fragments: None,
@@ -746,7 +742,6 @@ pub(crate) fn scan_dotted_patterns(
                     results.push(ExtractedString {
                         value: ip_port,
                         data_offset: offset,
-                        section: None,
                         method: StringMethod::XorDecode,
                         kind: Some(StringKind::IPPort),
                         fragments: None,
@@ -765,7 +760,6 @@ pub(crate) fn scan_dotted_patterns(
                 results.push(ExtractedString {
                     value: hostname,
                     data_offset: offset,
-                    section: None,
                     method: StringMethod::XorDecode,
                     kind: Some(StringKind::Hostname),
                     fragments: None,

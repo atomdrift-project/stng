@@ -267,29 +267,6 @@ fn print_json(strings: &[stng::ExtractedString]) -> Result<()> {
     Ok(())
 }
 
-/// Render a section-info map as `name -> "(size, type)"` display strings.
-fn section_meta_map(
-    info: std::collections::HashMap<String, stng::binary::SectionInfo>,
-) -> std::collections::HashMap<String, String> {
-    info.into_iter()
-        .map(|(name, si)| {
-            let type_str = match (si.is_executable, si.is_writable) {
-                (true, true) => "TEXT+DATA",
-                (true, false) => "TEXT",
-                (false, _) => "DATA",
-            };
-            let size_str = if si.size < 1024 {
-                format!("{}b", si.size)
-            } else if si.size < 1024 * 1024 {
-                format!("{:.1}kb", si.size as f64 / 1024.0)
-            } else {
-                format!("{:.1}mb", si.size as f64 / (1024.0 * 1024.0))
-            };
-            (name, format!("({size_str}, {type_str})"))
-        })
-        .collect()
-}
-
 fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     // Handle cache flushing if requested
     if cli.flush_cache {
@@ -324,7 +301,6 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
                 strings.push(stng::ExtractedString {
                     value: trimmed.to_string(),
                     data_offset: byte_offset,
-                    section: None,
                     method: stng::StringMethod::RawScan,
                     kind: stng::classify_string(trimmed),
                     ..Default::default()
@@ -561,132 +537,14 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         }
         println!();
 
-        // Sort by section (in file offset order), then by offset within section
-        // In --flat mode, sort purely by offset for raw file order
-        if cli.flat {
-            strings.sort_by_key(|s| s.data_offset);
-        } else {
-            // Build section order map based on minimum offset per section
-            let mut section_min_offset: std::collections::HashMap<Option<String>, u64> =
-                std::collections::HashMap::new();
-            for s in &strings {
-                let section = s.section.clone();
-                section_min_offset
-                    .entry(section)
-                    .and_modify(|min| *min = (*min).min(s.data_offset))
-                    .or_insert(s.data_offset);
-            }
+        // Sort by file offset (section grouping was dropped with the per-string
+        // section field; callers that need a section derive it from the offset).
+        strings.sort_by_key(|s| s.data_offset);
 
-            // Sort by section's minimum offset, then by string offset within section
-            strings.sort_by(|a, b| {
-                let a_section_offset = section_min_offset
-                    .get(&a.section)
-                    .copied()
-                    .unwrap_or(u64::MAX);
-                let b_section_offset = section_min_offset
-                    .get(&b.section)
-                    .copied()
-                    .unwrap_or(u64::MAX);
-                a_section_offset
-                    .cmp(&b_section_offset)
-                    .then(a.data_offset.cmp(&b.data_offset))
-            });
-        }
-
-        // Build section metadata map directly from binary format
-        let section_metadata: std::collections::HashMap<String, String> = {
-            use goblin::Object;
-            use stng::binary::{
-                collect_elf_section_info, collect_macho_section_info, collect_pe_section_info,
-            };
-            match Object::parse(&data) {
-                Ok(Object::PE(pe)) => section_meta_map(collect_pe_section_info(&pe)),
-                Ok(Object::Elf(elf)) => section_meta_map(collect_elf_section_info(&elf)),
-                Ok(Object::Mach(goblin::mach::Mach::Binary(macho))) => {
-                    section_meta_map(collect_macho_section_info(&macho))
-                }
-                _ => std::collections::HashMap::new(),
-            }
-        };
-
-        // Use sentinel to detect first section (distinguishes from "no section yet" vs "section is None")
-        let mut current_section: Option<Option<&str>> = None;
-        let mut current_arch: Option<Option<&str>> = None;
-
-        // Track section offsets (first string's offset in each section)
-        let mut section_offsets: std::collections::HashMap<Option<String>, u64> =
-            std::collections::HashMap::new();
-
-        // Collect high-severity items for summary
+        // Collect high-severity items for the summary.
         let mut notable: Vec<&stng::ExtractedString> = Vec::new();
-
         for s in &strings {
-            let section = s.section.as_deref();
-            // Architecture is no longer tracked per-string; never groups headers.
-            let arch: Option<&str> = None;
-
-            // Print section header when section or architecture changes
-            // Track as tuple (section, arch) to detect when either changes
-            let section_changed = current_section != Some(section);
-            let arch_changed = current_arch != Some(arch);
-            if !cli.flat && (section_changed || arch_changed) {
-                if current_section.is_some() {
-                    println!();
-                }
-
-                // Skip section header for empty section names, but still print the strings
-                if let Some("") = section {
-                    current_section = Some(section);
-                    current_arch = Some(arch);
-                    // Fall through to print_string_line instead of skipping
-                } else {
-                    // Record offset for this section (first string's offset)
-                    let section_key = section.map(std::string::ToString::to_string);
-                    section_offsets
-                        .entry(section_key.clone())
-                        .or_insert(s.data_offset);
-                    let section_offset = section_offsets.get(&section_key).copied().unwrap_or(0);
-
-                    let section_name = section.unwrap_or("(analysis)");
-
-                    // Build section header with optional architecture
-                    let mut section_header = if let Some(sect) = section {
-                        // Try exact match first, then prefix match for section strings with trailing garbage
-                        let metadata = section_metadata.get(sect).or_else(|| {
-                            section_metadata
-                                .iter()
-                                .find(|(k, _)| k.starts_with(sect) || sect.starts_with(k.as_str()))
-                                .map(|(_, v)| v)
-                        });
-
-                        if let Some(meta) = metadata {
-                            format!("{} {}", section_name, meta)
-                        } else {
-                            section_name.to_string()
-                        }
-                    } else {
-                        section_name.to_string()
-                    };
-
-                    // Add architecture if present (for fat binaries)
-                    if let Some(architecture) = arch {
-                        section_header = format!("{} ({})", section_header, architecture);
-                    }
-
-                    let offset_str = format!("{:>8x}", section_offset);
-                    if use_color {
-                        println!("{DIM}{} ── {} ──{RESET}", offset_str, section_header);
-                    } else {
-                        println!("{} ── {} ──", offset_str, section_header);
-                    }
-                    current_section = Some(section);
-                    current_arch = Some(arch);
-                }
-            }
-
             print_string_line(s, use_color);
-
-            // Collect all high-severity items (we'll sort and truncate later)
             if s.kind.map_or(Severity::Info, StringKind::severity) == Severity::High
                 && s.kind != Some(stng::StringKind::XorKey)
             {
@@ -698,11 +556,11 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         if let Some(ref overlay) = overlay_info {
             let has_overlay_strings = strings
                 .iter()
-                .any(|s| s.section.as_deref() == Some("overlay"));
+                .any(|s| s.data_offset >= overlay.start_offset);
 
             if !has_overlay_strings && !cli.flat {
                 // Overlay exists but no printable strings - show informational message
-                if current_section.is_some() {
+                if !strings.is_empty() {
                     println!();
                 }
                 if use_color {

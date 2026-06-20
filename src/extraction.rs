@@ -207,7 +207,7 @@ pub(crate) fn extract_from_structures<F>(
     blob: &[u8],
     blob_addr: u64,
     structs: &[StringStruct],
-    section_name: Option<&str>,
+    _section_name: Option<&str>,
     classify_fn: F,
 ) -> Vec<ExtractedString>
 where
@@ -248,7 +248,6 @@ where
                 Some(ExtractedString {
                     value: trimmed.to_string(),
                     data_offset: s.ptr,
-                    section: section_name.map(str::to_string),
                     method: StringMethod::Structure,
                     kind: classify_fn(trimmed),
                     ..Default::default()
@@ -440,7 +439,6 @@ mod tests {
         let strings = extract_from_structures(blob, 0x1000, &structs, Some(".rodata"), |_| None);
 
         assert_eq!(strings.len(), 1);
-        assert_eq!(strings[0].section, Some(".rodata".to_string()));
     }
 
     #[test]

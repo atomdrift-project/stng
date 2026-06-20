@@ -347,7 +347,6 @@ fn create_decoded_string(original: &ExtractedString, decoded: String) -> Extract
     ExtractedString {
         value: decoded,
         data_offset: original.data_offset,
-        section: original.section.clone(),
         method: StringMethod::Base64ObfuscatedDecode,
         kind,
         ..Default::default()

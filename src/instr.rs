@@ -144,7 +144,6 @@ fn extract_arm64_inline_string(
             strings.push(ExtractedString {
                 value: s,
                 data_offset: str_addr,
-                section: Some(".rodata".to_string()),
                 method: StringMethod::InstructionPattern,
                 kind,
                 ..Default::default()
@@ -456,7 +455,6 @@ fn extract_backward_strings(
                 strings.push(ExtractedString {
                     value,
                     data_offset: str_addr,
-                    section: Some(".rodata".to_string()),
                     method: StringMethod::InstructionPattern,
                     kind,
                     ..Default::default()
@@ -667,7 +665,6 @@ fn extract_amd64_value_string(
                 strings.push(ExtractedString {
                     value: s.to_string(),
                     data_offset: str_addr,
-                    section: Some(".rodata".to_string()),
                     method: StringMethod::InstructionPattern,
                     kind: final_kind,
                     ..Default::default()

@@ -178,7 +178,6 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
                                 local.push(ExtractedString {
                                     value: trimmed.to_string(),
                                     data_offset: s.data_offset,
-                                    section: s.section.clone(),
                                     method: StringMethod::Base64Decode,
                                     kind: crate::classify_string(trimmed),
                                     ..Default::default()
@@ -216,7 +215,6 @@ pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<Extracte
                 let temp = ExtractedString {
                     value: deobfuscated,
                     data_offset: s.data_offset,
-                    section: s.section.clone(),
                     method: s.method,
                     kind: s.kind,
                     ..Default::default()
@@ -271,7 +269,6 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
     Some(ExtractedString {
         value: decoded_str,
         data_offset: s.data_offset,
-        section: s.section.clone(),
         method: StringMethod::Base64Decode,
         kind,
         ..Default::default()
@@ -312,7 +309,6 @@ fn decode_hex_string(s: &ExtractedString) -> Option<ExtractedString> {
     Some(ExtractedString {
         value: decoded_str,
         data_offset: s.data_offset,
-        section: s.section.clone(),
         method: StringMethod::HexDecode,
         kind,
         ..Default::default()
@@ -394,7 +390,6 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
     Some(ExtractedString {
         value: decoded,
         data_offset: s.data_offset,
-        section: s.section.clone(),
         method: StringMethod::UrlDecode,
         kind,
         ..Default::default()
@@ -442,7 +437,6 @@ fn decode_unicode_escape_string(s: &ExtractedString) -> Option<ExtractedString> 
     Some(ExtractedString {
         value: decoded,
         data_offset: s.data_offset,
-        section: s.section.clone(),
         method: StringMethod::UnicodeEscapeDecode,
         kind,
         ..Default::default()
@@ -645,7 +639,6 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
     Some(ExtractedString {
         value: decoded_str,
         data_offset: s.data_offset,
-        section: s.section.clone(),
         method: StringMethod::Base32Decode,
         kind,
         ..Default::default()
@@ -687,7 +680,6 @@ fn decode_base85_string(s: &ExtractedString) -> Option<ExtractedString> {
     Some(ExtractedString {
         value: decoded_str,
         data_offset: s.data_offset,
-        section: s.section.clone(),
         method: StringMethod::Base85Decode,
         kind,
         ..Default::default()
@@ -906,7 +898,6 @@ mod tests {
         let input = ExtractedString {
             value: "SGVsbG8gV29ybGQh".to_string(), // "Hello World!"
             data_offset: 0,
-            section: None,
             method: StringMethod::RawScan,
             kind: Some(StringKind::Base64),
             ..Default::default()
@@ -975,7 +966,6 @@ mod tests {
         let input = ExtractedString {
             value: "48656c6c6f20576f726c6421".to_string(), // "Hello World!"
             data_offset: 0,
-            section: None,
             method: StringMethod::RawScan,
             kind: Some(StringKind::HexEncoded),
             ..Default::default()
@@ -991,7 +981,6 @@ mod tests {
         let input = ExtractedString {
             value: "Hello%20World%21%20%2B%20More".to_string(), // "Hello World! + More"
             data_offset: 0,
-            section: None,
             method: StringMethod::RawScan,
             kind: Some(StringKind::UrlEncoded),
             ..Default::default()
@@ -1013,7 +1002,6 @@ mod tests {
                 "x = \"https://sourceware.org/gdb.html#:~:text=Function%3A%20to_string%20(self)\""
                     .to_string(),
             data_offset: 0,
-            section: None,
             method: StringMethod::RawScan,
             kind: Some(StringKind::UrlEncoded),
             ..Default::default()
@@ -1034,7 +1022,6 @@ mod tests {
         let input = ExtractedString {
             value: "\\x48\\x65\\x6c\\x6c\\x6f".to_string(), // "Hello"
             data_offset: 0,
-            section: None,
             method: StringMethod::RawScan,
             kind: Some(StringKind::UnicodeEscaped),
             ..Default::default()
@@ -1064,7 +1051,6 @@ mod tests {
         let input = ExtractedString {
             value: "JBSWY3DPEBLW64TMMQ======".to_string(), // "Hello World"
             data_offset: 0,
-            section: None,
             method: StringMethod::RawScan,
             kind: Some(StringKind::Base32),
             ..Default::default()
@@ -1080,7 +1066,6 @@ mod tests {
         let input = ExtractedString {
             value: "JBSWY3DPEBLW64TMMQ".to_string(), // "Hello World" without padding
             data_offset: 0,
-            section: None,
             method: StringMethod::RawScan,
             kind: Some(StringKind::Base32),
             ..Default::default()
@@ -1097,7 +1082,6 @@ mod tests {
         let input = ExtractedString {
             value: "KRUGS4ZANFZSAYJAONSWG4TFOQQG2ZLTONQWOZJAMZXXEIDUMVZXI2LOM4======".to_string(),
             data_offset: 0,
-            section: None,
             method: StringMethod::RawScan,
             kind: Some(StringKind::Base32),
             ..Default::default()
@@ -1157,7 +1141,6 @@ mod tests {
         ExtractedString {
             value: value.to_string(),
             data_offset: 0,
-            section: None,
             method: StringMethod::RawScan,
             kind,
             fragments: None,
@@ -1501,7 +1484,6 @@ mod tests {
         let input = ExtractedString {
             value: "exec(base64.b64decode('SGVsbG8gV29ybGQh'))".to_string(),
             data_offset: 12345,
-            section: Some("__TEXT".to_string()),
             method: StringMethod::RawScan,
             kind: None,
             ..Default::default()

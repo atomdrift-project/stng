@@ -155,12 +155,7 @@ impl GoStringExtractor {
         // miss constants that are assembled at runtime. Recover only bounded
         // high-signal substrings from the packed pool.
         if rodata_data.len() <= MAX_PACKED_RODATA_HEURISTIC_SIZE {
-            let packed = extract_packed_rodata_literals(
-                rodata_data,
-                rodata_addr,
-                Some("__rodata"),
-                self.min_length,
-            );
+            let packed = extract_packed_rodata_literals(rodata_data, rodata_addr, self.min_length);
             // Borrow existing values (no per-string clone). Collect the genuinely new
             // literals first so the borrow on `strings` is released before we extend it.
             let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
@@ -404,12 +399,7 @@ impl GoStringExtractor {
         // from the packed `.rdata` pool, which the generic raw scanner skips to
         // avoid emitting one giant concatenated run.
         if rodata_data.len() <= MAX_PACKED_RODATA_HEURISTIC_SIZE {
-            let packed = extract_packed_rodata_literals(
-                rodata_data,
-                rodata_va,
-                Some(".rodata"),
-                self.min_length,
-            );
+            let packed = extract_packed_rodata_literals(rodata_data, rodata_va, self.min_length);
             let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
             let fresh: Vec<ExtractedString> = packed
                 .into_iter()
@@ -467,10 +457,9 @@ impl GoStringExtractor {
 fn extract_packed_rodata_literals(
     data: &[u8],
     section_data_offset: u64,
-    section: Option<&str>,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    let mut sink = PackedLiteralSink::new(section_data_offset, section, min_length);
+    let mut sink = PackedLiteralSink::new(section_data_offset, min_length);
 
     extract_url_literals(data, &mut sink);
     extract_find_command_fragments(data, &mut sink);
@@ -478,19 +467,17 @@ fn extract_packed_rodata_literals(
     sink.results
 }
 
-struct PackedLiteralSink<'a> {
+struct PackedLiteralSink {
     section_data_offset: u64,
-    section: Option<&'a str>,
     min_length: usize,
     seen: HashSet<String>,
     results: Vec<ExtractedString>,
 }
 
-impl<'a> PackedLiteralSink<'a> {
-    fn new(section_data_offset: u64, section: Option<&'a str>, min_length: usize) -> Self {
+impl PackedLiteralSink {
+    fn new(section_data_offset: u64, min_length: usize) -> Self {
         Self {
             section_data_offset,
-            section,
             min_length,
             seen: HashSet::new(),
             results: Vec::new(),
@@ -517,7 +504,6 @@ impl<'a> PackedLiteralSink<'a> {
         self.results.push(ExtractedString {
             value: value.to_string(),
             data_offset: self.section_data_offset + start as u64,
-            section: self.section.map(str::to_string),
             method: StringMethod::Heuristic,
             kind: classify_string(value),
             ..Default::default()
@@ -525,7 +511,7 @@ impl<'a> PackedLiteralSink<'a> {
     }
 }
 
-fn extract_url_literals(data: &[u8], sink: &mut PackedLiteralSink<'_>) {
+fn extract_url_literals(data: &[u8], sink: &mut PackedLiteralSink) {
     const URL_SCHEMES: [&[u8]; 2] = [b"http://", b"https://"];
 
     for scheme in URL_SCHEMES {
@@ -539,7 +525,7 @@ fn extract_url_literals(data: &[u8], sink: &mut PackedLiteralSink<'_>) {
     }
 }
 
-fn extract_find_command_fragments(data: &[u8], sink: &mut PackedLiteralSink<'_>) {
+fn extract_find_command_fragments(data: &[u8], sink: &mut PackedLiteralSink) {
     const FIND_TRIGGER: &[u8] = b"-maxdepth";
     const MAX_COMMAND_FRAGMENT: usize = 256;
 
@@ -702,7 +688,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 pub(crate) fn extract_varint_prefixed_strings(
     data: &[u8],
     section_data_offset: u64,
-    section: Option<&str>,
+    _section: Option<&str>,
     min_length: usize,
 ) -> Vec<ExtractedString> {
     use crate::types::StringMethod;
@@ -784,7 +770,6 @@ pub(crate) fn extract_varint_prefixed_strings(
                 results.push(ExtractedString {
                     value: value.to_string(),
                     data_offset: section_data_offset + *off as u64,
-                    section: section.map(str::to_string),
                     method: StringMethod::PclntabSymbol,
                     kind,
                     ..Default::default()
@@ -812,7 +797,7 @@ pub(crate) fn extract_varint_prefixed_strings(
 pub(crate) fn extract_null_separated_strings(
     data: &[u8],
     section_data_offset: u64,
-    section: Option<&str>,
+    _section: Option<&str>,
     min_length: usize,
 ) -> Vec<ExtractedString> {
     use crate::types::StringMethod;
@@ -887,7 +872,6 @@ pub(crate) fn extract_null_separated_strings(
                 results.push(ExtractedString {
                     value: value.to_string(),
                     data_offset: section_data_offset + *off as u64,
-                    section: section.map(str::to_string),
                     method: StringMethod::PclntabSymbol,
                     kind,
                     ..Default::default()
@@ -962,7 +946,7 @@ mod tests {
         let buf =
             b"noisehttps://api.telegram.org/bot123456789:ABCDEF/sendMessagehttp2: server idle";
 
-        let out = extract_packed_rodata_literals(buf, 0x1000, Some("__rodata"), 4);
+        let out = extract_packed_rodata_literals(buf, 0x1000, 4);
 
         let url = out
             .iter()
@@ -977,7 +961,7 @@ mod tests {
     fn packed_rodata_recovers_bounded_find_command_fragment() {
         let buf = b"crypto/rsa: insecure -maxdepth 6 -iname \"*wallet*\" -o -iname \"*keystore*\" -o -iname \"id.json\" 2>/dev/null|head -30b3312d04f441d4ca5ec8e6d8c3ce3de5 more";
 
-        let out = extract_packed_rodata_literals(buf, 0x2000, Some("__rodata"), 4);
+        let out = extract_packed_rodata_literals(buf, 0x2000, 4);
 
         let command = "-maxdepth 6 -iname \"*wallet*\" -o -iname \"*keystore*\" -o -iname \"id.json\" 2>/dev/null|head -30";
         let found = out

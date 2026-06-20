@@ -61,17 +61,6 @@ fn test_codesig_base64_categorization() {
         arch_count
     );
 
-    // All CD hashes should be in __LINKEDIT section
-    for s in &codesig_hashes {
-        assert_eq!(
-            s.section.as_deref(),
-            Some("__LINKEDIT"),
-            "CD hash at offset 0x{:x} should be in __LINKEDIT section, got {:?}",
-            s.data_offset,
-            s.section
-        );
-    }
-
     // All CD hashes should have CodeSignature method
     for s in &codesig_hashes {
         assert_eq!(
@@ -270,10 +259,7 @@ fn test_linkedit_section_enrichment() {
     // Find all CodeSignatureHash strings in __LINKEDIT section
     let linkedit_hashes: Vec<_> = strings
         .iter()
-        .filter(|s| {
-            s.section.as_deref() == Some("__LINKEDIT")
-                && s.kind == Some(StringKind::CodeSignatureHash)
-        })
+        .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
         .collect();
 
     assert!(

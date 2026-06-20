@@ -625,7 +625,6 @@ mod tests {
             ExtractedString {
                 value: "some_underscore_string".to_string(),
                 data_offset: 0,
-                section: None,
                 method: StringMethod::RawScan,
                 kind: None,
                 ..Default::default()
@@ -633,7 +632,6 @@ mod tests {
             ExtractedString {
                 value: "cstr.SomeString".to_string(),
                 data_offset: 100,
-                section: None,
                 method: StringMethod::RawScan,
                 kind: None,
                 ..Default::default()
@@ -641,7 +639,6 @@ mod tests {
             ExtractedString {
                 value: "ShortKey".to_string(),
                 data_offset: 200,
-                section: None,
                 method: StringMethod::RawScan,
                 kind: None,
                 ..Default::default()
@@ -649,7 +646,6 @@ mod tests {
             ExtractedString {
                 value: key_string.to_string(), // The actual key
                 data_offset: 300,
-                section: None,
                 method: StringMethod::RawScan,
                 kind: None,
                 ..Default::default()
@@ -715,7 +711,6 @@ mod tests {
             ExtractedString {
                 value: "some_other_key_12345".to_string(),
                 data_offset: 0,
-                section: None,
                 method: StringMethod::RawScan,
                 kind: None,
                 ..Default::default()
@@ -723,7 +718,6 @@ mod tests {
             ExtractedString {
                 value: key_string.to_string(),
                 data_offset: 100,
-                section: None,
                 method: StringMethod::RawScan,
                 kind: None,
                 ..Default::default()

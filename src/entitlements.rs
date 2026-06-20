@@ -42,7 +42,6 @@ pub(crate) fn extract_macho_entitlements(
                         entitlements.push(ExtractedString {
                             value: xml_str,
                             data_offset: (offset + xml_start) as u64,
-                            section: Some("__LINKEDIT".to_string()),
                             method: StringMethod::CodeSignature,
                             kind: Some(StringKind::EntitlementsXml),
                             ..Default::default()

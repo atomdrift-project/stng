@@ -32,8 +32,6 @@ pub struct ExtractedString {
     pub value: String,
     /// Offset in the binary where the string data is located
     pub data_offset: u64,
-    /// Section name where the string was found
-    pub section: Option<String>,
     /// How the string was found
     pub method: StringMethod,
     /// Semantic kind of the string (None means no specific classification)
@@ -52,7 +50,6 @@ impl Default for ExtractedString {
         Self {
             value: String::new(),
             data_offset: 0,
-            section: None,
             method: StringMethod::RawScan,
             kind: None,
             fragments: None,
@@ -184,21 +181,21 @@ impl Arch {
 /// Lifetime `'a` borrows the section name; pass `None` if you don't
 /// have one.
 #[derive(Debug, Clone, Default)]
-pub struct StringContext<'a> {
+pub struct StringContext {
     /// Semantic kind from the extractor (URL, Path, Section, …).
     /// Same role as the `kind` parameter on `is_garbage_with_kind`.
     pub kind: Option<StringKind>,
-    /// Section the string was extracted from, when known
-    /// (`.text`, `__TEXT.__text`, `.rodata`, …).  Lets section-scoped
-    /// rules opt out when the section can't host their target pattern.
-    pub section: Option<&'a str>,
+    /// Whether the string lives in an executable (code) section, when
+    /// known. `Some(false)` lets code-only rules (the x86 save-sequence
+    /// detector) opt out; `None` means "unknown — apply the rule".
+    pub in_code_section: Option<bool>,
     /// CPU architecture, when known.  `None` means "no info — assume
     /// any rule may apply"; `Some(non-x86)` switches off x86-only
     /// rules without the caller having to know which they are.
     pub arch: Option<Arch>,
 }
 
-impl<'a> StringContext<'a> {
+impl StringContext {
     /// Empty context — no kind, no section, no arch.  Equivalent to
     /// the legacy `is_garbage(s)` call.
     #[must_use]
@@ -834,7 +831,6 @@ mod tests {
         let s = ExtractedString {
             value: "test".to_string(),
             data_offset: 100,
-            section: Some("section".to_string()),
             method: StringMethod::Structure,
             kind: None,
             ..Default::default()
@@ -843,7 +839,7 @@ mod tests {
         let cloned = s.clone();
         assert_eq!(s.value, cloned.value);
         assert_eq!(s.data_offset, cloned.data_offset);
-        assert_eq!(s.section, cloned.section);
+        assert_eq!(s.method, cloned.method);
     }
 
     #[test]

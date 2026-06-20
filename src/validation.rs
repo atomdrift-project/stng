@@ -865,7 +865,7 @@ fn is_x86_save_sequence_fragment(
     s: &str,
     len: usize,
     stats: &CharStats,
-    ctx: &crate::types::StringContext<'_>,
+    ctx: &crate::types::StringContext,
 ) -> bool {
     // Architecture scoping: skip when the caller has confirmed the
     // binary is non-x86. `None` means "unknown" — we still run the
@@ -877,12 +877,9 @@ fn is_x86_save_sequence_fragment(
     }
 
     // Section scoping: REX-prefix + push/pop bytes only originate in
-    // executable sections. When the caller has tagged the source
-    // section, restrict the rule to known code sections; an unknown
-    // (`None`) section still runs the rule.
-    if let Some(section) = ctx.section
-        && !is_code_section(section)
-    {
+    // executable sections. When the caller knows the string is NOT in a
+    // code section, skip the rule; `None` (unknown) still runs it.
+    if ctx.in_code_section == Some(false) {
         return false;
     }
 
@@ -917,21 +914,6 @@ fn is_x86_save_sequence_fragment(
     }
 
     false
-}
-
-/// Recognise the executable / code-section names that asm-fragment
-/// strings can leak from. Covers ELF (`.text` and per-function
-/// variants like `.text.startup`, `.text.hot`), PE / Windows (`.text`,
-/// `CODE`), and Mach-O (`__text`, `__TEXT.__text`).  Anything else is
-/// treated as data — the asm filter won't fire there.
-fn is_code_section(section: &str) -> bool {
-    if section.starts_with(".text.") {
-        return true;
-    }
-    matches!(
-        section,
-        ".text" | "__text" | "__TEXT.__text" | "__TEXT,__text" | "CODE" | ".code" | "code"
-    )
 }
 
 /// Detect PE relocation table patterns like "xçx&xìxÇx..." or "uHu}uQu\uYu0u"
@@ -1614,7 +1596,7 @@ fn is_statistical_garbage(
     s: &str,
     len: usize,
     stats: &CharStats,
-    ctx: &crate::types::StringContext<'_>,
+    ctx: &crate::types::StringContext,
 ) -> bool {
     // Short pattern checks
     if is_short_identifier_garbage(s, len, stats) {
@@ -1964,7 +1946,7 @@ pub fn is_garbage_with_kind(s: &str, kind: Option<crate::types::StringKind>) -> 
 ///   filter intentionally stays inactive when the bytes weren't
 ///   extracted from a code section.
 #[must_use]
-pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext<'_>) -> bool {
+pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bool {
     let trimmed = s.trim();
     let len = trimmed.len();
 
@@ -3382,16 +3364,14 @@ mod dotnet_tests {
         let s = "AVAUATSH";
         let stats = CharStats::from_str(s);
 
-        for section in [".rodata", ".data", ".bss", ".symtab", ".strtab", ".dynstr"] {
-            let ctx = StringContext {
-                section: Some(section),
-                ..StringContext::default()
-            };
-            assert!(
-                !is_x86_save_sequence_fragment(s, s.len(), &stats, &ctx),
-                "filter must skip when section is '{section}'"
-            );
-        }
+        let ctx = StringContext {
+            in_code_section: Some(false),
+            ..StringContext::default()
+        };
+        assert!(
+            !is_x86_save_sequence_fragment(s, s.len(), &stats, &ctx),
+            "filter must skip in a non-code section"
+        );
     }
 
     #[test]
@@ -3401,23 +3381,14 @@ mod dotnet_tests {
         let s = "AVAUATSH";
         let stats = CharStats::from_str(s);
 
-        for section in [
-            ".text",
-            "__text",
-            "__TEXT.__text",
-            ".text.startup",
-            ".text.hot",
-            "CODE",
-        ] {
-            let ctx = StringContext {
-                section: Some(section),
-                ..StringContext::default()
-            };
-            assert!(
-                is_x86_save_sequence_fragment(s, s.len(), &stats, &ctx),
-                "filter must run when section is '{section}' (code)"
-            );
-        }
+        let ctx = StringContext {
+            in_code_section: Some(true),
+            ..StringContext::default()
+        };
+        assert!(
+            is_x86_save_sequence_fragment(s, s.len(), &stats, &ctx),
+            "filter must run in a code section"
+        );
     }
 
     #[test]
@@ -3448,7 +3419,7 @@ mod dotnet_tests {
         // x86 arch + non-code section → skip
         let ctx = StringContext {
             arch: Some(Arch::X86_64),
-            section: Some(".rodata"),
+            in_code_section: Some(false),
             ..StringContext::default()
         };
         assert!(
@@ -3459,7 +3430,7 @@ mod dotnet_tests {
         // Non-x86 arch + code section → skip
         let ctx = StringContext {
             arch: Some(Arch::Aarch64),
-            section: Some(".text"),
+            in_code_section: Some(true),
             ..StringContext::default()
         };
         assert!(
@@ -3500,31 +3471,4 @@ mod dotnet_tests {
     }
 
     // ─── is_code_section ─────────────────────────────────────────────
-
-    #[test]
-    fn test_is_code_section_recognises_known_names() {
-        // ELF
-        assert!(is_code_section(".text"));
-        assert!(is_code_section(".text.startup"));
-        assert!(is_code_section(".text.hot"));
-        assert!(is_code_section(".text.unlikely"));
-        // Mach-O
-        assert!(is_code_section("__text"));
-        assert!(is_code_section("__TEXT.__text"));
-        assert!(is_code_section("__TEXT,__text"));
-        // PE / Windows
-        assert!(is_code_section("CODE"));
-        assert!(is_code_section(".code"));
-        assert!(is_code_section("code"));
-
-        // Data sections — must not be misclassified as code
-        assert!(!is_code_section(".rodata"));
-        assert!(!is_code_section(".data"));
-        assert!(!is_code_section(".bss"));
-        assert!(!is_code_section(".symtab"));
-        assert!(!is_code_section(".strtab"));
-        assert!(!is_code_section(".dynstr"));
-        assert!(!is_code_section("__DATA.__data"));
-        assert!(!is_code_section(""));
-    }
 }

@@ -1,6 +1,6 @@
 //! Import and export symbol extraction.
 
-use crate::binary::{find_macho_section, macho_vaddr_to_file_offset};
+use crate::binary::macho_vaddr_to_file_offset;
 use crate::types::{ExtractedString, StringKind, StringMethod};
 use goblin::mach::MachO;
 use std::collections::HashSet;
@@ -13,13 +13,11 @@ pub(crate) fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec
     if let Ok(imports) = macho.imports() {
         for import in imports {
             if import.name.len() >= min_length && seen.insert(import.name.to_string()) {
-                let section = find_macho_section(macho, import.address);
                 // Convert virtual address to file offset
                 let file_offset = macho_vaddr_to_file_offset(macho, import.address);
                 strings.push(ExtractedString {
                     value: import.name.to_string(),
                     data_offset: file_offset,
-                    section,
                     method: StringMethod::Structure,
                     kind: Some(StringKind::Import),
                     ..Default::default()
@@ -34,11 +32,9 @@ pub(crate) fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec
             if export.name.len() >= min_length && seen.insert(export.name.clone()) {
                 // Convert virtual address to file offset
                 let file_offset = macho_vaddr_to_file_offset(macho, export.offset);
-                let section = find_macho_section(macho, export.offset);
                 strings.push(ExtractedString {
                     value: export.name.clone(),
                     data_offset: file_offset,
-                    section,
                     method: StringMethod::Structure,
                     kind: Some(StringKind::Export),
                     ..Default::default()
@@ -69,12 +65,10 @@ pub(crate) fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec
         // Undefined symbols have n_value == 0; merge_imports retags the located
         // raw-scan hit and keeps its real offset, so the address here only
         // matters for the rare symbol absent from the strtab scan.
-        let section = find_macho_section(macho, nlist.n_value);
         let file_offset = macho_vaddr_to_file_offset(macho, nlist.n_value);
         strings.push(ExtractedString {
             value: name.to_string(),
             data_offset: file_offset,
-            section,
             method: StringMethod::Structure,
             kind: Some(kind),
             ..Default::default()
@@ -104,7 +98,6 @@ pub(crate) fn extract_pe_imports(
                 value: import.name.to_string(),
                 // u64 from usize: lossless on 64-bit hosts (this tool is 64-bit only).
                 data_offset: import.offset as u64,
-                section: None,
                 method: StringMethod::Structure,
                 kind: Some(StringKind::Import),
                 ..Default::default()
@@ -120,7 +113,6 @@ pub(crate) fn extract_pe_imports(
             strings.push(ExtractedString {
                 value: name.to_string(),
                 data_offset: export.offset.unwrap_or(0) as u64,
-                section: None,
                 method: StringMethod::Structure,
                 kind: Some(StringKind::Export),
                 ..Default::default()
@@ -165,7 +157,7 @@ pub(crate) fn extract_elf_imports(
         };
 
         // Look up the actual section name from the section index
-        let section = if sym.st_shndx > 0 && sym.st_shndx < elf.section_headers.len() {
+        let _section = if sym.st_shndx > 0 && sym.st_shndx < elf.section_headers.len() {
             elf.shdr_strtab
                 .get_at(elf.section_headers[sym.st_shndx].sh_name)
                 .map(std::string::ToString::to_string)
@@ -175,7 +167,6 @@ pub(crate) fn extract_elf_imports(
         strings.push(ExtractedString {
             value: name.to_string(),
             data_offset: sym.st_value,
-            section,
             method: StringMethod::Structure,
             kind,
             ..Default::default()

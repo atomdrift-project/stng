@@ -121,8 +121,8 @@ fn test_bin_ls_clean() {
             .filter(|s| s.kind == Some(StringKind::Base64))
         {
             eprintln!(
-                "  offset=0x{:x} method={:?} section={:?} value={:?}",
-                s.data_offset, s.method, s.section, s.value
+                "  offset=0x{:x} method={:?} value={:?}",
+                s.data_offset, s.method, s.value
             );
         }
     }

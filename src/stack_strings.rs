@@ -367,7 +367,6 @@ impl<'a> StackStringExtractor<'a> {
                     offset: first.instr_off,
                     length: 0, // updated below
                 }])),
-                ..Default::default()
             };
             // Set first fragment length correctly
             if let Some(frags) = &mut current.fragments {
@@ -417,7 +416,6 @@ impl<'a> StackStringExtractor<'a> {
                             offset: w.instr_off,
                             length: string_len,
                         }])),
-                        ..Default::default()
                     };
                     current_end_disp = w.disp + string_len as i64;
                 }
@@ -496,7 +494,6 @@ impl<'a> StackStringExtractor<'a> {
             } else {
                 Some(Box::new(merged_fragments))
             },
-            ..Default::default()
         }
     }
 

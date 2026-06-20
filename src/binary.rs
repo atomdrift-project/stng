@@ -440,25 +440,6 @@ pub(crate) fn pe_rust_skip_ranges(
         .collect()
 }
 
-/// Find the section name containing an address in a Mach-O binary.
-#[must_use]
-pub(crate) fn find_macho_section(macho: &MachO<'_>, addr: u64) -> Option<String> {
-    for seg in &macho.segments {
-        // Skip an unreadable segment rather than abandoning the whole search.
-        let Ok(sections) = seg.sections() else {
-            continue;
-        };
-        for (sec, _) in &sections {
-            let start = sec.addr;
-            let end = start + sec.size;
-            if addr >= start && addr < end {
-                return sec.name().ok().map(str::to_string);
-            }
-        }
-    }
-    None
-}
-
 /// Convert virtual address to file offset for Mach-O binaries.
 #[must_use]
 pub(crate) fn macho_vaddr_to_file_offset(macho: &MachO<'_>, vaddr: u64) -> u64 {

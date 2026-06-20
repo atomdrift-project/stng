@@ -201,7 +201,6 @@ fn test_linkedit_const_strings_selective_codesig() {
         .iter()
         .filter(|s| {
             s.kind.is_none()
-                && s.section.as_deref() == Some("__LINKEDIT")
                 && !s.value.starts_with('<')
                 && !s.value.starts_with("<?xml")
                 && !is_certificate_string(&s.value)
@@ -228,11 +227,10 @@ fn test_linkedit_const_strings_selective_codesig() {
     let xml_strings: Vec<_> = strings
         .iter()
         .filter(|s| {
-            s.section.as_deref() == Some("__LINKEDIT")
-                && (s.value.starts_with("<?xml")
-                    || s.value.starts_with("<plist")
-                    || s.value.starts_with("<dict")
-                    || s.value.starts_with("<key>"))
+            s.value.starts_with("<?xml")
+                || s.value.starts_with("<plist")
+                || s.value.starts_with("<dict")
+                || s.value.starts_with("<key>")
         })
         .collect();
 
@@ -397,7 +395,6 @@ fn test_no_base64_kind_in_linkedit() {
         .iter()
         .filter(|s| {
             s.kind == Some(StringKind::Base64)
-                && s.section.as_deref() == Some("__LINKEDIT")
                 && BASE64
                     .decode(s.value.trim())
                     .map(|b| b.len() == 20 || b.len() == 32)

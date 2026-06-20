@@ -207,7 +207,7 @@ fn strip_go_varint_prefixes(strings: &mut [ExtractedString]) {
 /// filters (notably the x86 push/pop save-sequence detector) can scope
 /// themselves to the right inputs. Kind, section, and arch all come
 /// from the `ExtractedString` itself when known.
-fn passes_garbage_filter(s: &ExtractedString) -> bool {
+fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, usize)]) -> bool {
     // Strings produced by our own decoders / deobfuscators are
     // *deliberately* surfaced — base64-decoded payloads, XOR-decrypted
     // C2 URLs, deobfuscated VBScript fragments, etc. The garbage
@@ -260,14 +260,30 @@ fn passes_garbage_filter(s: &ExtractedString) -> bool {
     ) {
         return true;
     }
+    // Derive the code-section flag from the offset: `code_ranges` are the
+    // executable byte ranges (built once from section headers). Empty ranges
+    // mean "no section info" → unknown. Replaces the per-string section name
+    // that `ExtractedString` no longer carries.
+    let in_code_section = if code_ranges.is_empty() {
+        None
+    } else {
+        let off = usize::try_from(s.data_offset).unwrap_or(usize::MAX);
+        Some(offset_in_ranges(off, code_ranges))
+    };
     let ctx = crate::types::StringContext {
         kind: s.kind,
-        section: s.section.as_deref(),
+        in_code_section,
         // Arch hint was only ever stamped *after* this filter ran (or not at
         // all on the main path), so it was always `None` here in practice.
         arch: None,
     };
     !validation::is_garbage_with_context(&s.value, &ctx)
+}
+
+/// True if `offset` falls in any of the sorted, non-overlapping `ranges`.
+fn offset_in_ranges(offset: usize, ranges: &[(usize, usize)]) -> bool {
+    let i = ranges.partition_point(|&(start, _)| start <= offset);
+    i > 0 && offset < ranges[i - 1].1
 }
 
 /// Merge a set of imports into the strings list.
@@ -471,7 +487,6 @@ fn apply_xor_scan(
                 strings.push(ExtractedString {
                     value: key_str.clone(),
                     data_offset: 0,
-                    section: None,
                     method: StringMethod::XorDecode,
                     kind: Some(StringKind::XorKey),
                     fragments: None,
@@ -783,127 +798,37 @@ fn extract_elf_pclntab_strings(
     nulls
 }
 
-/// Enrich strings with section information based on their file offsets (ELF)
-fn enrich_elf_sections(strings: &mut [ExtractedString], elf: &goblin::elf::Elf<'_>) {
-    for s in strings {
-        if s.section.is_none() {
-            // Find which section this offset belongs to
-            for sh in &elf.section_headers {
-                if s.data_offset >= sh.sh_offset
-                    && s.data_offset < sh.sh_offset.saturating_add(sh.sh_size)
-                    && let Some(name) = elf.shdr_strtab.get_at(sh.sh_name)
-                    && !name.is_empty()
-                {
-                    s.section = Some(name.to_string());
-                    break;
+/// File-offset range(s) of the Mach-O `__LINKEDIT` segment (which holds the
+/// code-signature blob). Returns one range for a thin binary and one per slice
+/// for a fat binary; empty for non-Mach-O. Used to scope code-signature
+/// reclassification by offset now that strings no longer carry a section name.
+fn macho_linkedit_ranges(object: &Object<'_>) -> Vec<(u64, u64)> {
+    fn from_macho(macho: &MachO<'_>, base: u64) -> Option<(u64, u64)> {
+        macho.segments.iter().find_map(|seg| {
+            (seg.name().ok() == Some("__LINKEDIT")).then(|| {
+                let start = base + seg.fileoff;
+                (start, start + seg.filesize)
+            })
+        })
+    }
+    let mut ranges = Vec::new();
+    match object {
+        Object::Mach(goblin::mach::Mach::Binary(macho)) => ranges.extend(from_macho(macho, 0)),
+        Object::Mach(goblin::mach::Mach::Fat(fat)) => {
+            let offsets: Vec<u64> = fat
+                .iter_arches()
+                .filter_map(std::result::Result::ok)
+                .map(|a| u64::from(a.offset))
+                .collect();
+            for (arch, base) in fat.into_iter().zip(offsets) {
+                if let Ok(goblin::mach::SingleArch::MachO(macho)) = arch {
+                    ranges.extend(from_macho(&macho, base));
                 }
             }
         }
+        _ => {}
     }
-}
-
-/// Enrich strings with section information based on their file offsets (Mach-O)
-///
-/// `base_offset` is the file offset where this architecture starts (0 for regular binaries,
-/// arch.offset for fat binaries).
-fn enrich_macho_sections(
-    strings: &mut [ExtractedString],
-    macho: &goblin::mach::MachO<'_>,
-    base_offset: u64,
-) {
-    // Calculate Mach-O header regions (relative to architecture start)
-    // Header is 32 bytes for 64-bit, 28 bytes for 32-bit
-    let header_size: u64 = if macho.is_64 { 32 } else { 28 };
-    let load_cmds_end = base_offset + header_size + u64::from(macho.header.sizeofcmds);
-
-    // Find LINKEDIT segment range (contains symbol/string tables)
-    // Segment fileoff is relative to architecture, so add base_offset
-    let mut linkedit_range: Option<(u64, u64)> = None;
-    for segment in &macho.segments {
-        if let Ok(name) = segment.name()
-            && name == "__LINKEDIT"
-        {
-            let start = base_offset + segment.fileoff;
-            let end = start + segment.filesize;
-            linkedit_range = Some((start, end));
-            break;
-        }
-    }
-
-    for s in strings {
-        // Check if section needs enrichment (None or empty string)
-        let needs_section = s.section.as_ref().is_none_or(std::string::String::is_empty);
-        if needs_section {
-            // First check actual sections
-            // Try both absolute and architecture-relative comparisons
-            // (radare2 on fat binaries returns architecture-relative offsets)
-            let mut found = false;
-            for segment in &macho.segments {
-                for (section, _data) in segment.into_iter().flatten() {
-                    // Skip BSS/uninitialized sections (offset 0, no file content)
-                    if section.offset == 0 {
-                        continue;
-                    }
-
-                    // Try absolute file offset comparison first
-                    let section_start_abs = base_offset + u64::from(section.offset);
-                    let section_end_abs = section_start_abs + section.size;
-
-                    // Try architecture-relative offset comparison second
-                    let section_start_rel = u64::from(section.offset);
-                    let section_end_rel = section_start_rel + section.size;
-
-                    let matches_absolute =
-                        s.data_offset >= section_start_abs && s.data_offset < section_end_abs;
-                    let matches_relative =
-                        s.data_offset >= section_start_rel && s.data_offset < section_end_rel;
-
-                    if matches_absolute || matches_relative {
-                        s.section = Some(section.name().unwrap_or("(unknown)").to_string());
-                        found = true;
-                        break;
-                    }
-                }
-                if found {
-                    break;
-                }
-            }
-
-            // If not in a section, check Mach-O specific regions
-            if !found {
-                if s.data_offset >= base_offset && s.data_offset < load_cmds_end {
-                    // In header or load commands area
-                    s.section = Some("load_commands".to_string());
-                } else if let Some((start, end)) = linkedit_range
-                    && s.data_offset >= start
-                    && s.data_offset < end
-                {
-                    // In LINKEDIT but not in a specific section (symbol/string tables)
-                    s.section = Some("__LINKEDIT".to_string());
-                }
-            }
-        }
-    }
-}
-
-/// Enrich strings with section information based on their file offsets (PE)
-fn enrich_pe_sections(strings: &mut [ExtractedString], pe: &goblin::pe::PE<'_>) {
-    for s in strings {
-        if s.section.is_none() {
-            // Find which section this offset belongs to
-            for section in &pe.sections {
-                let section_start = u64::from(section.pointer_to_raw_data);
-                let section_end = section_start + u64::from(section.size_of_raw_data);
-                if s.data_offset >= section_start && s.data_offset < section_end {
-                    let name = binary::pe_section_name(&section.name);
-                    if !name.is_empty() {
-                        s.section = Some(name);
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    ranges
 }
 
 /// Clear IP/host classifications for strings that are VS_VERSION_INFO values.
@@ -1255,7 +1180,6 @@ fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_length: usize) 
             new_strings.push(ExtractedString {
                 value: decoded,
                 data_offset: s.data_offset,
-                section: s.section.clone(),
                 method: StringMethod::SpacedAscii,
                 kind,
                 ..Default::default()
@@ -1567,7 +1491,7 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
             apply_xor_scan(&mut strings, data, opts, is_pe, &[]);
         }
         if opts.filter_garbage {
-            strings.retain(passes_garbage_filter);
+            strings.retain(|s| passes_garbage_filter(s, &[]));
         }
 
         deduplicate_by_offset(strings)
@@ -2265,39 +2189,20 @@ fn extract_from_object(
         }
     }
 
-    // Enrich all strings with section information based on file offsets
-    // This happens AFTER all extraction (including XOR) is complete
-    match object {
-        Object::Elf(elf) => enrich_elf_sections(&mut strings, elf),
-        Object::Mach(goblin::mach::Mach::Binary(macho)) => {
-            enrich_macho_sections(&mut strings, macho, 0)
-        }
-        Object::Mach(goblin::mach::Mach::Fat(fat)) => {
-            // Collect architecture offsets first
-            let arch_offsets: Vec<u64> = fat
-                .iter_arches()
-                .filter_map(std::result::Result::ok)
-                .map(|a| u64::from(a.offset))
-                .collect();
-
-            // Enrich strings against each architecture
-            for (macho_result, base_offset) in fat.into_iter().zip(arch_offsets) {
-                if let Ok(goblin::mach::SingleArch::MachO(macho)) = macho_result {
-                    enrich_macho_sections(&mut strings, &macho, base_offset);
-                }
-            }
-        }
-        Object::PE(pe) => {
-            enrich_pe_sections(&mut strings, pe);
-            suppress_version_info_ips(&mut strings, pe);
-        }
-        _ => {}
+    // Section names are no longer stored per-string (callers derive them from
+    // the offset when needed). PE version-info IP suppression still applies.
+    if let Object::PE(pe) = object {
+        suppress_version_info_ips(&mut strings, pe);
     }
 
-    // Upgrade strings in __LINKEDIT section related to code signatures
+    // Upgrade strings in the Mach-O __LINKEDIT segment related to code
+    // signatures. Section names are no longer stored per-string, so gate on
+    // the segment's file-offset range(s) instead (thin: one; fat: per slice).
+    let linkedit_ranges = macho_linkedit_ranges(object);
     for s in &mut strings {
-        if let Some(ref section) = s.section
-            && section == "__LINKEDIT"
+        if linkedit_ranges
+            .iter()
+            .any(|&(start, end)| s.data_offset >= start && s.data_offset < end)
         {
             // Base64 strings in __LINKEDIT that decode to SHA-1 (20 bytes) or
             // SHA-256 (32 bytes) are CD hashes. Other base64 content (certificate
@@ -2396,9 +2301,10 @@ fn extract_from_object(
         // verdict is independent, so evaluate them in parallel. `into_par_iter`
         // + `filter` + `collect` preserves the original order, matching the
         // sequential `retain` it replaces.
+        let code_ranges = binary::code_ranges_from_sections(&section_info);
         strings = std::mem::take(&mut strings)
             .into_par_iter()
-            .filter(passes_garbage_filter)
+            .filter(|s| passes_garbage_filter(s, &code_ranges))
             .collect();
     }
 

@@ -465,7 +465,6 @@ fn test_decode_encoded_strings_surfaces_wide_payload() {
     let raw = vec![stng::ExtractedString {
         value: blob,
         data_offset: 0,
-        section: None,
         method: StringMethod::RawScan,
         kind: Some(StringKind::Base64),
         ..Default::default()

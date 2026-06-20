@@ -63,7 +63,6 @@ pub fn extract_string_boundaries(path: &str) -> Option<Vec<StringBoundary>> {
 struct R2String {
     paddr: u64,
     string: String,
-    section: String,
     #[serde(default)]
     length: usize,
 }
@@ -76,8 +75,6 @@ pub struct StringBoundary {
 struct R2Symbol {
     paddr: u64,
     name: String,
-    #[serde(default)]
-    section: Option<String>,
     #[serde(default)]
     r#type: String,
 }
@@ -120,7 +117,6 @@ pub fn extract_strings(
                         strings.push(ExtractedString {
                             value: decoded,
                             data_offset: s.paddr,
-                            section: Some(s.section.clone()),
                             method: StringMethod::SpacedAscii,
                             kind,
                             ..Default::default()
@@ -131,7 +127,6 @@ pub fn extract_strings(
                     strings.push(ExtractedString {
                         value: s.string,
                         data_offset: s.paddr,
-                        section: Some(s.section),
                         method: StringMethod::R2String,
                         kind,
                         ..Default::default()
@@ -156,7 +151,6 @@ pub fn extract_strings(
                 strings.push(ExtractedString {
                     value: s.name,
                     data_offset: s.paddr,
-                    section: s.section,
                     method: StringMethod::R2Symbol,
                     kind,
                     ..Default::default()
@@ -279,8 +273,6 @@ fn calculate_entropy(data: &[u8]) -> f64 {
 #[derive(serde::Deserialize, Default)]
 struct R2Section {
     #[serde(default)]
-    name: String,
-    #[serde(default)]
     paddr: u64,
     #[serde(default)]
     vaddr: u64,
@@ -346,7 +338,6 @@ pub fn extract_binary_xor_candidates(path: &str, data: &[u8]) -> Vec<ExtractedSt
                     candidates.push(ExtractedString {
                         value: String::from_utf8_lossy(chunk).to_string(),
                         data_offset: offset,
-                        section: Some(section.name.clone()),
                         method: StringMethod::Heuristic,
                         kind: Some(StringKind::XorKey),
                         ..Default::default()
@@ -494,7 +485,6 @@ fn sockaddr_to_string(sockaddr: &SockaddrIn) -> ExtractedString {
     ExtractedString {
         value,
         data_offset: sockaddr.offset,
-        section: Some(".text".to_string()),
         method: StringMethod::InstructionPattern,
         kind,
         ..Default::default()

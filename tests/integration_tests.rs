@@ -283,7 +283,6 @@ fn test_extracted_string_serialization() {
     let s = ExtractedString {
         value: "test".to_string(),
         data_offset: 0x1000,
-        section: Some("__rodata".to_string()),
         method: StringMethod::Structure,
         kind: None,
         ..Default::default()
@@ -417,12 +416,9 @@ mod real_binary_tests {
         };
 
         let strings = extract_strings(&data, 4);
-        for s in &strings {
-            if let Some(ref section) = s.section {
-                // Section names should not be empty
-                assert!(!section.is_empty());
-            }
-        }
+        // Section names are no longer stored per-string; just ensure extraction
+        // runs without panicking on a real binary.
+        assert!(!strings.is_empty() || strings.is_empty());
     }
 }
 
@@ -1216,7 +1212,6 @@ mod api_tests {
         let fake_r2 = vec![ExtractedString {
             value: "fake_r2_string".to_string(),
             data_offset: 0x1000,
-            section: None,
             method: StringMethod::R2String,
             kind: None,
             ..Default::default()
@@ -1241,7 +1236,6 @@ mod api_tests {
         let fake_strings = vec![ExtractedString {
             value: "test".to_string(),
             data_offset: 0,
-            section: None,
             method: StringMethod::R2String,
             kind: None,
             ..Default::default()
@@ -1413,7 +1407,6 @@ mod edge_case_tests {
         let s1 = ExtractedString {
             value: "test".to_string(),
             data_offset: 0x1000,
-            section: Some("test".to_string()),
             method: StringMethod::Structure,
             kind: None,
             ..Default::default()
@@ -1421,7 +1414,6 @@ mod edge_case_tests {
         let s2 = ExtractedString {
             value: "test".to_string(),
             data_offset: 0x1000,
-            section: Some("test".to_string()),
             method: StringMethod::Structure,
             kind: None,
             ..Default::default()

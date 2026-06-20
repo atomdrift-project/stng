@@ -266,7 +266,6 @@ fn parse_us_heap(heap: &[u8], file_base_offset: u64, min_length: usize) -> Vec<E
                     results.push(ExtractedString {
                         value: decoded,
                         data_offset: file_base_offset + string_start as u64,
-                        section: Some("#US".to_string()),
                         method: StringMethod::Structure,
                         kind,
                         ..Default::default()

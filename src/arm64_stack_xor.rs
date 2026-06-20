@@ -277,7 +277,7 @@ fn decode_stack_arg_with_candidate_pads(
     memory: &HashMap<i64, Vec<u8>>,
     cipher_start: i64,
     instr_off: u64,
-    section_name: Option<&str>,
+    _section_name: Option<&str>,
     min_length: usize,
 ) -> StackDecodeResults {
     let Some(cipher) = collect_contiguous(memory, cipher_start, 128) else {
@@ -350,7 +350,6 @@ fn decode_stack_arg_with_candidate_pads(
                 results.push(ExtractedString {
                     value: key_value,
                     data_offset: instr_off.saturating_sub(1),
-                    section: section_name.map(str::to_string),
                     method: StringMethod::XorStackPair,
                     kind: Some(StringKind::XorKey),
                     ..Default::default()
@@ -359,7 +358,6 @@ fn decode_stack_arg_with_candidate_pads(
             results.push(ExtractedString {
                 value,
                 data_offset: instr_off,
-                section: section_name.map(str::to_string),
                 method: StringMethod::XorStackPair,
                 kind,
                 ..Default::default()
@@ -376,7 +374,7 @@ fn decode_recent_stack_blobs_with_pads(
     pads: &[Vec<u8>],
     decoded_blob_state: &mut HashMap<i64, (usize, usize, u64)>,
     instr_off: u64,
-    section_name: Option<&str>,
+    _section_name: Option<&str>,
     min_length: usize,
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();
@@ -434,7 +432,6 @@ fn decode_recent_stack_blobs_with_pads(
                     kind: classify_string(&value).or(Some(StringKind::StackString)),
                     value,
                     data_offset: instr_off,
-                    section: section_name.map(str::to_string),
                     method: StringMethod::XorStackPair,
                     ..Default::default()
                 });

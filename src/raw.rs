@@ -21,10 +21,10 @@ fn in_skip_range(offset: usize, skip_ranges: &[Range<usize>]) -> bool {
 pub(crate) fn extract_raw_strings(
     data: &[u8],
     min_length: usize,
-    section: Option<&str>,
+    // Section name and metadata are no longer stored per-string; retained for
+    // call-site compatibility.
+    _section: Option<&str>,
     segment_names: &[String],
-    // Retained for call-site compatibility; section metadata is no longer
-    // stored per-string, so this is unused.
     _section_info: &HashMap<String, crate::binary::SectionInfo>,
     skip_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
@@ -33,7 +33,6 @@ pub(crate) fn extract_raw_strings(
 
     let context = PrintableRunContext {
         min_length,
-        section,
         segment_names_set: &segment_names_set,
         skip_ranges,
     };
@@ -109,7 +108,6 @@ pub(crate) fn extract_raw_strings(
 #[derive(Clone, Copy)]
 pub(crate) struct PrintableRunContext<'a> {
     pub(crate) min_length: usize,
-    pub(crate) section: Option<&'a str>,
     pub(crate) segment_names_set: &'a HashSet<&'a str>,
     pub(crate) skip_ranges: &'a [Range<usize>],
 }
@@ -196,7 +194,6 @@ fn classify_runs(
                     return Some(ExtractedString {
                         value: trimmed.to_string(),
                         data_offset: start as u64,
-                        section: context.section.map(str::to_string),
                         method: StringMethod::RawScan,
                         kind,
                         fragments: None,
@@ -222,7 +219,7 @@ fn classify_runs(
 pub(crate) fn extract_wide_strings(
     data: &[u8],
     min_length: usize,
-    section: Option<&str>,
+    _section: Option<&str>,
     segment_names: &[String],
     _section_info: &HashMap<String, crate::binary::SectionInfo>,
     skip_ranges: &[Range<usize>],
@@ -319,7 +316,6 @@ pub(crate) fn extract_wide_strings(
         strings.push(ExtractedString {
             value: trimmed.to_string(),
             data_offset: start as u64,
-            section: section.map(str::to_string),
             method: StringMethod::WideString,
             kind,
             fragments: None,

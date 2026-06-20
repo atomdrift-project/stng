@@ -14,7 +14,6 @@ fn test_extracted_string_default() {
     let s = ExtractedString::default();
     assert_eq!(s.value, "");
     assert_eq!(s.data_offset, 0);
-    assert_eq!(s.section, None);
     assert_eq!(s.method, StringMethod::RawScan);
     assert_eq!(s.kind, None);
     assert_eq!(s.fragments, None);
@@ -235,7 +234,6 @@ fn test_extracted_string_serialization() {
     let s = ExtractedString {
         value: "test_value".to_string(),
         data_offset: 0x1234,
-        section: Some(".text".to_string()),
         method: StringMethod::Structure,
         kind: Some(StringKind::FuncName),
         ..Default::default()
@@ -244,7 +242,6 @@ fn test_extracted_string_serialization() {
     let json = serde_json::to_string(&s).unwrap();
     assert!(json.contains("test_value"));
     assert!(json.contains("4660")); // 0x1234 in decimal
-    assert!(json.contains(".text"));
 }
 
 #[test]
@@ -326,7 +323,6 @@ fn test_extracted_string_with_all_fields() {
     let s = ExtractedString {
         value: "complex_string".to_string(),
         data_offset: 0x5000,
-        section: Some(".data".to_string()),
         method: StringMethod::StackString,
         kind: Some(StringKind::StackString),
         fragments: Some(Box::new(vec![StringFragment {
@@ -337,7 +333,6 @@ fn test_extracted_string_with_all_fields() {
 
     assert_eq!(s.value, "complex_string");
     assert_eq!(s.data_offset, 0x5000);
-    assert!(s.section.is_some());
     assert!(s.fragments.is_some());
 }
 
