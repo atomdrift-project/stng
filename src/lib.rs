@@ -64,6 +64,7 @@ mod go;
 pub(crate) mod instr;
 pub mod r2;
 mod rust;
+pub mod string_cache;
 pub(crate) mod xor;
 
 // Decoders for encoded strings
@@ -75,6 +76,9 @@ pub use binary::{is_go_binary, is_rust_binary};
 pub use classifier::classify_string;
 pub use detect::{detect_language, is_text_file};
 pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
+pub use string_cache::{
+    cache_key_for, cached_strings_by_key, cached_strings_from_object, cached_strings_with_options,
+};
 pub use types::{
     Arch, BinaryInfo, ExtractedString, OverlayInfo, Severity, StringContext, StringFragment,
     StringKind, StringMethod, StringStruct,
