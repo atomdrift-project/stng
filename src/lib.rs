@@ -223,9 +223,21 @@ fn passes_garbage_filter(s: &ExtractedString) -> bool {
     // `is_garbage_with_context` check below culls them — exactly the
     // payload bytes the caller asked us to decode.
     //
-    // Limited to *transformation* methods (decode / unobfuscate);
-    // raw scan variants like `RawScan` and `WideString` are still
-    // subject to the garbage check.
+    // Limited to *deterministic transformation* methods (decode /
+    // unobfuscate); raw scan variants like `RawScan` and `WideString` are
+    // still subject to the garbage check.
+    //
+    // `StackString` is deliberately NOT exempt. Unlike the decoders above —
+    // which reverse a known, reversible encoding and so produce trustworthy
+    // output — stack-string extraction is a *heuristic* reconstruction of
+    // bytes laid into a stack frame. It readily assembles junk (a block of
+    // 0x3f stack fills becomes `????????`, register save patterns become
+    // `wwwwwwww`). Exempting the whole method surfaced that noise whenever
+    // the caller asked for filtering. Routing stack strings through
+    // `is_garbage_with_context` (kind-aware: `StackString` is treated as
+    // provenance, so real reconstructions still pass) drops the junk while
+    // keeping genuine deobfuscated payloads. Raw mode (`filter_garbage`
+    // off) never reaches this function, so it still surfaces every fragment.
     if matches!(
         s.method,
         StringMethod::Base64Decode
@@ -235,7 +247,6 @@ fn passes_garbage_filter(s: &ExtractedString) -> bool {
             | StringMethod::UnicodeEscapeDecode
             | StringMethod::ScriptDecode
             | StringMethod::XorDecode
-            | StringMethod::StackString
     ) {
         return true;
     }

@@ -1128,20 +1128,19 @@ pub fn extract_incremental_xor_strings(
         let max_offset = data.len().saturating_sub(pattern.len());
 
         for offset in 0..max_offset {
-            // Skip offsets that fall inside a covered range (either an
-            // already-extracted region or a caller-provided exclusion such
-            // as a `.text` code section). Checking up front avoids the
-            // per-pattern validation loop on bytes we know we'll throw out.
-            if covered_ranges
-                .iter()
-                .any(|&(s, e)| offset >= s && offset < e)
-            {
-                continue;
-            }
-
             // Derive candidate seed: data[offset+i] ^ (seed + i) = pattern[i]
             // seed + i = data[offset+i] ^ pattern[i]
             // seed = (data[offset+i] ^ pattern[i]).wrapping_sub(i as u8)
+            //
+            // The covered-range check (caller exclusions + already-extracted
+            // regions) is deferred until *after* a seed validates below. Seed
+            // validation rejects virtually every offset in O(1), whereas the
+            // covered-range scan is O(ranges) per offset; with `covered_ranges`
+            // growing each time a seed is found, checking it up front made the
+            // whole loop O(offsets × ranges) — quadratic on files that produce
+            // many seeds (e.g. multi-MB ELF `.so` payloads, where it cost tens
+            // of seconds on a single member). Validating first and skipping the
+            // covered check below yields byte-identical output far faster.
             let seed = data[offset] ^ pattern[0];
 
             // Skip trivial seed 0 (already handled by normal extraction)
@@ -1164,7 +1163,10 @@ pub fn extract_incremental_xor_strings(
                 let region_start = offset.saturating_sub(4096);
                 let region_end = (offset + 4096).min(data.len());
 
-                // Avoid redundant extraction
+                // Sole covered-range guard: skip offsets inside a caller
+                // exclusion (e.g. a `.text` code section) or an already-extracted
+                // region. Only reached on a validated seed, so this O(ranges)
+                // scan runs rarely instead of once per byte.
                 if covered_ranges
                     .iter()
                     .any(|&(s, e)| offset >= s && offset < e)
