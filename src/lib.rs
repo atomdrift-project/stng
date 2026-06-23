@@ -491,6 +491,7 @@ fn apply_xor_scan(
                 strings.push(ExtractedString {
                     value: key_str.clone(),
                     data_offset: 0,
+                    data_len: 0,
                     method: StringMethod::XorDecode,
                     kind: Some(StringKind::XorKey),
                     fragments: None,
@@ -1184,6 +1185,7 @@ fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_length: usize) 
             new_strings.push(ExtractedString {
                 value: decoded,
                 data_offset: s.data_offset,
+                data_len: 0,
                 method: StringMethod::SpacedAscii,
                 kind,
                 ..Default::default()

@@ -347,6 +347,8 @@ fn create_decoded_string(original: &ExtractedString, decoded: String) -> Extract
     ExtractedString {
         value: decoded,
         data_offset: original.data_offset,
+        // The payload occupies the obfuscated base64 source, not the decoded form.
+        data_len: original.contiguous_source_len(),
         method: StringMethod::Base64ObfuscatedDecode,
         kind,
         ..Default::default()

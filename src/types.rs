@@ -32,6 +32,22 @@ pub struct ExtractedString {
     pub value: String,
     /// Offset in the binary where the string data is located
     pub data_offset: u64,
+    /// Source byte length of the string's contiguous extent, starting at
+    /// `data_offset` — i.e. the location is the span `[data_offset,
+    /// data_offset + data_len)`.
+    ///
+    /// This is the **source (encoded) length**, recorded by the extractor that
+    /// consumed the bytes: 2×code-units for UTF-16LE, the base64 token length
+    /// for a decoded payload — NOT the decoded `value` length. `0` means the
+    /// extractor didn't record it, which is only the case for byte-identical
+    /// scans (plain ASCII/UTF-8) where `value.len()` *is* the source length.
+    /// Ignored when `fragments` is set (the source is then those scattered
+    /// spans). Use [`source_spans`](Self::source_spans), never `value.len()`,
+    /// to locate the string. `u32` because a single string never spans 4 GiB,
+    /// keeping the per-string cost to 4 bytes — the doc on `fragments` records
+    /// why a heavier inline representation was rejected.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub data_len: u32,
     /// How the string was found
     pub method: StringMethod,
     /// Semantic kind of the string (None means no specific classification)
@@ -45,11 +61,72 @@ pub struct ExtractedString {
     pub fragments: Option<Box<Vec<StringFragment>>>,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if signature
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+/// Iterator over a string's source byte spans — see
+/// [`ExtractedString::source_spans`].
+pub enum SourceSpans<'a> {
+    /// The single contiguous extent of a normal string.
+    Single(std::iter::Once<(u64, u64)>),
+    /// The scattered fragments of a `StackString`.
+    Fragments(std::slice::Iter<'a, StringFragment>),
+}
+
+impl Iterator for SourceSpans<'_> {
+    type Item = (u64, u64);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            SourceSpans::Single(it) => it.next(),
+            SourceSpans::Fragments(it) => it.next().map(|f| (f.offset, f.length as u64)),
+        }
+    }
+}
+
+impl ExtractedString {
+    /// The source byte spans this string was recovered from, as `(offset,
+    /// len)` pairs: the scattered `fragments` for a `StackString`, otherwise
+    /// its single contiguous extent. `len` is `data_len` when the extractor
+    /// recorded it, else the byte-identical `value` length.
+    ///
+    /// This is the one correct way to locate a string in the source, for any
+    /// encoding — consumers must use it rather than deriving a span from
+    /// `value.len()`, which is the decoded length and undercounts UTF-16LE /
+    /// base64 / other re-encoded strings.
+    #[must_use]
+    pub fn source_spans(&self) -> SourceSpans<'_> {
+        match self.fragments.as_deref() {
+            Some(frags) => SourceSpans::Fragments(frags.iter()),
+            None => SourceSpans::Single(std::iter::once((
+                self.data_offset,
+                u64::from(self.contiguous_source_len()),
+            ))),
+        }
+    }
+
+    /// Source byte length of this string's single contiguous extent: the
+    /// recorded `data_len`, or the value's byte length when unrecorded (only
+    /// the byte-identical scans leave it unrecorded). A string decoded from
+    /// this one occupies the same source bytes, so it inherits this extent.
+    /// Not meaningful for a `StackString` (use [`source_spans`](Self::source_spans)).
+    #[must_use]
+    pub(crate) fn contiguous_source_len(&self) -> u32 {
+        if self.data_len > 0 {
+            self.data_len
+        } else {
+            u32::try_from(self.value.len()).unwrap_or(u32::MAX)
+        }
+    }
+}
+
 impl Default for ExtractedString {
     fn default() -> Self {
         Self {
             value: String::new(),
             data_offset: 0,
+            data_len: 0,
             method: StringMethod::RawScan,
             kind: None,
             fragments: None,
@@ -740,6 +817,51 @@ impl BinaryInfo {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn source_spans_use_recorded_extent_then_fall_back_then_fragments() {
+        // Recorded extent (e.g. a UTF-16LE string: source is 2× the value).
+        let wide = ExtractedString {
+            value: "Hi".into(),
+            data_offset: 0x40,
+            data_len: 4,
+            method: StringMethod::WideString,
+            ..Default::default()
+        };
+        assert_eq!(wide.source_spans().collect::<Vec<_>>(), vec![(0x40, 4)]);
+
+        // No recorded extent → byte-identical fallback to the value length.
+        let ascii = ExtractedString {
+            value: "abcd".into(),
+            data_offset: 0x10,
+            method: StringMethod::RawScan,
+            ..Default::default()
+        };
+        assert_eq!(ascii.source_spans().collect::<Vec<_>>(), vec![(0x10, 4)]);
+
+        // Scattered stack string → the fragments, not the (bogus) single extent.
+        let stack = ExtractedString {
+            value: "STACK".into(),
+            data_offset: 9999,
+            data_len: 0,
+            method: StringMethod::StackString,
+            fragments: Some(Box::new(vec![
+                StringFragment {
+                    offset: 0x100,
+                    length: 4,
+                },
+                StringFragment {
+                    offset: 0x200,
+                    length: 1,
+                },
+            ])),
+            ..Default::default()
+        };
+        assert_eq!(
+            stack.source_spans().collect::<Vec<_>>(),
+            vec![(0x100, 4), (0x200, 1)]
+        );
+    }
 
     #[test]
     fn test_binary_info_64bit_le() {

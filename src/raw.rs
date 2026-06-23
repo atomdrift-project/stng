@@ -194,6 +194,9 @@ fn classify_runs(
                     return Some(ExtractedString {
                         value: trimmed.to_string(),
                         data_offset: start as u64,
+                        // The full printable run `[start, start+run.len())` — so a
+                        // value trimmed of surrounding whitespace still spans it.
+                        data_len: u32::try_from(run.len()).unwrap_or(u32::MAX),
                         method: StringMethod::RawScan,
                         kind,
                         fragments: None,
@@ -316,6 +319,9 @@ pub(crate) fn extract_wide_strings(
         strings.push(ExtractedString {
             value: trimmed.to_string(),
             data_offset: start as u64,
+            // Source extent is the UTF-16LE run `[start, j)` (~2× the decoded
+            // value), excluding the NUL terminator.
+            data_len: u32::try_from(j - start).unwrap_or(u32::MAX),
             method: StringMethod::WideString,
             kind,
             fragments: None,
@@ -347,5 +353,57 @@ fn is_valid_wide_char(code_unit: u16) -> bool {
         0x20A0..=0x20CF => true,
         // Arrows, math operators, etc. - skip as they add noise
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A UTF-16LE wide string records its *source* extent in `data_len`, which is
+    /// ~2× the decoded value's byte length — the documented headline case.
+    #[test]
+    fn wide_string_data_len_is_source_extent() {
+        // "Hello" UTF-16LE followed by a NUL terminator.
+        let data = b"H\0e\0l\0l\0o\0\0\0";
+        let out = extract_wide_strings(data, 4, None, &[], &HashMap::new(), &[]);
+
+        assert_eq!(out.len(), 1, "expected exactly one wide string");
+        let s = &out[0];
+        assert_eq!(s.value, "Hello");
+        assert_eq!(s.data_offset, 0);
+        assert_eq!(
+            s.data_len as usize,
+            2 * s.value.len(),
+            "wide data_len must be the encoded extent, not the decoded length"
+        );
+        // The NUL terminator is excluded from the recorded span.
+        assert_eq!(s.source_spans().collect::<Vec<_>>(), vec![(0, 10)]);
+    }
+
+    /// A raw ASCII run records the *untrimmed* run as its extent, so a value
+    /// trimmed of surrounding whitespace still spans the full source bytes.
+    #[test]
+    fn raw_run_data_len_covers_untrimmed_extent() {
+        let empty: HashSet<&str> = HashSet::new();
+        let ctx = PrintableRunContext {
+            min_length: 4,
+            segment_names_set: &empty,
+            skip_ranges: &[],
+        };
+        let mut strings = Vec::new();
+        let mut seen = HashSet::new();
+        // A 9-byte printable run "  hello  " terminated by a NUL.
+        extract_printable_runs(b"  hello  \0", ctx, &mut strings, &mut seen);
+
+        assert_eq!(strings.len(), 1);
+        let s = &strings[0];
+        assert_eq!(s.value, "hello");
+        assert_eq!(s.data_offset, 0);
+        assert_eq!(
+            s.data_len, 9,
+            "data_len must span the full run, including trimmed whitespace"
+        );
+        assert_eq!(s.source_spans().collect::<Vec<_>>(), vec![(0, 9)]);
     }
 }

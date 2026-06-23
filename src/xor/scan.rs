@@ -388,6 +388,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
                         results.push(ExtractedString {
                             value: cleaned_value,
                             data_offset: offset,
+                            data_len: 0,
                             method: StringMethod::XorDecode,
                             kind,
                             fragments: None,
@@ -488,6 +489,7 @@ fn extract_xor_strings_from_hints(
                     results.push(ExtractedString {
                         value: s,
                         data_offset: offset as u64,
+                        data_len: 0,
                         method: StringMethod::XorDecode,
                         kind,
                         fragments: None,
@@ -888,6 +890,7 @@ fn extract_custom_xor_strings_pattern_based_simple(
             Some(ExtractedString {
                 value: cleaned_value,
                 data_offset: pos as u64,
+                data_len: 0,
                 method: StringMethod::XorDecode,
                 kind,
                 fragments: None,
@@ -1063,6 +1066,7 @@ pub(crate) fn extract_rolling_xor_with_known_plaintext(
                         results.push(ExtractedString {
                             value: s,
                             data_offset: file_offset,
+                            data_len: 0,
                             method: StringMethod::XorDecode,
                             kind,
                             fragments: None,
@@ -1205,6 +1209,7 @@ pub fn extract_incremental_xor_strings(
                                         results.push(ExtractedString {
                                             value: s,
                                             data_offset: current_start as u64,
+                                            data_len: 0,
                                             method: StringMethod::XorDecode,
                                             kind: Some(kind),
                                             fragments: None,
@@ -1224,6 +1229,7 @@ pub fn extract_incremental_xor_strings(
                                             results.push(ExtractedString {
                                                 value: s,
                                                 data_offset: current_start as u64,
+                                                data_len: 0,
                                                 method: StringMethod::XorDecode,
                                                 kind: Some(kind),
                                                 fragments: None,

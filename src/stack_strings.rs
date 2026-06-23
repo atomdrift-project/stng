@@ -361,6 +361,7 @@ impl<'a> StackStringExtractor<'a> {
             let mut current = ExtractedString {
                 value: first.string,
                 data_offset: first.instr_off,
+                data_len: 0,
                 method: StringMethod::StackString,
                 kind: Some(StringKind::StackString),
                 fragments: Some(Box::new(vec![StringFragment {
@@ -410,6 +411,7 @@ impl<'a> StackStringExtractor<'a> {
                     current = ExtractedString {
                         value: w.string,
                         data_offset: w.instr_off,
+                        data_len: 0,
                         method: StringMethod::StackString,
                         kind: Some(StringKind::StackString),
                         fragments: Some(Box::new(vec![StringFragment {
@@ -487,6 +489,7 @@ impl<'a> StackStringExtractor<'a> {
         ExtractedString {
             value: merged_value,
             data_offset: first_offset,
+            data_len: 0,
             method: StringMethod::StackString,
             kind: Some(StringKind::StackString),
             fragments: if merged_fragments.is_empty() {
@@ -604,6 +607,7 @@ impl<'a> StackStringExtractor<'a> {
                         results.push(ExtractedString {
                             value: trimmed.to_string(),
                             data_offset: min_off,
+                            data_len: 0,
                             method: StringMethod::XorStackPair,
                             kind: Some(StringKind::StackString),
                             ..Default::default()
@@ -658,6 +662,7 @@ impl<'a> StackStringExtractor<'a> {
                         results.push(ExtractedString {
                             value: chunk,
                             data_offset: start_pos as u64,
+                            data_len: 0,
                             method: StringMethod::StackString,
                             kind: Some(StringKind::StackString),
                             ..Default::default()

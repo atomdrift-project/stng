@@ -177,7 +177,11 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
                             if trimmed.len() >= 4 {
                                 local.push(ExtractedString {
                                     value: trimmed.to_string(),
-                                    data_offset: s.data_offset,
+                                    // The base64 token sits at `b64_match.start()`
+                                    // within the parent's bytes; its source extent
+                                    // is the encoded token, not the decoded value.
+                                    data_offset: s.data_offset + b64_match.start() as u64,
+                                    data_len: u32::try_from(b64_str.len()).unwrap_or(u32::MAX),
                                     method: StringMethod::Base64Decode,
                                     kind: crate::classify_string(trimmed),
                                     ..Default::default()
@@ -215,6 +219,9 @@ pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<Extracte
                 let temp = ExtractedString {
                     value: deobfuscated,
                     data_offset: s.data_offset,
+                    // The decoded payload occupies the parent's source bytes,
+                    // not the (shorter) deobfuscated form.
+                    data_len: s.contiguous_source_len(),
                     method: s.method,
                     kind: s.kind,
                     ..Default::default()
@@ -265,10 +272,13 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
     // Classify before moving
     let kind = crate::classify_string(&decoded_str);
 
-    // Create new ExtractedString with decoded content
+    // Create new ExtractedString with decoded content. The decoded text lives
+    // in the encoded source's bytes — inherit the parent base64 string's extent,
+    // not the decoded length.
     Some(ExtractedString {
         value: decoded_str,
         data_offset: s.data_offset,
+        data_len: s.contiguous_source_len(),
         method: StringMethod::Base64Decode,
         kind,
         ..Default::default()
@@ -1141,6 +1151,7 @@ mod tests {
         ExtractedString {
             value: value.to_string(),
             data_offset: 0,
+            data_len: 0,
             method: StringMethod::RawScan,
             kind,
             fragments: None,
@@ -1480,19 +1491,26 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_embedded_base64_preserves_offset() {
+    fn test_extract_embedded_base64_locates_the_token() {
+        let value = "exec(base64.b64decode('SGVsbG8gV29ybGQh'))";
+        let token = "SGVsbG8gV29ybGQh";
+        let token_pos = value.find(token).unwrap() as u64;
         let input = ExtractedString {
-            value: "exec(base64.b64decode('SGVsbG8gV29ybGQh'))".to_string(),
+            value: value.to_string(),
             data_offset: 12345,
             method: StringMethod::RawScan,
-            kind: None,
             ..Default::default()
         };
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1);
+        // The decoded payload's source is the base64 token itself: its offset is
+        // the token's position within the parent, and its extent is the encoded
+        // token length — not the parent offset, and not the decoded length.
+        assert_eq!(results[0].data_offset, 12345 + token_pos);
+        assert_eq!(results[0].data_len as usize, token.len());
         assert_eq!(
-            results[0].data_offset, 12345,
-            "Should preserve original offset"
+            results[0].source_spans().collect::<Vec<_>>(),
+            vec![(12345 + token_pos, token.len() as u64)]
         );
     }
 }

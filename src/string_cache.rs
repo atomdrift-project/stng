@@ -223,6 +223,7 @@ mod tests {
         vec![ExtractedString {
             value: "https://example.com/payload".to_string(),
             data_offset: 0x40,
+            data_len: 0,
             method: StringMethod::RawScan,
             kind: None,
             fragments: None,

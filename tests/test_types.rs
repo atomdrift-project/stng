@@ -257,6 +257,27 @@ fn test_extracted_string_serialization_skip_none() {
     assert!(!json.contains("library"));
     assert!(!json.contains("fragments"));
     assert!(!json.contains("architecture"));
+    // An unrecorded extent (data_len == 0) is omitted from the wire form.
+    assert!(!json.contains("data_len"));
+}
+
+#[test]
+fn test_extracted_string_data_len_roundtrip() {
+    let s = ExtractedString {
+        value: "Hi".to_string(),
+        data_offset: 0x40,
+        data_len: 4, // UTF-16LE source extent, 2× the value
+        method: StringMethod::WideString,
+        ..Default::default()
+    };
+
+    let json = serde_json::to_string(&s).unwrap();
+    // A recorded extent is serialized...
+    assert!(json.contains("data_len"));
+    // ...and survives a round-trip, preserving the source span.
+    let back: ExtractedString = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.data_len, 4);
+    assert_eq!(back.source_spans().collect::<Vec<_>>(), vec![(0x40, 4)]);
 }
 
 // ===== StringStruct Tests =====
@@ -323,6 +344,9 @@ fn test_extracted_string_with_all_fields() {
     let s = ExtractedString {
         value: "complex_string".to_string(),
         data_offset: 0x5000,
+        // A fragmented stack string carries its spans in `fragments`, so the
+        // contiguous `data_len` is left unrecorded (0).
+        data_len: 0,
         method: StringMethod::StackString,
         kind: Some(StringKind::StackString),
         fragments: Some(Box::new(vec![StringFragment {
@@ -334,6 +358,12 @@ fn test_extracted_string_with_all_fields() {
     assert_eq!(s.value, "complex_string");
     assert_eq!(s.data_offset, 0x5000);
     assert!(s.fragments.is_some());
+    // Fragmented strings locate via their fragments, not the single extent.
+    assert_eq!(
+        s.source_spans().collect::<Vec<_>>(),
+        vec![(0x5000, 14)],
+        "source_spans should follow fragments, ignoring data_len"
+    );
 }
 
 #[test]

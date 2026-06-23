@@ -456,7 +456,7 @@ pub(crate) fn extract_xor_strings(
         } else {
             expand_xor_string(data, pos, info.key, min_length)
         };
-        if let Some((decoded, start, _end)) = expanded
+        if let Some((decoded, start, end)) = expanded
             && let Some(kind) = classify_xor_string(&decoded)
         {
             let offset = start as u64;
@@ -464,6 +464,9 @@ pub(crate) fn extract_xor_strings(
                 results.push(ExtractedString {
                     value: decoded,
                     data_offset: offset,
+                    // True source extent `[start, end)` — for a wide xor string
+                    // this is 2× the decoded length, which `value.len()` misses.
+                    data_len: u32::try_from(end - start).unwrap_or(u32::MAX),
                     method: StringMethod::XorDecode,
                     kind,
                     fragments: None,
@@ -550,6 +553,8 @@ pub(crate) fn extract_multikey_xor_strings(
                             results.push(ExtractedString {
                                 value: s,
                                 data_offset: start as u64,
+                                // Single-byte xor is 1:1 over `[start, i)`.
+                                data_len: u32::try_from(len).unwrap_or(u32::MAX),
                                 method: StringMethod::XorDecode,
                                 kind,
                                 ..Default::default()
@@ -591,7 +596,7 @@ pub(crate) fn extract_multikey_xor_strings(
 
             // Correct alignment: key_bytes[0] should match at (pos - shift)
             // But we can just use expand_multikey_xor_string which handles arbitrary alignment
-            if let Some((decoded, start, _end)) =
+            if let Some((decoded, start, end)) =
                 expand_multikey_xor_string(data, pos, key_bytes, shift, min_length)
                 && let Some(kind) = classify_xor_string(&decoded)
             {
@@ -600,6 +605,7 @@ pub(crate) fn extract_multikey_xor_strings(
                     results.push(ExtractedString {
                         value: decoded,
                         data_offset: offset,
+                        data_len: u32::try_from(end - start).unwrap_or(u32::MAX),
                         method: StringMethod::XorDecode,
                         kind,
                         fragments: None,
@@ -719,7 +725,7 @@ pub(crate) fn scan_dotted_patterns(
 
         // Check for IP address (digits around dot)
         if prev.is_ascii_digit() && next.is_ascii_digit() {
-            if let Some((ip, start, _end)) = extract_ip_at_dot(data, pos, key)
+            if let Some((ip, start, end)) = extract_ip_at_dot(data, pos, key)
                 && ip.len() >= min_length.saturating_sub(2)
             {
                 let offset = start as u64;
@@ -727,6 +733,7 @@ pub(crate) fn scan_dotted_patterns(
                     results.push(ExtractedString {
                         value: ip,
                         data_offset: offset,
+                        data_len: u32::try_from(end - start).unwrap_or(u32::MAX),
                         method: StringMethod::XorDecode,
                         kind: Some(StringKind::IP),
                         fragments: None,
@@ -734,7 +741,7 @@ pub(crate) fn scan_dotted_patterns(
                 }
             }
 
-            if let Some((ip_port, start, _end)) = extract_ip_port_at_pos(data, pos, key)
+            if let Some((ip_port, start, end)) = extract_ip_port_at_pos(data, pos, key)
                 && ip_port.len() >= min_length
             {
                 let offset = start as u64;
@@ -742,6 +749,7 @@ pub(crate) fn scan_dotted_patterns(
                     results.push(ExtractedString {
                         value: ip_port,
                         data_offset: offset,
+                        data_len: u32::try_from(end - start).unwrap_or(u32::MAX),
                         method: StringMethod::XorDecode,
                         kind: Some(StringKind::IPPort),
                         fragments: None,
@@ -752,7 +760,7 @@ pub(crate) fn scan_dotted_patterns(
         // Check for hostname (alphanumeric around dot, like evil.com)
         else if prev.is_ascii_alphanumeric()
             && next.is_ascii_alphanumeric()
-            && let Some((hostname, start, _end)) =
+            && let Some((hostname, start, end)) =
                 extract_hostname_at_dot(data, pos, key, min_length)
         {
             let offset = start as u64;
@@ -760,6 +768,7 @@ pub(crate) fn scan_dotted_patterns(
                 results.push(ExtractedString {
                     value: hostname,
                     data_offset: offset,
+                    data_len: u32::try_from(end - start).unwrap_or(u32::MAX),
                     method: StringMethod::XorDecode,
                     kind: Some(StringKind::Hostname),
                     fragments: None,
