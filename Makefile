@@ -7,7 +7,7 @@ OUT_DIR = out
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release check-cargo install install-precommit test test-unit lint fmt clean ci help bench-build sampled-benchmark heap-build heap-benchmark tuna tuna-once
+.PHONY: all build debug release check-cargo install install-precommit test test-unit lint fix fmt clean ci help bench-build sampled-benchmark heap-build heap-benchmark tuna tuna-once
 
 # Default target
 all: build
@@ -25,6 +25,7 @@ help: ## Show this help
 	@echo "  test        - Run all tests (unit + integration)"
 	@echo "  test-unit   - Run only unit tests (skip integration tests)"
 	@echo "  fmt         - Format all code with rustfmt"
+	@echo "  fix         - Auto-fix clippy lints, then format with rustfmt"
 	@echo "  lint        - Run code formatting and linting checks"
 	@echo "  ci          - Run all CI checks (test + lint)"
 	@echo "  clean       - Clean all build artifacts"
@@ -120,6 +121,12 @@ fmt: ## Format all code with rustfmt
 	@echo "Formatting code..."
 	@cargo fmt --all
 	@echo "✓ Code formatted"
+
+fix: ## Auto-fix clippy lints, then format with rustfmt
+	@echo "Applying clippy fixes..."
+	@cargo clippy --fix --workspace --all-targets --all-features --allow-dirty --allow-staged
+	@cargo fmt --all
+	@echo "✓ Fixes applied"
 
 lint: ## Run code formatting and linting checks
 	@echo "Checking formatting..."
