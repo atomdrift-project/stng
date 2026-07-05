@@ -427,30 +427,53 @@ mod go_binary_tests {
     use super::*;
     use std::path::Path;
 
+    /// Reject non-Go candidates by scanning the section table for a real Go
+    /// section. A `go` on PATH can be a shim for a tool that merely *mentions*
+    /// Go markers in its data (e.g. anything linking stng), so a byte-substring
+    /// check is not enough — the marker must be an actual section.
+    fn looks_like_go(data: &[u8]) -> bool {
+        use stng::goblin::Object;
+        let has_go_section = |name: &str| name == "__gopclntab" || name == ".gopclntab";
+        match Object::parse(data) {
+            Ok(Object::Mach(stng::goblin::mach::Mach::Binary(macho))) => {
+                macho.segments.iter().any(|seg| {
+                    seg.sections().is_ok_and(|secs| {
+                        secs.iter()
+                            .any(|(sec, _)| has_go_section(sec.name().unwrap_or("")))
+                    })
+                })
+            }
+            Ok(Object::Elf(elf)) => elf
+                .section_headers
+                .iter()
+                .any(|sh| has_go_section(elf.shdr_strtab.get_at(sh.sh_name).unwrap_or(""))),
+            _ => false,
+        }
+    }
+
     fn get_go_binary() -> Option<Vec<u8>> {
-        // Try common Go binary locations
-        let go_path = std::process::Command::new("which")
+        // Candidate paths, in preference order: whatever `go` resolves to on
+        // PATH, followed by common install locations.
+        let which_go = std::process::Command::new("which")
             .arg("go")
             .output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string());
 
-        if let Some(path) = go_path
-            && Path::new(&path).exists()
-        {
-            return std::fs::read(&path).ok();
-        }
-
-        // Try standard locations
-        let paths = [
-            "/opt/homebrew/bin/go",
-            "/usr/local/go/bin/go",
-            "/usr/bin/go",
+        let standard = [
+            "/opt/homebrew/bin/go".to_string(),
+            "/usr/local/go/bin/go".to_string(),
+            "/usr/bin/go".to_string(),
         ];
-        for path in paths {
-            if Path::new(path).exists()
-                && let Ok(data) = std::fs::read(path)
+
+        // Return the first candidate that is genuinely a Go binary. This
+        // guards against a `go` on PATH that is a shim for a tool written in
+        // another language, which would otherwise be read and mis-tested.
+        for path in which_go.into_iter().chain(standard) {
+            if Path::new(&path).exists()
+                && let Ok(data) = std::fs::read(&path)
+                && looks_like_go(&data)
             {
                 return Some(data);
             }
