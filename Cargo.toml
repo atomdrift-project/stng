@@ -15,7 +15,7 @@ categories = ["command-line-utilities", "development-tools"]
 goblin = "0.10"
 
 # Pattern matching
-regex = "1.12"
+regex = "1.13"
 
 # Parallelism
 rayon = "1.12"
