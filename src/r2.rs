@@ -3,11 +3,24 @@ pub mod cache;
 use crate::classifier::classify_string;
 use crate::{ExtractedString, StringKind, StringMethod};
 use cache::R2Cache;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 static TOOL: OnceLock<Option<&'static str>> = OnceLock::new();
+
+/// In-process memoization of tool command outputs, keyed by
+/// `(path, command, file size, mtime)`. Several extraction passes ask for the
+/// same command on the same file (e.g. `izzj` for both string extraction and
+/// XOR boundary hints); each spawn costs a full rizin startup + scan, so the
+/// second caller waits on the first instead of re-running it. The size/mtime
+/// key components keep long-lived library callers safe if a file changes on
+/// disk between extractions; the size cap bounds growth for such callers.
+type MemoKey = (String, String, u64, Option<std::time::SystemTime>);
+type MemoCell = Arc<OnceLock<Option<Arc<String>>>>;
+static MEMO: LazyLock<Mutex<HashMap<MemoKey, MemoCell>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+const MEMO_MAX_ENTRIES: usize = 16;
 #[must_use]
 pub fn is_available() -> bool {
     get_tool().is_some()
@@ -36,13 +49,13 @@ fn get_tool() -> Option<&'static str> {
 }
 
 #[must_use]
-pub fn extract_string_boundaries(path: &str) -> Option<Vec<StringBoundary>> {
+pub fn extract_string_boundaries(path: &str, use_cache: bool) -> Option<Vec<StringBoundary>> {
     let tool = get_tool()?;
     let file_size = std::fs::metadata(path).ok()?.len();
     if file_size > 10 * 1024 * 1024 {
         return None;
     }
-    let data_strings = run_tool_command(tool, path, "izzj")?;
+    let data_strings = run_tool_command_with_cache(tool, path, "izzj", use_cache)?;
     serde_json::from_str::<Vec<R2String>>(&data_strings)
         .ok()
         .map(|json| {
@@ -165,15 +178,36 @@ pub fn extract_strings(
     }
 }
 
-fn run_tool_command(tool: &str, path: &str, cmd: &str) -> Option<String> {
-    run_tool_command_with_cache(tool, path, cmd, true)
-}
 fn run_tool_command_with_cache(
     tool: &str,
     path: &str,
     cmd: &str,
     use_cache: bool,
-) -> Option<String> {
+) -> Option<Arc<String>> {
+    let key = match std::fs::metadata(path) {
+        Ok(m) => (
+            path.to_string(),
+            cmd.to_string(),
+            m.len(),
+            m.modified().ok(),
+        ),
+        Err(_) => (path.to_string(), cmd.to_string(), 0, None),
+    };
+    let cell = {
+        let mut memo = match MEMO.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if memo.len() >= MEMO_MAX_ENTRIES && !memo.contains_key(&key) {
+            memo.clear();
+        }
+        memo.entry(key).or_default().clone()
+    };
+    cell.get_or_init(|| spawn_tool_command(tool, path, cmd, use_cache).map(Arc::new))
+        .clone()
+}
+
+fn spawn_tool_command(tool: &str, path: &str, cmd: &str, use_cache: bool) -> Option<String> {
     if use_cache
         && let Ok(cache) = R2Cache::new()
         && let Some(cached) = cache.get(path, cmd)
@@ -283,8 +317,8 @@ struct R2Section {
     #[serde(default)]
     perm: String,
 }
-fn get_sections(tool: &str, path: &str) -> Vec<R2Section> {
-    if let Some(output) = run_tool_command(tool, path, "iSj") {
+fn get_sections(tool: &str, path: &str, use_cache: bool) -> Vec<R2Section> {
+    if let Some(output) = run_tool_command_with_cache(tool, path, "iSj", use_cache) {
         serde_json::from_str::<Vec<R2Section>>(&output).unwrap_or_default()
     } else {
         Vec::new()
@@ -304,9 +338,13 @@ fn vaddr_to_paddr(vaddr: u64, sections: &[R2Section]) -> Option<u64> {
 }
 
 #[must_use]
-pub fn extract_binary_xor_candidates(path: &str, data: &[u8]) -> Vec<ExtractedString> {
+pub fn extract_binary_xor_candidates(
+    path: &str,
+    data: &[u8],
+    use_cache: bool,
+) -> Vec<ExtractedString> {
     let tool = get_tool().unwrap_or("rizin");
-    let sections = get_sections(tool, path);
+    let sections = get_sections(tool, path, use_cache);
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
     for section in sections {
@@ -358,48 +396,83 @@ pub fn verify_xor_keys(
     path: &str,
     _data: &[u8],
     candidates: &[ExtractedString],
+    use_cache: bool,
 ) -> Vec<XorKeyInfo> {
     let Some(tool) = get_tool() else {
         return Vec::new();
     };
-    let sections = get_sections(tool, path);
+    let sections = get_sections(tool, path, use_cache);
     let mut instr_results = Vec::new();
     let mut seen_keys = HashSet::new();
     let mut xor_instrs = Vec::new();
-    if let Some(output) = run_tool_command(tool, path, "aaa; /at xor") {
-        for line in output.lines() {
-            if let Ok(addr) = u64::from_str_radix(
-                line.split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .trim_start_matches("0x"),
-                16,
-            ) {
-                xor_instrs.push(addr);
-            }
+    // Run both instruction searches in one rizin session: `aaa` is by far the
+    // most expensive step, so two separate subprocesses would redo the whole
+    // analysis. `/at` prints one match per line, each starting with `0x<addr>`,
+    // and emits the xor-search hits before the lea-search hits. A `p8 1 @ 0`
+    // between them prints a single line of bare hex (never `0x…`), so the
+    // first non-`0x` line marks the xor→lea boundary — architecture-independent,
+    // unlike matching on the mnemonic (ARM uses `eor`/`adrp`, not `xor`/`lea`).
+    let instr_output =
+        run_tool_command_with_cache(tool, path, "aaa; /at xor; p8 1 @ 0; /at lea", use_cache);
+    let mut lea_addrs = Vec::new();
+    let mut in_lea = false;
+    for line in instr_output
+        .as_deref()
+        .map(String::as_str)
+        .unwrap_or("")
+        .lines()
+    {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some(hex) = line.strip_prefix("0x") else {
+            in_lea = true; // the p8 marker line separating the two searches
+            continue;
+        };
+        let Ok(addr) = u64::from_str_radix(hex.split_whitespace().next().unwrap_or(""), 16) else {
+            continue;
+        };
+        if in_lea {
+            lea_addrs.push(addr);
+        } else {
+            xor_instrs.push(addr);
         }
     }
-    if let Some(output) = run_tool_command(tool, path, "aaa; /at lea") {
-        for line in output.lines() {
-            if let Ok(lea_addr) = u64::from_str_radix(
-                line.split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .trim_start_matches("0x"),
-                16,
-            ) && xor_instrs.iter().any(|&x| {
+    // Keep only lea addresses within 256 bytes of a xor instruction, then
+    // decode them all in a single batched session — each `aoj` subprocess
+    // would otherwise pay a full tool startup + binary load. `aoj 1` emits one
+    // JSON array per address, so the batched output is a whitespace-separated
+    // stream of arrays parsed in order (no `aaa` needed — `aoj` analyses a
+    // single op at the given address).
+    let near_xor: Vec<u64> = lea_addrs
+        .into_iter()
+        .filter(|&lea_addr| {
+            xor_instrs.iter().any(|&x| {
                 if x >= lea_addr {
                     x - lea_addr < 256
                 } else {
                     lea_addr - x < 256
                 }
-            }) && let Some(ao_output) =
-                run_tool_command(tool, path, &format!("aoj 1 @ 0x{lea_addr:x}"))
-                && let Ok(json) = serde_json::from_str::<Vec<serde_json::Value>>(&ao_output)
-                && let Some(vaddr) = json
-                    .first()
-                    .and_then(|i| i.get("ptr"))
-                    .and_then(serde_json::Value::as_u64)
+            })
+        })
+        .collect();
+    if !near_xor.is_empty() {
+        let batched = near_xor
+            .iter()
+            .map(|addr| format!("aoj 1 @ 0x{addr:x}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let ao_outputs = run_tool_command_with_cache(tool, path, &batched, use_cache);
+        let stream = serde_json::Deserializer::from_str(
+            ao_outputs.as_deref().map(String::as_str).unwrap_or(""),
+        )
+        .into_iter::<Vec<serde_json::Value>>();
+        for json in stream.flatten() {
+            if let Some(vaddr) = json
+                .first()
+                .and_then(|i| i.get("ptr"))
+                .and_then(serde_json::Value::as_u64)
                 && let Some(paddr) = vaddr_to_paddr(vaddr, &sections)
                 && !seen_keys.contains(&paddr)
             {
@@ -442,14 +515,16 @@ pub fn verify_xor_keys(
 }
 
 #[must_use]
-pub fn extract_connect_addrs(path: &str, data: &[u8]) -> Vec<ExtractedString> {
+pub fn extract_connect_addrs(path: &str, data: &[u8], use_cache: bool) -> Vec<ExtractedString> {
     let Some(tool) = get_tool() else {
         return Vec::new();
     };
     if data.len() > 10 * 1024 * 1024 {
         return scan_binary_for_connect_addrs(data);
     }
-    let Some(output) = run_tool_command(tool, path, "aaa; e scr.color=0; s entry0; pdf") else {
+    let Some(output) =
+        run_tool_command_with_cache(tool, path, "aaa; e scr.color=0; s entry0; pdf", use_cache)
+    else {
         return Vec::new();
     };
     let mut results = Vec::new();

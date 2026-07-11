@@ -204,6 +204,15 @@ fn main() -> Result<()> {
     let t_total = std::time::Instant::now();
     let cli = Cli::parse();
 
+    // Detecting rizin/radare2 spawns `rizin -v` (~50–100 ms). Warm that
+    // one-time probe on a background thread so it overlaps reading the
+    // target file; the later `is_available()` call then returns instantly.
+    if !cli.no_r2 {
+        std::thread::spawn(|| {
+            let _ = stng::r2::is_available();
+        });
+    }
+
     // Initialize tracing (modern structured logging)
     if cli.debug {
         tracing_subscriber::fmt()

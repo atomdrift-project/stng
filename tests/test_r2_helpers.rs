@@ -58,7 +58,7 @@ fn test_extract_string_boundaries_large_file() {
     let temp_path = create_temp_file("r2_large", &vec![0u8; 11 * 1024 * 1024]);
     let file_path = temp_path.to_str().unwrap();
 
-    let result = stng::r2::extract_string_boundaries(file_path);
+    let result = stng::r2::extract_string_boundaries(file_path, true);
 
     // Should return None for files > 10MB
     assert!(result.is_none(), "Should skip files larger than 10MB");
@@ -72,7 +72,7 @@ fn test_extract_string_boundaries_small_file() {
     let temp_path = create_temp_file("r2_small", b"small test file");
     let file_path = temp_path.to_str().unwrap();
 
-    let result = stng::r2::extract_string_boundaries(file_path);
+    let result = stng::r2::extract_string_boundaries(file_path, true);
 
     // May return None if r2/rizin not available, or Some if available
     // Just verify it doesn't panic
@@ -92,7 +92,7 @@ fn test_extract_string_boundaries_small_file() {
 fn test_extract_string_boundaries_nonexistent() {
     let fake_path = "/tmp/nonexistent_file_boundaries_test.bin";
 
-    let result = stng::r2::extract_string_boundaries(fake_path);
+    let result = stng::r2::extract_string_boundaries(fake_path, true);
 
     // Should return None for non-existent file
     assert!(result.is_none(), "Should return None for non-existent file");
@@ -172,7 +172,7 @@ fn test_verify_xor_keys_empty_candidates() {
     let temp_path = create_temp_file("r2_xor_empty", b"test content");
     let file_path = temp_path.to_str().unwrap();
 
-    let result = stng::r2::verify_xor_keys(file_path, &[], &[]);
+    let result = stng::r2::verify_xor_keys(file_path, &[], &[], true);
 
     // Should return empty vec for empty input
     assert!(result.is_empty(), "Should return empty for no candidates");
@@ -201,7 +201,7 @@ fn test_verify_xor_keys_invalid_lengths() {
         },
     ];
 
-    let result = stng::r2::verify_xor_keys(file_path, &[], &candidates);
+    let result = stng::r2::verify_xor_keys(file_path, &[], &candidates, true);
 
     // Should return empty since all candidates are filtered out by length
     assert!(
@@ -217,7 +217,7 @@ fn test_verify_xor_keys_invalid_lengths() {
 fn test_extract_connect_addrs_nonexistent() {
     let fake_data = b"test data";
 
-    let result = stng::r2::extract_connect_addrs("/nonexistent/path.bin", fake_data);
+    let result = stng::r2::extract_connect_addrs("/nonexistent/path.bin", fake_data, true);
 
     // Should return empty for non-existent file
     assert!(
@@ -233,7 +233,7 @@ fn test_extract_connect_addrs_large_file() {
     let temp_path = create_temp_file("r2_connect_large", &large_data);
     let file_path = temp_path.to_str().unwrap();
 
-    let result = stng::r2::extract_connect_addrs(file_path, &large_data);
+    let result = stng::r2::extract_connect_addrs(file_path, &large_data, true);
 
     // Should use binary scan for large files (no r2 analysis)
     // Result may be empty if no connect patterns found
@@ -248,7 +248,7 @@ fn test_extract_connect_addrs_empty_data() {
     let temp_path = create_temp_file("r2_connect_empty", b"");
     let file_path = temp_path.to_str().unwrap();
 
-    let result = stng::r2::extract_connect_addrs(file_path, b"");
+    let result = stng::r2::extract_connect_addrs(file_path, b"", true);
 
     // Should return empty for empty data
     assert!(result.is_empty(), "Should return empty for empty data");

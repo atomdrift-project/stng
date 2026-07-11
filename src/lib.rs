@@ -449,7 +449,9 @@ fn apply_xor_scan(
     //      independent CLI tool.
     let r2_boundaries = opts.rizin_boundaries.clone().or_else(|| {
         if opts.use_r2 {
-            opts.path.as_deref().and_then(r2::extract_string_boundaries)
+            opts.path
+                .as_deref()
+                .and_then(|p| r2::extract_string_boundaries(p, opts.use_cache))
         } else {
             None
         }
@@ -575,7 +577,11 @@ fn apply_xor_scan(
         } else if opts.use_r2 {
             if let Some(path) = opts.path.as_deref() {
                 let mut c = strings.clone();
-                c.extend(r2::extract_binary_xor_candidates(path, data));
+                c.extend(r2::extract_binary_xor_candidates(
+                    path,
+                    data,
+                    opts.use_cache,
+                ));
                 (Some(c), Some(path))
             } else {
                 (None, None)
@@ -585,7 +591,7 @@ fn apply_xor_scan(
         };
         if let Some(candidates) = candidates {
             let verify_path = path_for_verify.unwrap_or("");
-            let xor_keys = r2::verify_xor_keys(verify_path, data, &candidates);
+            let xor_keys = r2::verify_xor_keys(verify_path, data, &candidates, opts.use_cache);
             if !xor_keys.is_empty() {
                 let decoded =
                     xor::extract_multikey_xor_strings(data, &xor_keys, opts.xor_min_length);
@@ -1543,6 +1549,42 @@ pub fn extract_strings_from_object(
     deduplicate_by_offset(strings)
 }
 
+/// Whether `object` could be an ARM binary (32- or 64-bit), including
+/// formats whose architecture we can't positively identify.
+///
+/// The connect()-address disassembly pass only understands ARM patterns:
+/// its entry-point scan greps for the ARM EABI connect syscall number (283)
+/// or a direct connect call, and its parser matches `strb`/`str` stores to
+/// `sp`-relative sockaddr offsets. On a positively-identified non-ARM
+/// binary that pass cannot produce a true detection, so spending a full
+/// rizin `aaa` analysis on it buys nothing.
+fn arm_arch_possible(object: &Object<'_>) -> bool {
+    use goblin::mach::constants::cputype::{CPU_TYPE_ARM, CPU_TYPE_ARM64, CPU_TYPE_ARM64_32};
+    match object {
+        Object::Elf(elf) => matches!(
+            elf.header.e_machine,
+            goblin::elf::header::EM_ARM | goblin::elf::header::EM_AARCH64
+        ),
+        Object::PE(pe) => matches!(
+            pe.header.coff_header.machine,
+            goblin::pe::header::COFF_MACHINE_ARM
+                | goblin::pe::header::COFF_MACHINE_ARMNT
+                | goblin::pe::header::COFF_MACHINE_ARM64
+                | goblin::pe::header::COFF_MACHINE_THUMB
+        ),
+        Object::Mach(goblin::mach::Mach::Binary(macho)) => matches!(
+            macho.header.cputype,
+            CPU_TYPE_ARM | CPU_TYPE_ARM64 | CPU_TYPE_ARM64_32
+        ),
+        Object::Mach(goblin::mach::Mach::Fat(fat)) => fat.arches().map_or(true, |arches| {
+            arches
+                .iter()
+                .any(|a| matches!(a.cputype, CPU_TYPE_ARM | CPU_TYPE_ARM64 | CPU_TYPE_ARM64_32))
+        }),
+        _ => true,
+    }
+}
+
 /// Extract strings from a pre-parsed binary object.
 ///
 /// Dispatches to the appropriate language-aware extractor based on the binary format
@@ -1553,6 +1595,32 @@ fn extract_from_object(
     object: &Object<'_>,
     data: &[u8],
     opts: &ExtractOptions,
+) -> Vec<ExtractedString> {
+    // The connect()-address pass shells out to rizin for a full `aaa`
+    // analysis — by far the most expensive subprocess in the pipeline
+    // (seconds, versus milliseconds for native extraction). Start it first
+    // on its own thread so its wall time overlaps everything below, and
+    // skip it outright where it cannot detect anything (`arm_arch_possible`).
+    std::thread::scope(|scope| {
+        let connect_scan = if opts.rizin_connect_addrs.is_none()
+            && opts.use_r2
+            && data.len() <= 10 * 1024 * 1024
+            && arm_arch_possible(object)
+            && let Some(path) = opts.path.as_deref()
+        {
+            Some(scope.spawn(move || r2::extract_connect_addrs(path, data, opts.use_cache)))
+        } else {
+            None
+        };
+        extract_from_object_inner(object, data, opts, connect_scan)
+    })
+}
+
+fn extract_from_object_inner(
+    object: &Object<'_>,
+    data: &[u8],
+    opts: &ExtractOptions,
+    connect_scan: Option<std::thread::ScopedJoinHandle<'_, Vec<ExtractedString>>>,
 ) -> Vec<ExtractedString> {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
@@ -2178,21 +2246,21 @@ fn extract_from_object(
     }
 
     // IPs recovered from `connect()` syscalls. Pre-populated wins
-    // (expose's upstream rizin pass already harvested them);
-    // otherwise stng spawns rizin itself when `use_r2` is on and we
-    // have a path — standalone CLI behaviour. Skip on large files
-    // (>10 MB) where the binary scan has diminishing returns.
+    // (expose's upstream rizin pass already harvested them); otherwise
+    // `extract_from_object` spawned the rizin scan before extraction
+    // started — standalone CLI behaviour — and it is joined here.
     if let Some(ref pre) = opts.rizin_connect_addrs {
         if !pre.is_empty() {
             strings.extend(pre.clone());
         }
-    } else if opts.use_r2
-        && data.len() <= 10 * 1024 * 1024
-        && let Some(ref path) = opts.path
-    {
-        let connect_addrs = r2::extract_connect_addrs(path, data);
-        if !connect_addrs.is_empty() {
-            strings.extend(connect_addrs);
+    } else if let Some(handle) = connect_scan {
+        match handle.join() {
+            Ok(connect_addrs) => {
+                if !connect_addrs.is_empty() {
+                    strings.extend(connect_addrs);
+                }
+            }
+            Err(_) => tracing::warn!("connect-addr scan thread panicked"),
         }
     }
 
