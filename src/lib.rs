@@ -240,7 +240,8 @@ fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, usize)]) ->
     // off) never reaches this function, so it still surfaces every fragment.
     if matches!(
         s.method,
-        StringMethod::Base64Decode
+        StringMethod::Structure
+            | StringMethod::Base64Decode
             | StringMethod::Base64ObfuscatedDecode
             | StringMethod::HexDecode
             | StringMethod::UrlDecode
