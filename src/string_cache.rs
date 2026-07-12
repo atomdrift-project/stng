@@ -171,7 +171,10 @@ fn memo_put(key: &str, arc: &Arc<[ExtractedString]>) {
 ///
 /// `STNG_STRING_CACHE=0`/`false` disables the disk tier; `STNG_STRING_CACHE_DIR`
 /// overrides the location (used by tests to avoid touching the user's cache).
-fn cache_dir() -> Option<PathBuf> {
+///
+/// Public so [`crate::cache_sweep`] reclaims exactly the directory written here.
+#[must_use]
+pub fn cache_dir() -> Option<PathBuf> {
     match std::env::var("STNG_STRING_CACHE") {
         Ok(v) if v == "0" || v.eq_ignore_ascii_case("false") => return None,
         _ => {}

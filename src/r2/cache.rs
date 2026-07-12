@@ -32,6 +32,19 @@ struct CacheMeta {
     created_at: u64, // unix timestamp
 }
 
+/// The r2/rizin cache root (`…/stng/r2`), or `None` when no cache location can
+/// be determined. Mirrors the path [`R2Cache::with_enabled`] uses, and is the
+/// directory [`crate::cache_sweep`] reclaims.
+#[must_use]
+pub fn cache_dir() -> Option<PathBuf> {
+    // Linux: ~/.cache/stng/r2 · macOS: ~/Library/Caches/stng/r2
+    // Windows: C:\Users\<user>\AppData\Local\stng\r2
+    if let Some(base) = dirs::cache_dir() {
+        return Some(base.join("stng").join("r2"));
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache").join("stng").join("r2"))
+}
+
 impl R2Cache {
     /// Create a new cache instance with caching enabled.
     pub fn new() -> Result<Self, std::io::Error> {
@@ -40,20 +53,8 @@ impl R2Cache {
 
     /// Create a cache instance with explicit enable/disable control.
     pub fn with_enabled(enabled: bool) -> Result<Self, std::io::Error> {
-        let cache_dir = if let Some(base) = dirs::cache_dir() {
-            // Use OS-appropriate cache directory
-            // Linux: ~/.cache/stng/r2
-            // macOS: ~/Library/Caches/stng/r2
-            // Windows: C:\Users\<user>\AppData\Local\stng\r2
-            base.join("stng").join("r2")
-        } else {
-            // Fallback for systems without standard cache dir
-            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
-                .join(".cache")
-                .join("stng")
-                .join("r2")
-        };
-
+        let cache_dir = cache_dir()
+            .unwrap_or_else(|| PathBuf::from(".").join(".cache").join("stng").join("r2"));
         Self::with_cache_dir(enabled, cache_dir)
     }
 

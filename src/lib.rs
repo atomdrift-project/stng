@@ -59,6 +59,9 @@ pub mod script;
 // String classifier
 pub mod classifier;
 
+// Best-effort background reclamation of stng's on-disk caches
+pub mod cache_sweep;
+
 // Language-specific extractors
 mod go;
 pub(crate) mod instr;
@@ -73,6 +76,7 @@ mod fuzzy_base64;
 
 // Public API
 pub use binary::{is_go_binary, is_rust_binary};
+pub use cache_sweep::{Budget, Root, spawn, spawn_periodic, stng_budget};
 pub use classifier::classify_string;
 pub use detect::{detect_language, is_text_file};
 pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};

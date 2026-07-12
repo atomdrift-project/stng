@@ -226,6 +226,11 @@ fn main() -> Result<()> {
             .init();
     }
 
+    // Reclaim stale/oversized cache entries on a detached thread. Best-effort
+    // and self-gated to once a day, so it overlaps the real work and never
+    // slows it down; if this process exits first, the next run resumes.
+    stng::spawn(vec![stng::stng_budget()]);
+
     let root = Path::new(&cli.target);
     if !root.exists() {
         anyhow::bail!("Path does not exist: {}", cli.target);
