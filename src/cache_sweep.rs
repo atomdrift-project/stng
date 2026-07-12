@@ -59,8 +59,20 @@ pub struct Budget {
 /// One sweep in flight per process; a second [`spawn`] is a no-op until it ends.
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
+/// Clears [`RUNNING`] on drop, so a panic inside the sweep can never wedge every
+/// future [`spawn`] into a permanent no-op.
+struct RunningGuard;
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        RUNNING.store(false, Ordering::Release);
+    }
+}
+
 /// Sweep `budgets` on a detached thread and return immediately. The thread is
-/// reaped when the process exits; a partial sweep simply resumes next run.
+/// reaped when the process exits; a sweep interrupted that way is re-attempted
+/// on a later run (at most once per 24h per the marker, so a long-lived
+/// consumer is what carries a large cache all the way to completion).
 ///
 /// For a one-shot CLI, call once at startup — it races the real work. For a
 /// long-lived daemon, use [`spawn_periodic`] instead.
@@ -72,10 +84,17 @@ pub fn spawn(mut budgets: Vec<Budget>) {
     if RUNNING.swap(true, Ordering::AcqRel) {
         return; // a sweep is already running
     }
-    std::thread::spawn(move || {
-        run_all(&budgets);
+    // `Builder::spawn` returns an error (rather than panicking) if the OS
+    // refuses the thread; reset the guard so a later call can retry.
+    let started = std::thread::Builder::new()
+        .name("stng-cache-sweep".into())
+        .spawn(move || {
+            let _guard = RunningGuard;
+            run_all(&budgets);
+        });
+    if started.is_err() {
         RUNNING.store(false, Ordering::Release);
-    });
+    }
 }
 
 /// Sweep `budgets` now and every `interval` thereafter, on one detached thread,
@@ -87,12 +106,14 @@ pub fn spawn_periodic(mut budgets: Vec<Budget>, interval: Duration) {
     if budgets.is_empty() {
         return;
     }
-    std::thread::spawn(move || {
-        loop {
-            run_all(&budgets);
-            std::thread::sleep(interval);
-        }
-    });
+    let _ = std::thread::Builder::new()
+        .name("stng-cache-sweep".into())
+        .spawn(move || {
+            loop {
+                run_all(&budgets);
+                std::thread::sleep(interval);
+            }
+        });
 }
 
 /// stng's own budget: the string cache and the r2/rizin cache, sharing one
@@ -114,7 +135,8 @@ pub fn stng_budget() -> Budget {
     }
 }
 
-/// Retention window from `var` (in days), or the 30-day default.
+/// Retention window from `var` (in days), or the 30-day default. `saturating_mul`
+/// so an absurd env value can't overflow into a panic (debug) or wrap (release).
 #[must_use]
 pub fn max_age_from_env(var: &str) -> Duration {
     let days = std::env::var(var)
@@ -122,17 +144,25 @@ pub fn max_age_from_env(var: &str) -> Duration {
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&d| d > 0)
         .unwrap_or(DEFAULT_TTL_DAYS);
-    Duration::from_secs(days * 24 * 60 * 60)
+    Duration::from_secs(days.saturating_mul(24 * 60 * 60))
 }
 
 /// Byte ceiling from `var`, or the 2 GiB default.
 #[must_use]
 pub fn max_bytes_from_env(var: &str) -> u64 {
+    max_bytes_from_env_or(var, DEFAULT_MAX_BYTES)
+}
+
+/// Byte ceiling from `var`, or `default` when unset or invalid. Lets a consumer
+/// pick a different default (e.g. fletch's larger artifact cache) while still
+/// honoring the same env override.
+#[must_use]
+pub fn max_bytes_from_env_or(var: &str, default: u64) -> u64 {
     std::env::var(var)
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&b| b > 0)
-        .unwrap_or(DEFAULT_MAX_BYTES)
+        .unwrap_or(default)
 }
 
 fn run_all(budgets: &[Budget]) {
@@ -258,16 +288,24 @@ fn stat_entry(path: PathBuf, is_dir: bool) -> Option<Entry> {
 
 /// Recursive byte size of a directory entry. Only ever called on the small
 /// per-item directories stng's r2 cache uses (a handful of files each).
+///
+/// Recursion is gated on `file_type()`, which does NOT follow symlinks: a
+/// symlink is neither descended nor counted. That keeps a stray symlink loop
+/// in the cache dir from spinning this into an (uncatchable) stack-overflow
+/// abort, and a symlink to a large tree from inflating the byte total.
 fn dir_size(dir: &Path) -> u64 {
     let Ok(rd) = fs::read_dir(dir) else {
         return 0;
     };
     let mut total = 0;
     for e in rd.flatten() {
-        match e.metadata() {
-            Ok(m) if m.is_dir() => total += dir_size(&e.path()),
-            Ok(m) => total += m.len(),
-            Err(_) => {}
+        let Ok(ft) = e.file_type() else {
+            continue;
+        };
+        if ft.is_dir() {
+            total += dir_size(&e.path());
+        } else if ft.is_file() {
+            total += e.metadata().map(|m| m.len()).unwrap_or(0);
         }
     }
     total
@@ -369,6 +407,25 @@ mod tests {
         run(&budget);
         assert!(!ver.join("a.zst").exists(), "aged grandchild evicted");
         assert!(ver.join("b.zst").exists(), "fresh grandchild kept");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dir_size_does_not_follow_symlink_loops() {
+        let dir = scratch("symloop");
+        let sub = dir.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("a.json"), b"1234567890").unwrap(); // 10 bytes
+        // A symlink back to the parent: following it would recurse forever and
+        // abort the process on stack overflow.
+        std::os::unix::fs::symlink(&dir, sub.join("loop")).unwrap();
+        // Must return promptly, counting only the real file.
+        assert_eq!(
+            dir_size(&dir),
+            10,
+            "the symlink is neither followed nor counted"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
