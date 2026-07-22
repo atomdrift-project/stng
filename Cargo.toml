@@ -2,6 +2,9 @@
 name = "stng"
 version = "1.7.1"
 edition = "2024"
+# Build on any rustc within ~2 releases of current stable; edition 2024 implies
+# the MSRV-aware resolver, so this also caps dependency versions.
+rust-version = "1.94"
 authors = ["The Atomdrift Project"]
 description = "Language-aware advanced string extraction binaries"
 license = "Apache-2.0"
