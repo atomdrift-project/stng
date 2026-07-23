@@ -15,7 +15,7 @@ brew install atomdrift/tap/stng
 Or with cargo:
 
 ```bash
-cargo install --git https://codeberg.org/atomdrift/stng
+cargo install --git https://github.com/atomdrift-project/stng
 ```
 
 ## Quick Start

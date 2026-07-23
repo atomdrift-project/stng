@@ -9,7 +9,7 @@ authors = ["The Atomdrift Project"]
 description = "Language-aware advanced string extraction binaries"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://codeberg.org/atomdrift/stng"
+repository = "https://github.com/atomdrift-project/stng"
 keywords = ["binary", "strings", "go", "rust", "reverse-engineering"]
 categories = ["command-line-utilities", "development-tools"]
 
