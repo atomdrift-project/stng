@@ -1,6 +1,6 @@
 [package]
 name = "stng"
-version = "1.7.1"
+version = "1.8.0"
 edition = "2024"
 # Build on any rustc within ~2 releases of current stable; edition 2024 implies
 # the MSRV-aware resolver, so this also caps dependency versions.
