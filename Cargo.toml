@@ -45,6 +45,11 @@ hex = "0.4"
 # URL decoding
 urlencoding = "2.1"
 
+# Hostname canonicalization and public-suffix validation. `psl` embeds a static
+# snapshot, so analysis never performs network I/O and remains reproducible.
+idna = "1.1"
+psl = "2.1"
+
 # Zlib/gzip decompression (for script deobfuscation)
 flate2 = "1.1"
 

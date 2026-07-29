@@ -37,6 +37,7 @@
 
 // Core modules
 mod extraction;
+mod ioc;
 mod types;
 mod validation;
 mod validation_thresholds;
@@ -79,6 +80,10 @@ pub use binary::{is_go_binary, is_rust_binary};
 pub use cache_sweep::{Budget, Root, spawn, spawn_periodic, stng_budget};
 pub use classifier::classify_string;
 pub use detect::{detect_language, is_text_file};
+pub use ioc::{
+    Ioc, IocKind, IocOccurrence, KeyAlgorithm, KeyMetadata, MAX_IOC_OCCURRENCES,
+    canonicalize_hostname, canonicalize_ioc_path, extract_iocs, fingerprint_key_material,
+};
 pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
 pub use string_cache::{
     cache_key_for, cached_strings_by_key, cached_strings_from_object, cached_strings_with_options,
