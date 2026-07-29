@@ -9,11 +9,10 @@
 //! corpus analysis.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 use crate::{ExtractedString, StringKind, StringMethod};
 
@@ -32,10 +31,92 @@ pub enum IocKind {
     Ip,
     /// A DNS hostname.
     Hostname,
-    /// Canonical cryptographic key material fingerprint.
+    /// Canonical, lossless cryptographic key material.
     Key,
     /// An uncommon, absolute hardcoded filesystem path.
     Path,
+}
+
+/// Structural context for deciding whether a routable IP is version-like text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpEvidence {
+    /// An exact, otherwise unanchored IP string.
+    Bare,
+    /// A URL authority or an exact `IP:port` endpoint.
+    Authority,
+}
+
+/// Whether an address is externally routable and useful as an IOC.
+///
+/// This is the shared implementation of Cleave's external-IPv4 policy,
+/// extended to IPv6. It rejects non-routable/special ranges and, for bare
+/// IPv4 strings, dotted versions. URL/endpoint structure relaxes only the
+/// version heuristic; it never admits private or otherwise non-routable IPs.
+#[must_use]
+pub fn is_external_ip(ip: &IpAddr, evidence: IpEvidence) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_external_ipv4(ip, evidence),
+        IpAddr::V6(ip) => is_external_ipv6(ip, evidence),
+    }
+}
+
+fn is_external_ipv4(ip: &Ipv4Addr, evidence: IpEvidence) -> bool {
+    let octets = ip.octets();
+
+    // Zero octets are overwhelmingly versions/padding in static data. Cleave's
+    // established IOC policy rejects them even inside a URL.
+    if octets.contains(&0) {
+        return false;
+    }
+
+    if octets[0] == 10
+        || octets[0] == 127
+        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+        || (octets[0] == 169 && octets[1] == 254)
+        || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+        || (octets[0] == 192 && octets[1] == 168)
+        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+        || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+        || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+        || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+        || octets[0] >= 224
+    {
+        return false;
+    }
+
+    if evidence == IpEvidence::Bare {
+        if octets[0] < 10 && octets[1] < 10 && octets[2] < 10 {
+            return false;
+        }
+        if octets[2] == 1 && octets[3] == 1 {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_external_ipv6(ip: &Ipv6Addr, evidence: IpEvidence) -> bool {
+    if let Some(mapped) = ip.to_ipv4_mapped() {
+        return is_external_ipv4(&mapped, evidence);
+    }
+
+    let segments = ip.segments();
+    if ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_multicast()
+        || (segments[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
+        || (segments[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+        || (segments[0] & 0xffc0) == 0xfec0 // deprecated site-local fec0::/10
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8) // documentation
+        || (segments[0] & 0xfff0) == 0x3ff0 // documentation 3fff::/20
+        // NAT64 well-known prefix
+        || (segments[0] == 0x0064 && segments[1] == 0xff9b)
+    {
+        return false;
+    }
+
+    // The remaining globally scoped allocations begin in 2000::/3.
+    (segments[0] & 0xe000) == 0x2000
 }
 
 /// Algorithm context attached to structurally proven key material.
@@ -55,7 +136,7 @@ pub enum KeyAlgorithm {
     ChaCha20,
 }
 
-/// Metadata for a key IOC. Raw key bytes are deliberately never serialized.
+/// Metadata for a key IOC. Exact bytes live in the IOC's canonical `value`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyMetadata {
     /// Sorted unique algorithms for which this material was observed.
@@ -87,7 +168,7 @@ pub struct IocOccurrence {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ioc {
     pub kind: IocKind,
-    /// Canonical address/hostname, or a key fingerprint for `Key`.
+    /// Canonical address/hostname/path, or `base64url:<material>` for `Key`.
     pub value: String,
     /// Sorted unique ports observed with this address/hostname.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -180,6 +261,12 @@ pub fn extract_iocs(strings: &[ExtractedString]) -> Vec<Ioc> {
     for extracted in strings {
         let value = extracted.value.as_str();
 
+        // Certificate/code-signature strings contain validation and policy
+        // URLs that identify the signer ecosystem, not behavior of the sample.
+        if extracted.method == StringMethod::CodeSignature {
+            continue;
+        }
+
         // Key IOCs require an upstream structural detector. Never infer a key
         // from entropy or length here: ordinary constants would swamp a large
         // corpus with false positives.
@@ -222,7 +309,16 @@ pub fn extract_iocs(strings: &[ExtractedString]) -> Vec<Ioc> {
         // URL authorities are strong structural evidence even when a broader
         // classifier called the whole string a shell command or source code.
         scan_url_authorities(value, |m| {
-            record_match(&mut out, &mut by_identity, extracted, m);
+            let external_ip = m.kind != IocKind::Ip
+                || m.value
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| is_external_ip(&ip, IpEvidence::Authority));
+            if external_ip
+                && (m.kind != IocKind::Hostname
+                    || !should_suppress_metadata_hostname(extracted.method, &m.value))
+            {
+                record_match(&mut out, &mut by_identity, extracted, m);
+            }
         });
 
         let typed_host = extracted.kind == Some(StringKind::Hostname);
@@ -233,6 +329,17 @@ pub fn extract_iocs(strings: &[ExtractedString]) -> Vec<Ioc> {
         // hostname or IP is accepted only when the upstream extractor typed it.
         if (typed_host || typed_ip || has_endpoint_shape(value))
             && let Some(m) = parse_exact_network(value, typed_host, typed_ip)
+            && !(m.kind == IocKind::Hostname
+                && should_suppress_metadata_hostname(extracted.method, &m.value))
+            && (m.kind != IocKind::Ip
+                || m.value.parse::<IpAddr>().is_ok_and(|ip| {
+                    let evidence = if m.port.is_some() {
+                        IpEvidence::Authority
+                    } else {
+                        IpEvidence::Bare
+                    };
+                    is_external_ip(&ip, evidence)
+                }))
         {
             record_match(&mut out, &mut by_identity, extracted, m);
         }
@@ -306,7 +413,7 @@ fn record_key(
     material: &[u8],
     algorithm: KeyAlgorithm,
 ) {
-    let value = fingerprint_key_material(material);
+    let value = encode_key_material(material);
     let identity = (IocKind::Key, value.clone());
     let idx = if let Some(idx) = by_identity.get(&identity) {
         *idx
@@ -348,17 +455,32 @@ fn record_key(
     });
 }
 
-/// Return the stable, non-secret IOC identity for decoded key bytes.
+/// Return the stable, lossless IOC identity for decoded key bytes.
 ///
-/// SHA-256 is encoded as unpadded base64url and prefixed with the scheme so the
-/// representation can evolve without silently changing cross-system matches.
-/// Consumers should store the decoded 32-byte digest internally and use this
-/// text form only at JSON/API boundaries.
+/// Unpadded base64url represents arbitrary bytes without JSON escaping. The
+/// prefix makes the encoding explicit and leaves room for future wire formats.
+/// Hopper should decode and store the exact bytes; Bloom filters may hash them
+/// internally, but every reported match must be confirmed against these bytes.
 #[must_use]
-pub fn fingerprint_key_material(material: &[u8]) -> String {
-    let digest = Sha256::digest(material);
-    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
-    format!("sha256:{encoded}")
+pub fn encode_key_material(material: &[u8]) -> String {
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(material);
+    format!("base64url:{encoded}")
+}
+
+/// Decode a canonical key IOC value back to its exact bytes.
+///
+/// Non-canonical aliases (padding, non-zero trailing bits, or the wrong
+/// alphabet/prefix) are rejected so all producers share one identity.
+#[must_use]
+pub fn decode_key_material(value: &str) -> Option<Vec<u8>> {
+    let encoded = value.strip_prefix("base64url:")?;
+    if encoded.is_empty() {
+        return None;
+    }
+    let material = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .ok()?;
+    (encode_key_material(&material) == value).then_some(material)
 }
 
 /// Canonicalize an uncommon absolute path suitable for exact IOC matching.
@@ -374,6 +496,7 @@ pub fn canonicalize_ioc_path(input: &str) -> Option<String> {
         || input.trim() != input
         || input.bytes().any(|b| b.is_ascii_control())
         || has_path_template(input)
+        || input.contains("://")
     {
         return None;
     }
@@ -393,12 +516,19 @@ pub fn canonicalize_ioc_path(input: &str) -> Option<String> {
     if !posix && !windows_drive && !windows_unc {
         return None;
     }
+    if posix && memchr::memchr_iter(b'/', bytes).count() < 2 {
+        return None;
+    }
 
     if input.ends_with(['/', '\\']) {
         return None;
     }
     let leaf = input.rsplit(['/', '\\']).next()?;
-    if leaf.is_empty() || matches!(leaf, "." | "..") || looks_like_source_file(leaf) {
+    if leaf.len() < 5
+        || matches!(leaf, "." | "..")
+        || looks_like_source_file(leaf)
+        || looks_like_build_source_path(input, leaf)
+    {
         return None;
     }
 
@@ -409,7 +539,10 @@ pub fn canonicalize_ioc_path(input: &str) -> Option<String> {
         {
             return None;
         }
-    } else if input.bytes().any(|b| matches!(b, b'?' | b'*')) {
+    } else if !input
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+' | '@' | ' '))
+    {
         return None;
     }
 
@@ -452,6 +585,26 @@ fn looks_like_source_file(leaf: &str) -> bool {
     .any(|extension| leaf.ends_with(extension))
 }
 
+fn looks_like_build_source_path(path: &str, leaf: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    let in_source_tree = normalized.contains("/src/")
+        || normalized.contains("/include/")
+        || normalized.contains("/node_modules/")
+        || normalized.contains("/vendor/")
+        || normalized.contains("/go/pkg/mod/")
+        || normalized.contains("/rustc/");
+    if !in_source_tree {
+        return false;
+    }
+    let leaf = leaf.to_ascii_lowercase();
+    [
+        ".c", ".cc", ".cpp", ".cxx", ".go", ".h", ".hh", ".hpp", ".java", ".js", ".m", ".mm",
+        ".py", ".rs", ".swift", ".ts",
+    ]
+    .iter()
+    .any(|extension| leaf.ends_with(extension))
+}
+
 fn is_common_system_path(path: &str) -> bool {
     const POSIX: &[&str] = &[
         "/bin/bash",
@@ -463,7 +616,46 @@ fn is_common_system_path(path: &str) -> bool {
         "/bin/sh",
         "/bin/true",
         "/bin/zsh",
+        "/dev/egd-pool",
         "/dev/null",
+        "/dev/random",
+        "/dev/srandom",
+        "/dev/stderr",
+        "/dev/stdin",
+        "/dev/stdout",
+        "/dev/tty",
+        "/dev/ubskey",
+        "/dev/urandom",
+        "/etc/egd-pool",
+        "/etc/entropy",
+        "/etc/apache/mime.types",
+        "/etc/apache2/mime.types",
+        "/etc/group",
+        "/etc/hosts",
+        "/etc/httpd/conf/mime.types",
+        "/etc/mdns.allow",
+        "/etc/mime.types",
+        "/etc/nsswitch.conf",
+        "/etc/passwd",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+        "/etc/pki/tls/cacert.pem",
+        "/etc/pki/tls/certs",
+        "/etc/protocols",
+        "/etc/resolv.conf",
+        "/etc/services",
+        "/etc/ssl/ca-bundle.pem",
+        "/etc/ssl/cert.pem",
+        "/etc/ssl/certs",
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/zoneinfo",
+        "/lib/time/zoneinfo.zip",
+        "/lib64/ld-linux-x86-64.so.2",
+        "/proc/meminfo",
+        "/proc/self/auxv",
+        "/proc/sys/kernel/hostname",
+        "/proc/sys/net/core/somaxconn",
+        "/system/etc/security/cacerts",
         "/usr/bin/bash",
         "/usr/bin/curl",
         "/usr/bin/env",
@@ -476,6 +668,11 @@ fn is_common_system_path(path: &str) -> bool {
         "/usr/bin/true",
         "/usr/bin/wget",
         "/usr/bin/zsh",
+        "/usr/bin/ntlm_auth",
+        "/usr/lib/dyld",
+        "/usr/local/share/mime/globs2",
+        "/usr/share/mime/globs2",
+        "/var/run/egd-pool",
     ];
     const WINDOWS_LOWERCASE: &[&str] = &[
         r"c:\windows\explorer.exe",
@@ -484,7 +681,66 @@ fn is_common_system_path(path: &str) -> bool {
         r"c:\windows\system32\powershell.exe",
         r"c:\windows\system32\rundll32.exe",
     ];
-    POSIX.contains(&path) || WINDOWS_LOWERCASE.contains(&path)
+    POSIX.contains(&path)
+        || WINDOWS_LOWERCASE.contains(&path)
+        || path.eq_ignore_ascii_case("/drivers/etc/hosts")
+        || path.starts_with("/dev/")
+        || path.starts_with("/root/go/")
+        || path.starts_with("/System/Library/Frameworks/")
+        || path.starts_with("/root/openssl-prefix/")
+        || path.starts_with("/sys/kernel/mm/")
+        || path.contains("/.cargo/registry/src/")
+        || path.contains("/lib/rustlib/src/")
+        || (path.starts_with("/usr/lib/") && path.rsplit('/').next().is_some_and(is_system_library))
+}
+
+fn is_system_library(leaf: &str) -> bool {
+    (leaf.starts_with("lib") && (leaf.contains(".so") || leaf.ends_with(".dylib")))
+        || leaf == "dyld"
+}
+
+fn is_common_metadata_hostname(hostname: &str) -> bool {
+    if matches!(
+        hostname,
+        "curl.haxx.se"
+            | "ns.adobe.com"
+            | "schemas.microsoft.com"
+            | "schemas.openxmlformats.org"
+            | "www.apple.com"
+            | "crl.microsoft.com"
+            | "github.com"
+            | "go.dev"
+            | "www.microsoft.com"
+            | "www.openssl.org"
+            | "www.w3.org"
+    ) {
+        return true;
+    }
+
+    let mut labels = hostname.rsplit('.');
+    matches!(
+        (labels.next(), labels.next()),
+        (
+            Some("com"),
+            Some("digicert" | "symcb" | "symauth" | "verisign")
+        )
+    )
+}
+
+fn should_suppress_metadata_hostname(method: StringMethod, hostname: &str) -> bool {
+    // Compiler, runtime, and certificate metadata is surfaced by these direct
+    // extraction paths. Decoded/stack-constructed values are much stronger
+    // behavioral evidence and keep the overwhelmingly common IOC hot path
+    // free of a metadata deny-list lookup.
+    matches!(
+        method,
+        StringMethod::RawScan
+            | StringMethod::Heuristic
+            | StringMethod::InstructionPattern
+            | StringMethod::Structure
+            | StringMethod::R2String
+            | StringMethod::WideString
+    ) && is_common_metadata_hostname(hostname)
 }
 
 fn xor_key_material(extracted: &ExtractedString) -> Option<Vec<u8>> {
@@ -748,17 +1004,74 @@ mod tests {
     fn ipv6_endpoint_is_canonical_and_deduplicated_with_plain_ip() {
         let values = [
             string(
-                "[2001:0db8:0:0:0:0:0:1]:443",
+                "[2606:4700:4700:0:0:0:0:1111]:443",
                 Some(StringKind::IPPort),
                 StringMethod::RawScan,
             ),
-            string("2001:db8::1", Some(StringKind::IP), StringMethod::RawScan),
+            string(
+                "2606:4700:4700::1111",
+                Some(StringKind::IP),
+                StringMethod::RawScan,
+            ),
         ];
         let got = extract_iocs(&values);
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].value, "2001:db8::1");
+        assert_eq!(got[0].value, "2606:4700:4700::1111");
         assert_eq!(got[0].ports, vec![443]);
         assert_eq!(got[0].count, 2);
+    }
+
+    #[test]
+    fn external_ip_policy_rejects_versions_and_non_routable_ranges() {
+        for accepted in [
+            "45.33.32.156",
+            "104.16.132.229",
+            "3.147.61.167",
+            "2.27.62.51",
+            "208.67.222.222",
+            "2606:4700:4700::1111",
+        ] {
+            let ip = accepted.parse().expect("valid test IP");
+            assert!(
+                is_external_ip(&ip, IpEvidence::Bare),
+                "rejected external IP: {accepted}"
+            );
+        }
+
+        for rejected in [
+            "1.2.0.4",
+            "8.8.8.8",
+            "10.1.2.3",
+            "100.64.1.1",
+            "127.1.2.3",
+            "169.254.1.1",
+            "172.16.1.1",
+            "192.168.1.1",
+            "192.0.2.1",
+            "198.19.1.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.1.2.3",
+            "240.1.2.3",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "2001:db8::1",
+            "3fff::1",
+        ] {
+            let ip = rejected.parse().expect("valid test IP");
+            assert!(
+                !is_external_ip(&ip, IpEvidence::Bare),
+                "accepted non-IOC IP: {rejected}"
+            );
+        }
+
+        let structural_dns = "1.1.1.1".parse().expect("valid test IP");
+        assert!(!is_external_ip(&structural_dns, IpEvidence::Bare));
+        assert!(is_external_ip(&structural_dns, IpEvidence::Authority));
+
+        let private = "192.168.1.1".parse().expect("valid test IP");
+        assert!(!is_external_ip(&private, IpEvidence::Authority));
     }
 
     #[test]
@@ -769,6 +1082,22 @@ mod tests {
             string(
                 "1.2.3.4:abc",
                 Some(StringKind::IPPort),
+                StringMethod::RawScan,
+            ),
+            string("1.2.0.4", Some(StringKind::IP), StringMethod::RawScan),
+            string(
+                "http://192.168.1.1/admin",
+                Some(StringKind::Url),
+                StringMethod::RawScan,
+            ),
+            string(
+                "http://203.0.113.7/test",
+                Some(StringKind::Url),
+                StringMethod::RawScan,
+            ),
+            string(
+                "http://45.0.32.156/test",
+                Some(StringKind::Url),
                 StringMethod::RawScan,
             ),
             string("not a scheme ://example.com", None, StringMethod::RawScan),
@@ -803,7 +1132,7 @@ mod tests {
     }
 
     #[test]
-    fn structurally_typed_xor_keys_are_fingerprinted_and_deduplicated() {
+    fn structurally_typed_xor_keys_are_lossless_and_deduplicated() {
         let values = [
             string("secret", Some(StringKind::XorKey), StringMethod::RawScan),
             string(
@@ -815,7 +1144,8 @@ mod tests {
         let got = extract_iocs(&values);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].kind, IocKind::Key);
-        assert_eq!(got[0].value, fingerprint_key_material(b"secret"));
+        assert_eq!(got[0].value, encode_key_material(b"secret"));
+        assert_eq!(decode_key_material(&got[0].value), Some(b"secret".to_vec()));
         assert_eq!(got[0].count, 2);
         assert_eq!(
             got[0].key,
@@ -826,14 +1156,27 @@ mod tests {
         );
 
         let json = serde_json::to_string(&got).unwrap();
+        assert!(json.contains(r#""value":"base64url:c2VjcmV0""#));
         assert!(
             !json.contains("secret"),
-            "raw key material leaked into JSON"
+            "binary key material was not JSON-safe encoded"
         );
         assert!(
             !json.contains("736563726574"),
             "hex key material leaked into JSON"
         );
+    }
+
+    #[test]
+    fn key_material_encoding_is_canonical() {
+        let binary = [0xfb, 0xff, 0x00, 0x7f];
+        let encoded = encode_key_material(&binary);
+        assert_eq!(encoded, "base64url:-_8Afw");
+        assert_eq!(decode_key_material(&encoded), Some(binary.to_vec()));
+        assert_eq!(decode_key_material("base64url:"), None);
+        assert_eq!(decode_key_material("base64url:c2VjcmV0="), None);
+        assert_eq!(decode_key_material("base64url:AB"), None);
+        assert_eq!(decode_key_material("sha256:c2VjcmV0"), None);
     }
 
     #[test]
@@ -873,11 +1216,26 @@ mod tests {
             "/usr/bin/python3",
             r"C:\Windows\System32\cmd.exe",
             "/build/project/src/main.rs",
+            "/opt/homebrew/Cellar/go/1.25.6/libexec/src/runtime/runtime-gdb.py",
             "./relative/payload.bin",
+            "/Applications",
+            "/CBx",
             "/tmp/stage/",
             "/tmp/$USER/payload",
             "/tmp/payload-%s",
             "/tmp/*.dat",
+            "/dev/urandom7K'UmU",
+            "/dev/uraL9",
+            "/etc/hosts",
+            "/proc/sys/kernel/hostname",
+            "/root/go/go1.16.6",
+            "/usr/share/mime/globs2",
+            "/Users/cosmanking/.cargo/registry/src/index.crates.io/hash/src/lib.rsmessage",
+            "/Drivers/etc/hosts",
+            "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+            "/usr/lib/libSystem.B.dylib",
+            "/root/openssl-prefix/ssl/cert.pem",
+            "/http://example.com/cert.crl",
         ] {
             assert_eq!(
                 canonicalize_ioc_path(rejected),

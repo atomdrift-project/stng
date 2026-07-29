@@ -66,6 +66,7 @@ fn common_dotted_lookalikes_do_not_become_iocs() {
         "v1.2.3",
         "Chrome/100.0.0.0",
         "1.2.0.0",
+        "1.2.0.4",
         "module.example",
         "example.invalid",
         "localhost",
@@ -83,10 +84,25 @@ fn common_dotted_lookalikes_do_not_become_iocs() {
 }
 
 #[test]
+fn explicitly_typed_common_values_are_still_not_iocs() {
+    let strings = [
+        extracted("wallet.dat", Some(StringKind::Path), 0),
+        extracted("/etc/hosts", Some(StringKind::Path), 32),
+        extracted("/home/builder/src/main.rs", Some(StringKind::Path), 64),
+        extracted("1.2.0.4", Some(StringKind::IP), 96),
+        extracted("192.168.1.1", Some(StringKind::IP), 128),
+        extracted("crl.microsoft.com", Some(StringKind::Hostname), 160),
+        extracted("github.com", Some(StringKind::Hostname), 192),
+    ];
+
+    assert!(extract_iocs(&strings).is_empty());
+}
+
+#[test]
 fn exact_network_types_and_endpoints_are_canonical_and_deduplicated() {
     let strings = [
-        extracted("203.0.113.7", Some(StringKind::IP), 0),
-        extracted("203.0.113.7:443", Some(StringKind::IPPort), 32),
+        extracted("45.33.32.156", Some(StringKind::IP), 0),
+        extracted("45.33.32.156:443", Some(StringKind::IPPort), 32),
         extracted("C2.Example.COM:8443", None, 64),
         extracted("c2.example.com.", Some(StringKind::Hostname), 96),
     ];
@@ -94,7 +110,7 @@ fn exact_network_types_and_endpoints_are_canonical_and_deduplicated() {
     let iocs = extract_iocs(&strings);
     assert_eq!(iocs.len(), 2);
     assert_eq!(iocs[0].kind, IocKind::Ip);
-    assert_eq!(iocs[0].value, "203.0.113.7");
+    assert_eq!(iocs[0].value, "45.33.32.156");
     assert_eq!(iocs[0].ports, vec![443]);
     assert_eq!(iocs[0].count, 2);
     assert_eq!(iocs[1].kind, IocKind::Hostname);
@@ -115,6 +131,9 @@ fn malformed_network_shapes_never_emit() {
         ":443",
         "example.com:",
         "[2001:db8::1]:notaport",
+        "http://192.168.1.1/admin",
+        "http://203.0.113.7/test",
+        "http://45.0.32.156/test",
     ];
     let strings: Vec<_> = malformed
         .iter()

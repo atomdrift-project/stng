@@ -81,8 +81,9 @@ pub use cache_sweep::{Budget, Root, spawn, spawn_periodic, stng_budget};
 pub use classifier::classify_string;
 pub use detect::{detect_language, is_text_file};
 pub use ioc::{
-    Ioc, IocKind, IocOccurrence, KeyAlgorithm, KeyMetadata, MAX_IOC_OCCURRENCES,
-    canonicalize_hostname, canonicalize_ioc_path, extract_iocs, fingerprint_key_material,
+    Ioc, IocKind, IocOccurrence, IpEvidence, KeyAlgorithm, KeyMetadata, MAX_IOC_OCCURRENCES,
+    canonicalize_hostname, canonicalize_ioc_path, decode_key_material, encode_key_material,
+    extract_iocs, is_external_ip,
 };
 pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
 pub use string_cache::{
