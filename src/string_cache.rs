@@ -148,7 +148,7 @@ fn cache_key(data: &[u8], opts: &ExtractOptions) -> String {
     ]);
     h.update(format!("{:?}", opts.format_hint).as_bytes());
     h.update(CACHE_VERSION.as_bytes());
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 
 fn memo_get(key: &str) -> Option<Arc<[ExtractedString]>> {

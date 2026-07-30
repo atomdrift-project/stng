@@ -509,7 +509,7 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         let size = data.len();
         let mut hasher = Sha256::new();
         hasher.update(&data);
-        let hash = format!("{:x}", hasher.finalize());
+        let hash = hex::encode(hasher.finalize());
 
         // Format custom XOR key for display
         // Check for XOR key (custom or auto-detected)

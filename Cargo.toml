@@ -59,8 +59,13 @@ data-encoding = "2.11"
 # Error handling
 anyhow = "1.0"
 
-# Hashing
-sha2 = { version = "0.10", features = ["asm"] }
+# Hashing. 0.11 does ARM/x86 hardware SHA acceleration automatically, so it
+# replaces the old `asm` feature without the sha2-asm dependency that pulled
+# in. sha2-asm ships GAS-syntax .S files MSVC's assembler cannot build, and
+# because cargo unifies features across the graph, enabling `asm` here broke
+# the x86_64-pc-windows-msvc build for every crate sharing this sha2. Matches
+# cleave and fletch, both on 0.11.
+sha2 = "0.11"
 
 # x86-64 instruction decoding (for garble emulation)
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "intel"] }

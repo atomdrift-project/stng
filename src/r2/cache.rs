@@ -186,7 +186,7 @@ fn compute_file_hash(path: &str) -> Result<String, std::io::Error> {
     // Cache miss - compute hash
     let data = fs::read(path)?;
     let hash = Sha256::digest(&data);
-    let hash_hex = format!("{:x}", hash);
+    let hash_hex = hex::encode(hash);
 
     // Update cache (skip on mutex poison — next call will recompute the hash)
     match HASH_CACHE.lock() {
@@ -219,7 +219,7 @@ fn sanitize_command_for_filename(cmd: &str) -> String {
         // Use SHA256 hash for long commands to ensure safe filename
         let mut hasher = Sha256::new();
         hasher.update(cmd.as_bytes());
-        format!("cmd_{:x}", hasher.finalize())
+        format!("cmd_{}", hex::encode(hasher.finalize()))
     }
 }
 

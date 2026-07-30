@@ -49,7 +49,7 @@ pub fn is_text_file(data: &[u8]) -> bool {
     }
     if data.len() >= 2 {
         // PE (MZ header)
-        if data[0..2] == [b'M', b'Z'] {
+        if data[0..2] == *b"MZ" {
             return false;
         }
     }

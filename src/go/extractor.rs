@@ -623,15 +623,12 @@ fn trim_find_command_fragment(s: &str) -> &str {
 }
 
 fn end_after_head_limit(s: &str) -> Option<usize> {
-    let marker = if let Some(pos) = s.find("|head") {
-        (pos, "|head".len())
-    } else if let Some(pos) = s.find("| head") {
-        (pos, "| head".len())
-    } else {
-        return None;
+    let (pos, marker_len) = match s.find("|head") {
+        Some(pos) => (pos, "|head".len()),
+        None => (s.find("| head")?, "| head".len()),
     };
 
-    let mut end = marker.0 + marker.1;
+    let mut end = pos + marker_len;
     let bytes = s.as_bytes();
     while end < bytes.len() && bytes[end].is_ascii_whitespace() {
         end += 1;
