@@ -81,11 +81,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 terminal_size = "0.4"
 
 # Use jemalloc on unix systems where it isn't already the system allocator.
-# FreeBSD/DragonFlyBSD ship jemalloc as the default; bundling a second copy
-# causes TSD assertion failures in jails. OpenBSD's jemalloc version string
+# FreeBSD/DragonFlyBSD/NetBSD ship jemalloc as the default (NetBSD's libc malloc
+# is jemalloc-derived); bundling a second copy causes TSD assertion failures in
+# jails, and on NetBSD tikv-jemalloc-sys's configure script fails outright. OpenBSD's jemalloc version string
 # format is incompatible with tikv-jemalloc-sys's configure script. illumos
 # and Solaris ship libumem (a comparable arena allocator).
-[target.'cfg(all(unix, not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "illumos", target_os = "solaris"))))'.dependencies]
+[target.'cfg(all(unix, not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd", target_os = "illumos", target_os = "solaris"))))'.dependencies]
 tikv-jemallocator = "0.7"
 
 [features]
