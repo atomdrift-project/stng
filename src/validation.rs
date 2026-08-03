@@ -1950,6 +1950,27 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bo
     let trimmed = s.trim();
     let len = trimmed.len();
 
+    // A trailing label separator does not change what a string is. Field names
+    // (`TracerPid:` in /proc/<pid>/status, `VmRSS:`), header names
+    // (`Content-Length:`) and struct labels are their identifier plus a colon,
+    // yet the colon alone was enough to flip the verdict: it adds a character
+    // class and a run, which no short-identifier pattern here tolerates
+    // (`is_pascal_case` allows one uppercase and no specials), and strings
+    // under MIN_FAST_PATH_VALID_LENGTH never reach the fast path that accepts
+    // punctuation. `TracerPid` survived extraction from a real ELF while
+    // `TracerPid:` did not. Judge the stem instead; the guard keeps this to
+    // identifier-shaped labels so arbitrary junk ending in a colon still gets
+    // the full analysis on its own merits.
+    if let Some(stem) = trimmed.strip_suffix(':')
+        && stem.len() >= 3
+        && !stem.ends_with(':')
+        && stem
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+    {
+        return is_garbage_with_context(stem, ctx);
+    }
+
     // Fast path: obvious valid strings (kind-aware: skips classify_string re-call)
     if is_fast_path_valid_with_kind(trimmed, len, ctx.kind) {
         return false;
@@ -3471,4 +3492,31 @@ mod dotnet_tests {
     }
 
     // ─── is_code_section ─────────────────────────────────────────────
+}
+
+#[cfg(test)]
+mod label_string_tests {
+    use super::is_garbage;
+
+    /// Field-name labels ending in a colon must survive extraction.
+    ///
+    /// `TracerPid:` is the literal an anti-debug check compares against when
+    /// parsing /proc/<pid>/status, so dropping it makes that behaviour
+    /// invisible in compiled binaries. It was observed missing from a real ELF
+    /// while its immediate neighbours (`/proc/self/status`, and a 5-character
+    /// `aeiou`) were both extracted, so neither length nor position explains
+    /// the loss — the trailing colon does, by adding one character-class run.
+    #[test]
+    fn colon_terminated_labels_are_not_garbage() {
+        for s in [
+            "TracerPid:",
+            "Content-Length:",
+            "Name:",
+            "SigBlkd:",
+            "VmRSS:",
+            "Uid:",
+        ] {
+            assert!(!is_garbage(s), "label dropped: {s:?}");
+        }
+    }
 }
