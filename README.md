@@ -1,54 +1,101 @@
+# stng
+
+[![Latest release](https://img.shields.io/github/v/release/atomdrift-project/stng)](https://github.com/atomdrift-project/stng/releases/latest)
+[![License](https://img.shields.io/github/license/atomdrift-project/stng)](LICENSE)
+
+stng is an open-source string extractor for malware analysis and reverse
+engineering. It finds ordinary, encoded, XOR-obfuscated, and language-specific
+strings while filtering the compiler noise that makes `strings(1)` output hard
+to use.
+
+Use it for quick triage, C2 and credential discovery, or preparing a focused
+set of strings for YARA and incident-response work. Analysis is local and does
+not require a network connection, account, or API key.
+
 <p align="center">
-  <img src="media/logo.svg" alt="stng" width="240">
+  <img src="media/screenshot.png" alt="stng terminal output" width="760">
 </p>
 
-**stng** — modern string extraction for binary analysis. All of the good stuff, none of the garbage.
+## Why stng?
 
-![screenshot](media/screenshot.png)
+- **Useful output by default.** Filters low-value noise while keeping an
+  `--unfiltered` escape hatch.
+- **Understands compiled languages.** Recovers Go and Rust string layouts,
+  symbols, and x86/arm64 stack strings.
+- **Finds obfuscated text.** Detects common encodings, single-byte XOR, custom
+  keys, and optional deeper multi-byte XOR scans.
+- **Highlights security signals.** Classifies URLs, IPs, hostnames, commands,
+  suspicious paths, wallets, tokens, API keys, and ransom-note text.
+- **Easy to automate.** Human-readable, simple line-oriented, and JSON output
+  come from one small CLI.
 
-## Installation
+## Install
+
+### Homebrew on macOS or Linux
 
 ```bash
+brew tap atomdrift/tap https://github.com/atomdrift-project/homebrew-tap.git
 brew install atomdrift/tap/stng
 ```
 
-Or with cargo:
+### Build from source
+
+Source builds require Git, Make, a C/C++ toolchain, and Rust 1.94 or newer.
+
+```bash
+git clone https://github.com/atomdrift-project/stng.git
+cd stng
+make install
+```
+
+You can also install directly with Cargo:
 
 ```bash
 cargo install --git https://github.com/atomdrift-project/stng
 ```
 
-Optionally install [rizin](https://rizin.re) or [radare2](https://radare.org) to enable deep XOR scanning (`--xorscan`) and `connect()` address recovery. stng works without them, skipping those passes.
+[Rizin](https://rizin.re/) or [radare2](https://rada.re/n/) is optional. When
+present, stng can recover additional addresses and perform `--xorscan`; without
+either tool it skips those passes.
 
-## Quick Start
+## Quick start
 
 ```bash
-stng malware.bin              # Full analysis with XOR auto-detection
-stng -i malware.bin           # Show interesting strings
-stng --json malware.bin       # Machine-readable output with encoding metadata
+# Full analysis with automatic single-byte XOR detection.
+stng malware.bin
+
+# Keep the most useful structured and security-relevant strings.
+stng --interesting malware.bin
+
+# Emit machine-readable output.
+stng --json malware.bin
+
+# Decode with a known key.
+stng --xor 0xAB malware.bin
+stng --xor secretkey malware.bin
+
+# Run the slower multi-byte XOR pass (requires Rizin or radare2).
+stng --xorscan malware.bin
 ```
 
-## Features
+Run `stng --help` for filtering, grouping, cache, and output controls.
 
-- **Garbage filtering**: Filters unusable noise by default (`--unfiltered` to disable)
-- **Language-aware extraction**: Go/Rust `{ptr, len}`, Go pclntab symbols, stack-string reconstruction (x86 and arm64)
-- **XOR obfuscation**: Single/multi-byte keys, entropy analysis, arm64 stack-XOR, double-layer (encoding+XOR)
-- **Script deobfuscation**: Decodes obfuscated Python/JS/PHP/PowerShell payloads and re-scans them
-- **Encoding detection**: Base64, Base32, Base85, hex, URL-encoding, Unicode escapes, UTF-16LE wide strings
-- **IOC classification**: IPs, URLs, hostnames, shell commands, suspicious paths, crypto wallets, Tor addresses, JWTs, API keys, mining pools, ransom notes
-- **Mach-O specifics**: Code signatures, entitlements, fat/universal binaries
-- **Format support**: ELF, PE, Mach-O, raw binaries, overlays
+## What it extracts
 
-Useful for initial triage, C2 enumeration, credential extraction, and YARA signature development.
+- ASCII and UTF-16LE strings with file offsets
+- Base64, Base32, Base85, hexadecimal, URL, and Unicode-escape payloads
+- Go and Rust runtime string layouts and Go `pclntab` symbols
+- x86 and arm64 stack strings
+- decoded Python, JavaScript, PHP, and PowerShell payload text
+- Mach-O code-signing, entitlement, and universal-binary context
 
-## Caching
+Rizin/radare2 results and extracted strings are cached by content to accelerate
+repeat analysis. The cache defaults to a 30-day TTL and a 2 GiB ceiling; see the
+`STNG_CACHE_*` environment variables and `stng --help` for controls.
 
-Rizin analysis and extracted strings are cached on disk (`~/.cache/stng`, `~/Library/Caches/stng` on macOS) to speed up repeat scans. The cache self-reclaims in the background — entries older than 30 days or exceeding 2 GiB are swept at most once per day, never blocking a scan.
+Issues and pull requests are welcome in the
+[GitHub repository](https://github.com/atomdrift-project/stng).
 
-| Variable | Default | Effect |
-|---|---|---|
-| `STNG_CACHE_TTL_DAYS` | `30` | Age after which entries are dropped |
-| `STNG_CACHE_MAX_BYTES` | `2147483648` | Size ceiling before oldest entries are dropped |
-| `STNG_STRING_CACHE` | `1` | Set `0` to disable the string cache |
+## License
 
-License: Apache-2.0
+stng is available under the [Apache License 2.0](LICENSE).
