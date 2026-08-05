@@ -34,8 +34,7 @@ not require a network connection, account, or API key.
 ### Homebrew on macOS or Linux
 
 ```bash
-brew tap atomdrift/tap https://github.com/atomdrift-project/homebrew-tap.git
-brew install atomdrift/tap/stng
+brew install atomdrift-project/tap/stng
 ```
 
 ### Build from source
