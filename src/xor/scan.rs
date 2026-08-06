@@ -1087,6 +1087,60 @@ pub(crate) fn extract_rolling_xor_with_known_plaintext(
     results
 }
 
+/// Patterns long enough for an incremental-XOR anchor, with their index in
+/// [`XOR_PATTERNS`]. Shorter ones produce too many chance hits to be evidence.
+const MIN_ANCHOR_LEN: usize = 4;
+
+/// Every `(pattern_index, offset, seed)` where `data` decodes to an
+/// [`XOR_PATTERNS`] entry under incremental XOR — i.e. where
+/// `data[offset + i] ^ (seed + i) == pattern[i]` for the whole pattern.
+///
+/// Searching for that directly costs a pass over `data` per pattern. But the
+/// relation inverts: for a fixed pattern and seed the bytes being sought are
+/// themselves fixed, `pattern[i] ^ (seed + i)`. So the whole search is an exact
+/// multi-pattern match over the 255 seeds x eligible patterns encodings, which
+/// one Aho-Corasick pass answers — the same inversion the single-byte-XOR
+/// scanners already use (see [`AUTOMATON_ASCII`]). Seed 0 is excluded: that is
+/// plain unobfuscated text, which normal extraction already covers.
+///
+/// Overlapping iteration is required — two encodings can match at overlapping
+/// offsets and each is independent evidence, exactly as the per-pattern scans
+/// were.
+#[allow(clippy::expect_used)]
+static INCREMENTAL_AUTOMATON: LazyLock<(AhoCorasick, Vec<(usize, u8)>)> = LazyLock::new(|| {
+    let mut needles: Vec<Vec<u8>> = Vec::new();
+    let mut meta: Vec<(usize, u8)> = Vec::new();
+    for (pattern_idx, pattern) in XOR_PATTERNS.iter().enumerate() {
+        if pattern.len() < MIN_ANCHOR_LEN {
+            continue;
+        }
+        for seed in 1u8..=255u8 {
+            needles.push(
+                pattern
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &b)| b ^ seed.wrapping_add(i as u8))
+                    .collect(),
+            );
+            meta.push((pattern_idx, seed));
+        }
+    }
+    // MatchKind::Standard (the default) is what supports overlapping iteration.
+    // The needle set is a compile-time constant, so this build cannot fail.
+    let ac = AhoCorasick::new(&needles).expect("incremental XOR automaton");
+    (ac, meta)
+});
+
+fn find_incremental_anchors(data: &[u8]) -> Vec<(usize, usize, u8)> {
+    let (ac, meta) = &*INCREMENTAL_AUTOMATON;
+    ac.find_overlapping_iter(data)
+        .filter_map(|m| {
+            let &(pattern_idx, seed) = meta.get(m.pattern().as_usize())?;
+            Some((pattern_idx, m.start(), seed))
+        })
+        .collect()
+}
+
 /// Extract strings using incremental XOR detection.
 ///
 /// This function detects XOR obfuscation where the key increments for each byte:
@@ -1105,148 +1159,114 @@ pub fn extract_incremental_xor_strings(
     // segments are never inspected.
     let mut covered_ranges: Vec<(usize, usize)> = excluded_ranges.to_vec();
 
-    // Scan for patterns to find the seed
-    for pattern in XOR_PATTERNS {
-        if pattern.len() < 4 {
+    // Anchors, in the order the pattern-major/offset-ascending scan this
+    // replaces would have found them — `covered_ranges` suppression depends on
+    // that order, so the sort reproduces it exactly.
+    let mut anchors = find_incremental_anchors(data);
+    anchors.sort_unstable();
+
+    for (_pattern_idx, offset, seed) in anchors {
+        // Seed found! Extract strings from the surrounding 8KB region
+        let region_start = offset.saturating_sub(4096);
+        let region_end = (offset + 4096).min(data.len());
+
+        // Sole covered-range guard: skip offsets inside a caller
+        // exclusion (e.g. a `.text` code section) or an already-extracted
+        // region. Only reached on a validated seed, so this O(ranges)
+        // scan runs rarely instead of once per byte.
+        if covered_ranges
+            .iter()
+            .any(|&(s, e)| offset >= s && offset < e)
+        {
             continue;
         }
-        let max_offset = data.len().saturating_sub(pattern.len());
+        covered_ranges.push((region_start, region_end));
 
-        for offset in 0..max_offset {
-            // Derive candidate seed: data[offset+i] ^ (seed + i) = pattern[i]
-            // seed + i = data[offset+i] ^ pattern[i]
-            // seed = (data[offset+i] ^ pattern[i]).wrapping_sub(i as u8)
-            //
-            // The covered-range check (caller exclusions + already-extracted
-            // regions) is deferred until *after* a seed validates below. Seed
-            // validation rejects virtually every offset in O(1), whereas the
-            // covered-range scan is O(ranges) per offset; with `covered_ranges`
-            // growing each time a seed is found, checking it up front made the
-            // whole loop O(offsets × ranges) — quadratic on files that produce
-            // many seeds (e.g. multi-MB ELF `.so` payloads, where it cost tens
-            // of seconds on a single member). Validating first and skipping the
-            // covered check below yields byte-identical output far faster.
-            let seed = data[offset] ^ pattern[0];
-
-            // Skip trivial seed 0 (already handled by normal extraction)
-            if seed == 0 {
-                continue;
+        let mut pos = region_start;
+        while pos < region_end {
+            // Find start of printable run
+            while pos < region_end {
+                let current_key = seed.wrapping_add((pos.wrapping_sub(offset)) as u8);
+                let decoded = data[pos] ^ current_key;
+                // Skip if raw byte is 0 (key reflection artifact)
+                if data[pos] != 0 && is_printable_byte_for_file_xor(decoded) {
+                    break;
+                }
+                pos += 1;
             }
 
-            // Validate seed with the rest of the pattern
-            let mut valid = true;
-            for i in 1..pattern.len() {
-                let expected_key = seed.wrapping_add(i as u8);
-                if (data[offset + i] ^ expected_key) != pattern[i] {
-                    valid = false;
+            if pos >= region_end {
+                break;
+            }
+
+            // Collect printable run
+            let start_pos = pos;
+            let mut decoded_bytes = Vec::new();
+            while pos < region_end {
+                let current_key = seed.wrapping_add((pos.wrapping_sub(offset)) as u8);
+                let decoded = data[pos] ^ current_key;
+                // Stop if raw byte is 0 (key reflection artifact)
+                if data[pos] != 0 && is_printable_byte_for_file_xor(decoded) {
+                    decoded_bytes.push(decoded);
+                    pos += 1;
+                } else {
                     break;
                 }
             }
 
-            if valid {
-                // Seed found! Extract strings from the surrounding 8KB region
-                let region_start = offset.saturating_sub(4096);
-                let region_end = (offset + 4096).min(data.len());
+            if decoded_bytes.len() >= min_length {
+                let mut current_bytes = decoded_bytes;
+                let mut current_start = start_pos;
 
-                // Sole covered-range guard: skip offsets inside a caller
-                // exclusion (e.g. a `.text` code section) or an already-extracted
-                // region. Only reached on a validated seed, so this O(ranges)
-                // scan runs rarely instead of once per byte.
-                if covered_ranges
-                    .iter()
-                    .any(|&(s, e)| offset >= s && offset < e)
-                {
-                    continue;
-                }
-                covered_ranges.push((region_start, region_end));
-
-                let mut pos = region_start;
-                while pos < region_end {
-                    // Find start of printable run
-                    while pos < region_end {
-                        let current_key = seed.wrapping_add((pos.wrapping_sub(offset)) as u8);
-                        let decoded = data[pos] ^ current_key;
-                        // Skip if raw byte is 0 (key reflection artifact)
-                        if data[pos] != 0 && is_printable_byte_for_file_xor(decoded) {
+                while current_bytes.len() >= min_length {
+                    match String::from_utf8(current_bytes.clone()) {
+                        Ok(s) => {
+                            // Incremental XOR is high-FP: a single 4-byte anchor
+                            // match triggers 4KB of speculative decoding. Only keep
+                            // strings that the classifier affirms are meaningful
+                            // — unclassified "any-alpha-char" noise should be dropped.
+                            if s.chars().any(char::is_alphabetic)
+                                && let Some(Some(kind)) = classify_xor_string(&s)
+                            {
+                                results.push(ExtractedString {
+                                    value: s,
+                                    data_offset: current_start as u64,
+                                    data_len: 0,
+                                    method: StringMethod::XorDecode,
+                                    kind: Some(kind),
+                                    fragments: None,
+                                });
+                            }
                             break;
                         }
-                        pos += 1;
-                    }
-
-                    if pos >= region_end {
-                        break;
-                    }
-
-                    // Collect printable run
-                    let start_pos = pos;
-                    let mut decoded_bytes = Vec::new();
-                    while pos < region_end {
-                        let current_key = seed.wrapping_add((pos.wrapping_sub(offset)) as u8);
-                        let decoded = data[pos] ^ current_key;
-                        // Stop if raw byte is 0 (key reflection artifact)
-                        if data[pos] != 0 && is_printable_byte_for_file_xor(decoded) {
-                            decoded_bytes.push(decoded);
-                            pos += 1;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if decoded_bytes.len() >= min_length {
-                        let mut current_bytes = decoded_bytes;
-                        let mut current_start = start_pos;
-
-                        while current_bytes.len() >= min_length {
-                            match String::from_utf8(current_bytes.clone()) {
-                                Ok(s) => {
-                                    // Incremental XOR is high-FP: a single 4-byte anchor
-                                    // match triggers 4KB of speculative decoding. Only keep
-                                    // strings that the classifier affirms are meaningful
-                                    // — unclassified "any-alpha-char" noise should be dropped.
-                                    if s.chars().any(char::is_alphabetic)
-                                        && let Some(Some(kind)) = classify_xor_string(&s)
-                                    {
-                                        results.push(ExtractedString {
-                                            value: s,
-                                            data_offset: current_start as u64,
-                                            data_len: 0,
-                                            method: StringMethod::XorDecode,
-                                            kind: Some(kind),
-                                            fragments: None,
-                                        });
-                                    }
-                                    break;
+                        Err(e) => {
+                            let valid_up_to = e.utf8_error().valid_up_to();
+                            if valid_up_to >= min_length {
+                                let mut valid_bytes = current_bytes.clone();
+                                valid_bytes.truncate(valid_up_to);
+                                if let Ok(s) = String::from_utf8(valid_bytes)
+                                    && s.chars().any(char::is_alphabetic)
+                                    && let Some(Some(kind)) = classify_xor_string(&s)
+                                {
+                                    results.push(ExtractedString {
+                                        value: s,
+                                        data_offset: current_start as u64,
+                                        data_len: 0,
+                                        method: StringMethod::XorDecode,
+                                        kind: Some(kind),
+                                        fragments: None,
+                                    });
                                 }
-                                Err(e) => {
-                                    let valid_up_to = e.utf8_error().valid_up_to();
-                                    if valid_up_to >= min_length {
-                                        let mut valid_bytes = current_bytes.clone();
-                                        valid_bytes.truncate(valid_up_to);
-                                        if let Ok(s) = String::from_utf8(valid_bytes)
-                                            && s.chars().any(char::is_alphabetic)
-                                            && let Some(Some(kind)) = classify_xor_string(&s)
-                                        {
-                                            results.push(ExtractedString {
-                                                value: s,
-                                                data_offset: current_start as u64,
-                                                data_len: 0,
-                                                method: StringMethod::XorDecode,
-                                                kind: Some(kind),
-                                                fragments: None,
-                                            });
-                                        }
-                                    }
+                            }
 
-                                    // Skip the invalid sequence and try again with the rest
-                                    let error_len = e.utf8_error().error_len().unwrap_or(1);
-                                    let skip = valid_up_to + error_len;
-                                    if skip < current_bytes.len() {
-                                        current_bytes = current_bytes[skip..].to_vec();
-                                        current_start += skip;
-                                    } else {
-                                        break;
-                                    }
-                                }
+                            // Skip the invalid sequence and try again with the rest
+                            let error_len = e.utf8_error().error_len().unwrap_or(1);
+                            let skip = valid_up_to + error_len;
+                            if skip < current_bytes.len() {
+                                current_bytes = current_bytes[skip..].to_vec();
+                                current_start += skip;
+                            } else {
+                                break;
                             }
                         }
                     }
@@ -1260,4 +1280,95 @@ pub fn extract_incremental_xor_strings(
     results.dedup_by(|a, b| a.data_offset == b.data_offset && a.value == b.value);
 
     results
+}
+
+#[cfg(test)]
+mod incremental_anchor_tests {
+    use super::{MIN_ANCHOR_LEN, XOR_PATTERNS, find_incremental_anchors};
+
+    /// The original pattern-major, offset-ascending brute-force scan that
+    /// [`find_incremental_anchors`] replaces. Kept here as the oracle: the
+    /// Aho-Corasick inversion is only worth having if it is exactly equal.
+    fn reference_anchors(data: &[u8]) -> Vec<(usize, usize, u8)> {
+        let mut out = Vec::new();
+        for (pattern_idx, pattern) in XOR_PATTERNS.iter().enumerate() {
+            if pattern.len() < MIN_ANCHOR_LEN {
+                continue;
+            }
+            let max_offset = data.len().saturating_sub(pattern.len());
+            for offset in 0..max_offset {
+                let seed = data[offset] ^ pattern[0];
+                if seed == 0 {
+                    continue;
+                }
+                let valid = (1..pattern.len())
+                    .all(|i| (data[offset + i] ^ seed.wrapping_add(i as u8)) == pattern[i]);
+                if valid {
+                    out.push((pattern_idx, offset, seed));
+                }
+            }
+        }
+        out
+    }
+
+    fn assert_agrees(data: &[u8], label: &str) {
+        let mut got = find_incremental_anchors(data);
+        got.sort_unstable();
+        let mut want = reference_anchors(data);
+        want.sort_unstable();
+        assert_eq!(got, want, "anchor mismatch on {label}");
+    }
+
+    /// `data[offset + i] = pattern[i] ^ (seed + i)` — what the scan looks for.
+    fn encode(pattern: &[u8], seed: u8) -> Vec<u8> {
+        pattern
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| b ^ seed.wrapping_add(i as u8))
+            .collect()
+    }
+
+    #[test]
+    fn matches_reference_on_planted_anchors() {
+        // Every eligible pattern, at a spread of seeds including the wrapping
+        // edges, planted in filler that must not itself anchor.
+        for (idx, pattern) in XOR_PATTERNS.iter().enumerate() {
+            if pattern.len() < MIN_ANCHOR_LEN {
+                continue;
+            }
+            for seed in [1u8, 7, 128, 200, 255] {
+                let mut data = vec![0u8; 32];
+                data.extend(encode(pattern, seed));
+                data.extend(vec![0u8; 32]);
+                let anchors = find_incremental_anchors(&data);
+                assert!(
+                    anchors.contains(&(idx, 32, seed)),
+                    "planted pattern {pattern:?} seed {seed} not found"
+                );
+                assert_agrees(&data, "planted");
+            }
+        }
+    }
+
+    #[test]
+    fn matches_reference_on_pseudorandom_and_degenerate_input() {
+        // Deterministic LCG: dense enough to produce chance anchors, which is
+        // where an off-by-one in the inversion would show up.
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut data: Vec<u8> = Vec::with_capacity(64 * 1024);
+        for _ in 0..64 * 1024 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            data.push((state >> 33) as u8);
+        }
+        assert_agrees(&data, "pseudorandom");
+
+        assert_agrees(b"", "empty");
+        assert_agrees(b"abc", "shorter than any pattern");
+        assert_agrees(&vec![0u8; 4096], "all zeroes");
+        assert_agrees(&vec![0xFFu8; 4096], "all ones");
+        // Plain text: seed 0 is excluded, so unobfuscated patterns must not anchor.
+        assert_agrees(b"https://example.com/bin/sh .exe .dll passw", "plaintext");
+    }
 }
