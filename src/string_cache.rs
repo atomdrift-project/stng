@@ -21,7 +21,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 /// Bump when extraction output changes shape so stale disk entries are ignored.
-const CACHE_VERSION: &str = "1";
+/// Unlike filefacts' cache, this key carries no build fingerprint, so a change
+/// to the decoder pipeline is invisible to it until this constant moves.
+///
+/// - `2`: short/command-vouched embedded base64 now decodes (`base64 -d <<< …`
+///   → `/bin/rm`), so entries keyed under `1` are missing those rows.
+const CACHE_VERSION: &str = "2";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted

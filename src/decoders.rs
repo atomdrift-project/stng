@@ -13,14 +13,55 @@ use std::sync::LazyLock;
 static QUOTED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]"#).expect("static regex"));
 
-/// Matches base64-like substrings within larger strings (e.g., embedded in shell commands).
-/// Requires at least 12 characters to avoid false positives on short sequences.
+/// Matches base64-like substrings within larger strings (e.g. embedded in shell
+/// commands). The `{8,}` run only *starts* a candidate — [`accept_embedded`]
+/// then decides whether a run this short is trustworthy. A 6-byte payload is 8
+/// base64 chars, so this is the floor below which nothing meaningful decodes.
 #[allow(clippy::expect_used)]
 static EMBEDDED_B64_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"([A-Za-z0-9+/]{12,}={0,2})").expect("static regex"));
+    LazyLock::new(|| Regex::new(r"([A-Za-z0-9+/]{8,}={0,2})").expect("static regex"));
 
-/// Minimum length for base64 strings to attempt decoding
-pub(crate) const MIN_BASE64_LENGTH: usize = 16;
+/// The alphabet-char count above which an embedded run is trusted on its own —
+/// long enough (9 decoded bytes) that a false positive is unlikely. Shorter
+/// runs need a corroborating signal; see [`accept_embedded`].
+const EMBEDDED_B64_TRUSTED_LEN: usize = 12;
+
+/// Whether an embedded base64 run is worth decoding, given its length, how many
+/// `=` pad it, and whether a decode command sits in the same string.
+///
+/// A short run alone is indistinguishable from an ordinary identifier, so it is
+/// only taken with a corroborating signal:
+/// - **padding** — a trailing `=` is base64's own tell and almost never follows
+///   an identifier, so a padded short run is trustworthy on its own;
+/// - **a decode command** — `base64 -d`/`--decode`/`-D` in the string vouches
+///   for its argument, catching the unpadded 6–8 byte payloads that have none.
+///
+/// A run at or above [`EMBEDDED_B64_TRUSTED_LEN`] is taken unconditionally, as
+/// the old fixed `{12,}` floor did.
+fn accept_embedded(alnum_len: usize, pad: usize, has_command: bool) -> bool {
+    alnum_len >= EMBEDDED_B64_TRUSTED_LEN || pad > 0 || has_command
+}
+
+/// Whether a string invokes a base64 *decode* command — GNU `base64 -d` /
+/// `base64 --decode`, or BSD/macOS `base64 -D`. The argument to such a command
+/// is base64 by construction, so a shorter run is trustworthy there than it
+/// would be in free text.
+fn has_base64_decode_command(s: &str) -> bool {
+    ["base64 -d", "base64 --decode", "base64 -D"]
+        .iter()
+        .any(|m| s.contains(m))
+}
+
+/// Minimum length for base64 strings to attempt decoding.
+///
+/// 12 is the shortest base64 that carries a meaningful short command: a
+/// 7–9 byte payload (`/bin/rm`, `uname -a`) encodes to exactly 12 chars, and
+/// obfuscated droppers hide exactly those primitives in `base64 -d <<< …`
+/// one-liners. It also matches the `{12,}` embedded-base64 extraction regex
+/// above, so a run this scan surfaces is a run this decoder will attempt. The
+/// input-vs-output quality gate below — not this floor — is what rejects short
+/// identifiers that merely look like base64.
+pub(crate) const MIN_BASE64_LENGTH: usize = 12;
 
 /// Minimum length for hex-encoded strings to attempt decoding
 pub(crate) const MIN_HEX_LENGTH: usize = 16;
@@ -146,6 +187,7 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
         .par_iter()
         .flat_map_iter(|s| {
             let mut local = Vec::new();
+            let has_command = has_base64_decode_command(&s.value);
             for cap in EMBEDDED_B64_RE.captures_iter(&s.value) {
                 if let Some(b64_match) = cap.get(1) {
                     let b64_str = b64_match.as_str();
@@ -157,6 +199,13 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
 
                     // Must be valid base64 length (multiple of 4)
                     if b64_str.len() % 4 != 0 {
+                        continue;
+                    }
+
+                    // A short run is trusted only when padding or a decode
+                    // command corroborates it; a long run stands on its own.
+                    let pad = b64_str.bytes().rev().take_while(|&b| b == b'=').count();
+                    if !accept_embedded(b64_str.len() - pad, pad, has_command) {
                         continue;
                     }
 
@@ -260,10 +309,13 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
 
     // Reject if input is more text-like than output (false positive detection)
     // e.g., "IWorkItemQueriesExt2" decoding to binary garbage. Skipped for wide
-    // text, which the UTF-16LE decoder has already validated as clean.
+    // text, which the UTF-16LE decoder has already validated as clean. Score the
+    // trimmed decode: a trailing newline (routine in `base64 -d <<< …` and
+    // `echo … | base64` payloads) is not a quality defect, and penalizing it
+    // would sink genuine short commands like `/bin/rm\n` below their base64.
     if !is_wide {
         let input_quality = string_quality_score(&s.value);
-        let output_quality = string_quality_score(&decoded_str);
+        let output_quality = string_quality_score(trimmed);
         if input_quality > output_quality {
             return None;
         }
@@ -918,6 +970,24 @@ mod tests {
         assert_eq!(result.method, StringMethod::Base64Decode);
     }
 
+    #[test]
+    fn test_base64_decode_short_commands() {
+        // The dropper primitives hidden in `base64 -d <<< …` one-liners are
+        // short: `/bin/rm` and `uname -a` each encode to just 12 base64 chars.
+        // They must decode — the 12-char floor exists precisely for these.
+        for (encoded, plain) in [
+            ("L2Jpbi9ybQ==", "/bin/rm"),   // 7 bytes  -> 12 chars
+            ("L2Jpbi9ybQo=", "/bin/rm\n"), // gentoo's exact literal
+            ("dW5hbWUgLWE=", "uname -a"),  // 8 bytes  -> 12 chars
+        ] {
+            let s = make_string(encoded, Some(StringKind::Base64));
+            let out = decode_base64_string(&s)
+                .unwrap_or_else(|| panic!("{encoded} should decode to {plain:?}"));
+            assert_eq!(out.value, plain);
+            assert_eq!(out.method, StringMethod::Base64Decode);
+        }
+    }
+
     /// Encode an ASCII string as little-endian UTF-16 (the Windows wide-char form).
     fn utf16le(s: &str) -> Vec<u8> {
         s.encode_utf16().flat_map(u16::to_le_bytes).collect()
@@ -1420,6 +1490,58 @@ mod tests {
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1, "Should extract one embedded base64");
         assert_eq!(results[0].value, "Hello World!");
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_short_decode_command() {
+        // gentoo-systemd's obfuscated `configure` and kin: a short base64 hidden
+        // behind `base64 -d`/`--decode`/`-D`. Too short for the general floor,
+        // but the command vouches for it — including the *unpadded* `reboot`,
+        // which has no `=` to lean on. `/bin/rm` and `uname -a` are the other
+        // primitives a dropper hides this way.
+        for (line, plain) in [
+            ("meson=${meson:-`base64 -d <<< L2Jpbi9ybQo=`}", "/bin/rm"),
+            ("x=$(base64 --decode <<< dW5hbWUgLWE=)", "uname -a"),
+            ("printf %s L2Jpbi9ybQ== | base64 -D", "/bin/rm"),
+            ("base64 -d <<< cmVib290", "reboot"), // unpadded — command is the only signal
+        ] {
+            let results = extract_embedded_base64(&[make_string(line, None)]);
+            assert!(
+                results.iter().any(|r| r.value == plain),
+                "{line:?} should decode {plain:?}, got {:?}",
+                results.iter().map(|r| &r.value).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_padded_short_run() {
+        // Padding is base64's own tell and almost never follows an identifier,
+        // so a padded short run decodes on that signal alone — no command
+        // needed. Both are too short (10–11 alnum) for the old fixed floor.
+        for (line, plain) in [
+            ("x := \"L2Jpbi9ybQ==\"", "/bin/rm"),
+            ("arg=dW5hbWUgLWE=", "uname -a"),
+        ] {
+            let results = extract_embedded_base64(&[make_string(line, None)]);
+            assert!(
+                results.iter().any(|r| r.value == plain),
+                "{line:?} should decode {plain:?}, got {:?}",
+                results.iter().map(|r| &r.value).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_embedded_base64_unpadded_short_needs_a_signal() {
+        // `reboot` → `cmVib290` is 8 alnum with no padding: no signal on its
+        // own, so a bare occurrence is ignored. This is what keeps the lower
+        // floor from turning ordinary 8-char tokens into noise.
+        let results = extract_embedded_base64(&[make_string("tag=cmVib290;", None)]);
+        assert!(
+            results.iter().all(|r| r.value != "reboot"),
+            "unpadded short run without padding or a decode command must not be extracted"
+        );
     }
 
     #[test]
