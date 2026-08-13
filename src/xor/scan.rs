@@ -316,11 +316,14 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
             while seg_start < end && data[seg_start] == 0 {
                 seg_start += 1;
             }
-            // Extend until the next padding boundary (>=2 consecutive raw NULs) or end.
+            // Extend until the next padding boundary (>=2 consecutive raw NULs) or end,
+            // counting interior single NULs in the same pass for the density check below.
             let mut seg_end = seg_start;
+            let mut raw_null_count = 0usize;
             while seg_end < end
                 && !(data[seg_end] == 0 && seg_end + 1 < end && data[seg_end + 1] == 0)
             {
+                raw_null_count += usize::from(data[seg_end] == 0);
                 seg_end += 1;
             }
             let cur_start = seg_start;
@@ -332,7 +335,6 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
 
             // A segment still dominated by raw NULs is padding noise (key reflection
             // artifact), not a string.
-            let raw_null_count = data[cur_start..seg_end].iter().filter(|&&b| b == 0).count();
             if raw_null_count * 2 > (seg_end - cur_start) {
                 continue;
             }
