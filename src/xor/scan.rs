@@ -304,97 +304,103 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
         let run_start = start;
         start = end + 1; // always advance, regardless of what happens below
 
-        if end - run_start >= min_length {
-            // Skip strings decoded from null-heavy regions (key reflection artifact)
-            let raw_null_count = data[run_start..end].iter().filter(|&&b| b == 0).count();
-            if raw_null_count * 2 > (end - run_start) {
+        // A single printable run can span several NUL-padded records: each stored
+        // string is surrounded by NUL padding that XOR-decodes to a constant printable
+        // byte (key 0x7a renders NUL as 'z', as in the 3CX libffmpeg C2 config). Split
+        // the run at padding boundaries — runs of >=2 raw NULs — and validate each
+        // non-pad segment on its own, so a real string is neither trimmed away with the
+        // padding that precedes it nor rejected as part of a null-heavy run.
+        let mut seg_start = run_start;
+        while seg_start < end {
+            // Skip leading raw-NUL padding.
+            while seg_start < end && data[seg_start] == 0 {
+                seg_start += 1;
+            }
+            // Extend until the next padding boundary (>=2 consecutive raw NULs) or end.
+            let mut seg_end = seg_start;
+            while seg_end < end
+                && !(data[seg_end] == 0 && seg_end + 1 < end && data[seg_end + 1] == 0)
+            {
+                seg_end += 1;
+            }
+            let cur_start = seg_start;
+            seg_start = seg_end + 1; // advance past the boundary NUL, regardless of outcome
+
+            if seg_end - cur_start < min_length {
                 continue;
             }
 
-            // Check for double-null in original data (at same positions as decoded range)
-            let mut double_null_pos = None;
-            for offset in 0..(end - run_start).saturating_sub(1) {
-                let raw_pos = run_start + offset;
-                if raw_pos + 1 < data.len() && data[raw_pos] == 0 && data[raw_pos + 1] == 0 {
-                    double_null_pos = Some(offset);
-                    break;
+            // A segment still dominated by raw NULs is padding noise (key reflection
+            // artifact), not a string.
+            let raw_null_count = data[cur_start..seg_end].iter().filter(|&&b| b == 0).count();
+            if raw_null_count * 2 > (seg_end - cur_start) {
+                continue;
+            }
+
+            let Ok(s) = String::from_utf8(decoded[cur_start..seg_end].to_vec()) else {
+                continue;
+            };
+
+            // Always classify to determine kind — used for vowel ratio bypass below.
+            // When apply_filters is false, accept all classified strings (no rejection).
+            let Some(kind) = classify_xor_string(&s) else {
+                continue;
+            };
+
+            // Additional sanity check: reject obvious garbage.
+            // Since single-byte XOR uses ASCII-only run detection, all strings are ASCII;
+            // use fast byte-based counting instead of slow Unicode char iteration.
+            let alnum = s.bytes().filter(u8::is_ascii_alphanumeric).count();
+            let alpha = s.bytes().filter(u8::is_ascii_alphabetic).count();
+
+            // Reject if < 50% alphanumeric (likely garbage)
+            let char_count = s.len(); // ASCII: len == char count
+            if char_count > 0 && alnum * 100 < char_count * 50 {
+                continue;
+            }
+
+            // Reject if has letters but poor vowel ratio (English-specific check).
+            // Skip for encoded formats (base64, hex, etc.) and high-value IOCs
+            // (SuspiciousPath/ShellCmd) which may not follow English vowel patterns.
+            // DLL names (bcrypt.dll), API names (BCryptDecrypt), and shell commands
+            // are valid targets even with 0% vowels.
+            let is_encoded_format = matches!(
+                kind,
+                Some(StringKind::Base64)
+                    | Some(StringKind::UnicodeEscaped)
+                    | Some(StringKind::HexEncoded)
+                    | Some(StringKind::UrlEncoded)
+                    | Some(StringKind::SuspiciousPath)
+                    | Some(StringKind::ShellCmd)
+            );
+            if !is_encoded_format && alpha >= 3 {
+                let vowels = s
+                    .bytes()
+                    .filter(|&b| matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u'))
+                    .count();
+                let vowel_ratio = (vowels * 100).checked_div(alpha).unwrap_or(0);
+                if !(10..=70).contains(&vowel_ratio) {
+                    continue;
                 }
             }
 
-            // Trim at double-null position if found
-            let actual_end = if let Some(trim_pos) = double_null_pos {
-                run_start + trim_pos
-            } else {
-                end
-            };
+            let offset = cur_start as u64;
+            if seen.insert((offset, s.clone())) {
+                // Clean up URLs by removing trailing garbage
+                let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
+                    clean_url_trailing_garbage(&s)
+                } else {
+                    s.clone()
+                };
 
-            // Re-check minimum length after trimming
-            if actual_end - run_start >= min_length
-                && let Ok(s) = String::from_utf8(decoded[run_start..actual_end].to_vec())
-            {
-                // Always classify to determine kind — used for vowel ratio bypass below.
-                // When apply_filters is false, accept all classified strings (no rejection).
-                let kind_opt = classify_xor_string(&s);
-
-                if let Some(kind) = kind_opt {
-                    // Additional sanity check: reject obvious garbage.
-                    // Since single-byte XOR uses ASCII-only run detection, all strings are ASCII;
-                    // use fast byte-based counting instead of slow Unicode char iteration.
-                    let alnum = s.bytes().filter(u8::is_ascii_alphanumeric).count();
-                    let alpha = s.bytes().filter(u8::is_ascii_alphabetic).count();
-
-                    // Reject if < 50% alphanumeric (likely garbage)
-                    let char_count = s.len(); // ASCII: len == char count
-                    if char_count > 0 && alnum * 100 < char_count * 50 {
-                        continue;
-                    }
-
-                    // Reject if has letters but poor vowel ratio (English-specific check).
-                    // Skip for encoded formats (base64, hex, etc.) and high-value IOCs
-                    // (SuspiciousPath/ShellCmd) which may not follow English vowel patterns.
-                    // DLL names (bcrypt.dll), API names (BCryptDecrypt), and shell commands
-                    // are valid targets even with 0% vowels.
-                    let is_encoded_format = matches!(
-                        kind,
-                        Some(StringKind::Base64)
-                            | Some(StringKind::UnicodeEscaped)
-                            | Some(StringKind::HexEncoded)
-                            | Some(StringKind::UrlEncoded)
-                            | Some(StringKind::SuspiciousPath)
-                            | Some(StringKind::ShellCmd)
-                    );
-                    if !is_encoded_format && alpha >= 3 {
-                        let vowels = s
-                            .bytes()
-                            .filter(|&b| {
-                                matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u')
-                            })
-                            .count();
-                        let vowel_ratio = (vowels * 100).checked_div(alpha).unwrap_or(0);
-                        if !(10..=70).contains(&vowel_ratio) {
-                            continue;
-                        }
-                    }
-
-                    let offset = run_start as u64;
-                    if seen.insert((offset, s.clone())) {
-                        // Clean up URLs by removing trailing garbage
-                        let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
-                            clean_url_trailing_garbage(&s)
-                        } else {
-                            s.clone()
-                        };
-
-                        results.push(ExtractedString {
-                            value: cleaned_value,
-                            data_offset: offset,
-                            data_len: 0,
-                            method: StringMethod::XorDecode,
-                            kind,
-                            fragments: None,
-                        });
-                    }
-                }
+                results.push(ExtractedString {
+                    value: cleaned_value,
+                    data_offset: offset,
+                    data_len: 0,
+                    method: StringMethod::XorDecode,
+                    kind,
+                    fragments: None,
+                });
             }
         }
     }
