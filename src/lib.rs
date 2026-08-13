@@ -552,6 +552,31 @@ fn apply_xor_scan(
                         opts.filter_garbage,
                         false,
                     );
+                    // Validate the yield before keeping it — the same guards
+                    // auto_detect_xor_key applies to its candidates. Two
+                    // trigger-pattern hits sharing a key is weak evidence: in
+                    // megabytes of printable text, 3-byte patterns like "://"
+                    // collide with some key by chance, and an ASCII-preserving
+                    // key then "decodes" printable junk across the whole file
+                    // (tens of thousands of strings on a minified JS bundle).
+                    // A real key decodes a bounded set of high-value strings.
+                    // The trigger hits themselves are kept either way below.
+                    if full.len() > xor::MAX_XOR_KEY_RESULTS {
+                        tracing::debug!(
+                            "XOR key 0x{key:02x}: rejected full extraction ({} strings — noise, not a key)",
+                            full.len()
+                        );
+                        continue;
+                    }
+                    let score = xor::score_xor_results(&full, &(key as char).to_string());
+                    if score < xor::MIN_XOR_KEY_SCORE {
+                        tracing::debug!(
+                            "XOR key 0x{key:02x}: rejected full extraction (score {score} < {}, {} strings)",
+                            xor::MIN_XOR_KEY_SCORE,
+                            full.len()
+                        );
+                        continue;
+                    }
                     strings.extend(full);
                     fully_extracted_keys.insert(key);
                 }
