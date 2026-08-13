@@ -11,8 +11,7 @@ mod validate;
 
 // Re-export the public API that lib.rs calls as `xor::*`
 pub(crate) use self::classify::{
-    MAX_XOR_KEY_RESULTS, MIN_XOR_KEY_SCORE, auto_detect_xor_key, extract_multikey_xor_strings,
-    extract_xor_strings, score_xor_results,
+    auto_detect_xor_key, extract_multikey_xor_strings, extract_xor_strings,
 };
 pub use self::scan::extract_incremental_xor_strings;
 pub(crate) use self::scan::{
