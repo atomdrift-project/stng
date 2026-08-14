@@ -1,0 +1,23 @@
+# Bake a jemalloc default config into the `stng` binary at build time.
+#
+# stng is a short-lived, allocation-heavy CLI: each run fans many extractor
+# passes across rayon threads, churning hundreds of MB of transient strings,
+# then exits. jemalloc's defaults optimize for a long-lived server — ~4×CPU
+# arenas plus a 10s dirty-page decay — so freed pages linger as RSS for the
+# whole run and peak RSS lands ~30-50% above the live set.
+#
+# tikv-jemalloc-sys forwards this to jemalloc's compile-time `--with-malloc-conf`
+# (build.rs reads JEMALLOC_SYS_WITH_MALLOC_CONF). It is the *default* only — a
+# runtime `_RJEM_MALLOC_CONF` still overrides it.
+#
+#   dirty_decay_ms:0  return freed pages to the OS immediately (the big win for
+#                     a process that never lives long enough for timed decay).
+#   muzzy_decay_ms:0  same for the muzzy tier.
+#   narenas:4         immediate decay madvise()s per arena; the stock ~64 arenas
+#                     turn that into a syscall storm (+15% wall). Four arenas
+#                     keep enough alloc concurrency for the CLI's rayon fan-out
+#                     while making prompt reclamation essentially free.
+#
+# Measured: 26-55% lower peak RSS for +1-2% wall across Go ELF/PE samples.
+[env]
+JEMALLOC_SYS_WITH_MALLOC_CONF = "narenas:4,dirty_decay_ms:0,muzzy_decay_ms:0"

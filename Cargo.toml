@@ -1,6 +1,6 @@
 [package]
 name = "stng"
-version = "1.8.0"
+version = "1.9.0"
 edition = "2024"
 # Build on any rustc within ~2 releases of current stable; edition 2024 implies
 # the MSRV-aware resolver, so this also caps dependency versions.
@@ -109,6 +109,14 @@ path = "src/main.rs"
 lto = true
 codegen-units = 1
 debug = true
+
+# Distribution profile, used by release.yml for every shipped binary. `release`
+# already builds with fat LTO and one codegen unit; this drops the debuginfo it
+# keeps for profiling, which is most of the binary's size and of no use to
+# someone downloading it.
+[profile.release-lto]
+inherits = "release"
+strip = "debuginfo"
 
 # Optimize test binaries. The crate's hot paths (byte scanning, XOR detection,
 # string validation) are ~5x slower at opt-level=0 and dominate test runtime,
