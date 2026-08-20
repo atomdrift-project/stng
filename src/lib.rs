@@ -1508,11 +1508,9 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
             append_script_deobfuscation(&mut strings, data, opts);
         }
 
-        // Unknown format — no section info; full-file scan is acceptable
-        // because we couldn't identify code regions to skip.
-        if opts.xor_scan || opts.xor_scan_multi || opts.xor_key.is_some() {
-            apply_xor_scan(&mut strings, data, opts, is_pe, &[]);
-        }
+        // XOR already ran once above, before the decoder suite, so XOR
+        // plaintext still feeds base64/hex. A second full-file scan here
+        // is the same bytes (unknown format has no new section map).
         if opts.filter_garbage {
             strings.retain(|s| passes_garbage_filter(s, &[]));
         }
