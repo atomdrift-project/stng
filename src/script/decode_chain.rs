@@ -144,7 +144,9 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
                 return None;
             }
             let code_units: Vec<u16> = input
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             let s = String::from_utf16(&code_units).ok()?;

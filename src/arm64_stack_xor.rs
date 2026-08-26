@@ -13,6 +13,23 @@ use goblin::mach::constants::S_ATTR_SOME_INSTRUCTIONS;
 use goblin::mach::constants::cputype::CPU_TYPE_ARM64;
 use std::collections::{HashMap, HashSet};
 
+// The known stack-XOR family is compact (DynamicHub's ARM64 slice is well
+// under this). Above this size, only pay for the specialized disassembly when
+// the ordinary extraction pass says the image is opaque. This is an admission
+// heuristic, not a work budget: admitted samples are analyzed completely.
+const SMALL_INPUT: usize = 1024 * 1024;
+const FEW_STRINGS: usize = 64;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AdmissionProfile {
+    /// Bytes the extractor would disassemble (one architecture for fat files).
+    pub(crate) input_size: usize,
+    /// Bytes represented by `string_count`/`string_bytes` (the whole image).
+    pub(crate) content_size: usize,
+    pub(crate) string_count: usize,
+    pub(crate) string_bytes: usize,
+}
+
 #[derive(Debug, Clone)]
 enum RegValue {
     Imm(u64),
@@ -25,9 +42,11 @@ pub(crate) fn extract_arm64_stack_xor_strings(
     macho: &MachO<'_>,
     arch_data: &[u8],
     arch_base_offset: u64,
+    profile: AdmissionProfile,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    if macho.header.cputype != CPU_TYPE_ARM64 || !imports_system(macho) {
+    if macho.header.cputype != CPU_TYPE_ARM64 || !imports_system(macho) || !should_extract(profile)
+    {
         return Vec::new();
     }
 
@@ -70,7 +89,25 @@ pub(crate) fn extract_arm64_stack_xor_strings(
 fn imports_system(macho: &MachO<'_>) -> bool {
     macho
         .imports()
-        .is_ok_and(|imports| imports.iter().any(|import| import.name.contains("system")))
+        .is_ok_and(|imports| imports.iter().any(|import| is_system_import(import.name)))
+}
+
+fn is_system_import(name: &str) -> bool {
+    matches!(name, "system" | "_system")
+}
+
+fn should_extract(profile: AdmissionProfile) -> bool {
+    if profile.input_size <= SMALL_INPUT {
+        return true;
+    }
+
+    // Match the opacity definition used by filefacts' expensive-analysis
+    // admission policy: either very few printable runs, or printable content
+    // covering less than roughly 0.1% of the image. A large, transparent app
+    // with thousands of ordinary strings has little to gain from this narrow
+    // malware-family extractor.
+    profile.string_count < FEW_STRINGS
+        || profile.string_bytes.saturating_mul(1024) < profile.content_size
 }
 
 fn extract_section(
@@ -88,7 +125,7 @@ fn extract_section(
     let mut recovered_pads: Vec<Vec<u8>> = Vec::new();
     let mut seen_values = HashSet::new();
 
-    for (idx, chunk) in code.chunks_exact(4).enumerate() {
+    for (idx, chunk) in code.as_chunks::<4>().0.iter().enumerate() {
         let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         let instr_off = (idx * 4) as u64;
         let pc = section_addr + instr_off;
@@ -739,5 +776,50 @@ mod tests {
     #[test]
     fn formats_binary_xor_key_as_hex() {
         assert_eq!(format_xor_key(&[0xff, 0x19, 0x76]), "0xff1976");
+    }
+
+    #[test]
+    fn system_import_match_is_exact() {
+        assert!(is_system_import("_system"));
+        assert!(is_system_import("system"));
+        assert!(!is_system_import("__ZNSt3__112system_errorC1Ev"));
+        assert!(!is_system_import("__ZNSt3__14__fs10filesystem8__statusEv"));
+        assert!(!is_system_import("_systemstats_init"));
+    }
+
+    #[test]
+    fn compact_inputs_are_admitted_even_when_string_rich() {
+        assert!(should_extract(AdmissionProfile {
+            input_size: SMALL_INPUT,
+            content_size: SMALL_INPUT,
+            string_count: 10_000,
+            string_bytes: SMALL_INPUT / 2,
+        }));
+    }
+
+    #[test]
+    fn large_opaque_inputs_are_admitted() {
+        assert!(should_extract(AdmissionProfile {
+            input_size: 16 * SMALL_INPUT,
+            content_size: 16 * SMALL_INPUT,
+            string_count: FEW_STRINGS - 1,
+            string_bytes: SMALL_INPUT,
+        }));
+        assert!(should_extract(AdmissionProfile {
+            input_size: 16 * SMALL_INPUT,
+            content_size: 16 * SMALL_INPUT,
+            string_count: 1_000,
+            string_bytes: 8 * 1024,
+        }));
+    }
+
+    #[test]
+    fn large_string_rich_inputs_are_rejected() {
+        assert!(!should_extract(AdmissionProfile {
+            input_size: 16 * SMALL_INPUT,
+            content_size: 16 * SMALL_INPUT,
+            string_count: 1_000,
+            string_bytes: 256 * 1024,
+        }));
     }
 }

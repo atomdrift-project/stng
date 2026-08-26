@@ -1277,7 +1277,7 @@ fn extract_from_utf16_file(
 
     // Decode UTF-16 to UTF-8, streaming code units straight from the byte
     // slice so the whole-file Vec<u16> intermediate is never materialized.
-    let code_units = utf16_data.chunks_exact(2).map(|chunk| {
+    let code_units = utf16_data.as_chunks::<2>().0.iter().map(|chunk| {
         if is_little_endian {
             u16::from_le_bytes([chunk[0], chunk[1]])
         } else {
@@ -1709,6 +1709,10 @@ fn extract_from_object_inner(
                 strings.extend(extra);
             }
             if !is_go_binary {
+                // Capture opacity before adding instruction-derived stack
+                // strings; the admission signal should describe what the
+                // ordinary string pass could see in the file.
+                let profile = arm64_stack_xor_profile(data.len(), &strings);
                 // Only disassemble executable sections — feeding the whole
                 // Mach-O to iced-x86 wastes cycles on __LINKEDIT and
                 // non-code segments.
@@ -1718,9 +1722,10 @@ fn extract_from_object_inner(
                     min_length,
                     &exec_ranges,
                 ));
-                strings.extend(arm64_stack_xor::extract_arm64_stack_xor_strings(
-                    macho, data, 0, min_length,
-                ));
+                let xor_strings = arm64_stack_xor::extract_arm64_stack_xor_strings(
+                    macho, data, 0, profile, min_length,
+                );
+                strings.extend(xor_strings);
             }
             if !opts.caller_provides_symbols {
                 merge_imports(&mut strings, extract_macho_imports(macho, min_length));
@@ -1796,6 +1801,9 @@ fn extract_from_object_inner(
                 ));
             }
             if !is_go_binary {
+                // See the thin Mach-O branch: measure opacity before adding
+                // instruction-derived stack strings.
+                let profile = arm64_stack_xor_profile(data.len(), &strings);
                 let exec_ranges = binary::code_ranges_from_sections(&section_info);
                 strings.extend(extract_stack_strings_from_ranges(
                     data,
@@ -1815,12 +1823,18 @@ fn extract_from_object_inner(
                         let Some(arch_data) = data.get(arch_start..arch_end) else {
                             continue;
                         };
-                        strings.extend(arm64_stack_xor::extract_arm64_stack_xor_strings(
+                        let profile = arm64_stack_xor::AdmissionProfile {
+                            input_size: arch_data.len(),
+                            ..profile
+                        };
+                        let xor_strings = arm64_stack_xor::extract_arm64_stack_xor_strings(
                             &macho,
                             arch_data,
                             u64::from(arch.offset),
+                            profile,
                             min_length,
-                        ));
+                        );
+                        strings.extend(xor_strings);
                     }
                 }
             }
@@ -2394,6 +2408,27 @@ fn extract_from_object_inner(
     strip_go_varint_prefixes(&mut strings);
 
     deduplicate_by_offset(strings)
+}
+
+fn arm64_stack_xor_profile(
+    input_size: usize,
+    strings: &[ExtractedString],
+) -> arm64_stack_xor::AdmissionProfile {
+    let mut string_count = 0_usize;
+    let mut string_bytes = 0_usize;
+    for string in strings {
+        if string.method == StringMethod::XorStackPair {
+            continue;
+        }
+        string_count = string_count.saturating_add(1);
+        string_bytes = string_bytes.saturating_add(string.value.len());
+    }
+    arm64_stack_xor::AdmissionProfile {
+        input_size,
+        content_size: input_size,
+        string_count,
+        string_bytes,
+    }
 }
 
 /// Rizin string set. Two sources, in preference order:

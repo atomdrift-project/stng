@@ -104,7 +104,14 @@ fn decoded_to_text(decoded: Vec<u8>) -> Option<String> {
 fn looks_like_utf16le(bytes: &[u8]) -> bool {
     bytes.len() >= 4
         && bytes.len().is_multiple_of(2)
-        && bytes.chunks_exact(2).filter(|c| c[1] == 0).count() * 2 >= bytes.len() / 2
+        && bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter(|c| c[1] == 0)
+            .count()
+            * 2
+            >= bytes.len() / 2
 }
 
 /// Decode bytes as little-endian UTF-16, but only when they actually look like
@@ -115,7 +122,9 @@ fn decode_utf16le(bytes: &[u8]) -> Option<String> {
         return None;
     }
     let code_units: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
     let decoded = String::from_utf16(&code_units).ok()?;

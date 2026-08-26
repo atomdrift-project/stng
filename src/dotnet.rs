@@ -250,7 +250,9 @@ fn parse_us_heap(heap: &[u8], file_base_offset: u64, min_length: usize) -> Vec<E
 
                 // Convert to u16 code units
                 let code_units: Vec<u16> = utf16_data
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
                     .collect();
 
