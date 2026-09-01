@@ -516,69 +516,68 @@ fn decode_unicode_escape_string(s: &ExtractedString) -> Option<ExtractedString> 
 
 /// Decode unicode escape sequences in a string.
 ///
-/// Handles: \xHH, \uHHHH, \UHHHHHHHH
+/// Handles `\xHH`, `\uHHHH`, and `\UHHHHHHHH`, and — importantly for triage —
+/// a redundant escaping backslash in front of them: `\\xHH`, `\\uHHHH`, and
+/// `\\UHHHHHHHH`. That doubled form is a string escape written inside another
+/// escaped string (a Python or JS literal embedded in a JSON/gyp string, say),
+/// a common obfuscation layer. Decoding through it recovers the greppable
+/// payload (`catch_warnings`, `__import__`, `node payload.js`) instead of the
+/// half-decoded `\c\a\t\c\h...` a single-layer pass leaves behind. The strict
+/// hex-digit-count requirement keeps benign text like `C:\\Users` untouched,
+/// since `Users` is not eight hex digits.
 fn decode_unicode_escapes(s: &str) -> Option<String> {
+    let chars: Vec<char> = s.chars().collect();
     let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
+    let mut i = 0;
     let mut changed = false;
 
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.peek() {
-                Some('x') => {
-                    // \xHH - 2 hex digits
-                    chars.next(); // consume 'x'
-                    if let Some(decoded_char) = parse_hex_escape(&mut chars, 2) {
-                        result.push(decoded_char);
-                        changed = true;
-                        continue;
-                    }
-                    result.push('\\');
-                    result.push('x');
-                }
-                Some('u') => {
-                    // \uHHHH - 4 hex digits
-                    chars.next(); // consume 'u'
-                    if let Some(decoded_char) = parse_hex_escape(&mut chars, 4) {
-                        result.push(decoded_char);
-                        changed = true;
-                        continue;
-                    }
-                    result.push('\\');
-                    result.push('u');
-                }
-                Some('U') => {
-                    // \UHHHHHHHH - 8 hex digits
-                    chars.next(); // consume 'U'
-                    if let Some(decoded_char) = parse_hex_escape(&mut chars, 8) {
-                        result.push(decoded_char);
-                        changed = true;
-                        continue;
-                    }
-                    result.push('\\');
-                    result.push('U');
-                }
-                _ => result.push(ch),
+    while i < chars.len() {
+        if chars[i] == '\\' {
+            // The escape letter is at i+1, or i+2 when a redundant backslash
+            // precedes it.
+            let esc = if chars.get(i + 1) == Some(&'\\') {
+                i + 2
+            } else {
+                i + 1
+            };
+            let width = match chars.get(esc) {
+                Some('x') => 2,
+                Some('u') => 4,
+                Some('U') => 8,
+                _ => 0,
+            };
+            if width > 0
+                && let Some(decoded) = parse_hex_escape(&chars, esc + 1, width)
+            {
+                result.push(decoded);
+                changed = true;
+                i = esc + 1 + width;
+                continue;
             }
+            // Not a decodable escape: emit the backslash and move on. The
+            // character after it is reprocessed on the next iteration, so no
+            // trailing hex digits are dropped.
+            result.push('\\');
+            i += 1;
         } else {
-            result.push(ch);
+            result.push(chars[i]);
+            i += 1;
         }
     }
 
     if changed { Some(result) } else { None }
 }
 
-/// Parse a hex escape sequence of the specified length.
-fn parse_hex_escape(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    len: usize,
-) -> Option<char> {
-    let hex_str: String = chars.take(len).collect();
-    if hex_str.len() != len {
+/// Parse `width` hex digits starting at `start` in `chars` into a `char`.
+/// Returns `None` when there are too few digits, they aren't hex, or the code
+/// point is invalid (a lone surrogate or beyond U+10FFFF).
+fn parse_hex_escape(chars: &[char], start: usize, width: usize) -> Option<char> {
+    let end = start.checked_add(width)?;
+    if end > chars.len() {
         return None;
     }
-
-    let code_point = u32::from_str_radix(&hex_str, 16).ok()?;
+    let hex: String = chars[start..end].iter().collect();
+    let code_point = u32::from_str_radix(&hex, 16).ok()?;
     char::from_u32(code_point)
 }
 
@@ -1119,6 +1118,34 @@ mod tests {
         let result = decode_unicode_escape_string(&input).unwrap();
         assert_eq!(result.value, "Hello");
         assert_eq!(result.method, StringMethod::UnicodeEscapeDecode);
+    }
+
+    #[test]
+    fn unicode_escape_decodes_through_redundant_backslash() {
+        // Layered escape (a Python string literal inside a JSON/gyp string):
+        // the on-disk bytes are a DOUBLE backslash `\\U000000NN` — written in
+        // Rust source as `\\\\U...`. It must recover the clean word, not the
+        // half-decoded `\c\a\t...`. This is the node-gyp `binding.gyp`
+        // sandbox-escape obfuscation shape.
+        assert_eq!(
+            decode_unicode_escapes(
+                "\\\\U00000063\\\\U00000061\\\\U00000074\\\\U00000063\\\\U00000068"
+            )
+            .as_deref(),
+            Some("catch")
+        );
+        // Single-backslash escapes still decode exactly as before.
+        assert_eq!(
+            decode_unicode_escapes("\\x6e\\x6f\\x6e\\x65").as_deref(),
+            Some("none")
+        );
+        assert_eq!(
+            decode_unicode_escapes("\\U00000063\\U00000061\\U00000074").as_deref(),
+            Some("cat")
+        );
+        // A benign Windows path is not eight hex digits after `\\U`, so it is
+        // left untouched (no spurious decode).
+        assert_eq!(decode_unicode_escapes("C:\\\\Users\\\\admin"), None);
     }
 
     #[test]
