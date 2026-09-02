@@ -24,6 +24,10 @@ pub enum DecodeStep {
     Xor(u8),
     /// ROT13 on ASCII letters
     Rot13,
+    /// Caesar rotation of ASCII letters by an arbitrary amount. ROT13 is the
+    /// self-inverse special case that gets its own variant; packers routinely
+    /// pick another shift precisely because 13 is the one people try.
+    Rot(u8),
     /// UTF-16LE to UTF-8
     Utf16Le,
     /// Reverse the byte sequence
@@ -37,6 +41,7 @@ pub enum DecodeStep {
 impl std::fmt::Display for DecodeStep {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Rot(n) => write!(f, "rot{n}"),
             Self::Base64 => write!(f, "base64"),
             Self::Zlib => write!(f, "zlib"),
             Self::Gzip => write!(f, "gzip"),
@@ -139,6 +144,19 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
                 })
                 .collect(),
         ),
+        DecodeStep::Rot(n) => {
+            let n = n % 26;
+            Some(
+                input
+                    .iter()
+                    .map(|&b| match b {
+                        b'a'..=b'z' => (b - b'a' + n) % 26 + b'a',
+                        b'A'..=b'Z' => (b - b'A' + n) % 26 + b'A',
+                        _ => b,
+                    })
+                    .collect(),
+            )
+        }
         DecodeStep::Utf16Le => {
             if input.len() < 2 || !input.len().is_multiple_of(2) {
                 return None;

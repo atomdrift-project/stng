@@ -26,7 +26,11 @@ use std::sync::{Arc, LazyLock, Mutex};
 ///
 /// - `2`: short/command-vouched embedded base64 now decodes (`base64 -d <<< …`
 ///   → `/bin/rm`), so entries keyed under `1` are missing those rows.
-const CACHE_VERSION: &str = "2";
+/// - `3`: the JavaScript charcode-array packer decodes, with its Caesar shift
+///   recovered (`[...].map(c => String.fromCharCode(c)).join("")` handed to a
+///   rotation before `eval`). Entries keyed under `2` hold only the outer
+///   wrapper's strings and none of the payload's.
+const CACHE_VERSION: &str = "3";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted

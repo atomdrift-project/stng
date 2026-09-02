@@ -3338,3 +3338,42 @@ mod string_deduplication_tests {
         );
     }
 }
+
+/// The npm install-hook packer decodes through charcodes and a recovered Caesar
+/// shift, exposing the AES staging call underneath.
+///
+/// Regression for a real miss: the payload was invisible end to end because the
+/// charcode recipe was written as an array `.map(...)` rather than a direct
+/// `eval(String.fromCharCode(...))`, and because the shift was 6 rather than the
+/// ROT13 everyone tries. Both had to be fixed for a single string of the
+/// payload to reach a rule.
+#[test]
+fn npm_charcode_rot_packer_exposes_aes_staging() {
+    let src = include_bytes!("fixtures/npm-charcode-rot-packer.js");
+    let results = stng::script::deobfuscate_script(src);
+    let decoded: String = results.iter().map(|r| r.decoded.as_str()).collect();
+
+    assert!(
+        !results.is_empty(),
+        "packer produced no deobfuscation results"
+    );
+    assert!(
+        decoded.contains("createDecipheriv"),
+        "AES staging call not recovered: {}",
+        &decoded[..decoded.len().min(200)]
+    );
+    assert!(
+        decoded.contains("aes-128-gcm"),
+        "cipher name not recovered from the decoded payload"
+    );
+    assert!(
+        results
+            .iter()
+            .any(|r| r.chain_description.contains("charcode-array")),
+        "expected the charcode-array chain, got: {:?}",
+        results
+            .iter()
+            .map(|r| r.chain_description.as_str())
+            .collect::<Vec<_>>()
+    );
+}
