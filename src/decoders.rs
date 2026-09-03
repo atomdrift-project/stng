@@ -715,6 +715,109 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
     })
 }
 
+/// Decode strings that are base64 only after a rot13 rotation.
+///
+/// rot13 is not a decoder that can be offered blindly: every alphabetic string
+/// is valid rot13 input, so rotating everything would double the string table
+/// with noise. The gate is therefore on the *result* -- rotate, and keep it only
+/// when the rotation turns something that was not base64 into something that is,
+/// then decode that base64 and emit the payload. Ordinary prose and identifiers
+/// do not become valid base64 by being rotated, so the false-positive rate is
+/// governed by `is_likely_base64`, which already demands mixed case, digits and
+/// a length that is a multiple of four.
+///
+/// The shape this exists for hides a payload in plain sight: the chunks sit in
+/// the source as long alphanumeric literals, and only the ones that were also
+/// rotated fail to decode for a reader who tries base64 first. A W4SP-family
+/// PyPI stealer splits its payload across four such literals, rot13-ing two of
+/// them, and reassembles the pieces with `codecs.decode(chunk, 'rot13')` --
+/// where even the string `rot13` is written as hex escapes so it cannot be
+/// grepped.
+pub(crate) fn decode_rot13_base64_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+    strings
+        .par_iter()
+        .filter_map(decode_rot13_base64_string)
+        .collect()
+}
+
+/// Rotate a single string by 13 and decode the result as base64.
+fn decode_rot13_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
+    let value = s.value.trim();
+    if value.len() < MIN_BASE64_LENGTH {
+        return None;
+    }
+    // rot13 maps the base64 alphabet onto itself -- letters rotate, digits and
+    // `+/=` are untouched -- so a rotated payload still *looks* like base64 and
+    // "is it base64 already?" cannot separate the two readings. What separates
+    // them is which one decodes to plausible text: at most one will, since the
+    // other is the same bytes read 13 letters out of phase. If the string
+    // decodes as-is, it is ordinary base64 and belongs to the plain decoder.
+    let unrotated_decodes = |v: &str| -> bool {
+        let whole = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, v)
+            .ok()
+            .and_then(decoded_to_text);
+        if whole.is_some() {
+            return true;
+        }
+        let keep = v.len() - v.len() % 4;
+        keep >= MIN_BASE64_LENGTH
+            && base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &v[..keep])
+                .ok()
+                .and_then(decoded_to_text)
+                .is_some()
+    };
+    if unrotated_decodes(value) {
+        return None;
+    }
+
+    let rotated: String = value
+        .chars()
+        .map(|c| match c {
+            'a'..='z' => (((c as u8 - b'a' + 13) % 26) + b'a') as char,
+            'A'..='Z' => (((c as u8 - b'A' + 13) % 26) + b'A') as char,
+            other => other,
+        })
+        .collect();
+    if !is_likely_base64(&rotated) {
+        return None;
+    }
+
+    // Same fragment problem the fuzzy path handles: a payload split across
+    // several literals leaves each piece with an arbitrary length mod 4, so the
+    // whole string may not decode while its longest valid prefix does. Try the
+    // string as it stands, then the prefix.
+    let decoded_str = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        rotated.as_str(),
+    )
+    .ok()
+    .and_then(decoded_to_text)
+    .or_else(|| {
+        let keep = rotated.len() - rotated.len() % 4;
+        if keep < MIN_BASE64_LENGTH {
+            return None;
+        }
+        base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &rotated[..keep],
+        )
+        .ok()
+        .and_then(decoded_to_text)
+    })?;
+    if decoded_str.trim().len() < 4 {
+        return None;
+    }
+
+    let kind = crate::classify_string(&decoded_str);
+    Some(ExtractedString {
+        value: decoded_str,
+        data_offset: s.data_offset,
+        method: StringMethod::Rot13Base64Decode,
+        kind,
+        ..Default::default()
+    })
+}
+
 /// Decode base85-encoded strings from a list of extracted strings.
 ///
 /// Returns a vector of newly decoded strings with `StringMethod::Base85Decode`.
@@ -1670,5 +1773,66 @@ mod tests {
             results[0].source_spans().collect::<Vec<_>>(),
             vec![(12345 + token_pos, token.len() as u64)]
         );
+    }
+}
+
+#[cfg(test)]
+mod rot13_base64_tests {
+    use super::*;
+
+    fn s(v: &str) -> ExtractedString {
+        ExtractedString {
+            value: v.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// The shape this decoder exists for: a payload base64-encoded and then
+    /// rotated, so a reader who tries base64 first gets nothing.
+    #[test]
+    fn recovers_rot13_wrapped_base64_payload() {
+        let payload = "import os\nhook = \"https://discord.com/api/webhooks/1088/abc\"\n";
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, payload);
+        let rotated: String = b64
+            .chars()
+            .map(|c| match c {
+                'a'..='z' => (((c as u8 - b'a' + 13) % 26) + b'a') as char,
+                'A'..='Z' => (((c as u8 - b'A' + 13) % 26) + b'A') as char,
+                other => other,
+            })
+            .collect();
+        let out = decode_rot13_base64_strings(&[s(&rotated)]);
+        assert_eq!(out.len(), 1, "rotated base64 should decode");
+        assert!(out[0].value.contains("discord.com/api/webhooks"));
+        assert_eq!(out[0].method, StringMethod::Rot13Base64Decode);
+    }
+
+    /// A string that is already base64 belongs to the plain decoder; rotating
+    /// it would only produce a second, wrong reading of the same bytes.
+    #[test]
+    fn leaves_plain_base64_to_the_base64_decoder() {
+        let b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            "import os\nhook = \"https://example.com/a\"\n",
+        );
+        assert!(decode_rot13_base64_strings(&[s(&b64)]).is_empty());
+    }
+
+    /// Every alphabetic string is valid rot13 input, so the guard against
+    /// doubling the string table with noise is that the *result* has to look
+    /// like base64. Ordinary text does not.
+    #[test]
+    fn ignores_ordinary_text_and_identifiers() {
+        for v in [
+            "the quick brown fox jumps over the lazy dog",
+            "getUserProfileFromDatabaseConnection",
+            "/usr/local/lib/python3.11/site-packages",
+            "Copyright (c) 2024 Example Corporation",
+        ] {
+            assert!(
+                decode_rot13_base64_strings(&[s(v)]).is_empty(),
+                "should not decode: {v}"
+            );
+        }
     }
 }

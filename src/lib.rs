@@ -1167,6 +1167,7 @@ pub fn decode_encoded_strings(strings: &[ExtractedString]) -> Vec<ExtractedStrin
     decoded.extend(fuzzy_base64::extract_fuzzy_base64(strings));
     decoded.extend(decoders::decode_base32_strings(strings));
     decoded.extend(decoders::decode_base85_strings(strings));
+    decoded.extend(decoders::decode_rot13_base64_strings(strings));
     decoded.extend(decoders::decode_hex_strings(strings));
     decoded.extend(decoders::decode_url_strings(strings));
     decoded.extend(decoders::decode_unicode_escape_strings(strings));

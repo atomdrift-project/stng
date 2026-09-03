@@ -329,6 +329,8 @@ pub enum StringMethod {
     Base32Decode,
     /// Found via base85 decoding (ASCII85/Z85)
     Base85Decode,
+    /// Found via rot13 of a string that is base64 only after rotation
+    Rot13Base64Decode,
     /// Found via stack string construction analysis (immediate values)
     StackString,
     /// Found in Mach-O code signature (entitlements)
@@ -360,6 +362,7 @@ impl StringMethod {
             | Self::Base64Decode
             | Self::Base32Decode
             | Self::Base85Decode
+            | Self::Rot13Base64Decode
             | Self::HexDecode
             | Self::UrlDecode
             | Self::UnicodeEscapeDecode
@@ -402,6 +405,7 @@ impl StringMethod {
             | Self::Base64Decode
             | Self::Base32Decode
             | Self::Base85Decode
+            | Self::Rot13Base64Decode
             | Self::HexDecode
             | Self::UrlDecode
             | Self::UnicodeEscapeDecode
