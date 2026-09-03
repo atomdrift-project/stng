@@ -177,10 +177,7 @@ fn try_charcode_array(source: &str) -> Vec<DeobfuscationResult> {
             // The regex stops at `.map(`; require the callback to actually be
             // the charcode conversion, within a short window after it.
             let tail_end = source.len().min(whole.end() + 160);
-            if !source
-                .get(whole.end()..tail_end)?
-                .contains("fromCharCode")
-            {
+            if !source.get(whole.end()..tail_end)?.contains("fromCharCode") {
                 return None;
             }
             let decoded: String = cap
@@ -279,8 +276,16 @@ mod tests {
             .iter()
             .find(|r| r.chain_description.contains("charcode-array"))
             .expect("charcode array payload recovered");
-        assert!(hit.decoded.contains("require(\"node:crypto\")"), "{}", hit.decoded);
-        assert!(hit.chain_description.contains("rot6"), "{}", hit.chain_description);
+        assert!(
+            hit.decoded.contains("require(\"node:crypto\")"),
+            "{}",
+            hit.decoded
+        );
+        assert!(
+            hit.chain_description.contains("rot6"),
+            "{}",
+            hit.chain_description
+        );
     }
 
     #[test]
