@@ -786,24 +786,19 @@ fn decode_rot13_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
     // several literals leaves each piece with an arbitrary length mod 4, so the
     // whole string may not decode while its longest valid prefix does. Try the
     // string as it stands, then the prefix.
-    let decoded_str = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        rotated.as_str(),
-    )
-    .ok()
-    .and_then(decoded_to_text)
-    .or_else(|| {
-        let keep = rotated.len() - rotated.len() % 4;
-        if keep < MIN_BASE64_LENGTH {
-            return None;
-        }
-        base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            &rotated[..keep],
-        )
-        .ok()
-        .and_then(decoded_to_text)
-    })?;
+    let decoded_str =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, rotated.as_str())
+            .ok()
+            .and_then(decoded_to_text)
+            .or_else(|| {
+                let keep = rotated.len() - rotated.len() % 4;
+                if keep < MIN_BASE64_LENGTH {
+                    return None;
+                }
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &rotated[..keep])
+                    .ok()
+                    .and_then(decoded_to_text)
+            })?;
     if decoded_str.trim().len() < 4 {
         return None;
     }

@@ -313,8 +313,7 @@ fn decode_base64_fuzzy(input: &str) -> Option<String> {
     let keep = input.len() - input.len() % 4;
     if keep >= MIN_BASE64_SEGMENT
         && keep != input.len()
-        && let Ok(decoded_bytes) =
-            base64::engine::general_purpose::STANDARD.decode(&input[..keep])
+        && let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(&input[..keep])
     {
         let decoded_str = String::from_utf8_lossy(&decoded_bytes).into_owned();
         if is_meaningful_decoded(&decoded_str) {
