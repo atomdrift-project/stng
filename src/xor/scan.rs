@@ -623,11 +623,27 @@ fn extract_custom_xor_strings_pattern_based_simple(
             }
 
             // XOR decode while printable: data[pos+j] ^ key[j % len(key)]
-            // Fast early exit: if the first decoded byte is not printable, skip this position
-            // immediately without any allocation or excluded-range check. Most positions fail
-            // this single-byte test, so doing it first dramatically reduces overhead.
+            //
+            // Exact pre-filter, no allocation: a result needs at least
+            // `min_length` decoded bytes, and the decode below stops at the
+            // first non-printable byte (the consecutive-null rule only breaks
+            // on a non-printable decode too), so unless the first `min_length`
+            // positions all decode printable this position yields nothing.
+            // Byte 0 alone rejected ~63% of positions in binary data; the
+            // full prefix rejects nearly all of them before the `Vec` and
+            // the up-to-1024-byte walk. Measured 2026-09-05 on a scan server:
+            // `auto_detect_xor_key` (five candidate keys, every position of
+            // every Mach-O member ≤ 512 KB) was a third of all CPU, most of
+            // it this closure's walk over positions that could never reach
+            // `min_length`. Results are identical by construction.
             let key_len = key.len();
-            if !is_printable_byte_for_file_xor(data[pos] ^ key[0]) {
+            let remaining = data.len() - pos;
+            if remaining < min_length {
+                return None;
+            }
+            if !(0..min_length)
+                .all(|j| is_printable_byte_for_file_xor(data[pos + j] ^ key[j % key_len]))
+            {
                 return None;
             }
 
