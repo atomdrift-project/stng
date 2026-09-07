@@ -21,7 +21,7 @@ static ENCODED_CMD_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("static regex")
 });
 
-/// [Convert]::FromBase64String("...") or [System.Convert]::FromBase64String("...")
+/// `[Convert]::FromBase64String("...")` or `[System.Convert]::FromBase64String("...")`
 #[allow(clippy::expect_used)]
 static CONVERT_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -111,7 +111,7 @@ fn try_encoded_command(source: &str) -> Vec<DeobfuscationResult> {
         .collect()
 }
 
-/// iex([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("...")))
+/// `iex([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("...")))`
 fn try_iex_encoding_b64(source: &str) -> Vec<DeobfuscationResult> {
     IEX_ENCODING_B64_RE
         .captures_iter(source)
@@ -130,7 +130,7 @@ fn try_iex_encoding_b64(source: &str) -> Vec<DeobfuscationResult> {
         .collect()
 }
 
-/// [Convert]::FromBase64String (standalone, not wrapped in iex+Encoding)
+/// `[Convert]::FromBase64String` (standalone, not wrapped in iex+Encoding)
 fn try_convert_b64(source: &str) -> Vec<DeobfuscationResult> {
     CONVERT_B64_RE
         .captures_iter(source)

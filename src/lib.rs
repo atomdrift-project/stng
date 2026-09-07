@@ -645,7 +645,7 @@ fn is_bundle_id(s: &str) -> bool {
 /// Certificates are embedded in the code signature blob and contain:
 /// - Distinguished Names (DN): "Apple Inc.1", "Apple Certification Authority1"
 /// - ASN.1 dates: "111024173941Z", "261024173941Z0"
-/// - CRL URLs: "http://crl.apple.com/codesigning.crl0"
+/// - CRL URLs: `"http://crl.apple.com/codesigning.crl0"`
 /// - Policy text: "This certificate is to be used exclusively for..."
 fn is_certificate_string(s: &str) -> bool {
     // Certificate Authority names

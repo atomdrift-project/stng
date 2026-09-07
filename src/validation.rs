@@ -1933,7 +1933,7 @@ pub fn is_garbage_with_kind(s: &str, kind: Option<crate::types::StringKind>) -> 
 /// themselves — for example the x86 register save-sequence detector
 /// only fires when `arch` is `None` (unknown) or x86-family AND
 /// `section` is `None` or a known code section.  Callers that don't
-/// know their context can pass [`StringContext::empty`] and get the
+/// know their context can pass [`StringContext::empty`](crate::types::StringContext::empty) and get the
 /// same behavior as `is_garbage(s)` did before context was added.
 ///
 /// Use cases:
