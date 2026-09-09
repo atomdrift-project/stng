@@ -26,6 +26,25 @@ static EMBEDDED_B64_RE: LazyLock<Regex> =
 /// runs need a corroborating signal; see [`accept_embedded`].
 const EMBEDDED_B64_TRUSTED_LEN: usize = 12;
 
+/// Matches hex runs embedded in a larger string — the shape droppers use when
+/// they hide a command as `echo <hex> | xxd -r -p | sh` rather than encoding
+/// the whole string. [`decode_hex_strings`] only decodes a value that is hex
+/// *in its entirety*, so without this the payload inside such a one-liner is
+/// never decoded and every plaintext rule downstream is blind to it.
+#[allow(clippy::expect_used)]
+static EMBEDDED_HEX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"([0-9a-fA-F]{32,})").expect("static regex"));
+
+/// The run length above which an embedded hex run is decoded on its own: 32
+/// nibbles is 16 decoded bytes. The floor is deliberately double
+/// [`MIN_HEX_LENGTH`] because an embedded run has no delimiters vouching for
+/// it — it is simply a stretch of text that happens to be hex — and the corpus
+/// is full of innocent long hex: digests, UUIDs with the dashes stripped, git
+/// object ids, key material, colour tables. Those are rejected on output
+/// rather than input: random bytes almost never survive [`decoded_to_text`],
+/// which requires the result to be printable text end to end.
+const EMBEDDED_HEX_TRUSTED_LEN: usize = 32;
+
 /// Whether an embedded base64 run is worth decoding, given its length, how many
 /// `=` pad it, and whether a decode command sits in the same string.
 ///
@@ -248,6 +267,65 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
                         }
                     }
                 }
+            }
+            local
+        })
+        .collect()
+}
+
+/// Extract and decode hex runs embedded inside larger strings.
+///
+/// The counterpart to [`extract_embedded_base64`]. [`decode_hex_strings`]
+/// decodes a string only when the *whole* value is hex, which misses the
+/// common dropper shape where the blob is one argument of a shell one-liner
+/// (`echo <hex> | xxd -r -p | sh`). Recovering it here puts the decoded
+/// command in the encoded-string corpus, where the ordinary plaintext rules
+/// can see it.
+pub(crate) fn extract_embedded_hex(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+    // Each input string can yield several embedded payloads; `flat_map_iter`
+    // parallelises across strings while keeping each string's per-capture order.
+    strings
+        .par_iter()
+        .flat_map_iter(|s| {
+            let mut local = Vec::new();
+            for cap in EMBEDDED_HEX_RE.captures_iter(&s.value) {
+                let Some(hex_match) = cap.get(1) else {
+                    continue;
+                };
+                let hex_str = hex_match.as_str();
+
+                // The whole-string case is decode_hex_strings' job.
+                if hex_str == s.value {
+                    continue;
+                }
+                if hex_str.len() < EMBEDDED_HEX_TRUSTED_LEN || !hex_str.len().is_multiple_of(2) {
+                    continue;
+                }
+
+                let Ok(decoded) = hex::decode(hex_str) else {
+                    continue;
+                };
+                // Rejects the digests, ids, and key material that make up most
+                // long hex: their bytes are not printable text.
+                let Some(decoded_str) = decoded_to_text(decoded) else {
+                    continue;
+                };
+                let trimmed = decoded_str.trim();
+                if trimmed.len() < 4 {
+                    continue;
+                }
+
+                local.push(ExtractedString {
+                    value: trimmed.to_string(),
+                    // The hex token sits at `hex_match.start()` within the
+                    // parent's bytes; the source extent is the encoded token,
+                    // not the decoded value.
+                    data_offset: s.data_offset + hex_match.start() as u64,
+                    data_len: u32::try_from(hex_str.len()).unwrap_or(u32::MAX),
+                    method: StringMethod::HexDecode,
+                    kind: crate::classify_string(trimmed),
+                    ..Default::default()
+                });
             }
             local
         })

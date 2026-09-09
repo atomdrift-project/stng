@@ -30,7 +30,10 @@ use std::sync::{Arc, LazyLock, Mutex};
 ///   recovered (`[...].map(c => String.fromCharCode(c)).join("")` handed to a
 ///   rotation before `eval`). Entries keyed under `2` hold only the outer
 ///   wrapper's strings and none of the payload's.
-const CACHE_VERSION: &str = "3";
+/// - `4`: hex runs embedded in a larger string now decode (`echo <hex> | xxd
+///   -r -p | sh`), where previously only a value that was hex end to end did.
+///   Entries keyed under `3` hold the wrapping command but not the payload.
+const CACHE_VERSION: &str = "4";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted

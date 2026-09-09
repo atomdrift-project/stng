@@ -1169,6 +1169,7 @@ pub fn decode_encoded_strings(strings: &[ExtractedString]) -> Vec<ExtractedStrin
     decoded.extend(decoders::decode_base85_strings(strings));
     decoded.extend(decoders::decode_rot13_base64_strings(strings));
     decoded.extend(decoders::decode_hex_strings(strings));
+    decoded.extend(decoders::extract_embedded_hex(strings));
     decoded.extend(decoders::decode_url_strings(strings));
     decoded.extend(decoders::decode_unicode_escape_strings(strings));
     decoded
@@ -1349,6 +1350,7 @@ fn append_script_deobfuscation(
         payload_decoded.extend(decoders::decode_base64_strings(&payload_strings));
         payload_decoded.extend(decoders::extract_embedded_base64(&payload_strings));
         payload_decoded.extend(decoders::decode_hex_strings(&payload_strings));
+        payload_decoded.extend(decoders::extract_embedded_hex(&payload_strings));
         payload_decoded.extend(decoders::decode_url_strings(&payload_strings));
         payload_decoded.extend(decoders::decode_unicode_escape_strings(&payload_strings));
         payload_strings.extend(payload_decoded);
@@ -1494,6 +1496,7 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
             decoded.extend(decoders::decode_base32_strings(&strings));
             decoded.extend(decoders::decode_base85_strings(&strings));
             decoded.extend(decoders::decode_hex_strings(&strings));
+            decoded.extend(decoders::extract_embedded_hex(&strings));
         }
         if !opts.is_cancelled() {
             decoded.extend(decoders::decode_url_strings(&strings));
@@ -2371,6 +2374,7 @@ fn extract_from_object_inner(
                         let mut v = decoders::decode_base32_strings(&strings);
                         v.extend(decoders::decode_base85_strings(&strings));
                         v.extend(decoders::decode_hex_strings(&strings));
+                        v.extend(decoders::extract_embedded_hex(&strings));
                         v
                     },
                     || {
