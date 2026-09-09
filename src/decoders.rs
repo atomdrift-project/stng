@@ -837,7 +837,15 @@ fn decode_rot13_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
         if whole.is_some() {
             return true;
         }
+        // Truncate to a whole base64 quartet, but only on a char boundary. The
+        // input is an arbitrary extracted string, so it can hold multi-byte
+        // UTF-8, and a byte index landing mid-scalar panics the slice.
         let keep = v.len() - v.len() % 4;
+        let keep = if v.is_char_boundary(keep) {
+            keep
+        } else {
+            return false;
+        };
         keep >= MIN_BASE64_LENGTH
             && base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &v[..keep])
                 .ok()
@@ -870,7 +878,7 @@ fn decode_rot13_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
             .and_then(decoded_to_text)
             .or_else(|| {
                 let keep = rotated.len() - rotated.len() % 4;
-                if keep < MIN_BASE64_LENGTH {
+                if keep < MIN_BASE64_LENGTH || !rotated.is_char_boundary(keep) {
                     return None;
                 }
                 base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &rotated[..keep])
