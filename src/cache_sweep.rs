@@ -1,13 +1,22 @@
 //! Best-effort, non-blocking cache reclamation.
 //!
 //! A cache here is a directory of entries, each carrying an mtime. A *sweep*
-//! deletes the oldest entries until the directory is within a time and size
-//! budget. The whole thing runs on one detached thread that dies with the
+//! deletes the oldest entries until the directory is within an age, count and
+//! size budget. The whole thing runs on one detached thread that dies with the
 //! process — no daemon, no async runtime, no persistent index.
 //!
+//! The count ceiling is the one that usually binds: entries are small, so a
+//! byte budget alone lets a directory reach millions of files, which every
+//! filesystem tool handles badly and which makes the sweep meant to fix it
+//! progressively more expensive.
+//!
 //! Two properties keep it cheap and safe:
-//! - A once-a-day `.last-sweep` marker gates the walk, so the common case is a
-//!   single `stat`, never a scan of a million-entry directory.
+//! - A `.last-sweep` marker gates the walk, so the common case is a single
+//!   `stat`, never a scan of a million-entry directory. The marker records
+//!   whether the sweep it names *finished*: a detached thread dies with its
+//!   process, and a sweep cut short that way must not book itself as a full
+//!   day's work, or a cache too large to sweep in one short run would never be
+//!   swept at all.
 //! - Every filesystem error is ignored: reclaiming disk must never disturb the
 //!   program it runs alongside. These caches are written once and never
 //!   rewritten, and on Unix unlinking a file another thread has open leaves that
@@ -19,17 +28,31 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 /// Default retention window: entries older than this are dropped.
 const DEFAULT_TTL_DAYS: u64 = 30;
 /// Default aggregate ceiling per component: 2 GiB.
 const DEFAULT_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Default aggregate ceiling per component, in entries. Chosen so a cache stays
+/// comfortable for `ls`, Finder and Spotlight, and so the sweep's own walk
+/// stays cheap enough to finish inside a short-lived process.
+const DEFAULT_MAX_ENTRIES: usize = 16_384;
 /// Re-walk a cache at most this often; cheaper runs just read the marker.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-/// Marker file whose mtime records the last sweep, written in the primary root.
+/// Re-walk this soon after a sweep that never reported finishing. A sweep still
+/// running after this long can be joined by a second one, which costs a
+/// redundant walk but nothing else: eviction is a delete of an entry each
+/// process decided was oldest, and a failed delete is already ignored.
+const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// Marker file, written in the primary root: its mtime records when the last
+/// sweep started and its single byte whether that sweep finished.
 const MARKER: &str = ".last-sweep";
+/// Marker contents: a sweep is in flight, or died with its process.
+const MARK_STARTED: &[u8] = b"s";
+/// Marker contents: the sweep that wrote it ran to completion.
+const MARK_DONE: &[u8] = b"d";
 
 /// A cache directory and how deep its entries live below it.
 #[derive(Debug)]
@@ -54,6 +77,9 @@ pub struct Budget {
     /// After the age pass, delete oldest entries until the total across all
     /// roots is at or below this.
     pub max_bytes: u64,
+    /// Likewise for the entry count across all roots. Usually the binding
+    /// ceiling; `max_bytes` bounds the case of a few very large entries.
+    pub max_entries: usize,
 }
 
 /// One sweep in flight per process; a second [`spawn`] is a no-op until it ends.
@@ -70,13 +96,17 @@ impl Drop for RunningGuard {
 }
 
 /// Sweep `budgets` on a detached thread and return immediately. The thread is
-/// reaped when the process exits; a sweep interrupted that way is re-attempted
-/// on a later run (at most once per 24h per the marker, so a long-lived
-/// consumer is what carries a large cache all the way to completion).
+/// reaped when the process exits; a sweep interrupted that way leaves the
+/// marker unfinished, so the next run retries it within the hour rather than
+/// waiting out a full interval.
 ///
 /// For a one-shot CLI, call once at startup — it races the real work. For a
 /// long-lived daemon, use [`spawn_periodic`] instead.
-pub fn spawn(mut budgets: Vec<Budget>) {
+pub fn spawn(budgets: Vec<Budget>) {
+    spawn_inner(budgets, false);
+}
+
+fn spawn_inner(mut budgets: Vec<Budget>, force: bool) {
     budgets.retain(|b| !b.roots.is_empty());
     if budgets.is_empty() {
         return;
@@ -90,10 +120,30 @@ pub fn spawn(mut budgets: Vec<Budget>) {
         .name("stng-cache-sweep".into())
         .spawn(move || {
             let _guard = RunningGuard;
-            run_all(&budgets);
+            run_all(&budgets, force);
         });
     if started.is_err() {
         RUNNING.store(false, Ordering::Release);
+    }
+}
+
+/// Entries this process has written since it last triggered a sweep.
+static WRITES: AtomicUsize = AtomicUsize::new(0);
+
+/// Record one entry written to a swept cache, sweeping again once this process
+/// has written a full ceiling's worth.
+///
+/// The marker gates sweeps on elapsed *time*, which a batch run defeats: it can
+/// write millions of entries between two daily sweeps, all within one process
+/// whose startup sweep found nothing to do. Counting writes closes that gap
+/// without a second timer — an ordinary run never reaches the threshold and so
+/// never pays for this beyond one relaxed increment.
+pub fn note_write() {
+    // The cap is configurable, but reading the environment on every write is
+    // not worth it: the threshold only decides how often a long run re-sweeps.
+    if WRITES.fetch_add(1, Ordering::Relaxed) + 1 >= DEFAULT_MAX_ENTRIES {
+        WRITES.store(0, Ordering::Relaxed);
+        spawn_inner(vec![stng_budget()], true);
     }
 }
 
@@ -110,7 +160,7 @@ pub fn spawn_periodic(mut budgets: Vec<Budget>, interval: Duration) {
         .name("stng-cache-sweep".into())
         .spawn(move || {
             loop {
-                run_all(&budgets);
+                run_all(&budgets, false);
                 std::thread::sleep(interval);
             }
         });
@@ -132,6 +182,7 @@ pub fn stng_budget() -> Budget {
         roots,
         max_age: max_age_from_env("STNG_CACHE_TTL_DAYS"),
         max_bytes: max_bytes_from_env("STNG_CACHE_MAX_BYTES"),
+        max_entries: max_entries_from_env("STNG_CACHE_MAX_ENTRIES"),
     }
 }
 
@@ -165,9 +216,19 @@ pub fn max_bytes_from_env_or(var: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-fn run_all(budgets: &[Budget]) {
+/// Entry ceiling from `var`, or the [`DEFAULT_MAX_ENTRIES`] default.
+#[must_use]
+pub fn max_entries_from_env(var: &str) -> usize {
+    std::env::var(var)
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_MAX_ENTRIES)
+}
+
+fn run_all(budgets: &[Budget], force: bool) {
     for b in budgets {
-        run(b);
+        run(b, force);
     }
 }
 
@@ -180,17 +241,18 @@ struct Entry {
     bytes: u64,
 }
 
-fn run(b: &Budget) {
+fn run(b: &Budget, force: bool) {
     let Some(primary) = b.roots.first() else {
         return;
     };
-    if !due(&primary.path) {
+    if !force && !due(&primary.path) {
         return;
     }
     // Mark the start (mtime = now) so a racing process sees a fresh marker and
     // skips. Best-effort; if the directory doesn't exist yet, there's nothing
     // to sweep anyway.
-    let _ = fs::write(primary.path.join(MARKER), b"");
+    let marker = primary.path.join(MARKER);
+    let _ = fs::write(&marker, MARK_STARTED);
 
     let mut entries = Vec::new();
     for r in &b.roots {
@@ -212,22 +274,33 @@ fn run(b: &Budget) {
         }
     });
 
-    // Size pass: if still over budget, evict oldest first to 90% of the cap.
+    // Count/size pass: over either ceiling, evict oldest first until under 90%
+    // of both. Stopping at 90% rather than exactly at the cap keeps a cache
+    // sitting at the ceiling from re-triggering a sweep on the very next write.
+    // Divide before multiplying so a caller's `u64::MAX`/`usize::MAX` ceiling
+    // can't overflow the target.
+    let mut count = entries.len();
     let mut total: u64 = entries.iter().map(|e| e.bytes).sum();
-    if total > b.max_bytes {
+    if total > b.max_bytes || count > b.max_entries {
         entries.sort_by_key(|e| e.modified); // oldest first
-        let target = b.max_bytes / 10 * 9;
+        let byte_target = b.max_bytes / 10 * 9;
+        let count_target = b.max_entries / 10 * 9;
         for e in &entries {
-            if total <= target {
+            if total <= byte_target && count <= count_target {
                 break;
             }
             if remove(e) {
                 total = total.saturating_sub(e.bytes);
+                count -= 1;
                 freed += e.bytes;
                 removed += 1;
             }
         }
     }
+
+    // Record completion, so the next run waits a full interval rather than
+    // retrying. Not reached if this thread dies with its process mid-sweep.
+    let _ = fs::write(&marker, MARK_DONE);
 
     if removed > 0 {
         tracing::debug!(
@@ -240,14 +313,23 @@ fn run(b: &Budget) {
     }
 }
 
-/// True unless this root was swept within [`SWEEP_INTERVAL`]. A missing or
-/// unreadable marker counts as due, so a never-swept cache is handled on the
-/// first run.
+/// True unless this root was swept recently: within [`SWEEP_INTERVAL`] for a
+/// sweep that finished, or [`RETRY_INTERVAL`] for one that died with its
+/// process. A missing or unreadable marker counts as due, so a never-swept
+/// cache is handled on the first run.
 fn due(root: &Path) -> bool {
-    match fs::metadata(root.join(MARKER)).and_then(|m| m.modified()) {
-        Ok(t) => t.elapsed().map(|e| e >= SWEEP_INTERVAL).unwrap_or(true),
-        Err(_) => true,
-    }
+    let marker = root.join(MARKER);
+    let Ok(started) = fs::metadata(&marker).and_then(|m| m.modified()) else {
+        return true;
+    };
+    let Ok(elapsed) = started.elapsed() else {
+        return true; // marker dated in the future (clock skew): sweep now
+    };
+    let interval = match fs::read(&marker).as_deref() {
+        Ok(MARK_DONE) => SWEEP_INTERVAL,
+        _ => RETRY_INTERVAL,
+    };
+    elapsed >= interval
 }
 
 /// Gather the cache entries at `depth` below `root` into `out`. At `depth <= 1`
@@ -355,8 +437,9 @@ mod tests {
             }],
             max_age: day(30),
             max_bytes: u64::MAX,
+            max_entries: usize::MAX,
         };
-        run(&budget);
+        run(&budget, false);
         assert!(!dir.join("old.json").exists(), "40-day entry evicted");
         assert!(dir.join("fresh.json").exists(), "1-day entry kept");
         let _ = fs::remove_dir_all(&dir);
@@ -377,8 +460,9 @@ mod tests {
             }],
             max_age: day(3650), // age pass inert
             max_bytes: 1000,
+            max_entries: usize::MAX,
         };
-        run(&budget);
+        run(&budget, false);
         // 2000 bytes → evict oldest until ≤ 900: remove e0(5d), e1(4d), e2(3d).
         assert!(!dir.join("e0.json").exists(), "oldest evicted");
         assert!(!dir.join("e1.json").exists());
@@ -403,8 +487,9 @@ mod tests {
             }],
             max_age: day(30),
             max_bytes: u64::MAX,
+            max_entries: usize::MAX,
         };
-        run(&budget);
+        run(&budget, false);
         assert!(!ver.join("a.zst").exists(), "aged grandchild evicted");
         assert!(ver.join("b.zst").exists(), "fresh grandchild kept");
         let _ = fs::remove_dir_all(&dir);
@@ -430,6 +515,73 @@ mod tests {
     }
 
     #[test]
+    fn count_pass_evicts_oldest_to_ninety_percent() {
+        let dir = scratch("count");
+        // Thirteen tiny entries, oldest first; cap 10 → 90% = 9, so the four
+        // oldest go. The byte ceiling is inert, isolating the count pass.
+        for i in 0..13u64 {
+            write_aged(&dir.join(format!("e{i:02}.json")), 1, day(20 - i));
+        }
+        run(
+            &Budget {
+                label: "test",
+                roots: vec![Root {
+                    path: dir.clone(),
+                    depth: 1,
+                }],
+                max_age: day(3650),
+                max_bytes: u64::MAX,
+                max_entries: 10,
+            },
+            false,
+        );
+        let kept: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .filter(|n| n != MARKER)
+            .collect();
+        assert_eq!(kept.len(), 9, "evicted down to 90% of the cap");
+        assert!(!dir.join("e00.json").exists(), "oldest evicted");
+        assert!(!dir.join("e03.json").exists());
+        assert!(dir.join("e04.json").exists(), "newest kept");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unfinished_marker_retries_within_the_hour() {
+        let dir = scratch("unfinished");
+        let marker = dir.join(MARKER);
+        let two_hours = Duration::from_secs(2 * 60 * 60);
+
+        // A sweep that finished two hours ago holds off for a full day.
+        fs::write(&marker, MARK_DONE).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&marker)
+            .unwrap()
+            .set_modified(SystemTime::now() - two_hours)
+            .unwrap();
+        assert!(!due(&dir), "completed sweep gates for SWEEP_INTERVAL");
+
+        // One that died mid-walk is retried instead: without this, a cache too
+        // large to sweep inside one short-lived process is never swept at all.
+        fs::write(&marker, MARK_STARTED).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&marker)
+            .unwrap()
+            .set_modified(SystemTime::now() - two_hours)
+            .unwrap();
+        assert!(
+            due(&dir),
+            "unfinished sweep is due again after RETRY_INTERVAL"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn marker_gates_and_survives() {
         let dir = scratch("gate");
         assert!(due(&dir), "no marker ⇒ due");
@@ -441,8 +593,9 @@ mod tests {
             }],
             max_age: day(30),
             max_bytes: u64::MAX,
+            max_entries: usize::MAX,
         };
-        run(&budget);
+        run(&budget, false);
         assert!(dir.join(MARKER).exists(), "sweep writes the marker");
         assert!(!due(&dir), "fresh marker ⇒ not due");
         let _ = fs::remove_dir_all(&dir);

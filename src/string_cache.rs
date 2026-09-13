@@ -13,12 +13,22 @@
 //! ```
 //! where `<key>` hashes the input bytes, the output-affecting options, and a
 //! cache-format version so a logic change invalidates stale entries.
+//!
+//! Retention is [`crate::cache_sweep`]'s: entries are bounded by age, count and
+//! total bytes, evicted oldest-first. A hit refreshes an entry's mtime (see
+//! [`touch`]), making that order least-recently-*used*, and a write reports
+//! itself so a long batch run re-sweeps before it can outgrow the ceiling.
 
 use crate::{ExtractOptions, ExtractedString};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, SystemTime};
+
+/// How stale an entry's mtime must be before a cache hit rewrites it. Bounds
+/// the cost of LRU tracking to one `set_modified` per entry per day.
+const LRU_GRANULARITY: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Bump when extraction output changes shape so stale disk entries are ignored.
 /// Unlike filefacts' cache, this key carries no build fingerprint, so a change
@@ -204,8 +214,34 @@ fn disk_load(key: &str) -> Option<Vec<ExtractedString>> {
 }
 
 fn disk_load_at(dir: &Path, key: &str) -> Option<Vec<ExtractedString>> {
-    let bytes = std::fs::read(dir.join(format!("{key}.json"))).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    let path = dir.join(format!("{key}.json"));
+    let bytes = std::fs::read(&path).ok()?;
+    let strings = serde_json::from_slice(&bytes).ok()?;
+    // Only a usable entry counts as used: an unparseable one is a miss, and
+    // refreshing it would keep it alive past the age that would have cleared it.
+    touch(&path);
+    Some(strings)
+}
+
+/// Mark `path` as used now, so [`crate::cache_sweep`] — which orders eviction
+/// by mtime — drops entries that are least recently *used* rather than merely
+/// oldest. Without this a daily-hit entry dies at the retention window while a
+/// write-once entry of the same age survives on nothing but a later write.
+///
+/// Granular to a day: an entry already touched within the window is left alone,
+/// so a cache hit stays a read in every case but the first of each day.
+fn touch(path: &Path) {
+    let used_today = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .is_ok_and(|m| m.elapsed().is_ok_and(|since| since < LRU_GRANULARITY));
+    if used_today {
+        return;
+    }
+    // Best-effort, like every other cache operation: a read-only cache dir
+    // costs LRU ordering, never a failed extraction.
+    if let Ok(f) = std::fs::File::options().write(true).open(path) {
+        let _ = f.set_modified(SystemTime::now());
+    }
 }
 
 fn disk_store(key: &str, strings: &[ExtractedString]) {
@@ -224,8 +260,10 @@ fn disk_store_at(dir: &Path, key: &str, strings: &[ExtractedString]) {
     // Best-effort: a cache write failure must never fail extraction. Write to a
     // temp sibling and rename so a concurrent reader never sees a partial file.
     let tmp_path = dir.join(format!("{key}.json.tmp"));
-    if std::fs::write(&tmp_path, &bytes).is_ok() {
-        let _ = std::fs::rename(tmp_path, dir.join(format!("{key}.json")));
+    if std::fs::write(&tmp_path, &bytes).is_ok()
+        && std::fs::rename(tmp_path, dir.join(format!("{key}.json"))).is_ok()
+    {
+        crate::cache_sweep::note_write();
     }
 }
 
@@ -272,6 +310,42 @@ mod tests {
         let strings = sample();
         disk_store_at(&dir, key, &strings);
         assert_eq!(disk_load_at(&dir, key).as_deref(), Some(strings.as_slice()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hit_refreshes_a_stale_entry_but_not_a_fresh_one() {
+        let dir = std::env::temp_dir().join(format!("stng-strcache-lru-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let key = "lru_test_key";
+        disk_store_at(&dir, key, &sample());
+        let path = dir.join(format!("{key}.json"));
+
+        // Age the entry past the retention window, then hit it: the sweeper
+        // orders by mtime, so a hit has to move it or the entry dies in use.
+        let stale = SystemTime::now() - Duration::from_secs(40 * 24 * 60 * 60);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stale)
+            .unwrap();
+        assert!(disk_load_at(&dir, key).is_some());
+        let refreshed = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(
+            refreshed > stale,
+            "a hit on a stale entry rewrites its mtime"
+        );
+
+        // A second hit the same day leaves it alone — LRU costs one write per
+        // entry per day, not one per read.
+        assert!(disk_load_at(&dir, key).is_some());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            refreshed,
+            "an entry already touched today is left untouched"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
