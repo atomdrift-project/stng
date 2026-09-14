@@ -55,5 +55,10 @@ fn pe_inline_shell_command_recovered_without_r2() {
             "expected {want:?} to classify as ShellCmd, got {:?}",
             hit.kind
         );
+        assert!(
+            hit.data_offset < std::fs::metadata(SAMPLE).unwrap().len(),
+            "PE string offset must be file-relative, got 0x{:x}",
+            hit.data_offset
+        );
     }
 }

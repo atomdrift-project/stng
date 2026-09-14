@@ -404,8 +404,12 @@ fn extract_backward_strings(
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
-    // 120 bytes back covers a string spilled to the stack ahead of its CALL.
-    let scan_start = call_pos.saturating_sub(call_pos.min(120));
+    // 256 bytes back covers a string spilled to the stack ahead of its CALL
+    // and the longer Go setup sequences seen around runtime.concatstring2.
+    // The LEA+immediate-length pair itself remains exact, so widening this
+    // bounded association window does not make arbitrary printable data a
+    // candidate; it only lets a valid pair survive intervening setup code.
+    let scan_start = call_pos.saturating_sub(call_pos.min(256));
     let mut pos = scan_start;
 
     while pos + 7 <= call_pos {
@@ -504,6 +508,22 @@ fn find_inline_length_string(
         && let Some(s) = validate(len)
     {
         return Some((s, Some(reg)));
+    }
+
+    // Some Go branches materialize the length first and emit the pointer LEA
+    // immediately afterwards: `MOV EBX, 16; LEA RAX, literal`. Accept only
+    // an instruction that ends exactly at the LEA, keeping the same strict
+    // adjacency guarantee as the forward form.
+    for width in [5, 6, 7] {
+        if lea_pos < width {
+            continue;
+        }
+        if let Some((reg, len)) = decode_mov_imm32(text_data, lea_pos - width)
+            && reg != lea_dest
+            && let Some(s) = validate(len)
+        {
+            return Some((s, Some(reg)));
+        }
     }
 
     // Fallback: length stored to the stack (`MOV $len, disp(RSP)`), how a string
@@ -1097,6 +1117,51 @@ mod tests {
         assert!(
             results.iter().any(|s| s.value == "echo hello world"),
             "LEA RBX + MOV ECX length pair should be recovered, got {:?}",
+            results.iter().map(|s| &s.value).collect::<Vec<_>>(),
+        );
+    }
+
+    /// Go may leave substantial setup code between a literal's LEA/length
+    /// pair and the runtime call that consumes it. The association must remain
+    /// bounded, but must cover that legitimate shape.
+    #[test]
+    fn test_amd64_long_setup_before_call() {
+        let mut text = vec![
+            0x48, 0x8D, 0x05, 0xF9, 0x0F, 0x00, 0x00, // LEA RAX, [rip+0xff9]
+            0xBB, 0x10, 0x00, 0x00, 0x00, // MOV EBX, 16
+        ];
+        text.resize(140, 0x90);
+        text.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]);
+        text.extend_from_slice(&[0x90; 8]);
+        let mut rodata = vec![0u8; 0x40];
+        rodata[..16].copy_from_slice(b"/v1/teams/ingest");
+
+        let results = extract_inline_strings_amd64(&text, 0x100000, &rodata, 0x101000, 4);
+        assert!(
+            results.iter().any(|s| s.value == "/v1/teams/ingest"),
+            "long-distance LEA/MOV pair should be recovered, got {:?}",
+            results.iter().map(|s| &s.value).collect::<Vec<_>>(),
+        );
+    }
+
+    /// A Go branch can place the immediate length directly before the pointer
+    /// LEA rather than after it.
+    #[test]
+    fn test_amd64_preceding_length_before_lea() {
+        let mut text = vec![
+            0xBB, 0x10, 0x00, 0x00, 0x00, // MOV EBX, 16
+            0x48, 0x8D, 0x05, 0xF4, 0x0F, 0x00, 0x00, // LEA RAX, [rip+0xff4]
+        ];
+        text.extend_from_slice(&[0x90; 32]);
+        text.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]);
+        text.extend_from_slice(&[0x90; 8]);
+        let mut rodata = vec![0u8; 0x40];
+        rodata[..16].copy_from_slice(b"/v1/teams/ingest");
+
+        let results = extract_inline_strings_amd64(&text, 0x100000, &rodata, 0x101000, 4);
+        assert!(
+            results.iter().any(|s| s.value == "/v1/teams/ingest"),
+            "preceding MOV/LEA pair should be recovered, got {:?}",
             results.iter().map(|s| &s.value).collect::<Vec<_>>(),
         );
     }

@@ -414,6 +414,30 @@ impl GoStringExtractor {
             }
         }
 
+        // All PE Go passes above work in image-relative virtual addresses so
+        // pointer/length structures and instruction references can be
+        // resolved consistently. The public `data_offset` contract is a file
+        // offset, however, and cleave's section matcher compares it with PE
+        // raw-data ranges. Convert every result back to the physical `.rdata`
+        // offset before returning it.
+        let rdata_file_start = pe
+            .sections
+            .iter()
+            .find(|section| {
+                let name = crate::binary::pe_section_name(&section.name);
+                name.contains("rodata") || name == ".rdata"
+            })
+            .map(|section| u64::from(section.pointer_to_raw_data));
+        if let Some(rdata_file_start) = rdata_file_start {
+            for s in &mut strings {
+                if let Some(relative) = s.data_offset.checked_sub(rodata_va)
+                    && relative < rodata_data.len() as u64
+                {
+                    s.data_offset = rdata_file_start + relative;
+                }
+            }
+        }
+
         strings
     }
 
