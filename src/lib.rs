@@ -1423,6 +1423,18 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
     // Goblin's binary extractors have nothing useful to say about an
     // `Object::Unknown` anyway, so the only thing the goblin branch
     // contributes there is the gate that breaks decoding.
+    // A JVM class and a big-endian fat Mach-O share the same CAFEBABE magic.
+    // Goblin therefore accepts a class as `Mach::Fat`, interprets the JVM
+    // minor/major version words as an architecture count, warns once per
+    // bogus FatArch, and returns no useful strings.  A real fat Mach-O keeps
+    // its architecture count in bytes 4..8 (normally a small integer), while
+    // a class stores a plausible JVM major version in bytes 6..8 followed by
+    // a constant-pool count and tag. Walk that pool directly: it is both
+    // cheaper and more exact than treating Java as an unknown binary.
+    if looks_like_java_class(data) {
+        return extract_java_class_strings(data, opts);
+    }
+
     let parsed_binary = match Object::parse(data) {
         Ok(obj) if !matches!(obj, Object::Unknown(_)) => Some(obj),
         _ => None,
@@ -1521,6 +1533,86 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
 
         deduplicate_by_offset(strings)
     }
+}
+
+/// Distinguish JVM class files from big-endian fat Mach-O files, which use the
+/// same four-byte magic. The shared word after the magic is either the JVM
+/// `(minor, major)` pair or Mach-O's architecture count. Real universal Mach-O
+/// files have a small count; Java's major version alone makes the word larger.
+/// The same bound is used by filefacts, keeping malformed CAFEBABE input away
+/// from Goblin's fat-architecture loop too.
+fn looks_like_java_class(data: &[u8]) -> bool {
+    data.len() >= 8
+        && data[..4] == [0xCA, 0xFE, 0xBA, 0xBE]
+        && u32::from_be_bytes([data[4], data[5], data[6], data[7]]) > 16
+}
+
+/// Extract the JVM constant-pool UTF-8 entries directly. Besides being one
+/// linear pass, this preserves exact string boundaries: a raw byte scan can
+/// accidentally prepend a printable low byte from the preceding `u2 length`.
+fn extract_java_class_strings(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
+    let Some(&[count_hi, count_lo]) = data.get(8..10) else {
+        return Vec::new();
+    };
+    let count = u16::from_be_bytes([count_hi, count_lo]) as usize;
+    let mut strings = Vec::new();
+    let mut pos = 10usize;
+    let mut index = 1usize;
+
+    while index < count {
+        let Some(&tag) = data.get(pos) else {
+            break;
+        };
+        pos += 1;
+        let size = match tag {
+            1 => {
+                let Some(&[hi, lo]) = data.get(pos..pos + 2) else {
+                    break;
+                };
+                pos += 2;
+                let len = u16::from_be_bytes([hi, lo]);
+                let len_usize = usize::from(len);
+                let Some(bytes) = data.get(pos..pos.saturating_add(len_usize)) else {
+                    break;
+                };
+                let value = String::from_utf8_lossy(bytes).into_owned();
+                if value.len() >= opts.min_length {
+                    strings.push(ExtractedString {
+                        kind: classifier::classify_string(&value),
+                        value,
+                        data_offset: pos as u64,
+                        data_len: u32::from(len),
+                        method: StringMethod::RawScan,
+                        fragments: None,
+                    });
+                }
+                len_usize
+            }
+            3 | 4 | 9 | 10 | 11 | 12 | 17 | 18 => 4,
+            5 | 6 => {
+                index += 1;
+                8
+            }
+            7 | 8 | 16 | 19 | 20 => 2,
+            15 => 3,
+            _ => break,
+        };
+        let Some(next) = pos.checked_add(size).filter(|&next| next <= data.len()) else {
+            break;
+        };
+        pos = next;
+        index += 1;
+    }
+
+    if opts.xor_scan || opts.xor_scan_multi || opts.xor_key.is_some() {
+        apply_xor_scan(&mut strings, data, opts, false, &[]);
+    }
+    let decoded = decode_encoded_strings(&strings);
+    strings.extend(decoded);
+    if opts.filter_garbage {
+        strings.retain(|s| passes_garbage_filter(s, &[]));
+    }
+    deduplicate_by_offset(strings)
 }
 
 /// Extract strings from binary data using a caller-supplied parsed goblin object.
