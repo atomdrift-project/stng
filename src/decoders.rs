@@ -225,8 +225,9 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
                         continue;
                     }
 
-                    // Must be valid base64 length (multiple of 4)
-                    if b64_str.len() % 4 != 0 {
+                    // A remainder of one cannot encode any final bytes.
+                    // Remainders two and three are canonical unpadded Base64.
+                    if b64_str.len() % 4 == 1 {
                         continue;
                     }
 
@@ -238,9 +239,7 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
                     }
 
                     // Try to decode it
-                    if let Ok(decoded) =
-                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64_str)
-                    {
+                    if let Some(decoded) = decode_base64_bytes(b64_str) {
                         // Check size limit
                         if decoded.len() > MAX_DECODED_SIZE {
                             continue;
@@ -371,15 +370,28 @@ pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<Extracte
         .collect()
 }
 
+/// Decode Base64 whose required terminal padding may be partly or wholly
+/// omitted. Reject excess padding, interior padding, and nonzero unused bits.
+fn decode_base64_bytes(value: &str) -> Option<Vec<u8>> {
+    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value)
+        .or_else(|_| {
+            let unpadded = value.trim_end_matches('=');
+            let required = (4 - unpadded.len() % 4) % 4;
+            if value.len() - unpadded.len() > required {
+                return Err(base64::DecodeError::InvalidPadding);
+            }
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD_NO_PAD, unpadded)
+        })
+        .ok()
+}
+
 /// Attempt to decode a single base64 string.
 fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
     if s.value.len() < MIN_BASE64_LENGTH {
         return None;
     }
 
-    // Try standard base64 decoding
-    let decoded =
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s.value.trim()).ok()?;
+    let decoded = decode_base64_bytes(s.value.trim())?;
 
     // Wide (UTF-16LE) payloads are validated strictly during decoding, and their
     // base64 is artificially 'A'-heavy (from interleaved NULs), which would fool
@@ -665,8 +677,8 @@ fn is_likely_base64(s: &str) -> bool {
         return false;
     }
 
-    // Must be multiple of 4 (proper base64 padding)
-    if !s.len().is_multiple_of(4) {
+    // Padding may be omitted, but a remainder of one is never valid.
+    if s.len() % 4 == 1 {
         return false;
     }
 
@@ -1786,13 +1798,55 @@ mod tests {
 
     #[test]
     fn test_extract_embedded_base64_requires_valid_length() {
-        // Base64 must be multiple of 4
-        let input = make_string("decode('SGVsbG9Xb3JsZA')", None); // 14 chars, not multiple of 4
+        // Even without padding, a remainder of one is impossible.
+        let input = make_string("decode('SGVsbG9Xb3JsZ')", None); // 13 characters
         let results = extract_embedded_base64(&[input]);
         assert!(
             results.is_empty(),
             "Should reject base64 with invalid length"
         );
+    }
+
+    #[test]
+    fn base64_optional_padding_preserves_plain_and_embedded_evidence() {
+        use base64::Engine;
+        for plain in ["Hello World", "Hello World!", "Hello World!!"] {
+            let padded = base64::engine::general_purpose::STANDARD.encode(plain);
+            for token in [
+                padded.as_str(),
+                padded.trim_end_matches('='),
+                padded.strip_suffix('=').unwrap_or(&padded),
+            ] {
+                let decoded = decode_base64_strings(&[make_string(token, None)]);
+                assert!(
+                    decoded.iter().any(|s| s.value == plain),
+                    "whole token: {token}"
+                );
+                let line = format!("my $data = '{token}';");
+                let mut input = make_string(&line, None);
+                input.data_offset = 100;
+                let decoded = extract_embedded_base64(&[input]);
+                let evidence = decoded.iter().find(|s| s.value == plain).expect(token);
+                assert_eq!(evidence.data_offset, 112);
+                assert_eq!(evidence.data_len as usize, token.len());
+                assert_eq!(evidence.method, StringMethod::Base64Decode);
+            }
+        }
+    }
+
+    #[test]
+    fn base64_optional_padding_rejects_malformed_encodings() {
+        for token in [
+            "SGVsbG8gV29yb",     // impossible remainder of one
+            "SGVsbG8gV29ybGQ==", // excess padding
+            "SGVsbG8gV29ybGR",   // nonzero unused trailing bits
+            "SGVsbG8gV29ybGQ!",  // invalid alphabet
+        ] {
+            assert!(
+                decode_base64_string(&make_string(token, None)).is_none(),
+                "{token}"
+            );
+        }
     }
 
     #[test]
