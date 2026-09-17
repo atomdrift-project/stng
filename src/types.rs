@@ -313,7 +313,7 @@ pub enum StringMethod {
     WideString,
     /// Found via space-padded ASCII decoding (.NET metadata format)
     SpacedAscii,
-    /// Found via XOR decoding (single-byte key)
+    /// Found via XOR decoding (single-byte or recovered repeating key)
     XorDecode,
     /// Found via base64 decoding
     Base64Decode,

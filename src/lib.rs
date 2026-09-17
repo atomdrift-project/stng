@@ -51,6 +51,7 @@ mod dotnet;
 mod entitlements;
 mod imports;
 mod overlay;
+mod pe_xor;
 mod raw;
 mod stack_strings;
 
@@ -912,7 +913,7 @@ pub struct ExtractOptions {
     pub r2_strings: Option<Vec<ExtractedString>>,
     /// Filter out garbage strings (default: false for library, true for CLI)
     pub filter_garbage: bool,
-    /// Enable XOR string detection (single-byte keys). Default: false.
+    /// Enable XOR strings (single-byte scanning and bounded x86 PE decoder recovery). Default: false.
     pub xor_scan: bool,
     /// Custom XOR key for decoding (overrides auto-detection if set).
     pub xor_key: Option<Vec<u8>>,
@@ -1041,7 +1042,8 @@ impl ExtractOptions {
     }
 
     /// Enable XOR string detection with optional custom minimum length.
-    /// This scans for strings obfuscated with single-byte XOR keys (0x01-0xFF).
+    /// Scans single-byte XOR keys and recovers bounded, instruction-proven
+    /// repeating-key XOR buffers in x86 PEs without a subprocess.
     /// Default minimum length is 10 characters.
     #[must_use]
     pub fn with_xor(mut self, min_length: Option<usize>) -> Self {
@@ -2355,6 +2357,9 @@ fn extract_from_object_inner(
             strings.extend(net_strings);
             strings.extend(raw_strings);
             strings.extend(stack_strings);
+            if opts.xor_scan && opts.xor_key.is_none() && !is_go_binary && !opts.is_cancelled() {
+                strings.extend(pe_xor::extract(pe, data, min_length));
+            }
 
             // Recover imports/exports from the PE directories — names behind RVA
             // tables that a raw byte scan can't reach (the radare2-only gap).

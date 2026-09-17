@@ -43,7 +43,8 @@ const LRU_GRANULARITY: Duration = Duration::from_secs(24 * 60 * 60);
 /// - `4`: hex runs embedded in a larger string now decode (`echo <hex> | xxd
 ///   -r -p | sh`), where previously only a value that was hex end to end did.
 ///   Entries keyed under `3` hold the wrapping command but not the payload.
-const CACHE_VERSION: &str = "4";
+/// - `5`: instruction-guided PE repeating-XOR strings, with source spans.
+const CACHE_VERSION: &str = "5";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted

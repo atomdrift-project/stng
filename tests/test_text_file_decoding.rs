@@ -431,7 +431,7 @@ fn malformed_utf16_bom_with_utf8_payload_is_scanned_as_text() {
         .find(|s| s.value.contains("Invoke-WebRequest"))
         .expect("malformed BOM wrapper must not hide its UTF-8 payload");
     assert_eq!(
-        command.data_offset as usize,
+        usize::try_from(command.data_offset).expect("file offset fits in usize"),
         data.windows(b"powershell".len())
             .position(|window| window == b"powershell")
             .expect("fixture contains the recovered command")
