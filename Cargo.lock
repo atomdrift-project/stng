@@ -632,9 +632,9 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libredox"
-version = "0.1.24"
+version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6480ccc157a1389bb2e4891b24751b0f798ba640d22386f23143fbcc89da195a"
+checksum = "61ff90caf6077a803a240f62fdbe88645a890bbca49ef8174c3cb0404362171d"
 dependencies = [
  "libc",
 ]
@@ -784,9 +784,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.234"
+version = "2.1.235"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c71eb2c627c423ee9e66a236dc8fed3daad9762e36326405134e2af928eba9"
+checksum = "8319b56ff38ca0522b4e1e40bfa2b5de7f62dc89fc1e9033eac365551ec58e0e"
 dependencies = [
  "psl-types",
 ]
