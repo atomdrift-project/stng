@@ -829,10 +829,16 @@ pub(crate) fn extract_null_separated_strings(
 ) -> Vec<ExtractedString> {
     use crate::types::StringMethod;
 
-    // Funcnametab entries are Go function or type names — no whitespace,
-    // bounded length. Above ~80 chars we are almost certainly inside a
-    // packed string pool whose entries have no NUL separators.
-    const MAX_ENTRY_LEN: usize = 80;
+    // Funcnametab entries are Go function or type names, and a full name
+    // carries its module path: `github.com/org/repo/internal/pkg.Func` is
+    // routinely past 80 characters, and a generic instantiation spells its
+    // type shape in full. 80 used to be the cap; on a 75 MB Go Terraform
+    // provider it dropped 27,227 of 113,601 names (24%) -- and every rejected
+    // entry also broke the 3-in-a-row run around it, so whole stretches of
+    // application and third-party packages went missing. 1,024 keeps all but
+    // a few dozen there (max 1,139); the alphabet and 3-in-a-row gates, not
+    // the length, are what keep packed-pool runs out.
+    const MAX_ENTRY_LEN: usize = 1024;
 
     fn entry_at(data: &[u8], pos: usize) -> Option<(usize, &[u8])> {
         // An entry is at most MAX_ENTRY_LEN bytes before its NUL, so only scan
@@ -851,11 +857,26 @@ pub(crate) fn extract_null_separated_strings(
         // Reject anything that isn't strictly a Go-symbol-like token.
         // Spaces and punctuation outside the function-name alphabet break
         // packed-pool runs from masquerading as funcnametab entries.
+        // `{ } ; :` appear in generic instantiations
+        // (`pkg.F[go.shape.interface { Open([]uint8) error; Size() int }]`).
         let valid_body = bytes.iter().all(|&b| {
             b.is_ascii_alphanumeric()
                 || matches!(
                     b,
-                    b'_' | b'.' | b'/' | b'*' | b'[' | b']' | b'(' | b')' | b'-' | b',' | b' '
+                    b'_' | b'.'
+                        | b'/'
+                        | b'*'
+                        | b'['
+                        | b']'
+                        | b'('
+                        | b')'
+                        | b'-'
+                        | b','
+                        | b' '
+                        | b'{'
+                        | b'}'
+                        | b';'
+                        | b':'
                 )
         });
         let starts_ok = matches!(
@@ -957,6 +978,31 @@ mod tests {
         let values: Vec<&str> = out.iter().map(|s| s.value.as_str()).collect();
         assert!(values.contains(&"debugCall32"));
         assert!(values.contains(&"debugCall128"));
+    }
+
+    /// Real funcnametab names carry the full module path and, for generics,
+    /// the spelled-out type shape. Both used to be rejected (80-byte cap, no
+    /// `{ } ;` in the alphabet), and each rejection also broke the 3-in-a-row
+    /// run around it, so a hash-renamed backdoor helper and its neighbours in
+    /// a trojanized Terraform provider were never extracted.
+    #[test]
+    fn null_separated_keeps_long_module_paths_and_generic_shapes() {
+        let names = [
+            "github.com/gocommunity-io/terraform-provider-dockerd/internal/provider.normalizeGPUOption",
+            "github.com/gocommunity-io/terraform-provider-dockerd/internal/provider._ad79680770be",
+            "github.com/gocommunity-io/terraform-provider-dockerd/internal/provider._3701ded6d95a[go.shape.interface { NonceSize() int; Open([]uint8, []uint8, []uint8, []uint8) ([]uint8, error) }]",
+            "github.com/gocommunity-io/terraform-provider-dockerd/internal/provider._7a15e4445f4b",
+        ];
+        let mut buf = Vec::new();
+        for n in names {
+            buf.extend_from_slice(n.as_bytes());
+            buf.push(0);
+        }
+        let out = extract_null_separated_strings(&buf, 0, None, 4);
+        let values: Vec<&str> = out.iter().map(|s| s.value.as_str()).collect();
+        for n in names {
+            assert!(values.contains(&n), "missing {n}");
+        }
     }
 
     #[test]

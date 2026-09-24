@@ -57,7 +57,11 @@ const LRU_GRANULARITY: Duration = Duration::from_secs(24 * 60 * 60);
 ///   headers paired only within one register lifetime. `7` entries hold
 ///   merged raw runs for Rust binaries and, from the first amd64 stored-header
 ///   pass, some strings decoded with a neighbouring element's length.
-const CACHE_VERSION: &str = "8";
+/// - `9`: Go funcnametab entries up to 1,024 bytes (was 80) and with the
+///   `{ } ; :` of generic shapes. `8` entries drop every function whose
+///   module-qualified name passed 80 characters -- a quarter of a large Go
+///   binary's names, application packages included -- and their neighbours.
+const CACHE_VERSION: &str = "9";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted
