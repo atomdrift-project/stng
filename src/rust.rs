@@ -16,7 +16,9 @@
 
 use super::classifier::classify_string;
 use super::extraction::{extract_from_structures, find_string_structures};
-use super::instr::{extract_inline_strings_amd64, extract_inline_strings_arm64};
+use super::instr::{
+    extract_inline_strings_amd64, extract_inline_strings_arm64, is_valid_utf8_string,
+};
 use super::types::{BinaryInfo, ExtractedString, StringMethod, StringStruct};
 use goblin::elf::Elf;
 use goblin::mach::MachO;
@@ -269,6 +271,20 @@ impl RustStringExtractor {
             if let Some(extracted) = self.extract_from_section(elf, data, section_name, &info) {
                 strings.extend(extracted);
             }
+        }
+
+        // Position-independent builds -- rustc's default -- leave every pointer
+        // in .data.rel.ro zero on disk; the loader fills it from a RELATIVE
+        // relocation. The structure scan above reads the bytes, sees (0, len),
+        // and recovers nothing, so read the pointers from the relocations.
+        if let Some((rodata_addr, rodata_data)) = self.find_section(elf, data, ".rodata") {
+            strings.extend(relative_reloc_strings(
+                elf,
+                data,
+                rodata_addr,
+                rodata_data,
+                self.min_length,
+            ));
         }
 
         // Perform instruction pattern analysis for inline literals
@@ -746,6 +762,85 @@ impl RustStringExtractor {
             ..Default::default()
         });
     }
+}
+
+/// Longest `&str` a relocation-derived header may describe; a longer length
+/// word next to a rodata pointer is some other field, not a slice length.
+const RELOC_STRING_MAX_LEN: u64 = 4096;
+
+/// `&str` / `&[u8]` headers whose pointer half is a RELATIVE relocation.
+///
+/// In a PIE the `(ptr, len)` pairs rustc emits for string constants, panic
+/// locations and literal tables sit in `.data.rel.ro` with the pointer slot
+/// zeroed; the loader writes `base + addend` there. Each relocation's addend
+/// is therefore the string's address and its offset names the slot, so the
+/// length is the word after it. One pass over the relocations -- no scan of
+/// the section bytes -- and only pairs whose target lies in `.rodata` and
+/// decodes to printable text are kept. Addresses are virtual; the caller
+/// resolves them to file offsets with the rest of the ELF strings.
+fn relative_reloc_strings(
+    elf: &Elf<'_>,
+    data: &[u8],
+    rodata_addr: u64,
+    rodata: &[u8],
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let relative = match elf.header.e_machine {
+        goblin::elf::header::EM_X86_64 => goblin::elf::reloc::R_X86_64_RELATIVE,
+        goblin::elf::header::EM_AARCH64 => goblin::elf::reloc::R_AARCH64_RELATIVE,
+        _ => return Vec::new(),
+    };
+    if !elf.is_64 || !elf.little_endian {
+        return Vec::new();
+    }
+    let rodata_end = rodata_addr + rodata.len() as u64;
+    let mut seen: HashSet<(u64, u64)> = HashSet::new();
+    let mut out = Vec::new();
+    for rel in elf.dynrelas.iter() {
+        if rel.r_type != relative {
+            continue;
+        }
+        let Some(target) = rel.r_addend.and_then(|a| u64::try_from(a).ok()) else {
+            continue;
+        };
+        if !(rodata_addr..rodata_end).contains(&target) {
+            continue;
+        }
+        let Ok(len_at) = usize::try_from(crate::binary::elf_vaddr_to_file_offset(
+            elf,
+            rel.r_offset + 8,
+        )) else {
+            continue;
+        };
+        let Some(len) = data
+            .get(len_at..len_at + 8)
+            .and_then(|b| <[u8; 8]>::try_from(b).ok())
+            .map(u64::from_le_bytes)
+        else {
+            continue;
+        };
+        if len < min_length as u64 || len > RELOC_STRING_MAX_LEN || !seen.insert((target, len)) {
+            continue;
+        }
+        let start = (target - rodata_addr) as usize;
+        let Some(bytes) = rodata.get(start..start + len as usize) else {
+            continue;
+        };
+        let Ok(s) = std::str::from_utf8(bytes) else {
+            continue;
+        };
+        if !is_valid_utf8_string(s) {
+            continue;
+        }
+        out.push(ExtractedString {
+            value: s.to_string(),
+            data_offset: target,
+            method: StringMethod::Structure,
+            kind: classify_string(s),
+            ..Default::default()
+        });
+    }
+    out
 }
 
 #[cfg(test)]

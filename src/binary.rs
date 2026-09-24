@@ -357,14 +357,21 @@ pub fn is_rust_binary(data: &[u8]) -> bool {
     }
 }
 
-/// Path fragments rustc embeds verbatim in panic locations: the crates.io
-/// registry root in dependency paths and the `/rustc/<sha>` libstd prefix. Any
-/// non-trivial Rust build carries at least one, stripped or not.
-const RUST_CONTENT_NEEDLES: &[&[u8]] = &[b"index.crates.io", b"/rustc/"];
+/// Path fragments rustc embeds verbatim in panic locations, stripped or not:
+/// the crates.io registry root in dependency paths, the `/rustc/<sha>` libstd
+/// prefix of rustup toolchains, and the standard library's own source paths.
+/// The last matter for distro toolchains, which remap the prefix away (Arch
+/// ships `library/std/src/...` bare, or under `/usr/src/debug/rust/rustc-*`),
+/// so a dependency-free program from one carries neither of the first two.
+const RUST_CONTENT_NEEDLES: &[&[u8]] = &[
+    b"index.crates.io",
+    b"/rustc/",
+    b"library/std/src/",
+    b"library/core/src/",
+];
 
 /// Whether `bytes` carries one of [`RUST_CONTENT_NEEDLES`].
 fn has_rust_content(bytes: &[u8]) -> bool {
-    if std::env::var_os("ZZ_OLD").is_some() { return false; }
     RUST_CONTENT_NEEDLES
         .iter()
         .any(|n| memchr::memmem::find(bytes, n).is_some())

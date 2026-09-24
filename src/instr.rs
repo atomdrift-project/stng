@@ -592,10 +592,207 @@ pub(crate) fn extract_inline_strings_amd64(
         })
         .collect();
 
+    extract_amd64_stored_strings(
+        text_data,
+        text_addr,
+        rodata_data,
+        rodata_addr,
+        min_length,
+        &mut result,
+    );
+
     // Deduplicate by value, preserving first-seen order.
     let mut seen: HashSet<String> = HashSet::new();
     result.retain(|s| seen.insert(s.value.clone()));
     result
+}
+
+/// Bytes after a string-pointer `LEA` searched for its header stores. rustc
+/// and Go write a literal table element in four or five instructions; 48 bytes
+/// covers that with room for an interleaved store, and bounds the cost per LEA.
+const AMD64_STORED_AHEAD: usize = 48;
+/// Bytes before the `LEA` searched for a length register load that preceded
+/// it (a length shared across equal-length elements is loaded once).
+const AMD64_STORED_BEHIND: usize = 32;
+
+/// Recover strings whose header x86-64 code stores rather than passes: the
+/// elements of a `[&str; N]` / `[]string` literal or a struct built in memory.
+///
+/// ```text
+/// lea  rcx, [rip+str]      ; pointer into rodata
+/// mov  [rdi], rcx          ; header.ptr
+/// mov  ecx, 0x1f           ; length
+/// mov  [rdi+8], rcx        ; header.len  (or: mov qword [rdi+8], 0x1f)
+/// ```
+///
+/// No call follows, so the CALL-anchored scan never sees these; this is the
+/// amd64 twin of [`extract_arm64_stored_strings`]. Variable-length encoding
+/// rules out a cheap linear decode of `.text`, so the pass anchors on the rare
+/// shape instead: a RIP-relative `LEA` whose target is in rodata. Around each,
+/// a small byte window is probed for the pointer register stored to
+/// `[base+d]` and a length stored to `[base+d+8]`. Probing the window byte by
+/// byte can misparse, so a pair must agree on base and adjacent displacement,
+/// and the slice must decode to printable text -- the same bar as every other
+/// instruction-derived string.
+fn extract_amd64_stored_strings(
+    text: &[u8],
+    text_addr: u64,
+    rodata: &[u8],
+    rodata_addr: u64,
+    min_length: usize,
+    strings: &mut Vec<ExtractedString>,
+) {
+    let rodata_end = rodata_addr + rodata.len() as u64;
+    let mut seen: HashSet<(u64, u64)> = HashSet::new();
+    for op in memchr::memchr_iter(0x8D, text) {
+        // REX.W (optionally .R) 8D /r with ModRM mod=00 rm=101: LEA r64, [rip+disp32].
+        let Some(lea) = op.checked_sub(1) else {
+            continue;
+        };
+        let rex = text[lea];
+        if rex & 0xFB != 0x48 {
+            continue;
+        }
+        let Some(&modrm) = text.get(op + 1) else {
+            continue;
+        };
+        if modrm & 0xC7 != 0x05 {
+            continue;
+        }
+        let Some(disp) = read_i32(text, op + 2) else {
+            continue;
+        };
+        let end = op + 6;
+        let ptr_reg = ((modrm >> 3) & 7) | ((rex >> 2) & 1) << 3;
+        let target = (text_addr as i64 + end as i64 + i64::from(disp)).cast_unsigned();
+        if !(rodata_addr..rodata_end).contains(&target) {
+            continue;
+        }
+
+        let ahead = end..text.len().min(end + AMD64_STORED_AHEAD);
+        let Some((base, d)) = ahead.clone().find_map(|j| {
+            store_reg(text, j).and_then(|(src, base, d)| (src == ptr_reg).then_some((base, d)))
+        }) else {
+            continue;
+        };
+        let len_disp = d + 8;
+        let len = ahead.clone().find_map(|j| {
+            if let Some((b, dd, imm)) = store_imm(text, j)
+                && b == base
+                && dd == len_disp
+            {
+                return Some(u64::from(imm));
+            }
+            let (src, b, dd) = store_reg(text, j)?;
+            if b != base || dd != len_disp {
+                return None;
+            }
+            // The length register's most recent immediate load before its store.
+            (lea.saturating_sub(AMD64_STORED_BEHIND)..j)
+                .rev()
+                .find_map(|k| mov_imm(text, k).filter(|&(r, _)| r == src))
+                .map(|(_, imm)| u64::from(imm))
+        });
+        let Some(len) = len else { continue };
+        if !seen.insert((target, len)) {
+            continue;
+        }
+        if let Some(s) = decode_rodata_string(target, len, rodata, rodata_addr)
+            && s.len() >= min_length
+        {
+            let kind = classify_string(&s);
+            strings.push(ExtractedString {
+                value: s,
+                data_offset: target,
+                method: StringMethod::InstructionPattern,
+                kind,
+                ..Default::default()
+            });
+        }
+    }
+}
+
+fn read_i32(b: &[u8], at: usize) -> Option<i32> {
+    Some(i32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
+}
+
+/// A memory operand `[base + disp]` from the ModRM at `at` (REX.B in `rex`):
+/// base register, displacement and the operand's encoded length. RIP-relative,
+/// indexed and absolute forms are rejected -- a header store is always
+/// base-plus-displacement.
+fn mem_operand(b: &[u8], at: usize, rex: u8) -> Option<(u8, i64, usize)> {
+    let modrm = *b.get(at)?;
+    let md = modrm >> 6;
+    let rm = modrm & 7;
+    let mut len = 1;
+    let base = if rm == 4 {
+        let sib = *b.get(at + 1)?;
+        if (sib >> 3) & 7 != 4 || (md == 0 && sib & 7 == 5) {
+            return None; // indexed, or no base
+        }
+        len += 1;
+        sib & 7
+    } else {
+        if md == 0 && rm == 5 {
+            return None; // RIP-relative
+        }
+        rm
+    };
+    let disp = match md {
+        0 => 0,
+        1 => {
+            let d = i64::from(*b.get(at + len)? as i8);
+            len += 1;
+            d
+        }
+        2 => {
+            let d = i64::from(read_i32(b, at + len)?);
+            len += 4;
+            d
+        }
+        _ => return None, // register operand
+    };
+    Some((base | (rex & 1) << 3, disp, len))
+}
+
+/// `MOV [base+disp], r64` (REX.W 89 /r): source register, base, displacement.
+fn store_reg(b: &[u8], at: usize) -> Option<(u8, u8, i64)> {
+    let rex = *b.get(at)?;
+    if rex & 0xF8 != 0x48 || *b.get(at + 1)? != 0x89 {
+        return None;
+    }
+    let src = ((*b.get(at + 2)? >> 3) & 7) | ((rex >> 2) & 1) << 3;
+    let (base, disp, _) = mem_operand(b, at + 2, rex)?;
+    Some((src, base, disp))
+}
+
+/// `MOV QWORD [base+disp], imm32` (REX.W C7 /0): base, displacement, value.
+fn store_imm(b: &[u8], at: usize) -> Option<(u8, i64, u32)> {
+    let rex = *b.get(at)?;
+    if rex & 0xFA != 0x48 || *b.get(at + 1)? != 0xC7 || (*b.get(at + 2)? >> 3) & 7 != 0 {
+        return None;
+    }
+    let (base, disp, len) = mem_operand(b, at + 2, rex)?;
+    let imm = u32::try_from(read_i32(b, at + 2 + len)?).ok()?;
+    Some((base, disp, imm))
+}
+
+/// `MOV r32, imm32` (optional REX.B, B8+r) or `MOV r64, imm32` (REX.W C7 /0,
+/// register form): destination register and value.
+fn mov_imm(b: &[u8], at: usize) -> Option<(u8, u32)> {
+    let op = *b.get(at)?;
+    let (reg, imm_at) = if (0xB8..=0xBF).contains(&op) {
+        let high = at
+            .checked_sub(1)
+            .and_then(|p| b.get(p))
+            .is_some_and(|&r| r == 0x41);
+        ((op - 0xB8) | u8::from(high) << 3, at + 1)
+    } else if op & 0xFA == 0x48 && *b.get(at + 1)? == 0xC7 && *b.get(at + 2)? & 0xF8 == 0xC0 {
+        ((*b.get(at + 2)? & 7) | (op & 1) << 3, at + 3)
+    } else {
+        return None;
+    };
+    Some((reg, u32::try_from(read_i32(b, imm_at)?).ok()?))
 }
 
 /// Backward scan from a CALL site for inline string loads.
@@ -914,7 +1111,7 @@ fn extract_amd64_value_string(
 }
 
 /// Check if a string is valid UTF-8 with reasonable content.
-fn is_valid_utf8_string(s: &str) -> bool {
+pub(crate) fn is_valid_utf8_string(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }

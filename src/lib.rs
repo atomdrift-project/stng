@@ -1284,6 +1284,81 @@ fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_length: usize) 
     strings.extend(new_strings);
 }
 
+/// Raw-scan strings minus what the language passes in `claimed` already cover.
+///
+/// rustc packs `&str` literals back to back with no terminator, so one raw run
+/// can span a literal the structure pass sliced out and bytes it never named:
+/// `src/main.rshttps://host/x.png` when only `src/main.rs` is referenced.
+/// Offset dedup keeps the higher-priority slice and would discard the whole run,
+/// URL included. Instead each raw run is cut around the claimed byte spans and
+/// only the unclaimed pieces of at least `min_length` bytes are returned. Runs
+/// whose value a pass already produced are dropped outright.
+fn unclaimed_raw_strings(
+    raw: Vec<ExtractedString>,
+    claimed: &[ExtractedString],
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let known: HashSet<&str> = claimed.iter().map(|s| s.value.as_str()).collect();
+    let mut spans: Vec<(u64, u64)> = claimed
+        .iter()
+        .map(|s| (s.data_offset, s.data_offset + s.value.len() as u64))
+        .collect();
+    spans.sort_unstable();
+    let longest = spans.iter().map(|&(a, b)| b - a).max().unwrap_or(0);
+
+    let mut out = Vec::with_capacity(raw.len());
+    for s in raw {
+        if known.contains(s.value.as_str()) {
+            continue;
+        }
+        let start = s.data_offset;
+        let end = start + s.value.len() as u64;
+        // Spans sorted by start: those overlapping [start, end) begin before
+        // `end` and no earlier than `start - longest`.
+        let lo = spans.partition_point(|&(a, _)| a < start.saturating_sub(longest));
+        let hi = spans.partition_point(|&(a, _)| a < end);
+        let overlapping: Vec<(u64, u64)> = spans[lo..hi]
+            .iter()
+            .filter(|&&(_, b)| b > start)
+            .copied()
+            .collect();
+        if overlapping.is_empty() {
+            out.push(s);
+            continue;
+        }
+
+        let mut cursor = start;
+        let mut pieces = Vec::new();
+        for (a, b) in overlapping {
+            if a > cursor {
+                pieces.push((cursor, a));
+            }
+            cursor = cursor.max(b);
+        }
+        if cursor < end {
+            pieces.push((cursor, end));
+        }
+        for (a, b) in pieces {
+            let (Ok(lo), Ok(hi)) = (usize::try_from(a - start), usize::try_from(b - start)) else {
+                continue;
+            };
+            let Some(value) = s.value.get(lo..hi) else {
+                continue;
+            };
+            if value.len() < min_length || known.contains(value) {
+                continue;
+            }
+            out.push(ExtractedString {
+                value: value.to_string(),
+                data_offset: a,
+                kind: classifier::classify_string(value),
+                ..s.clone()
+            });
+        }
+    }
+    out
+}
+
 /// Deduplicate strings by keeping only the best string at each offset.
 ///
 /// Uses a single in-place sort + `dedup_by_key` pass — no HashMap allocation.
@@ -2210,12 +2285,7 @@ fn extract_from_object_inner(
                 }
                 let raw =
                     extract_raw_strings(scan_data, min_length, None, &segments, &section_info, &[]);
-                let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-                let fresh: Vec<_> = raw
-                    .into_iter()
-                    .filter(|s| !known.contains(s.value.as_str()))
-                    .collect();
-                drop(known);
+                let fresh = unclaimed_raw_strings(raw, &strings, min_length);
                 strings.extend(fresh);
             } else {
                 // Unknown ELF (C, C++, assembly, etc.) - use r2 if available + raw scan.
@@ -2701,4 +2771,58 @@ fn get_r2_strings(opts: &ExtractOptions) -> Option<Vec<ExtractedString>> {
         return r2::extract_strings(path, opts.min_length, opts.use_cache);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(value: &str, offset: u64, method: StringMethod) -> ExtractedString {
+        ExtractedString {
+            value: value.to_string(),
+            data_offset: offset,
+            method,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn unclaimed_raw_strings_keeps_bytes_around_claimed_literals() {
+        // rustc packs `src/main.rs` and an unreferenced URL back to back.
+        let raw = vec![
+            at(
+                "src/main.rshttps://example.org/x.png",
+                0x100,
+                StringMethod::RawScan,
+            ),
+            at("untouched run", 0x200, StringMethod::RawScan),
+            at("already known", 0x300, StringMethod::RawScan),
+        ];
+        let claimed = vec![
+            at("src/main.rs", 0x100, StringMethod::Structure),
+            at("already known", 0x400, StringMethod::Structure),
+        ];
+
+        let got: Vec<_> = unclaimed_raw_strings(raw, &claimed, 4)
+            .into_iter()
+            .map(|s| (s.value, s.data_offset))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("https://example.org/x.png".to_string(), 0x10b),
+                ("untouched run".to_string(), 0x200),
+            ]
+        );
+    }
+
+    #[test]
+    fn unclaimed_raw_strings_drops_short_gaps_between_literals() {
+        let raw = vec![at("alphaXYbravo", 0, StringMethod::RawScan)];
+        let claimed = vec![
+            at("alpha", 0, StringMethod::Structure),
+            at("bravo", 7, StringMethod::Structure),
+        ];
+        assert!(unclaimed_raw_strings(raw, &claimed, 4).is_empty());
+    }
 }

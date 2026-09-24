@@ -708,6 +708,8 @@ fn is_common_metadata_hostname(hostname: &str) -> bool {
             | "schemas.openxmlformats.org"
             | "www.apple.com"
             | "crl.microsoft.com"
+            | "doc.rust-lang.org"
+            | "docs.rs"
             | "github.com"
             | "go.dev"
             | "www.microsoft.com"
