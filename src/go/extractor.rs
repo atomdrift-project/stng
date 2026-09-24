@@ -281,6 +281,12 @@ impl GoStringExtractor {
             );
         }
 
+        // Every phase recorded a virtual address; resolve each to a file
+        // offset, as the Mach-O and PE paths do.
+        for s in &mut strings {
+            s.data_offset = crate::binary::elf_vaddr_to_file_offset(elf, s.data_offset);
+        }
+
         strings
     }
 

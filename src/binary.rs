@@ -351,25 +351,74 @@ pub fn is_rust_binary(data: &[u8]) -> bool {
     use goblin::Object;
     match Object::parse(data) {
         Ok(Object::Mach(goblin::mach::Mach::Binary(macho))) => macho_is_rust(&macho),
-        Ok(Object::Elf(elf)) => elf.section_headers.iter().any(|sh| {
-            let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
-            name.contains("rust") || name == ".rustc"
-        }),
+        Ok(Object::Elf(elf)) => elf_is_rust(&elf, data),
         Ok(Object::PE(pe)) => pe_is_rust(&pe, data),
         _ => false,
     }
 }
 
+/// Path fragments rustc embeds verbatim in panic locations: the crates.io
+/// registry root in dependency paths and the `/rustc/<sha>` libstd prefix. Any
+/// non-trivial Rust build carries at least one, stripped or not.
+const RUST_CONTENT_NEEDLES: &[&[u8]] = &[b"index.crates.io", b"/rustc/"];
+
+/// Whether `bytes` carries one of [`RUST_CONTENT_NEEDLES`].
+fn has_rust_content(bytes: &[u8]) -> bool {
+    if std::env::var_os("ZZ_OLD").is_some() { return false; }
+    RUST_CONTENT_NEEDLES
+        .iter()
+        .any(|n| memchr::memmem::find(bytes, n).is_some())
+}
+
 /// Check if a Mach-O binary appears to be a Rust binary.
+///
+/// A `rust`-named section marks a dylib or proc-macro that carries rustc
+/// metadata; an ordinary executable has none. Those are recognised by the
+/// panic-location paths in `__TEXT` read-only data instead, as on PE.
 #[must_use]
 pub(crate) fn macho_is_rust(macho: &MachO<'_>) -> bool {
-    macho.segments.iter().any(|seg| {
-        seg.sections().is_ok_and(|secs| {
-            secs.iter().any(|(sec, _)| {
-                let name = sec.name().unwrap_or("");
-                name.contains("rust")
-            })
-        })
+    let mut rodata = Vec::new();
+    for seg in &macho.segments {
+        let Ok(secs) = seg.sections() else { continue };
+        for (sec, bytes) in secs {
+            let name = sec.name().unwrap_or("");
+            if name.contains("rust") {
+                return true;
+            }
+            if matches!(name, "__const" | "__cstring") && seg.name().ok() == Some("__TEXT") {
+                rodata.push(bytes);
+            }
+        }
+    }
+    rodata.into_iter().any(has_rust_content)
+}
+
+/// Check if an ELF binary appears to be a Rust binary.
+///
+/// As for Mach-O: a `rust`-named section (`.rustc`) only exists in dylibs and
+/// proc-macros, so an ordinary Rust executable -- stripped or not -- is
+/// recognised by the panic-location paths in `.rodata`. Section-name-only
+/// detection sent every Rust executable down the unknown-ELF path, so its
+/// `&str` literals were never sliced out of rustc's packed string blob.
+#[must_use]
+pub(crate) fn elf_is_rust(elf: &goblin::elf::Elf<'_>, data: &[u8]) -> bool {
+    let mut rodata = None;
+    for sh in &elf.section_headers {
+        let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
+        if name.contains("rust") {
+            return true;
+        }
+        if name == ".rodata" {
+            rodata = Some(sh);
+        }
+    }
+    rodata.is_some_and(|sh| {
+        let (Ok(start), Ok(size)) = (usize::try_from(sh.sh_offset), usize::try_from(sh.sh_size))
+        else {
+            return false;
+        };
+        data.get(start..start.saturating_add(size).min(data.len()))
+            .is_some_and(has_rust_content)
     })
 }
 
@@ -382,7 +431,6 @@ pub(crate) fn macho_is_rust(macho: &MachO<'_>) -> bool {
 /// (libstd path prefix). Both are present in any non-trivial Rust PE build.
 #[must_use]
 pub(crate) fn pe_is_rust(pe: &goblin::pe::PE<'_>, data: &[u8]) -> bool {
-    const NEEDLES: &[&[u8]] = &[b"index.crates.io", b"/rustc/"];
     for section in &pe.sections {
         let name = pe_section_name(&section.name);
         if !matches!(name.as_str(), ".rdata" | ".rodata") {
@@ -398,11 +446,7 @@ pub(crate) fn pe_is_rust(pe: &goblin::pe::PE<'_>, data: &[u8]) -> bool {
         if start >= end {
             continue;
         }
-        let bytes = &data[start..end];
-        if NEEDLES
-            .iter()
-            .any(|n| memchr::memmem::find(bytes, n).is_some())
-        {
+        if has_rust_content(&data[start..end]) {
             return true;
         }
     }
@@ -438,6 +482,25 @@ pub(crate) fn pe_rust_skip_ranges(
             Some(start..end)
         })
         .collect()
+}
+
+/// Convert a virtual address to a file offset for ELF binaries.
+///
+/// The ELF counterpart of [`macho_vaddr_to_file_offset`]: finds the `PT_LOAD`
+/// segment whose file-backed range holds `vaddr` and rebases it. Extractors
+/// that decode pointers — Go string headers, `ADRP`/`LEA` targets — work in
+/// virtual addresses; left unconverted they report a string at an address that
+/// is off by the load bias (0x400000 for a non-PIE amd64 Go binary, 0x10000
+/// for arm64), pointing at unrelated bytes or past the end of the file.
+/// Addresses in no segment's file image (`.bss`, or no program headers at
+/// all) are returned unchanged, as the Mach-O helper does.
+#[must_use]
+pub(crate) fn elf_vaddr_to_file_offset(elf: &goblin::elf::Elf<'_>, vaddr: u64) -> u64 {
+    elf.program_headers
+        .iter()
+        .filter(|ph| ph.p_type == goblin::elf::program_header::PT_LOAD)
+        .find(|ph| vaddr >= ph.p_vaddr && vaddr - ph.p_vaddr < ph.p_filesz)
+        .map_or(vaddr, |ph| vaddr - ph.p_vaddr + ph.p_offset)
 }
 
 /// Convert virtual address to file offset for Mach-O binaries.

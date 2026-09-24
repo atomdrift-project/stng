@@ -24,6 +24,26 @@ func stngFixtureReadCredentialFile(name string) string {
 	return name + "/.git-credentials-fixture"
 }
 
+// stngFixturePathTable walks a local []string of constants. The slice does
+// not escape, so Go builds its backing array on the stack: on arm64 each
+// element is an ADRP+ADD pointer and a length stored with one STP, and no call
+// follows to anchor a scan on — the shape of an implant's credential-path
+// table.
+//
+//go:noinline
+func stngFixturePathTable(home string) []string {
+	var out []string
+	for _, p := range []string{
+		"/.stng-fixture-table-alpha",
+		"/.stng-fixture-table-bravo",
+		"/.stng-fixture-table-charlie",
+		"/.stng-fixture-table-delta1",
+	} {
+		out = append(out, home+p)
+	}
+	return out
+}
+
 //go:noinline
 func stngFixturePrepareRemoteTarget(dir string) string {
 	return dir + "/.vault-token-fixture"
@@ -33,4 +53,5 @@ func main() {
 	fmt.Println(stngFixturePublishRecursively(len(os.Args)))
 	fmt.Println(stngFixtureReadCredentialFile(os.Getenv("HOME")))
 	fmt.Println(stngFixturePrepareRemoteTarget(os.TempDir()))
+	fmt.Println(stngFixturePathTable(os.Getenv("HOME")))
 }

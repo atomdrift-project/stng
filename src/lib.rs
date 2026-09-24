@@ -1867,6 +1867,30 @@ fn extract_from_object_inner(
                 let extractor = RustStringExtractor::new(min_length);
                 // Thin binary: the slice is the whole file, so no slice base.
                 strings.extend(extractor.extract_macho(macho, 0));
+                // Same fallback an unknown Mach-O gets (see below): the Rust
+                // passes only cover the literals Rust code names.
+                if let Some(r2_strings) = get_r2_strings(opts) {
+                    strings.extend(r2_strings);
+                }
+                let extra: Vec<ExtractedString> = {
+                    let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+                    let mut seen: HashSet<String> = HashSet::new();
+                    scan_macho_sections(data, min_length, &segments, &section_info)
+                        .into_iter()
+                        .chain(extract_raw_strings(
+                            data,
+                            min_length,
+                            None,
+                            &segments,
+                            &section_info,
+                            &[],
+                        ))
+                        .filter(|s| {
+                            !known.contains(s.value.as_str()) && seen.insert(s.value.clone())
+                        })
+                        .collect()
+                };
+                strings.extend(extra);
             } else {
                 // Unknown Mach-O (C/C++/Objective-C/asm). Use r2 if available,
                 // then the targeted extractor, then an unconditional per-section
@@ -1988,20 +2012,27 @@ fn extract_from_object_inner(
                     break;
                 }
             }
-            // For non-Go/non-Rust fat binaries, use r2 if available + raw scan
-            if !is_go && !is_rust {
+            // For non-Go fat binaries, use r2 if available + raw scan. Rust
+            // slices get it too, after their structure pass: that pass only
+            // covers the literals Rust code names (see the thin branch).
+            if !is_go {
                 if let Some(r2_strings) = get_r2_strings(opts) {
                     strings.extend(r2_strings);
                 }
                 // Also do raw scan to catch anything r2 missed
-                strings.extend(extract_raw_strings(
-                    data,
-                    min_length,
-                    None,
-                    &segments,
-                    &section_info,
-                    &[],
-                ));
+                let raw =
+                    extract_raw_strings(data, min_length, None, &segments, &section_info, &[]);
+                if is_rust {
+                    let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+                    let fresh: Vec<_> = raw
+                        .into_iter()
+                        .filter(|s| !known.contains(s.value.as_str()))
+                        .collect();
+                    drop(known);
+                    strings.extend(fresh);
+                } else {
+                    strings.extend(raw);
+                }
             }
             if !is_go_binary {
                 // See the thin Mach-O branch: measure opacity before adding
@@ -2071,11 +2102,9 @@ fn extract_from_object_inner(
                 name == ".gopclntab" || name == ".go.buildinfo"
             });
 
-            // Check for Rust (presence of rust metadata or panic strings)
-            let has_rust = elf.section_headers.iter().any(|sh| {
-                let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
-                name.contains("rust") || name == ".rustc"
-            });
+            // Check for Rust (rustc metadata sections or panic-location paths).
+            // Only asked of non-Go binaries: the content probe scans .rodata.
+            let has_rust = !has_go && binary::elf_is_rust(elf, scan_data);
 
             if has_go {
                 is_go_binary = true;
@@ -2170,6 +2199,24 @@ fn extract_from_object_inner(
             } else if has_rust {
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_elf(elf, scan_data));
+                // The structure and instruction passes slice rustc's packed
+                // `&str` blob; everything else -- libc strings, C dependencies,
+                // data the Rust code never names -- still needs the raw scan an
+                // unknown ELF gets. Before content detection this branch only
+                // saw dylibs; now it sees every Rust executable, and dropping
+                // the raw scan would have lost strings they used to report.
+                if let Some(r2_strings) = get_r2_strings(opts) {
+                    strings.extend(r2_strings);
+                }
+                let raw =
+                    extract_raw_strings(scan_data, min_length, None, &segments, &section_info, &[]);
+                let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+                let fresh: Vec<_> = raw
+                    .into_iter()
+                    .filter(|s| !known.contains(s.value.as_str()))
+                    .collect();
+                drop(known);
+                strings.extend(fresh);
             } else {
                 // Unknown ELF (C, C++, assembly, etc.) - use r2 if available + raw scan.
                 if let Some(r2_strings) = get_r2_strings(opts) {

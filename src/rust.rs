@@ -299,6 +299,12 @@ impl RustStringExtractor {
             strings.extend(inline_strings);
         }
 
+        // Both phases decoded pointers, so every offset so far is a virtual
+        // address; resolve each to a file offset, as the Mach-O path does.
+        for s in &mut strings {
+            s.data_offset = crate::binary::elf_vaddr_to_file_offset(elf, s.data_offset);
+        }
+
         // Deduplicate by value: insert() is false on a repeat, dropping it.
         let mut seen: HashSet<String> = HashSet::new();
         strings.retain(|s| seen.insert(s.value.clone()));

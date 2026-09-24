@@ -47,7 +47,12 @@ const LRU_GRANULARITY: Duration = Duration::from_secs(24 * 60 * 60);
 /// - `6`: Mach-O Go binaries yield their `__gopclntab` function names, as ELF
 ///   and PE always have. Entries keyed under `5` hold none of them, so every
 ///   rule keyed on a Go function name would keep missing the macOS build.
-const CACHE_VERSION: &str = "6";
+/// - `7`: arm64 string literals Go stores on the stack as `{ptr, len}` pairs
+///   (a local `[]string` of constants). Entries keyed under `6` lack them, so
+///   an implant's credential-path table stays invisible in its arm64 builds.
+///   Also ELF Go and Rust decoded strings report file offsets, not virtual
+///   addresses; `6` entries place them off by the load bias.
+const CACHE_VERSION: &str = "7";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted

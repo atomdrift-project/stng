@@ -61,7 +61,224 @@ pub(crate) fn extract_inline_strings_arm64(
         i += 4;
     }
 
+    extract_arm64_stored_strings(
+        text_data,
+        text_addr,
+        rodata_data,
+        rodata_addr,
+        min_length,
+        &mut strings,
+        &mut seen,
+    );
+
     strings
+}
+
+/// How many instructions a register's decoded pointer or length stays usable.
+/// Go writes a composite literal's elements one after another, but reuses a
+/// length register across elements of equal length — the sckit implant's
+/// credential-path table reloads `x4 = 7` once and stores it with two
+/// different pointers eight instructions apart. Beyond a short window the value
+/// is more likely stale than reused, and a stale length over Go's packed
+/// rodata decodes into a plausible but wrong string.
+const ARM64_STORED_WINDOW: usize = 24;
+
+/// Recover strings whose header Go stores rather than passes: the elements of
+/// a `[]string` or struct literal built on the stack.
+///
+/// ```text
+/// adrp x2, page ; add x2, x2, #lo12   // pointer into rodata
+/// mov  x3, #17                         // length
+/// stp  x2, x3, [sp, #0x90]             // string header {ptr, len}
+/// ```
+///
+/// No call follows, so the BL-anchored scan never sees these — which is how
+/// every path in a Go implant's credential-file table went missing from its
+/// arm64 builds while the amd64 builds of the same source kept them.
+///
+/// A forward scan tracks, per register, the rodata pointer an `ADRP`+`ADD`
+/// produced and the immediate a `MOVZ` / `ORR Rd, XZR, #imm` loaded, and
+/// decodes a string when an `STP` stores that pointer and length as a pair.
+/// State is conservative: any branch clears every register, any other
+/// register-writing instruction clears its destination, and values expire
+/// after [`ARM64_STORED_WINDOW`] instructions.
+fn extract_arm64_stored_strings(
+    text_data: &[u8],
+    text_addr: u64,
+    rodata_data: &[u8],
+    rodata_addr: u64,
+    min_length: usize,
+    strings: &mut Vec<ExtractedString>,
+    seen: &mut HashSet<String>,
+) {
+    #[derive(Clone, Copy)]
+    enum Reg {
+        Unknown,
+        /// ADRP result: a page address awaiting its ADD.
+        Page(u64),
+        /// A decoded rodata address.
+        Ptr(u64),
+        /// A small immediate — a candidate length.
+        Len(u64),
+    }
+
+    // Each slot records the straight-line run (`epoch`) and instruction that
+    // set it. A branch invalidates every register by advancing the epoch
+    // rather than clearing the table: branches are a sizeable fraction of all
+    // instructions, and this runs over the text of millions of files a day.
+    #[derive(Clone, Copy)]
+    struct Slot {
+        reg: Reg,
+        epoch: u32,
+        at: u32,
+    }
+
+    let rodata_end = rodata_addr + rodata_data.len() as u64;
+    let mut slots = [Slot {
+        reg: Reg::Unknown,
+        epoch: 0,
+        at: 0,
+    }; 32];
+    let mut epoch: u32 = 1;
+    let window = ARM64_STORED_WINDOW as u32;
+
+    for (idx, word) in text_data.as_chunks::<4>().0.iter().enumerate() {
+        let inst = u32::from_le_bytes(*word);
+        let now = idx as u32;
+        let rd = (inst & 0x1F) as usize;
+        let get = |slots: &[Slot; 32], r: usize| {
+            let s = slots[r];
+            if s.epoch == epoch && now - s.at <= window {
+                s.reg
+            } else {
+                Reg::Unknown
+            }
+        };
+        let set = |slots: &mut [Slot; 32], r: usize, reg: Reg| {
+            slots[r] = Slot {
+                reg,
+                epoch,
+                at: now,
+            };
+        };
+
+        // Branches end a straight-line run: B, BL, B.cond, CBZ/CBNZ, TBZ/TBNZ,
+        // BR/BLR/RET. Nothing known before one can be trusted after it.
+        if is_arm64_branch(inst) {
+            epoch = epoch.wrapping_add(1);
+            continue;
+        }
+
+        // ADRP Xd, page
+        if (inst & 0x9F00_0000) == 0x9000_0000 {
+            let immlo = (inst >> 29) & 0x3;
+            let immhi = (inst >> 5) & 0x7FFFF;
+            let mut page_offset = i64::from((immhi << 2) | immlo);
+            if (page_offset & 0x100000) != 0 {
+                page_offset |= !0x1FFFFF_i64;
+            }
+            let pc = text_addr as i64 + (idx * 4) as i64;
+            let page = (pc & !0xFFF_i64) + (page_offset << 12);
+            set(
+                &mut slots,
+                rd,
+                u64::try_from(page).map_or(Reg::Unknown, Reg::Page),
+            );
+            continue;
+        }
+
+        // ADD Xd, Xn, #imm12 (64-bit, unshifted) completing an ADRP.
+        if (inst & 0xFFC0_0000) == 0x9100_0000 {
+            let rn = ((inst >> 5) & 0x1F) as usize;
+            let reg = match get(&slots, rn) {
+                Reg::Page(page) => {
+                    let addr = page + u64::from((inst >> 10) & 0xFFF);
+                    if (rodata_addr..rodata_end).contains(&addr) {
+                        Reg::Ptr(addr)
+                    } else {
+                        Reg::Unknown
+                    }
+                }
+                _ => Reg::Unknown,
+            };
+            set(&mut slots, rd, reg);
+            continue;
+        }
+
+        // MOVZ Xd, #imm, or ORR Xd, XZR, #bitmask — both load an immediate.
+        let is_movz = (inst & 0xFF80_0000) == 0xD280_0000;
+        let is_orr_imm = (inst & 0xFF80_0000) == 0xB200_0000 && ((inst >> 5) & 0x1F) == 31;
+        if is_movz || is_orr_imm {
+            set(
+                &mut slots,
+                rd,
+                decode_arm_mov_immediate(inst).map_or(Reg::Unknown, Reg::Len),
+            );
+            continue;
+        }
+
+        // STP Xt1, Xt2, [...] — 64-bit general registers, any addressing mode.
+        if matches!(inst & 0xFFC0_0000, 0xA900_0000 | 0xA980_0000 | 0xA880_0000) {
+            let rt2 = ((inst >> 10) & 0x1F) as usize;
+            if let (Reg::Ptr(addr), Reg::Len(len)) = (get(&slots, rd), get(&slots, rt2))
+                && let Some(s) = decode_rodata_string(addr, len, rodata_data, rodata_addr)
+                && s.len() >= min_length
+                && seen.insert(s.clone())
+            {
+                let kind = classify_string(&s);
+                strings.push(ExtractedString {
+                    value: s,
+                    data_offset: addr,
+                    method: StringMethod::InstructionPattern,
+                    kind,
+                    ..Default::default()
+                });
+            }
+            continue;
+        }
+
+        // Every other store reads its registers; everything else that is not
+        // a store may write Rd (and a load pair Rt2 as well).
+        if !is_arm64_store(inst) {
+            set(&mut slots, rd, Reg::Unknown);
+            if (inst & 0x3A40_0000) == 0x2840_0000 {
+                set(&mut slots, ((inst >> 10) & 0x1F) as usize, Reg::Unknown);
+            }
+        }
+    }
+}
+
+/// Whether an A64 instruction transfers control.
+fn is_arm64_branch(inst: u32) -> bool {
+    (inst & 0x7C00_0000) == 0x1400_0000 // B, BL
+        || (inst & 0xFF00_0010) == 0x5400_0000 // B.cond
+        || (inst & 0x7E00_0000) == 0x3400_0000 // CBZ, CBNZ
+        || (inst & 0x7E00_0000) == 0x3600_0000 // TBZ, TBNZ
+        || (inst & 0xFE1F_FC1F) == 0xD61F_0000 // BR, BLR, RET
+}
+
+/// Whether an A64 load/store-class instruction is a store (reads, never
+/// writes, its data registers). Load-literal has no L bit and is a load.
+fn is_arm64_store(inst: u32) -> bool {
+    let load_store_class = (inst & 0x0A00_0000) == 0x0800_0000;
+    let load_literal = (inst & 0x3B00_0000) == 0x1800_0000;
+    load_store_class && !load_literal && (inst & 0x0040_0000) == 0
+}
+
+/// A `len`-byte rodata string at virtual address `addr`, if it is text.
+fn decode_rodata_string(
+    addr: u64,
+    len: u64,
+    rodata_data: &[u8],
+    rodata_addr: u64,
+) -> Option<String> {
+    if len == 0 || len > 1000 {
+        return None;
+    }
+    let start = usize::try_from(addr.checked_sub(rodata_addr)?).ok()?;
+    let bytes = rodata_data.get(start..start.checked_add(usize::try_from(len).ok()?)?)?;
+    let s = std::str::from_utf8(bytes).ok()?;
+    is_valid_utf8_string(s).then(|| s.to_string())
 }
 
 /// Recover the inline string(s) loaded ahead of a BL call site.
@@ -961,6 +1178,109 @@ mod tests {
         );
 
         assert!(strings.is_empty());
+    }
+
+    // Encodings from `llvm-mc -triple=aarch64 -show-encoding`. Text sits at
+    // 0x100000 and rodata one page up, so `adrp x2, #4096` reaches it.
+    const ADRP_X2: u32 = 0xb000_0002; // adrp x2, #4096
+    const ADD_X2_0: u32 = 0x9100_0042; // add x2, x2, #0
+    const ADD_X2_16: u32 = 0x9100_4042; // add x2, x2, #16
+    const ADD_X2_32: u32 = 0x9100_8042; // add x2, x2, #32
+    const ADD_X2_OUT: u32 = 0x913f_fc42; // add x2, x2, #0xfff (past rodata)
+    const MOV_X3_11: u32 = 0xd280_0163; // mov x3, #11
+    const ORR_X4_7: u32 = 0xb240_0be4; // orr x4, xzr, #0x7
+    const STP_X2_X3: u32 = 0xa909_0fe2; // stp x2, x3, [sp, #144]
+    const STP_X2_X4: u32 = 0xa90a_13e2; // stp x2, x4, [sp, #160]
+    const B_NEXT: u32 = 0x1400_0001; // b #4
+    const LDR_X3: u32 = 0xf940_07e3; // ldr x3, [sp, #8]
+    const STR_X3: u32 = 0xf900_07e3; // str x3, [sp, #8]
+    const MOV_X3_X5: u32 = 0xaa05_03e3; // mov x3, x5
+    const NOP: u32 = 0xd503_201f;
+
+    fn text(words: &[u32]) -> Vec<u8> {
+        words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+
+    /// Strings packed back to back, as Go lays out rodata: a wrong length
+    /// still decodes to printable text, so these tests catch a stale length
+    /// rather than relying on the decoder to reject it.
+    fn packed_rodata() -> Vec<u8> {
+        let mut r = vec![b'x'; 0x100];
+        r[0..11].copy_from_slice(b"test_string");
+        r[16..23].copy_from_slice(b"abcdefg");
+        r[32..39].copy_from_slice(b"hijklmn");
+        r
+    }
+
+    fn stored(words: &[u32]) -> Vec<String> {
+        extract_inline_strings_arm64(&text(words), 0x100000, &packed_rodata(), 0x101000, 4)
+            .into_iter()
+            .map(|s| s.value)
+            .collect()
+    }
+
+    #[test]
+    fn arm64_stored_string_header_is_decoded() {
+        let found = extract_inline_strings_arm64(
+            &text(&[ADRP_X2, ADD_X2_0, MOV_X3_11, STP_X2_X3]),
+            0x100000,
+            &packed_rodata(),
+            0x101000,
+            4,
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].value, "test_string");
+        assert_eq!(found[0].data_offset, 0x101000);
+        assert_eq!(found[0].method, StringMethod::InstructionPattern);
+    }
+
+    /// Go reloads a length register only when the length changes: the second
+    /// element here reuses x4 = 7 from the first.
+    #[test]
+    fn arm64_stored_length_register_is_reused_across_elements() {
+        let found = stored(&[
+            ADRP_X2, ADD_X2_16, ORR_X4_7, STP_X2_X4, ADRP_X2, ADD_X2_32, STP_X2_X4,
+        ]);
+        assert_eq!(found, ["abcdefg", "hijklmn"]);
+    }
+
+    #[test]
+    fn arm64_stored_state_does_not_survive_a_branch() {
+        assert!(stored(&[ADRP_X2, ADD_X2_0, MOV_X3_11, B_NEXT, STP_X2_X3]).is_empty());
+    }
+
+    #[test]
+    fn arm64_stored_length_overwritten_is_not_used() {
+        assert!(stored(&[ADRP_X2, ADD_X2_0, MOV_X3_11, MOV_X3_X5, STP_X2_X3]).is_empty());
+        assert!(stored(&[ADRP_X2, ADD_X2_0, MOV_X3_11, LDR_X3, STP_X2_X3]).is_empty());
+    }
+
+    /// A store reads its register; it must not invalidate it.
+    #[test]
+    fn arm64_stored_intervening_store_keeps_state() {
+        assert_eq!(
+            stored(&[ADRP_X2, ADD_X2_0, MOV_X3_11, STR_X3, STP_X2_X3]),
+            ["test_string"]
+        );
+    }
+
+    #[test]
+    fn arm64_stored_values_expire_after_the_window() {
+        let within = |gap: usize| {
+            let mut words = vec![ADRP_X2, ADD_X2_0, MOV_X3_11];
+            words.extend(std::iter::repeat_n(NOP, gap));
+            words.push(STP_X2_X3);
+            !stored(&words).is_empty()
+        };
+        // The pointer was set two instructions before the length, so it is
+        // the first to age out.
+        assert!(within(ARM64_STORED_WINDOW - 2));
+        assert!(!within(ARM64_STORED_WINDOW - 1));
+    }
+
+    #[test]
+    fn arm64_stored_pointer_outside_rodata_is_ignored() {
+        assert!(stored(&[ADRP_X2, ADD_X2_OUT, MOV_X3_11, STP_X2_X3]).is_empty());
     }
 
     #[test]
