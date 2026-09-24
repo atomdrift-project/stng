@@ -44,7 +44,10 @@ const LRU_GRANULARITY: Duration = Duration::from_secs(24 * 60 * 60);
 ///   -r -p | sh`), where previously only a value that was hex end to end did.
 ///   Entries keyed under `3` hold the wrapping command but not the payload.
 /// - `5`: instruction-guided PE repeating-XOR strings, with source spans.
-const CACHE_VERSION: &str = "5";
+/// - `6`: Mach-O Go binaries yield their `__gopclntab` function names, as ELF
+///   and PE always have. Entries keyed under `5` hold none of them, so every
+///   rule keyed on a Go function name would keep missing the macOS build.
+const CACHE_VERSION: &str = "6";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted

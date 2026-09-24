@@ -821,6 +821,73 @@ fn extract_elf_pclntab_strings(
     nulls
 }
 
+/// Go function and package names from a Mach-O `__gopclntab` section.
+///
+/// The Mach-O counterpart of [`extract_elf_pclntab_strings`]. The raw scan
+/// skips `__gopclntab` (see `binary::macho_go_skip_ranges`) because its
+/// strings are packed without terminators the raw scanner understands, and the
+/// structure-based Go extractor recovers string literals rather than function
+/// names — so without this pass a Mach-O Go binary exposed none of the
+/// `pkg.Function` names its ELF and PE builds do, and every rule keyed on them
+/// went blind on macOS. `slice_base` rebases a fat slice's section offsets onto
+/// the whole file.
+fn extract_macho_pclntab_strings(
+    macho: &MachO<'_>,
+    data: &[u8],
+    slice_base: u64,
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let Some(sec) = macho
+        .segments
+        .iter()
+        .filter_map(|seg| seg.sections().ok())
+        .flatten()
+        .map(|(sec, _)| sec)
+        .find(|sec| sec.name().is_ok_and(|n| n == "__gopclntab"))
+    else {
+        return Vec::new();
+    };
+    let Some(start) = slice_base.checked_add(u64::from(sec.offset)) else {
+        return Vec::new();
+    };
+    let (Ok(start), Ok(size)) = (usize::try_from(start), usize::try_from(sec.size)) else {
+        return Vec::new();
+    };
+    let end = start.saturating_add(size).min(data.len());
+    let Some(section_bytes) = data.get(start..end) else {
+        return Vec::new();
+    };
+
+    let t_pcln = std::time::Instant::now();
+    // Same two encodings as the ELF pass: NUL-separated funcnametab and
+    // varint-prefixed pkgnamestab.
+    let (varints, mut nulls) = rayon::join(
+        || {
+            extract_varint_prefixed_strings(
+                section_bytes,
+                start as u64,
+                Some("__gopclntab"),
+                min_length,
+            )
+        },
+        || {
+            extract_null_separated_strings(
+                section_bytes,
+                start as u64,
+                Some("__gopclntab"),
+                min_length,
+            )
+        },
+    );
+    nulls.extend(varints);
+    tracing::debug!(
+        "TIME: Go Mach-O __gopclntab scan took {:?} ({} symbols)",
+        t_pcln.elapsed(),
+        nulls.len()
+    );
+    nulls
+}
+
 /// File-offset range(s) of the Mach-O `__LINKEDIT` segment (which holds the
 /// code-signature blob). Returns one range for a thin binary and one per slice
 /// for a fat binary; empty for non-Mach-O. Used to scope code-signature
@@ -1779,6 +1846,7 @@ fn extract_from_object_inner(
                 let extractor = GoStringExtractor::new(min_length);
                 // Thin binary: the slice is the whole file, so no slice base.
                 strings.extend(extractor.extract_macho(macho, 0));
+                strings.extend(extract_macho_pclntab_strings(macho, data, 0, min_length));
 
                 // Raw scan fallback for Go shared libraries / cgo binaries.
                 // Skip raw-scanning the Go string-blob sections — strings there
@@ -1888,6 +1956,9 @@ fn extract_from_object_inner(
                         is_go_binary = true;
                         let extractor = GoStringExtractor::new(min_length);
                         strings.extend(extractor.extract_macho(&macho, slice_base));
+                        strings.extend(extract_macho_pclntab_strings(
+                            &macho, data, slice_base, min_length,
+                        ));
 
                         // See macho_has_go_sections branch above for why we
                         // skip-scan the Go string-blob sections.
