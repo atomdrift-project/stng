@@ -614,6 +614,8 @@ const AMD64_STORED_AHEAD: usize = 48;
 /// Bytes before the `LEA` searched for a length register load that preceded
 /// it (a length shared across equal-length elements is loaded once).
 const AMD64_STORED_BEHIND: usize = 32;
+/// Furthest a header's length store may sit from its pointer store.
+const AMD64_STORED_PAIR_GAP: usize = 16;
 
 /// Recover strings whose header x86-64 code stores rather than passes: the
 /// elements of a `[&str; N]` / `[]string` literal or a struct built in memory.
@@ -669,14 +671,27 @@ fn extract_amd64_stored_strings(
             continue;
         }
 
-        let ahead = end..text.len().min(end + AMD64_STORED_AHEAD);
-        let Some((base, d)) = ahead.clone().find_map(|j| {
-            store_reg(text, j).and_then(|(src, base, d)| (src == ptr_reg).then_some((base, d)))
+        // The window closes where the pointer register is next loaded by
+        // another rip-relative LEA: past that, a store of the register writes
+        // a different string's pointer. Compilers reuse the same scratch
+        // register for consecutive table elements, and pairing across that
+        // reload was the main source of wrong-length strings.
+        let mut limit = text.len().min(end + AMD64_STORED_AHEAD);
+        if let Some(next) = (end..limit).find(|&j| rip_lea_dest(text, j) == Some(ptr_reg)) {
+            limit = next;
+        }
+        let ahead = end..limit;
+        let Some((ptr_at, base, d)) = ahead.clone().find_map(|j| {
+            store_reg(text, j).and_then(|(src, base, d)| (src == ptr_reg).then_some((j, base, d)))
         }) else {
             continue;
         };
         let len_disp = d + 8;
-        let len = ahead.clone().find_map(|j| {
+        // A header is written by adjacent instructions; a length store far
+        // from the pointer store belongs to something else.
+        let near =
+            ptr_at.saturating_sub(AMD64_STORED_PAIR_GAP)..limit.min(ptr_at + AMD64_STORED_PAIR_GAP);
+        let len = near.clone().find_map(|j| {
             if let Some((b, dd, imm)) = store_imm(text, j)
                 && b == base
                 && dd == len_disp
@@ -710,6 +725,16 @@ fn extract_amd64_stored_strings(
             });
         }
     }
+}
+
+/// Destination register of a `LEA r64, [rip+disp32]` starting at `at`.
+fn rip_lea_dest(b: &[u8], at: usize) -> Option<u8> {
+    let rex = *b.get(at)?;
+    if rex & 0xFB != 0x48 || *b.get(at + 1)? != 0x8D {
+        return None;
+    }
+    let modrm = *b.get(at + 2)?;
+    (modrm & 0xC7 == 0x05).then_some(((modrm >> 3) & 7) | ((rex >> 2) & 1) << 3)
 }
 
 fn read_i32(b: &[u8], at: usize) -> Option<i32> {
@@ -1478,6 +1503,87 @@ mod tests {
     #[test]
     fn arm64_stored_pointer_outside_rodata_is_ignored() {
         assert!(stored(&[ADRP_X2, ADD_X2_OUT, MOV_X3_11, STP_X2_X3]).is_empty());
+    }
+
+    // x86-64 encodings from `llvm-mc -triple=x86_64 -show-encoding`. Text at
+    // 0x1000, rodata at 0x3000; `lea` at text offset `at` reaching rodata+off
+    // needs disp = 0x3000 + off - (0x1000 + at + 7).
+    fn lea(reg_rex: u8, modrm: u8, at: usize, off: u32) -> Vec<u8> {
+        let disp = (0x3000 + off) as i64 - (0x1000 + at as i64 + 7);
+        let mut v = vec![reg_rex, 0x8d, modrm];
+        v.extend((disp as i32).to_le_bytes());
+        v
+    }
+    const LEA_RCX: (u8, u8) = (0x48, 0x0d); // lea rcx, [rip+d]
+    const LEA_RAX: (u8, u8) = (0x48, 0x05); // lea rax, [rip+d]
+    const STORE_RCX_RDI: [u8; 3] = [0x48, 0x89, 0x0f]; // mov [rdi], rcx
+    const STORE_RCX_RDI8: [u8; 4] = [0x48, 0x89, 0x4f, 0x08]; // mov [rdi+8], rcx
+    const STORE_RCX_RDI16: [u8; 4] = [0x48, 0x89, 0x4f, 0x10]; // mov [rdi+16], rcx
+    const MOV_ECX_11: [u8; 5] = [0xb9, 0x0b, 0, 0, 0]; // mov ecx, 11
+    const STORE_RAX_RSP20: [u8; 5] = [0x48, 0x89, 0x44, 0x24, 0x20]; // mov [rsp+0x20], rax
+    const STORE_IMM11_RSP28: [u8; 9] = [0x48, 0xc7, 0x44, 0x24, 0x28, 0x0b, 0, 0, 0]; // mov qword [rsp+0x28], 11
+    const STORE_IMM7_RDI8: [u8; 8] = [0x48, 0xc7, 0x47, 0x08, 0x07, 0, 0, 0]; // mov qword [rdi+8], 7
+
+    fn amd64_stored(parts: &[&[u8]]) -> Vec<String> {
+        let text: Vec<u8> = parts.concat();
+        let mut rodata = vec![b'x'; 0x100];
+        rodata[0..11].copy_from_slice(b"test_string");
+        rodata[16..23].copy_from_slice(b"abcdefg");
+        let mut out = Vec::new();
+        extract_amd64_stored_strings(&text, 0x1000, &rodata, 0x3000, 4, &mut out);
+        out.into_iter().map(|s| s.value).collect()
+    }
+
+    /// Pointer stored to [rdi], length loaded into a register and stored to
+    /// [rdi+8]: rustc's shape for a `[&str; N]` element.
+    #[test]
+    fn amd64_stored_header_with_register_length() {
+        let lea = lea(LEA_RCX.0, LEA_RCX.1, 0, 0);
+        assert_eq!(
+            amd64_stored(&[&lea, &STORE_RCX_RDI, &MOV_ECX_11, &STORE_RCX_RDI8]),
+            ["test_string"]
+        );
+    }
+
+    /// A stack-spilled header (SIB-addressed) with an immediate length store.
+    #[test]
+    fn amd64_stored_header_on_the_stack_with_immediate_length() {
+        let lea = lea(LEA_RAX.0, LEA_RAX.1, 0, 0);
+        assert_eq!(
+            amd64_stored(&[&lea, &STORE_RAX_RSP20, &STORE_IMM11_RSP28]),
+            ["test_string"]
+        );
+    }
+
+    /// The first LEA's pointer is never stored before the register is
+    /// reloaded; pairing it with the second element's stores would decode
+    /// "test_string" with the wrong length. Only the second element counts.
+    #[test]
+    fn amd64_stored_register_reload_closes_the_window() {
+        let first = lea(LEA_RCX.0, LEA_RCX.1, 0, 0);
+        let second = lea(LEA_RCX.0, LEA_RCX.1, 7, 16);
+        assert_eq!(
+            amd64_stored(&[&first, &second, &STORE_RCX_RDI, &STORE_IMM7_RDI8]),
+            ["abcdefg"]
+        );
+    }
+
+    /// The length must sit in the slot right after the pointer.
+    #[test]
+    fn amd64_stored_length_must_be_adjacent() {
+        let lea = lea(LEA_RCX.0, LEA_RCX.1, 0, 0);
+        assert!(amd64_stored(&[&lea, &STORE_RCX_RDI, &MOV_ECX_11, &STORE_RCX_RDI16]).is_empty());
+    }
+
+    /// A length store far from the pointer store belongs to something else.
+    #[test]
+    fn amd64_stored_length_must_be_near_the_pointer_store() {
+        let lea = lea(LEA_RCX.0, LEA_RCX.1, 0, 0);
+        let padding = [0x90u8; AMD64_STORED_PAIR_GAP + 1];
+        assert!(
+            amd64_stored(&[&lea, &STORE_RCX_RDI, &MOV_ECX_11, &padding, &STORE_RCX_RDI8])
+                .is_empty()
+        );
     }
 
     #[test]

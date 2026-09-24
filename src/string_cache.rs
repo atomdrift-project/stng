@@ -52,7 +52,12 @@ const LRU_GRANULARITY: Duration = Duration::from_secs(24 * 60 * 60);
 ///   an implant's credential-path table stays invisible in its arm64 builds.
 ///   Also ELF Go and Rust decoded strings report file offsets, not virtual
 ///   addresses; `6` entries place them off by the load bias.
-const CACHE_VERSION: &str = "7";
+/// - `8`: Rust executables recognised by content (not only a `.rustc`
+///   section), with PIE relocation-derived `&str` headers; amd64 stored string
+///   headers paired only within one register lifetime. `7` entries hold
+///   merged raw runs for Rust binaries and, from the first amd64 stored-header
+///   pass, some strings decoded with a neighbouring element's length.
+const CACHE_VERSION: &str = "8";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted
