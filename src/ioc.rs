@@ -750,10 +750,13 @@ fn xor_key_material(extracted: &ExtractedString) -> Option<Vec<u8>> {
         return None;
     }
 
-    // ARM64 stack-XOR recovery renders arbitrary key bytes as `0x<hex>`.
-    // Restrict hex decoding to that producer: a user-supplied ASCII XOR key
-    // beginning with "0x" must remain those literal bytes.
-    if extracted.method == StringMethod::XorStackPair {
+    // ARM64 stack-XOR and repeating-XOR PE recovery render arbitrary key bytes
+    // as `0x<hex>`. Restrict hex decoding to those producers: a user-supplied
+    // ASCII XOR key beginning with "0x" must remain those literal bytes.
+    if matches!(
+        extracted.method,
+        StringMethod::XorStackPair | StringMethod::XorRepeatingKey
+    ) {
         let encoded = extracted.value.strip_prefix("0x")?;
         if encoded.is_empty() || encoded.len() % 2 != 0 {
             return None;

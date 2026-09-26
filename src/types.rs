@@ -341,6 +341,9 @@ pub enum StringMethod {
     Utf16BeDecode,
     /// Found via XOR of two stack-placed non-printable immediate constants (e.g. BrickStorm/garble style)
     XorStackPair,
+    /// The repeating XOR key of a whole file that decodes to a PE image,
+    /// rendered `0x<hex>` (see [`recover_repeating_xor_pe`](crate::recover_repeating_xor_pe))
+    XorRepeatingKey,
     /// Found via script deobfuscation (decoded payload from obfuscated Python/JS/PHP/PowerShell)
     ScriptDecode,
     /// Found via Go pclntab (program counter line table) symbol extraction
@@ -357,6 +360,7 @@ impl StringMethod {
             Self::Structure
             | Self::StackString
             | Self::XorStackPair
+            | Self::XorRepeatingKey
             | Self::InstructionPattern
             | Self::XorDecode
             | Self::Base64Decode
@@ -394,6 +398,7 @@ impl StringMethod {
             Self::Structure
             | Self::StackString
             | Self::XorStackPair
+            | Self::XorRepeatingKey
             | Self::InstructionPattern
             | Self::Base64ObfuscatedDecode => 3,
 

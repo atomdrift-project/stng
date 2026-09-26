@@ -95,7 +95,9 @@ pub use types::{
     StringKind, StringMethod, StringStruct,
 };
 
-pub use xor::{MAX_XOR_SCAN_SIZE, extract_incremental_xor_strings};
+pub use xor::{
+    MAX_XOR_SCAN_SIZE, RepeatingXorKey, extract_incremental_xor_strings, recover_repeating_xor_pe,
+};
 
 // Internal — not part of the stable public API
 pub(crate) use go::{
@@ -1671,6 +1673,18 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
         // Trigger XOR scan even for unknown formats if requested
         if opts.xor_scan || opts.xor_scan_multi || opts.xor_key.is_some() {
             apply_xor_scan(&mut strings, data, opts, is_pe, &[]);
+        }
+
+        // A PE under a repeating XOR key is opaque to goblin, so this branch is
+        // the only place one can land. Recovery reads a fixed 128-byte header
+        // whatever the input size, so it needs no size gate; text is skipped
+        // as `apply_xor_scan` skips it. Only the key is surfaced; the decoded
+        // image is binary, for callers of `recover_repeating_xor_pe`.
+        if opts.xor_scan
+            && opts.format_hint != FormatHint::Text
+            && let Some(key) = xor::recover_repeating_xor_pe(data)
+        {
+            strings.push(key.to_key_string());
         }
 
         // Decode encoded strings (base64, hex, URL-encoding, unicode escapes).

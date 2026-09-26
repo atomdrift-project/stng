@@ -769,6 +769,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
     // Split method/encoding from classification for separate columns
     let (method, classification) = if s.method == stng::StringMethod::XorDecode
         || s.method == stng::StringMethod::XorStackPair
+        || s.method == stng::StringMethod::XorRepeatingKey
     {
         ("xor", s.kind.map_or("-", |k| k.short_name()))
     } else if s.method == stng::StringMethod::Base64ObfuscatedDecode {
@@ -805,6 +806,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         // XOR-decoded and obfuscated base64 content uses bright yellow to stand out
         if s.method == stng::StringMethod::XorDecode
             || s.method == stng::StringMethod::XorStackPair
+            || s.method == stng::StringMethod::XorRepeatingKey
             || s.method == stng::StringMethod::Base64ObfuscatedDecode
             || s.method == stng::StringMethod::ScriptDecode
         {

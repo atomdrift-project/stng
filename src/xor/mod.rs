@@ -3,9 +3,13 @@
 //! This module detects strings that have been XOR'd with a single-byte key,
 //! a common obfuscation technique in malware. Uses Aho-Corasick for efficient
 //! single-pass multi-pattern matching.
+//!
+//! [`repeating_pe`] recovers the repeating key of a whole file that decodes to
+//! a PE image (a dropper's encrypted payload), rather than individual strings.
 
 mod classify;
 mod key;
+pub(crate) mod repeating_pe;
 mod scan;
 mod validate;
 
@@ -13,6 +17,7 @@ mod validate;
 pub(crate) use self::classify::{
     auto_detect_xor_key, extract_multikey_xor_strings, extract_xor_strings,
 };
+pub use self::repeating_pe::{RepeatingXorKey, recover_repeating_xor_pe};
 pub use self::scan::extract_incremental_xor_strings;
 pub(crate) use self::scan::{
     extract_custom_xor_strings_with_hints, extract_rolling_xor_with_known_plaintext,
