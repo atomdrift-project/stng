@@ -346,6 +346,8 @@ pub enum StringMethod {
     XorRepeatingKey,
     /// Found via script deobfuscation (decoded payload from obfuscated Python/JS/PHP/PowerShell)
     ScriptDecode,
+    /// Found by decrypting a legacy Allaire/Adobe ColdFusion template
+    CfmlDecode,
     /// Found via Go pclntab (program counter line table) symbol extraction
     PclntabSymbol,
 }
@@ -372,7 +374,8 @@ impl StringMethod {
             | Self::UnicodeEscapeDecode
             | Self::Utf16LeDecode
             | Self::Utf16BeDecode
-            | Self::ScriptDecode => 3,
+            | Self::ScriptDecode
+            | Self::CfmlDecode => 3,
 
             // High: rich metadata sources
             Self::R2String
@@ -418,6 +421,7 @@ impl StringMethod {
             | Self::Utf16LeDecode
             | Self::Utf16BeDecode
             | Self::ScriptDecode
+            | Self::CfmlDecode
             | Self::PclntabSymbol => 2,
 
             Self::Heuristic => 1,

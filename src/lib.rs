@@ -44,12 +44,18 @@ mod validation_thresholds;
 
 // Binary format modules
 mod arm64_stack_xor;
+mod arm64_repeating_xor;
+mod swift_small_strings;
 pub mod binary;
 mod binary_net;
+mod cfml;
 mod detect;
 mod dotnet;
 mod entitlements;
 mod imports;
+mod lcg_xor;
+mod heap_xor;
+mod pointer_xor;
 mod overlay;
 mod pe_xor;
 mod raw;
@@ -85,6 +91,10 @@ pub use ioc::{
     Ioc, IocKind, IocOccurrence, IpEvidence, KeyAlgorithm, KeyMetadata, MAX_IOC_OCCURRENCES,
     canonicalize_hostname, canonicalize_ioc_path, decode_key_material, encode_key_material,
     extract_iocs, is_external_ip,
+};
+pub use lcg_xor::{
+    decode_lcg_xor, extract_macho_arithmetic_strings, extract_macho_lcg_xor,
+    extract_macho_shuffled_xorshift_strings, extract_macho_xor_macho_strings,
 };
 pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
 pub use string_cache::{
@@ -260,6 +270,7 @@ fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, usize)]) ->
             | StringMethod::UrlDecode
             | StringMethod::UnicodeEscapeDecode
             | StringMethod::ScriptDecode
+            | StringMethod::CfmlDecode
             | StringMethod::XorDecode
     ) {
         return true;
@@ -1665,6 +1676,23 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
             ));
         }
 
+        // Legacy ColdFusion templates use a fixed signature followed by
+        // DES-encrypted CFML. Recover the source as one decoded string so
+        // language and behavior traits can inspect the actual template body.
+        if !opts.is_cancelled()
+            && let Some(source) = cfml::decode(data)
+            && source.len() >= opts.min_length
+        {
+            strings.push(ExtractedString {
+                value: String::from_utf8_lossy(&source).into_owned(),
+                data_offset: 0,
+                data_len: u32::try_from(data.len()).unwrap_or(u32::MAX),
+                method: StringMethod::CfmlDecode,
+                kind: None,
+                fragments: None,
+            });
+        }
+
         // Extract binary network data (IPs and ports in network byte order)
         // For unknown formats, use 0 (not M68000) to process normally
         strings.extend(scan_binary_ips(data, opts.min_length, 0, None, None));
@@ -1930,6 +1958,20 @@ fn extract_from_object_inner(
         Object::Mach(goblin::mach::Mach::Binary(macho)) => {
             let segments = collect_macho_segments(macho);
             section_info = collect_macho_section_info(macho);
+            strings.extend(heap_xor::extract_macho(macho, 0, min_length));
+            strings.extend(pointer_xor::extract_macho(macho, 0, min_length));
+            strings.extend(arm64_repeating_xor::extract_macho(macho, 0, min_length));
+            strings.extend(swift_small_strings::extract_macho(macho, 0, min_length));
+            strings.extend(lcg_xor::extract_macho_arithmetic_strings(
+                macho, 0, min_length,
+            ));
+            strings.extend(lcg_xor::extract_macho_lcg_xor(macho, data, 0, min_length));
+            strings.extend(lcg_xor::extract_macho_xor_macho_strings(
+                macho, data, 0, min_length,
+            ));
+            strings.extend(lcg_xor::extract_macho_shuffled_xorshift_strings(
+                macho, data, 0, min_length,
+            ));
             if macho_has_go_sections(macho) {
                 is_go_binary = true;
                 let extractor = GoStringExtractor::new(min_length);
@@ -2064,6 +2106,22 @@ fn extract_from_object_inner(
                     let slice_base = arch_offsets.get(idx).copied().unwrap_or(0);
                     segments = collect_macho_segments(&macho);
                     section_info = collect_macho_section_info(&macho);
+                    strings.extend(heap_xor::extract_macho(&macho, slice_base, min_length));
+                    strings.extend(pointer_xor::extract_macho(&macho, slice_base, min_length));
+                    strings.extend(arm64_repeating_xor::extract_macho(&macho, slice_base, min_length));
+                    strings.extend(swift_small_strings::extract_macho(&macho, slice_base, min_length));
+                    strings.extend(lcg_xor::extract_macho_arithmetic_strings(
+                        &macho, slice_base, min_length,
+                    ));
+                    strings.extend(lcg_xor::extract_macho_lcg_xor(
+                        &macho, data, slice_base, min_length,
+                    ));
+                    strings.extend(lcg_xor::extract_macho_xor_macho_strings(
+                        &macho, data, slice_base, min_length,
+                    ));
+                    strings.extend(lcg_xor::extract_macho_shuffled_xorshift_strings(
+                        &macho, data, slice_base, min_length,
+                    ));
                     if macho_has_go_sections(&macho) {
                         is_go = true;
                         is_go_binary = true;

@@ -70,9 +70,9 @@ impl RustStringExtractor {
     /// Rust Mach-O binaries typically store strings in:
     /// - `__cstring` in `__TEXT` segment (null-terminated C strings)
     /// - `__const` in `__TEXT` segment (constants, often packed)
-    /// - `__const` in `__DATA_CONST` segment (ptr+len structures)
+    /// - `__const` in `__DATA_CONST` or `__DATA` (ptr+len structures)
     ///
-    /// Rust stores &str slice structures (ptr+len) in `__DATA_CONST`,
+    /// Rust stores &str slice structures (ptr+len) in either data segment,
     /// while the actual string data is in `__TEXT,__const` or `__cstring`.
     /// Extract strings from a Mach-O binary.
     ///
@@ -89,7 +89,7 @@ impl RustStringExtractor {
         // Collect sections by type
         let mut cstring_info: Option<(u64, &[u8])> = None;
         let mut text_const_info: Option<(u64, &[u8])> = None;
-        let mut data_const_info: Option<(u64, &[u8])> = None;
+        let mut data_const_sections = [None; 2];
         let mut text_info: Option<(u64, &[u8])> = None;
 
         for seg in &macho.segments {
@@ -105,7 +105,10 @@ impl RustStringExtractor {
                             text_const_info = Some((section.addr, section_data));
                         }
                         ("__DATA_CONST", "__const") => {
-                            data_const_info = Some((section.addr, section_data));
+                            data_const_sections[0] = Some((section.addr, section_data));
+                        }
+                        ("__DATA", "__const") => {
+                            data_const_sections[1] = Some((section.addr, section_data));
                         }
                         ("__TEXT", "__text") => text_info = Some((section.addr, section_data)),
                         _ => {}
@@ -114,9 +117,10 @@ impl RustStringExtractor {
             }
         }
 
-        // PHASE 1: Extract from __DATA_CONST structures pointing to string sections
+        // PHASE 1: Extract data-segment structures pointing to string sections.
+        // Older linkers place these in __DATA,__const rather than __DATA_CONST.
         // This is the primary method for Rust - it stores &str slices here
-        if let Some((data_const_addr, data_const_data)) = data_const_info {
+        for (data_const_addr, data_const_data) in data_const_sections.into_iter().flatten() {
             // Target sections to look for pointers to
             let targets: Vec<(u64, &[u8], &str)> = [
                 cstring_info.map(|(a, d)| (a, d, "__cstring")),

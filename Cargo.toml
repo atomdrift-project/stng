@@ -39,6 +39,9 @@ serde_json = "1.0"
 # Base64 decoding
 base64 = "0.22"
 
+# DES is used only by the signature-gated legacy ColdFusion template decoder.
+des = "0.8"
+
 # Hex decoding
 hex = "0.4"
 

@@ -61,7 +61,23 @@ const LRU_GRANULARITY: Duration = Duration::from_secs(24 * 60 * 60);
 ///   `{ } ; :` of generic shapes. `8` entries drop every function whose
 ///   module-qualified name passed 80 characters -- a quarter of a large Go
 ///   binary's names, application packages included -- and their neighbours.
-const CACHE_VERSION: &str = "9";
+/// `11`: Mach-O LCG-XOR payloads decoded from `__const` using constants
+/// recovered from `__text`. Entries keyed under `10` contain only the
+/// encrypted high-entropy section and miss all behavior in the script.
+/// `12`: expose strings from validated one-byte-XOR universal Mach-O payloads
+/// embedded in Mach-O `__const` sections.
+/// `13`: recover threaded shuffled-xorshift AppleScript stages from Mach-O
+/// constant data using code-referenced source and permutation tables.
+/// `14`: expose arithmetic-table Mach-O stages from instruction-derived bounds.
+/// `15`: recover state-machine arithmetic-table Mach-O stages.
+/// `16`: recover arithmetic tables traversed through a validated permutation.
+/// `17`: recover four-table permutation arithmetic and avoid duplicate table work.
+/// `18`: recover checked heap-array XOR literals from x86-64 Mach-O code.
+/// `19`: recover call-site string lengths loaded with adjacent PUSH/POP pairs.
+/// `20`: recover bounded qword XOR literals with arithmetic-derived key pointers.
+/// `21`: recover Rust slice headers stored in Mach-O __DATA,__const.
+/// `22`: recover ARM64 literals passed to a verified repeating-key XOR helper.
+const CACHE_VERSION: &str = "23";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted

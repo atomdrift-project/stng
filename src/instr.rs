@@ -531,7 +531,7 @@ fn decode_arm_bitmask_immediate(inst: u32) -> Option<u64> {
 /// Extracts inline strings from AMD64 executable code.
 ///
 /// Scans for CALL instructions and looks for LEAQ addr(RIP) patterns
-/// (string address) and MOVL/MOVQ patterns (string length).
+/// (string address) and MOVL/MOVQ or adjacent PUSH/POP patterns (string length).
 pub(crate) fn extract_inline_strings_amd64(
     text_data: &[u8],
     text_addr: u64,
@@ -949,6 +949,15 @@ fn find_inline_length_string(
         return Some((s, Some(reg)));
     }
 
+    // Size-optimized Rust uses PUSH imm8; POP reg for small lengths. Permit
+    // one intervening stack-address LEA for the call's output slot, but require
+    // the length load to end at this CALL: no byte-window search or stale pair.
+    if let Some((reg, len)) = decode_call_push_length(text_data, lea_pos + 7, call_pos, lea_dest)
+        && let Some(s) = validate(len)
+    {
+        return Some((s, Some(reg)));
+    }
+
     // Some Go branches materialize the length first and emit the pointer LEA
     // immediately afterwards: `MOV EBX, 16; LEA RAX, literal`. Accept only
     // an instruction that ends exactly at the LEA, keeping the same strict
@@ -992,6 +1001,41 @@ fn find_inline_length_string(
     }
 
     None
+}
+
+/// Adjacent positive PUSH imm8 / POP r64 immediately before a CALL, optionally
+/// preceded by a stack-address LEA into a third register. All operands must fit
+/// before the CALL and neither setup instruction may overwrite the pointer.
+fn decode_call_push_length(b: &[u8], mut p: usize, call: usize, ptr: u8) -> Option<(u8, u64)> {
+    let b = b.get(..call)?;
+    let mut output_reg = None;
+    if *b.get(p)? & 0xFB == 0x48 && *b.get(p + 1)? == 0x8D {
+        let rex = b[p];
+        let dest = ((b.get(p + 2)? >> 3) & 7) | ((rex >> 2) & 1) << 3;
+        let (base, _, width) = mem_operand(b, p + 2, rex)?;
+        if !matches!(base, 4 | 5) || dest == ptr || dest == 4 {
+            return None;
+        }
+        output_reg = Some(dest);
+        p += 2 + width;
+    }
+    if *b.get(p)? != 0x6A {
+        return None;
+    }
+    // PUSH sign extends imm8; negative values are not string lengths.
+    let len = *b.get(p + 1)?;
+    if len == 0 || len > 127 {
+        return None;
+    }
+    p += 2;
+    let high = u8::from(*b.get(p)? == 0x41) << 3;
+    p += usize::from(high != 0);
+    let pop = *b.get(p)?;
+    if !(0x58..=0x5F).contains(&pop) || p + 1 != call {
+        return None;
+    }
+    let reg = (pop - 0x58) | high;
+    (reg != ptr && reg != 4 && output_reg != Some(reg)).then_some((reg, u64::from(len)))
 }
 
 /// Decode a `MOV` of a 32-bit immediate into a general register at `p`.

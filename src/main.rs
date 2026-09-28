@@ -106,6 +106,15 @@ struct Cli {
     #[arg(long)]
     xor: Option<String>,
 
+    /// Decode an analyst-identified LCG-XOR range:
+    /// seed,multiplier,modulus,mask,offset,length (decimal or 0x-prefixed)
+    #[arg(
+        long,
+        value_name = "SEED,MUL,MOD,MASK,OFFSET,LENGTH",
+        conflicts_with = "xor"
+    )]
+    xor_lcg: Option<String>,
+
     /// Minimum length for XOR-decoded strings
     #[arg(long, default_value = "10")]
     xor_min_length: usize,
@@ -152,6 +161,40 @@ fn parse_xor_key(input: &str) -> Result<Vec<u8>> {
     }
 
     hex::decode(hex_str).map_err(|e| anyhow::anyhow!("Invalid hex key '{hex_str}': {e}"))
+}
+
+fn parse_integer(input: &str) -> Result<u64> {
+    if let Some(hex) = input
+        .strip_prefix("0x")
+        .or_else(|| input.strip_prefix("0X"))
+    {
+        u64::from_str_radix(hex, 16)
+            .map_err(|e| anyhow::anyhow!("Invalid hexadecimal integer '{input}': {e}"))
+    } else {
+        input
+            .parse::<u64>()
+            .map_err(|e| anyhow::anyhow!("Invalid decimal integer '{input}': {e}"))
+    }
+}
+
+fn parse_lcg_parameters(input: &str) -> Result<(u64, u64, u64, u8, usize, usize)> {
+    let fields: Vec<_> = input.split(',').map(str::trim).collect();
+    if fields.len() != 6 {
+        anyhow::bail!("--xor-lcg expects seed,multiplier,modulus,mask,offset,length");
+    }
+    let seed = parse_integer(fields[0])?;
+    let multiplier = parse_integer(fields[1])?;
+    let modulus = parse_integer(fields[2])?;
+    let mask = u8::try_from(parse_integer(fields[3])?)
+        .map_err(|_| anyhow::anyhow!("LCG mask must fit in one byte"))?;
+    let offset = usize::try_from(parse_integer(fields[4])?)
+        .map_err(|_| anyhow::anyhow!("LCG offset is too large"))?;
+    let length = usize::try_from(parse_integer(fields[5])?)
+        .map_err(|_| anyhow::anyhow!("LCG length is too large"))?;
+    if modulus == 0 || multiplier == 0 || length == 0 {
+        anyhow::bail!("LCG multiplier, modulus, and length must be nonzero");
+    }
+    Ok((seed, multiplier, modulus, mask, offset, length))
 }
 
 /// Get binary format and architecture string (e.g., "ELF arm32", "PE x64", "Mach-O arm64")
@@ -422,6 +465,13 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     }
 
     let mut strings = stng::extract_strings_with_options(&data, &opts);
+
+    if let Some(parameters) = cli.xor_lcg.as_deref() {
+        let (seed, multiplier, modulus, mask, offset, length) = parse_lcg_parameters(parameters)?;
+        let decoded = stng::decode_lcg_xor(&data, offset, length, seed, multiplier, modulus, mask)
+            .ok_or_else(|| anyhow::anyhow!("LCG-XOR parameters did not decode a readable range"))?;
+        strings.push(decoded);
+    }
 
     // Detect overlay for display purposes (even if no strings found)
     let overlay_info = stng::detect_elf_overlay(&data);
