@@ -297,7 +297,7 @@ impl StringContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StringMethod {
-    /// Found via pointer+length structure analysis
+    /// Found via language string layout (pointer+length or tagged inline bytes)
     Structure,
     /// Found via instruction pattern analysis (inline literals)
     InstructionPattern,

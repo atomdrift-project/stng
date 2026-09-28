@@ -30,7 +30,9 @@ pub(crate) fn extract_macho(
         if seg.name().ok() != Some("__TEXT") {
             continue;
         }
-        let Ok(sections) = seg.sections() else { continue };
+        let Ok(sections) = seg.sections() else {
+            continue;
+        };
         for (section, bytes) in sections {
             match section.name().ok() {
                 Some("__swift5_types") if !bytes.is_empty() => swift = true,
@@ -41,8 +43,12 @@ pub(crate) fn extract_macho(
             }
         }
     }
-    let Some((offset, code)) = code.filter(|_| swift) else { return Vec::new() };
-    let Some(base) = slice_base.checked_add(offset) else { return Vec::new() };
+    let Some((offset, code)) = code.filter(|_| swift) else {
+        return Vec::new();
+    };
+    let Some(base) = slice_base.checked_add(offset) else {
+        return Vec::new();
+    };
     if base.checked_add(code.len() as u64).is_none() {
         return Vec::new();
     }
@@ -64,8 +70,12 @@ pub(crate) fn extract_macho(
             }
             let imm = u64::from((w >> 5) & 0xffff) << shift;
             if op == 0x5280_0000 {
-                regs[rd] = Constant { value: imm, start: index, epoch };
-            } else if regs[rd].epoch == epoch && index - regs[rd].start <= MAX_DISTANCE {
+                regs[rd] = Constant {
+                    value: imm,
+                    start: index,
+                    epoch,
+                };
+            } else if regs[rd].epoch == epoch && index - regs[rd].start < MAX_DISTANCE {
                 regs[rd].value = (regs[rd].value & !(0xffff_u64 << shift)) | imm;
                 if !wide {
                     regs[rd].value &= 0xffff_ffff;
@@ -74,11 +84,14 @@ pub(crate) fn extract_macho(
                 regs[rd].epoch = 0;
             }
             // The changed register can be either word of a Swift string.
-            for first in [rd.checked_sub(1), (rd < 30).then_some(rd)].into_iter().flatten() {
+            for first in [rd.checked_sub(1), (rd < 30).then_some(rd)]
+                .into_iter()
+                .flatten()
+            {
                 let lo = regs[first];
                 let hi = regs[first + 1];
                 let start = lo.start.min(hi.start);
-                if lo.epoch != epoch || hi.epoch != epoch || index - start > MAX_DISTANCE {
+                if lo.epoch != epoch || hi.epoch != epoch || index - start >= MAX_DISTANCE {
                     continue;
                 }
                 let tag = (hi.value >> 56) as u8;
@@ -90,7 +103,9 @@ pub(crate) fn extract_macho(
                 raw[..8].copy_from_slice(&lo.value.to_le_bytes());
                 raw[8..].copy_from_slice(&hi.value.to_le_bytes());
                 // Require the declared ASCII payload and canonical zero padding.
-                if raw[..len].iter().all(|b| b.is_ascii_graphic() || *b == b' ')
+                if raw[..len]
+                    .iter()
+                    .all(|b| b.is_ascii_graphic() || *b == b' ')
                     && raw[len..15].iter().all(|b| *b == 0)
                 {
                     let value = String::from_utf8(raw[..len].to_vec()).unwrap();
@@ -99,7 +114,7 @@ pub(crate) fn extract_macho(
                         value,
                         data_offset: base + (start * 4) as u64,
                         data_len: ((index + 1 - start) * 4) as u32,
-                        method: StringMethod::StackString,
+                        method: StringMethod::Structure,
                         ..Default::default()
                     });
                     // Do not emit partial successive versions of the same pair.
@@ -110,10 +125,11 @@ pub(crate) fn extract_macho(
                     }
                 }
             }
-        } else if w & 0xffe0_ffe0 == 0xaa00_03e0 // MOV Xd,Xm
-            || w & 0xff80_0000 == 0x9100_0000 // ADD Xd,Xn,#imm
-            || w & 0xff20_0000 == 0x8b00_0000 // ADD Xd,Xn,Xm,shift
+        } else if w & 0xffe0_ffe0 == 0xaa00_03e0
+            || w & 0xff80_0000 == 0x9100_0000
+            || (w & 0xff20_0000 == 0x8b00_0000 && (w >> 22) & 3 != 3)
         {
+            // MOV Xd,Xm; ADD Xd,Xn,#imm; ADD Xd,Xn,Xm,shift.
             // Only preserve unrelated constants; do not infer pointer values.
             if rd < 31 {
                 regs[rd].epoch = 0;

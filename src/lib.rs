@@ -2103,9 +2103,12 @@ fn extract_from_object_inner(
                 .unwrap_or_default();
             for (idx, arch_result) in fat.into_iter().enumerate() {
                 if let Ok(goblin::mach::SingleArch::MachO(macho)) = arch_result {
-                    let slice_base = arch_offsets.get(idx).copied().unwrap_or(0);
-                    segments = collect_macho_segments(&macho);
-                    section_info = collect_macho_section_info(&macho);
+                    let Some(&slice_base) = arch_offsets.get(idx) else {
+                        continue;
+                    };
+                    // Instruction decoders must visit every architecture: an
+                    // x86-first universal file may carry ARM-only encodings.
+                    // Keep whole-file raw scanning below to one pass.
                     strings.extend(heap_xor::extract_macho(&macho, slice_base, min_length));
                     strings.extend(pointer_xor::extract_macho(&macho, slice_base, min_length));
                     strings.extend(arm64_repeating_xor::extract_macho(&macho, slice_base, min_length));
@@ -2122,6 +2125,21 @@ fn extract_from_object_inner(
                     strings.extend(lcg_xor::extract_macho_shuffled_xorshift_strings(
                         &macho, data, slice_base, min_length,
                     ));
+                    if first_macho.is_some() {
+                        if macho_has_go_sections(&macho) {
+                            let extractor = GoStringExtractor::new(min_length);
+                            strings.extend(extractor.extract_macho(&macho, slice_base));
+                            strings.extend(extract_macho_pclntab_strings(
+                                &macho, data, slice_base, min_length,
+                            ));
+                        } else if binary::macho_is_rust(&macho) {
+                            let extractor = RustStringExtractor::new(min_length);
+                            strings.extend(extractor.extract_macho(&macho, slice_base));
+                        }
+                        continue;
+                    }
+                    segments = collect_macho_segments(&macho);
+                    section_info = collect_macho_section_info(&macho);
                     if macho_has_go_sections(&macho) {
                         is_go = true;
                         is_go_binary = true;
@@ -2156,7 +2174,6 @@ fn extract_from_object_inner(
                         strings.extend(extractor.extract_macho(&macho, slice_base));
                     }
                     first_macho = Some(macho);
-                    break;
                 }
             }
             // For non-Go fat binaries, use r2 if available + raw scan. Rust
