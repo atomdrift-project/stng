@@ -77,7 +77,7 @@ const LRU_GRANULARITY: Duration = Duration::from_secs(24 * 60 * 60);
 /// `20`: recover bounded qword XOR literals with arithmetic-derived key pointers.
 /// `21`: recover Rust slice headers stored in Mach-O __DATA,__const.
 /// `22`: recover ARM64 literals passed to a verified repeating-key XOR helper.
-const CACHE_VERSION: &str = "24";
+const CACHE_VERSION: &str = "25";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted

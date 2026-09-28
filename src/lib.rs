@@ -45,6 +45,7 @@ mod validation_thresholds;
 // Binary format modules
 mod arm64_stack_xor;
 mod arm64_repeating_xor;
+mod x86_repeating_xor;
 mod swift_small_strings;
 pub mod binary;
 mod binary_net;
@@ -1961,6 +1962,7 @@ fn extract_from_object_inner(
             strings.extend(heap_xor::extract_macho(macho, 0, min_length));
             strings.extend(pointer_xor::extract_macho(macho, 0, min_length));
             strings.extend(arm64_repeating_xor::extract_macho(macho, 0, min_length));
+            strings.extend(x86_repeating_xor::extract_macho(macho, 0, min_length));
             strings.extend(swift_small_strings::extract_macho(macho, 0, min_length));
             strings.extend(lcg_xor::extract_macho_arithmetic_strings(
                 macho, 0, min_length,
@@ -2112,6 +2114,7 @@ fn extract_from_object_inner(
                     strings.extend(heap_xor::extract_macho(&macho, slice_base, min_length));
                     strings.extend(pointer_xor::extract_macho(&macho, slice_base, min_length));
                     strings.extend(arm64_repeating_xor::extract_macho(&macho, slice_base, min_length));
+                    strings.extend(x86_repeating_xor::extract_macho(&macho, slice_base, min_length));
                     strings.extend(swift_small_strings::extract_macho(&macho, slice_base, min_length));
                     strings.extend(lcg_xor::extract_macho_arithmetic_strings(
                         &macho, slice_base, min_length,
