@@ -33,5 +33,6 @@ existing Mach-O section enumeration. Unicode, pointer-backed Swift strings,
 interprocedural values, and x86 Swift small strings are not covered.
 
 Native stng static extraction and offline stng/cleave builds were used during
-authoring. No unit tests were added or run; no production throughput benchmark
-was performed.
+authoring. Eight regression tests now cover the specimen and filtered pipeline, malformed
+layouts, registers, barriers, lifetime and resource bounds in
+`src/swift_small_strings/tests.rs`. No production throughput benchmark was performed.

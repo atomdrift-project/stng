@@ -31,3 +31,26 @@ The paired sample `72967172020b2dfc4a622623c5dafe28ff7e53c26b42b68008ae7d715ee85
 has byte-identical x86 code and different ciphertext tables. Its payload hash
 is `35549a8fa7bf5a3770056ed82c8d5610e7dde657a03e44b6cd1caa1fa1838051`;
 the gate and cleanup hashes are identical.
+
+## Dedicated regression coverage
+
+`src/lcg_xor/arithmetic_variant_tests.rs` now retains direct tests for this
+recognizer and its independently decoded original specimen. Tests cover public
+thin/FAT output, exact hashes and spans, every recognized setup/loop instruction,
+branch targets, bounds, malformed data and table addresses, minimum length and
+overflow. Permutation forms additionally reject duplicate, negative and
+out-of-range indexes and accept another complete permutation. Dispatcher tests
+also cover both ARM forms, initialization slots, state transitions, truncation
+and the eight-candidate limit. See `arithmetic_variants_expected.json`.
+
+## ARM64 permutation regression coverage
+
+Cache version 33 adds four-way ARM permutation loops and two constant-folded
+VM-gate tail writes. Both ARM slices start at 1097728. The 536-byte gate,
+23862-byte payload and 22-byte cleanup exactly match the independently recovered
+x86 stages above. Thin source offsets are 0xfce90, 0x39d0 and 0xfcad0; spans
+are 5720, 254528 and 240 bytes. Seven arm_permutation tests in
+src/lcg_xor/arithmetic_variant_tests.rs cover hashes/provenance, public thin/FAT
+extraction, every setup/loop/tail instruction, invalid and reordered indexes,
+unused table entries versus literal writes, malformed operands/data and limits.
+Independent ARM reconstruction and native review: /var/tmp/triage40/review/macho-4da3-arm/.

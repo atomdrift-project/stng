@@ -172,6 +172,8 @@ impl GoStringExtractor {
             }
         }
 
+        strings.extend(super::struct_tags::extract(macho, self.min_length));
+
         // Every phase recorded a virtual address; resolve each to a file offset.
         for s in &mut strings {
             s.data_offset =

@@ -25,3 +25,14 @@ account password, gathers browser/wallet/Telegram/keychain data, uploads it to
 Its executable behavior matches the September arithmetic fixture, with changed
 campaign identifiers and endpoint. Interspersed RNG/math routines do not supply
 the table decoder's inputs. The specimen was never executed.
+
+## Dedicated regression coverage
+
+`src/lcg_xor/arithmetic_variant_tests.rs` now retains direct tests for this
+recognizer and its independently decoded original specimen. Tests cover public
+thin/FAT output, exact hashes and spans, every recognized setup/loop instruction,
+branch targets, bounds, malformed data and table addresses, minimum length and
+overflow. Permutation forms additionally reject duplicate, negative and
+out-of-range indexes and accept another complete permutation. Dispatcher tests
+also cover both ARM forms, initialization slots, state transitions, truncation
+and the eight-candidate limit. See `arithmetic_variants_expected.json`.

@@ -142,3 +142,6 @@ pub(crate) fn extract_macho(
     }
     results
 }
+
+#[cfg(test)]
+mod tests;

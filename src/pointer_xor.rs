@@ -1,8 +1,11 @@
 //! XOR literals whose key pointer is computed by a short arithmetic helper.
 //!
-//! An eight-byte setup signature gates instruction decoding. A complete bounded
-//! qword XOR loop and matching call argument length are required before folding
-//! the helper's register-only arithmetic. No memory emulation or key search.
+//! Fixed setup signatures gate bounded instruction decoding. A complete qword
+//! XOR loop and matching consumer length are required before folding the key
+//! helper's register-only arithmetic. Recovered bytes do not imply execution or
+//! aliasing into later consumers. No memory emulation or key search is used.
+
+mod arm64;
 
 use crate::{ExtractedString, StringMethod, classify_string};
 use goblin::mach::MachO;
@@ -42,7 +45,8 @@ pub(crate) fn extract_macho(
     slice_base: u64,
     min: usize,
 ) -> Vec<ExtractedString> {
-    if macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
+    let arm64 = macho.header.cputype == goblin::mach::constants::cputype::CPU_TYPE_ARM64;
+    if !arm64 && macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
         return Vec::new();
     }
     let mut code = None;
@@ -68,6 +72,9 @@ pub(crate) fn extract_macho(
         }
     }
     let Some(code) = code else { return Vec::new() };
+    if arm64 {
+        return arm64::extract(&code, &constants, slice_base, min);
+    }
     let mut output = Vec::new();
     for hit in memchr::memmem::find_iter(code.bytes, SETUP).take(MAX_CANDIDATES) {
         // RIP-relative LEA is 7 bytes; the stack LEA is 4–8 (RSP needs a SIB).
@@ -549,3 +556,6 @@ fn fold_helper(code: &Region<'_>, addr: u64, base: u64, seed: u64) -> Option<u64
     }
     None
 }
+
+#[cfg(test)]
+mod tests;

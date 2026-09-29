@@ -10,6 +10,7 @@
 use super::classifier::classify_string;
 use super::types::{ExtractedString, StringKind, StringMethod};
 use std::collections::HashSet;
+mod arm64_preserved;
 
 /// Extracts inline strings from ARM64 executable code.
 ///
@@ -32,6 +33,7 @@ pub(crate) fn extract_inline_strings_arm64(
     let mut seen: HashSet<String> = HashSet::new();
 
     let rodata_end = rodata_addr + rodata_data.len() as u64;
+    let mut preserved = arm64_preserved::Context::new(text_data, text_addr);
 
     // ARM64 instructions are a fixed 4 bytes.
     let mut i = 0;
@@ -45,6 +47,11 @@ pub(crate) fn extract_inline_strings_arm64(
 
         // BL (branch with link): 0x94xxxxxx
         if (inst & 0xFC000000) == 0x94000000 {
+            if let Some((value, address)) = preserved.recover(i,rodata_data,rodata_addr,min_length)
+                && seen.insert(value.clone()) {
+                strings.push(ExtractedString{kind:classify_string(&value),value,
+                    data_offset:address,method:StringMethod::InstructionPattern,..Default::default()});
+            }
             extract_arm64_inline_string(
                 i,
                 text_data,
@@ -206,8 +213,8 @@ fn extract_arm64_stored_strings(
         }
 
         // MOVZ Xd, #imm, or ORR Xd, XZR, #bitmask — both load an immediate.
-        let is_movz = (inst & 0xFF80_0000) == 0xD280_0000;
-        let is_orr_imm = (inst & 0xFF80_0000) == 0xB200_0000 && ((inst >> 5) & 0x1F) == 31;
+        let is_movz = (inst & 0x7F80_0000) == 0x5280_0000;
+        let is_orr_imm = (inst & 0x7F80_0000) == 0x3200_0000 && ((inst >> 5) & 0x1F) == 31;
         if is_movz || is_orr_imm {
             set(
                 &mut slots,
@@ -321,23 +328,49 @@ fn extract_arm64_inline_string(
 
         let inst1 = word(pos);
         let inst2 = word(pos + 4);
-        let inst3 = word(pos + 8);
+        let mut len_pos = pos + 8;
+        let mut inst3 = word(len_pos);
 
         // ADRP Rd, page ; ADD Rd, Rd, #imm12 — same Rd in both.
         let addr_reg = inst1 & 0x1F;
         let is_adrp = (inst1 & 0x9F000000) == 0x90000000;
-        let is_add = (inst2 & 0xFF000000) == 0x91000000
+        let is_add = (inst2 & 0xFFC00000) == 0x91000000
             && (inst2 & 0x1F) == addr_reg
             && ((inst2 >> 5) & 0x1F) == addr_reg;
+        if !is_adrp || !is_add || addr_reg == 31 {
+            lookback += 4;
+            continue;
+        }
+        // Rust may set up a separate stack result pointer between the string
+        // address and length. Require this exact harmless instruction and an
+        // immediately following length/call, not an arbitrary instruction gap.
+        if pos + 16 == bl_pos && inst3 & 0xffc003e0 == 0x910003e0
+            && inst3 & 31 != addr_reg && inst3 & 31 != 31 {
+            len_pos = pos + 12;
+            inst3 = word(len_pos);
+        }
         // MOVZ Rn, #imm or ORR Rn, XZR, #bitmask (the length) into a register
         // other than the pointer.
         let len_reg = inst3 & 0x1F;
-        let is_len = ((inst3 & 0xB2000000) == 0xB2000000 || (inst3 & 0xFF000000) == 0xD2000000)
-            && len_reg != addr_reg;
+        let is_len = len_reg != addr_reg && len_reg != 31
+            && decode_arm_mov_immediate(inst3).is_some();
 
+        // Only understood, independent argument setup may separate the length
+        // from this call. In particular, do not carry a pointer across another
+        // call, branch, load/writeback, or a write to either argument register.
+        let preserved = (len_pos + 4..bl_pos).step_by(4).all(|at| {
+            let inst = word(at);
+            if inst == 0xd503201f {return true;} // NOP
+            let dst = inst & 31;
+            dst != addr_reg && dst != len_reg && dst != 31
+                && (decode_arm_mov_immediate(inst).is_some()
+                    || inst & 0xffc003e0 == 0x910003e0
+                    || inst & 0x7fe0ffe0 == 0x2a0003e0)
+        });
         if is_adrp
             && is_add
             && is_len
+            && preserved
             && let Some((s, str_addr)) = decode_arm64_string(
                 inst1,
                 inst2,
@@ -446,15 +479,17 @@ fn decode_arm64_string(
 
 /// Decode ARM64 MOV/ORR immediate value.
 fn decode_arm_mov_immediate(inst: u32) -> Option<u64> {
-    // Check for MOVZ/MOVK (D2xxxxxx)
-    if (inst & 0xFF000000) == 0xD2000000 {
-        let imm16 = u64::from((inst >> 5) & 0xFFFF);
-        let shift = u64::from(((inst >> 21) & 0x3) * 16);
-        return Some(imm16 << shift);
+    // MOVZ Wd/Xd zeroes every lane not supplied by its immediate. A W write
+    // zero-extends into the corresponding X register; lanes 32/48 are reserved.
+    if (inst & 0x7f800000) == 0x52800000 {
+        let shift = ((inst >> 21) & 3) * 16;
+        if inst >> 31 == 0 && shift >= 32 {
+            return None;
+        }
+        return Some(u64::from((inst >> 5) & 0xffff) << shift);
     }
-
-    // Check for ORR with bitmask immediate (B2xxxxxx)
-    if (inst & 0xB2000000) == 0xB2000000 && (inst & 0xFF000000) != 0xD2000000 {
+    // ORR Rd, ZR, #imm is a constant load; ORR from a live register is not.
+    if (inst & 0x7f800000) == 0x32000000 && (inst >> 5) & 31 == 31 {
         return decode_arm_bitmask_immediate(inst);
     }
 
@@ -1853,3 +1888,9 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod push_length_regressions;
+
+#[cfg(test)]
+mod arm64_argument_tests;

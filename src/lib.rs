@@ -43,6 +43,8 @@ mod validation;
 mod validation_thresholds;
 
 // Binary format modules
+mod arm64_effects;
+mod arm64_frame;
 mod arm64_stack_xor;
 mod arm64_repeating_xor;
 mod x86_repeating_xor;
@@ -94,7 +96,7 @@ pub use ioc::{
     extract_iocs, is_external_ip,
 };
 pub use lcg_xor::{
-    decode_lcg_xor, extract_macho_arithmetic_strings, extract_macho_lcg_xor,
+    decode_lcg_xor, decode_xor_fat_macho, extract_macho_arithmetic_strings, extract_macho_lcg_xor,
     extract_macho_shuffled_xorshift_strings, extract_macho_xor_macho_strings,
 };
 pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
@@ -236,6 +238,17 @@ fn strip_go_varint_prefixes(strings: &mut [ExtractedString]) {
 /// themselves to the right inputs. Kind, section, and arch all come
 /// from the `ExtractedString` itself when known.
 fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, usize)]) -> bool {
+    // A referenced pointer/length can describe a complete multiline literal
+    // (scripts, XML, configuration). Preserve clean ASCII text layout without
+    // relaxing the control-character check for unstructured machine-code noise.
+    if s.method == StringMethod::InstructionPattern
+        && s.value.trim().contains(['\n', '\r', '\t'])
+        && s.value.bytes().all(|b| {
+            (b' '..=b'~').contains(&b) || matches!(b, b'\n' | b'\r' | b'\t')
+        })
+    {
+        return true;
+    }
     // Strings produced by our own decoders / deobfuscators are
     // *deliberately* surfaced — base64-decoded payloads, XOR-decrypted
     // C2 URLs, deobfuscated VBScript fragments, etc. The garbage
@@ -2869,6 +2882,30 @@ fn get_r2_strings(opts: &ExtractOptions) -> Option<Vec<ExtractedString>> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn instruction_referenced_text_preserves_layout_without_exempting_raw_noise() {
+        let text = "a\nb\tc\rd";
+        assert!(passes_garbage_filter(
+            &at(text, 0, StringMethod::InstructionPattern),
+            &[]
+        ));
+        assert!(!passes_garbage_filter(
+            &at(text, 0, StringMethod::RawScan),
+            &[]
+        ));
+        for control in ['\0', '\u{1}', '\u{1b}', '\u{7f}'] {
+            let value = format!("a\nb{control}c");
+            assert!(!passes_garbage_filter(
+                &at(&value, 0, StringMethod::InstructionPattern),
+                &[]
+            ));
+        }
+        assert!(!passes_garbage_filter(
+            &at(" \n\t\r ", 0, StringMethod::InstructionPattern),
+            &[]
+        ));
+    }
+
     fn at(value: &str, offset: u64, method: StringMethod) -> ExtractedString {
         ExtractedString {
             value: value.to_string(),
@@ -2918,3 +2955,6 @@ mod tests {
         assert!(unclaimed_raw_strings(raw, &claimed, 4).is_empty());
     }
 }
+
+#[cfg(test)]
+mod repeating_xor_tests;

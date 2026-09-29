@@ -4,6 +4,8 @@
 //! initialized arrays followed by the verified XOR loop are accepted. No
 //! emulation, guessed keys, or pairwise search is performed.
 
+mod arm64;
+
 use crate::{ExtractedString, StringMethod, classify_string};
 use goblin::mach::MachO;
 use iced_x86::{Decoder, DecoderOptions, Instruction, MemorySize, Mnemonic, OpKind, Register};
@@ -17,7 +19,8 @@ pub(crate) fn extract_macho(
     slice_base: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    if macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
+    let arm64=macho.header.cputype==goblin::mach::constants::cputype::CPU_TYPE_ARM64;
+    if !arm64 && macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
         return Vec::new();
     }
     for segment in &macho.segments {
@@ -31,6 +34,7 @@ pub(crate) fn extract_macho(
             if section.name().ok() != Some("__text") || code.len() > MAX_CODE {
                 continue;
             }
+            if arm64 {return arm64::extract(code,section.addr,u64::from(section.offset),slice_base,min_length);}
             let mut results = Vec::new();
             // push 1; pop rsi; mov edi, length; call allocator
             for start in memchr::memmem::find_iter(code, b"\x6a\x01\x5e\xbf").take(MAX_CANDIDATES) {
@@ -284,3 +288,6 @@ fn checked_index(code: &[u8], vma: u64, target: u64) -> bool {
         && reg_move(&s[3], Register::RAX, Register::RDI)
         && s[4].mnemonic() == Mnemonic::Ret
 }
+
+#[cfg(test)]
+mod tests;

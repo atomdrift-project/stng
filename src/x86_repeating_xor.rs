@@ -189,6 +189,18 @@ impl State {
                 self.set(i.op0_register(), self.address(i))
             }
             Mnemonic::Mov => {
+                if i.op0_kind() == OpKind::Register
+                    && i.op1_kind() == OpKind::Register
+                    && i.op0_register() == Register::RBP
+                    && i.op1_register() == Register::RSP
+                {
+                    // Start a fresh frame even after an earlier function or
+                    // unknown branch. No facts from the old frame survive.
+                    self.reset();
+                    self.regs[4] = Value::Stack(STACK as i64);
+                    self.regs[5] = self.regs[4];
+                    return true;
+                }
                 if i.op0_kind() == OpKind::Register {
                     let Some((_, n)) = reg(i.op0_register()) else {
                         return false;
@@ -360,7 +372,8 @@ pub(crate) fn extract_macho(
                         }
                         state.write(dest, len, Some(&scratch[..len]));
                         let text = scratch[..len].strip_suffix(&[0]).unwrap_or(&scratch[..len]);
-                        if text.len() >= min
+                        if !text.is_empty()
+                            && text.len() >= min
                             && text
                                 .iter()
                                 .all(|b| b.is_ascii_graphic() || b.is_ascii_whitespace())
@@ -390,6 +403,9 @@ pub(crate) fn extract_macho(
             } else if is_memcpy(p) {
                 if let Some(len) = len.filter(|n| *n <= MAX_LITERAL)
                     && range(dest, len).is_some()
+                    && range(dest, len)
+                        .zip(range(source, len))
+                        .is_none_or(|(a, b)| a.end <= b.start || b.end <= a.start)
                     && let Some(b) = state.read(source, len, &constants)
                 {
                     scratch[..len].copy_from_slice(b);

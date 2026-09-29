@@ -6,6 +6,9 @@
 //! Mach-O passes require identified loader structures or instruction patterns
 //! before decoding, and validate the recovered bytes before emitting strings.
 
+mod arm64_shuffled;
+mod arm64_arithmetic;
+
 use crate::{ExtractedString, StringMethod, classify_string};
 use goblin::Object;
 use goblin::mach::MachO;
@@ -82,6 +85,12 @@ pub fn extract_macho_lcg_xor(
     slice_base: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
+    if macho.header.cputype == goblin::mach::constants::cputype::CPU_TYPE_ARM64 {
+        return extract_arm64_lcg(macho, slice_base, min_length);
+    }
+    if macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
+        return Vec::new();
+    }
     const MAX_SECTION_SIZE: usize = 8 * 1024 * 1024;
     const MIN_ENTROPY: f64 = 6.5;
     const PREVIEW_SIZE: usize = 96;
@@ -196,6 +205,153 @@ pub fn extract_macho_lcg_xor(
     Vec::new()
 }
 
+/// One verified ARM64 LCG loop shape, with immediate operands read from code.
+/// No parameter search or emulation: unknown instruction forms are rejected.
+fn extract_arm64_lcg(
+    macho: &MachO<'_>,
+    slice_base: u64,
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    const MAX_CODE: usize = 1024 * 1024;
+    const MAX_PAYLOAD: usize = 8 * 1024 * 1024;
+    const LOOP: [u32; 13] = [
+        0x8b08014f, 0x394011ef, 0x4a0b0130, 0x4a1001ef, 0x8b080270, 0x3900120f, 0x1b0c7d29,
+        0x9bad7d2f, 0xd36dfdef, 0x1b0ea5e9, 0x91000508, 0xeb14011f, 0x54fffe81,
+    ];
+    let (mut text, mut constant) = (None, None);
+    for segment in &macho.segments {
+        let Ok(sections) = segment.sections() else {
+            continue;
+        };
+        for (section, bytes) in sections {
+            if section.segname().ok() != Some("__TEXT") {
+                continue;
+            }
+            match section.name().ok() {
+                Some("__text") => text = Some((section.addr, bytes)),
+                Some("__const") => constant = Some((section.addr, section.offset, bytes)),
+                _ => {}
+            }
+        }
+    }
+    let (Some((code_addr, code)), Some((const_addr, const_offset, constants))) = (text, constant)
+    else {
+        return Vec::new();
+    };
+    if code.len() > MAX_CODE || constants.len() < 5 || constants.len() > MAX_PAYLOAD + 4 {
+        return Vec::new();
+    }
+    let read_word = |bytes: &[u8]| u32::from_le_bytes(bytes[..4].try_into().unwrap());
+    // MOVZ/MOVK W immediates. Fixed destination and halfword are part of the gate.
+    let imm =
+        |word: u32, opcode: u32| (word & !0x001f_ffe0 == opcode).then_some((word >> 5) & 0xffff);
+    let mut candidates = 0;
+    for pos in (12..code.len().saturating_sub(95)).step_by(4) {
+        if read_word(&code[pos..]) != 0xd2800008 {
+            continue;
+        } // mov x8, #0
+        let window = &code[pos..pos + 96];
+        let w = |i: usize| read_word(&window[i * 4..]);
+        if w(2) != 0xb90002a9 // str w9, [x21]
+            || !LOOP.iter().enumerate().all(|(i, &expected)| w(i + 11) == expected)
+        {
+            continue;
+        }
+        let (Some(seed), Some(mask), Some(a_lo), Some(a_hi), Some(q_lo), Some(q_hi), Some(modulus)) = (
+            imm(w(1), 0x52800009),
+            imm(w(5), 0x5280000b),
+            imm(w(6), 0x5280000c),
+            imm(w(7), 0x72a0000c),
+            imm(w(8), 0x5280000d),
+            imm(w(9), 0x72a0000d),
+            imm(w(10), 0x5280000e),
+        ) else {
+            continue;
+        };
+        let Some(length) = imm(read_word(&code[pos - 12..]), 0x52800014) else {
+            continue;
+        };
+        if imm(read_word(&code[pos - 8..]), 0x52800001) != Some(length)
+            || read_word(&code[pos - 4..]) & 0xfc00_0000 != 0x9400_0000
+            || length == 0
+            || mask > 255
+            || modulus == 0
+            || seed != read_word(constants)
+        {
+            continue;
+        }
+        // ADRP x10; ADD x10,x10,#imm must address this exact constant header.
+        if w(3) & 0x9f00_001f != 0x9000_000a || w(4) & 0xffc0_03ff != 0x9100_014a {
+            continue;
+        }
+        let page_delta = i64::from(((w(3) >> 5) & 0x7ffff) << 2 | ((w(3) >> 29) & 3));
+        let pc = code_addr.saturating_add(pos as u64 + 12);
+        let source = (pc & !4095)
+            .wrapping_add_signed((page_delta << 43 >> 43) << 12)
+            .wrapping_add(u64::from((w(4) >> 10) & 0xfff));
+        if source != const_addr {
+            continue;
+        }
+        let Some(encoded) = constants.get(4..4 + length as usize) else {
+            continue;
+        };
+        if candidates == 8 {
+            break;
+        }
+        candidates += 1;
+        let multiplier = a_lo | (a_hi << 16);
+        let reciprocal = q_lo | (q_hi << 16);
+        let decode_byte = |state: &mut u32, byte: u8| {
+            let plain = byte ^ (*state as u8) ^ (mask as u8);
+            let product = state.wrapping_mul(multiplier);
+            // Reproduce MUL W, UMULL, LSR #45, MSUB W exactly, including wrap.
+            let quotient = ((u64::from(product) * u64::from(reciprocal)) >> 45) as u32;
+            *state = product.wrapping_sub(quotient.wrapping_mul(modulus));
+            plain
+        };
+        let mut preview = [0_u8; 96];
+        let preview_len = encoded.len().min(preview.len());
+        let mut state = seed;
+        for (dst, &src) in preview.iter_mut().zip(encoded) {
+            *dst = decode_byte(&mut state, src);
+        }
+        if !looks_like_script_or_command(&preview[..preview_len]) {
+            continue;
+        }
+        let mut state = seed;
+        let decoded: Vec<u8> = encoded
+            .iter()
+            .map(|&b| decode_byte(&mut state, b))
+            .collect();
+        let Ok(mut value) = String::from_utf8(decoded) else {
+            continue;
+        };
+        value.truncate(value.trim_end_matches('\0').len());
+        if value.len() < min_length
+            || value
+                .bytes()
+                .any(|b| b < 32 && !matches!(b, b'\n' | b'\r' | b'\t'))
+        {
+            continue;
+        }
+        let Some(offset) = slice_base
+            .checked_add(u64::from(const_offset))
+            .and_then(|o| o.checked_add(4))
+        else {
+            continue;
+        };
+        return vec![ExtractedString {
+            kind: classify_string(&value),
+            value,
+            data_offset: offset,
+            data_len: length,
+            method: StringMethod::XorDecode,
+            ..Default::default()
+        }];
+    }
+    Vec::new()
+}
+
 /// Extract printable strings from a validated single-byte-XOR Mach-O payload
 /// embedded in a Mach-O `__const` section. This only accepts blobs whose
 /// decoded bytes form a structurally valid universal Mach-O with valid slices;
@@ -257,20 +413,10 @@ pub fn extract_macho_xor_macho_strings(
                         .zip(magic)
                         .all(|(&encoded, plain)| encoded ^ key == plain)
                     {
-                        let Some(decoded_tail) = decode_fat_length(&encoded_section[cursor..], key)
+                        let Some(decoded) = decode_xor_fat_macho(&encoded_section[cursor..], key)
                         else {
                             continue;
                         };
-                        if decoded_tail < 4096 || decoded_tail > encoded_section.len() - cursor {
-                            continue;
-                        }
-                        let decoded: Vec<u8> = encoded_section[cursor..cursor + decoded_tail]
-                            .iter()
-                            .map(|byte| byte ^ key)
-                            .collect();
-                        if !is_valid_fat_macho(&decoded) {
-                            continue;
-                        }
                         found = Some((key, decoded));
                         break;
                     }
@@ -316,7 +462,7 @@ pub fn extract_macho_xor_macho_strings(
     out
 }
 
-/// Recover hex/custom-Base64 strings from the x86 arithmetic-table loader.
+/// Recover hex/custom-Base64 strings from x86 and ARM64 arithmetic-table loaders.
 /// The loop computes `(a[i] - c[i]) ^ b[i]`, optionally subtracting another
 /// table byte (or `b[i]` again), and emits the low byte. Addresses and bounds come
 /// from the instructions;
@@ -327,7 +473,8 @@ pub fn extract_macho_arithmetic_strings(
     slice_base: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    if macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
+    let arm = macho.header.cputype == goblin::mach::constants::cputype::CPU_TYPE_ARM64;
+    if !arm && macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
         return Vec::new();
     }
     let mut text = None;
@@ -359,39 +506,46 @@ pub fn extract_macho_arithmetic_strings(
     {
         return Vec::new();
     }
-    let instructions: Vec<_> = Decoder::with_ip(64, code, text_section.addr, DecoderOptions::NONE)
-        .into_iter()
-        .filter(|i| i.mnemonic() != Mnemonic::Nop)
-        .collect();
-    let mut blocks = Vec::new();
-    let direct_loops = instructions.windows(18).filter_map(|s| {
-        arithmetic_table_loop(s)
+    let tables = if arm {
+        arm64_arithmetic::tables(code, text_section.addr)
+    } else {
+        let instructions: Vec<_> = Decoder::with_ip(64, code, text_section.addr, DecoderOptions::NONE)
+            .into_iter()
+            .filter(|i| i.mnemonic() != Mnemonic::Nop)
+            .collect();
+        let direct_loops = instructions.windows(18).filter_map(|s| {
+            arithmetic_table_loop(s)
+                .map(|(addresses, length)| ArithmeticTables {
+                    addresses,
+                    length,
+                    subtract_address: Some(addresses[2]),
+                    permutation: None,
+                    literal_tail: None,
+                })
+                .or_else(|| arithmetic_permuted_table_loop(s))
+        });
+        let state_machine_loops = instructions
+            .windows(33)
+            .filter_map(arithmetic_state_machine_loop)
             .map(|(addresses, length)| ArithmeticTables {
                 addresses,
                 length,
-                subtract_address: Some(addresses[2]),
+                subtract_address: None,
                 permutation: None,
-            })
-            .or_else(|| arithmetic_permuted_table_loop(s))
-    });
-    let state_machine_loops = instructions
-        .windows(33)
-        .filter_map(arithmetic_state_machine_loop)
-        .map(|(addresses, length)| ArithmeticTables {
-            addresses,
-            length,
-            subtract_address: None,
-            permutation: None,
-        });
-    let four_table_loops = instructions
-        .windows(15)
-        .filter_map(arithmetic_four_table_loop);
+                literal_tail: None,
+            });
+        let four_table_loops = instructions
+            .windows(15)
+            .filter_map(arithmetic_four_table_loop);
+        direct_loops
+            .chain(state_machine_loops)
+            .chain(four_table_loops)
+            .take(8)
+            .collect::<Vec<_>>()
+    };
+    let mut blocks = Vec::new();
     let mut seen_tables = Vec::new();
-    for tables in direct_loops
-        .chain(state_machine_loops)
-        .chain(four_table_loops)
-        .take(8)
-    {
+    for tables in tables {
         // Initial and checksum-fallback loops can reference identical tables.
         // Count both toward the work cap, but decode each table set only once.
         if seen_tables.contains(&tables) {
@@ -403,6 +557,7 @@ pub fn extract_macho_arithmetic_strings(
             length,
             subtract_address,
             permutation,
+            literal_tail,
         } = tables;
         let table_offset = |address: u64| {
             let offset = usize::try_from(address.checked_sub(const_section.addr)?).ok()?;
@@ -423,13 +578,19 @@ pub fn extract_macho_arithmetic_strings(
             let Some(offset) = table_offset(address) else {
                 continue;
             };
-            let indexes = &data[offset..offset + length];
+            let index_length = length - if literal_tail.is_some() { 8 } else { 0 };
+            let indexes = &data[offset..offset + index_length];
             // Each input and output uses the same permuted index. Only a
-            // complete permutation justifies decoding directly in index order.
+            // complete permutation (including any explicit tail writes) justifies
+            // decoding directly in index order.
             let mut seen = vec![false; length / 4];
             if !indexes.chunks_exact(4).all(|word| {
                 let index = u32::from_le_bytes([word[0], word[1], word[2], word[3]]) as usize;
                 index < seen.len() && !std::mem::replace(&mut seen[index], true)
+            }) || literal_tail.is_some_and(|tail| {
+                tail.into_iter().any(|(index, _)| {
+                    index >= seen.len() || std::mem::replace(&mut seen[index], true)
+                })
             }) {
                 continue;
             }
@@ -440,6 +601,13 @@ pub fn extract_macho_arithmetic_strings(
             let byte = data[a + offset].wrapping_sub(data[c + offset]) ^ mask;
             let byte = if let Some(base) = subtract_base {
                 byte.wrapping_sub(data[base + offset])
+            } else {
+                byte
+            };
+            let byte = if let Some(tail) = literal_tail {
+                tail.into_iter()
+                    .find(|(index, _)| *index == offset / 4)
+                    .map_or(byte, |(_, literal)| literal)
             } else {
                 byte
             };
@@ -505,6 +673,8 @@ struct ArithmeticTables {
     length: usize,
     subtract_address: Option<u64>,
     permutation: Option<u64>,
+    // Two constant-folded writes replacing the final permutation entries.
+    literal_tail: Option<[(usize, u8); 2]>,
 }
 
 /// Recognize the four-table permutation loop used both directly and as the
@@ -573,6 +743,7 @@ fn arithmetic_four_table_loop(s: &[Instruction]) -> Option<ArithmeticTables> {
         length,
         subtract_address: Some(s[5].ip_rel_memory_address()),
         permutation: Some(s[1].ip_rel_memory_address()),
+        literal_tail: None,
     })
 }
 
@@ -670,6 +841,7 @@ fn arithmetic_permuted_table_loop(s: &[Instruction]) -> Option<ArithmeticTables>
         length: count * 4,
         subtract_address: None,
         permutation: Some(s[1].ip_rel_memory_address()),
+        literal_tail: None,
     })
 }
 
@@ -854,6 +1026,9 @@ pub fn extract_macho_shuffled_xorshift_strings(
     slice_base: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
+    if macho.header.cputype == goblin::mach::constants::cputype::CPU_TYPE_ARM64 {
+        return arm64_shuffled::extract(macho, slice_base, min_length);
+    }
     const MAX_STAGE_BYTES: usize = 0x20_000;
     const ALPHABET_TABLE_LEN: usize = 0x100;
     const GATE_TABLE_LEN: usize = 0xb2c;
@@ -1020,10 +1195,19 @@ pub fn extract_macho_shuffled_xorshift_strings(
                 continue;
             }
 
+            // The short terminal-cleanup stage uses the same tables and seed
+            // immediates, without a warm-up. Only inspect it after both larger
+            // stages have qualified, so unrelated files incur no extra search.
+            let cleanup = decode_hex_table(
+                constant_data, 0x78, 0x3c, &seeds, 0, false, &const_references,
+            ).and_then(|(hex, offset, _)| {
+                let encoded = decode_hex(&hex)?;
+                Some((decode_custom_base64(&encoded, &alphabet)?, offset, 0xf0))
+            });
             for (value, table_offset, table_len) in [
                 (gate, gate_data_offset, GATE_TABLE_LEN * 2),
                 (payload, payload_data_offset, payload_table_len * 2),
-            ] {
+            ].into_iter().chain(cleanup) {
                 if value.len() < min_length || value.len() > MAX_STAGE_BYTES {
                     continue;
                 }
@@ -1306,6 +1490,19 @@ fn decode_shuffled_table(
     let index_end = index_offset.checked_add(table_len)?;
     let source = section.get(data_offset..data_end)?;
     let indexes = section.get(index_offset..index_end)?;
+    decode_shuffled_slices(source, indexes, seed, skip, output_len)
+}
+
+fn decode_shuffled_slices(
+    source: &[u8],
+    indexes: &[u8],
+    seed: u64,
+    skip: usize,
+    output_len: usize,
+) -> Option<Vec<u8>> {
+    if source.len() != indexes.len() || source.len() != output_len.checked_mul(2)? {
+        return None;
+    }
     let mut state = seed;
     for _ in 0..skip {
         state = xorshift64(state);
@@ -1389,12 +1586,30 @@ fn decode_custom_base64(value: &[u8], alphabet: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn decode_fat_length(encoded: &[u8], key: u8) -> Option<usize> {
-    let header: Vec<u8> = encoded.iter().take(8).map(|byte| byte ^ key).collect();
-    if header.len() != 8 {
+/// Decode a single-byte-XOR universal Mach-O at a known candidate offset.
+/// The architecture table determines the exact extent; every slice must parse
+/// as Mach-O. Returns at most 32 MiB, with no scanning of the surrounding data.
+/// This lets consumers analyze the binary already discovered by string extraction.
+#[must_use]
+pub fn decode_xor_fat_macho(encoded: &[u8], key: u8) -> Option<Vec<u8>> {
+    if key == 0 {
         return None;
     }
+    let len = decode_fat_length(encoded, key)?;
+    if !(4096..=32 * 1024 * 1024).contains(&len) {
+        return None;
+    }
+    let decoded: Vec<u8> = encoded[..len].iter().map(|b| b ^ key).collect();
+    is_valid_fat_macho(&decoded).then_some(decoded)
+}
+
+fn decode_fat_length(encoded: &[u8], key: u8) -> Option<usize> {
+    let mut header: [u8; 8] = encoded.get(..8)?.try_into().ok()?;
+    header.iter_mut().for_each(|b| *b ^= key);
     let magic = u32::from_be_bytes(header[..4].try_into().ok()?);
+    if !matches!(magic, 0xcafebabe | 0xbebafeca | 0xcafebabf | 0xbfbafeca) {
+        return None;
+    }
     let swapped = matches!(magic, 0xbebafeca | 0xbfbafeca);
     let is_64 = matches!(magic, 0xcafebabf | 0xbfbafeca);
     let arch_count = if swapped {
@@ -1512,3 +1727,7 @@ fn entropy(bytes: &[u8]) -> f64 {
         })
         .sum()
 }
+
+#[cfg(test)]
+#[path = "lcg_xor/arithmetic_variant_tests.rs"]
+mod arithmetic_variant_tests;

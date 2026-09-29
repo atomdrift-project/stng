@@ -29,5 +29,29 @@ hex strings: alphabet `7b809ed3`, gate `809ee3d1`, payload `4741044a`, cleanup
 
 The complete script differs from the September arithmetic fixture only in
 campaign IDs. It phishes credentials, collects and uploads sensitive stores,
-replaces Ledger Live and installs a root LaunchDaemon. Instruction analysis
-covered the x86 slice; no sample code was executed.
+replaces Ledger Live and installs a root LaunchDaemon. Initial instruction analysis covered the x86 slice; the ARM follow-up below
+adds complete native coverage. No sample code was executed.
+
+## Dedicated regression coverage
+
+`src/lcg_xor/arithmetic_variant_tests.rs` now retains direct tests for this
+recognizer and its independently decoded original specimen. Tests cover public
+thin/FAT output, exact hashes and spans, every recognized setup/loop instruction,
+branch targets, bounds, malformed data and table addresses, minimum length and
+overflow. Permutation forms additionally reject duplicate, negative and
+out-of-range indexes and accept another complete permutation. Dispatcher tests
+also cover both ARM forms, initialization slots, state transitions, truncation
+and the eight-candidate limit. See `arithmetic_variants_expected.json`.
+
+## ARM64 follow-up
+
+All 25 ARM native function starts were reviewed. Independent reconstruction of
+primary and checksum-fallback paths matches every checksum and the three stage
+hashes above. The gate fallback uses 1,428 permutation entries followed by two
+literal stores. Six `arm_four_table_*` regression tests cover this original
+fixture, public thin/FAT extraction, every matched instruction, all four source
+tables, valid and malformed permutations, literal overrides, truncation, bounds,
+overflow and candidate limits. Combined relevant suites: 628 passed, zero failed,
+four ignored; the manual timing test separately passed.
+
+Analysis and test logs: `/var/tmp/triage40/review/macho-27dd-arm/README.md`.

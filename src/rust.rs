@@ -1322,3 +1322,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod triage_tests;

@@ -8,6 +8,7 @@
 //! instruction pattern analysis to extract strings that don't have stored structures.
 
 mod extractor;
+mod struct_tags;
 
 // Re-export the main extractor
 pub(crate) use extractor::{
