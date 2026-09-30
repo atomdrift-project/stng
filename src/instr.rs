@@ -47,10 +47,17 @@ pub(crate) fn extract_inline_strings_arm64(
 
         // BL (branch with link): 0x94xxxxxx
         if (inst & 0xFC000000) == 0x94000000 {
-            if let Some((value, address)) = preserved.recover(i,rodata_data,rodata_addr,min_length)
-                && seen.insert(value.clone()) {
-                strings.push(ExtractedString{kind:classify_string(&value),value,
-                    data_offset:address,method:StringMethod::InstructionPattern,..Default::default()});
+            if let Some((value, address)) =
+                preserved.recover(i, rodata_data, rodata_addr, min_length)
+                && seen.insert(value.clone())
+            {
+                strings.push(ExtractedString {
+                    kind: classify_string(&value),
+                    value,
+                    data_offset: address,
+                    method: StringMethod::InstructionPattern,
+                    ..Default::default()
+                });
             }
             extract_arm64_inline_string(
                 i,
@@ -344,25 +351,32 @@ fn extract_arm64_inline_string(
         // Rust may set up a separate stack result pointer between the string
         // address and length. Require this exact harmless instruction and an
         // immediately following length/call, not an arbitrary instruction gap.
-        if pos + 16 == bl_pos && inst3 & 0xffc003e0 == 0x910003e0
-            && inst3 & 31 != addr_reg && inst3 & 31 != 31 {
+        if pos + 16 == bl_pos
+            && inst3 & 0xffc003e0 == 0x910003e0
+            && inst3 & 31 != addr_reg
+            && inst3 & 31 != 31
+        {
             len_pos = pos + 12;
             inst3 = word(len_pos);
         }
         // MOVZ Rn, #imm or ORR Rn, XZR, #bitmask (the length) into a register
         // other than the pointer.
         let len_reg = inst3 & 0x1F;
-        let is_len = len_reg != addr_reg && len_reg != 31
-            && decode_arm_mov_immediate(inst3).is_some();
+        let is_len =
+            len_reg != addr_reg && len_reg != 31 && decode_arm_mov_immediate(inst3).is_some();
 
         // Only understood, independent argument setup may separate the length
         // from this call. In particular, do not carry a pointer across another
         // call, branch, load/writeback, or a write to either argument register.
         let preserved = (len_pos + 4..bl_pos).step_by(4).all(|at| {
             let inst = word(at);
-            if inst == 0xd503201f {return true;} // NOP
+            if inst == 0xd503201f {
+                return true;
+            } // NOP
             let dst = inst & 31;
-            dst != addr_reg && dst != len_reg && dst != 31
+            dst != addr_reg
+                && dst != len_reg
+                && dst != 31
                 && (decode_arm_mov_immediate(inst).is_some()
                     || inst & 0xffc003e0 == 0x910003e0
                     || inst & 0x7fe0ffe0 == 0x2a0003e0)

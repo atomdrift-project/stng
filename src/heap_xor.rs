@@ -19,7 +19,7 @@ pub(crate) fn extract_macho(
     slice_base: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    let arm64=macho.header.cputype==goblin::mach::constants::cputype::CPU_TYPE_ARM64;
+    let arm64 = macho.header.cputype == goblin::mach::constants::cputype::CPU_TYPE_ARM64;
     if !arm64 && macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
         return Vec::new();
     }
@@ -34,7 +34,15 @@ pub(crate) fn extract_macho(
             if section.name().ok() != Some("__text") || code.len() > MAX_CODE {
                 continue;
             }
-            if arm64 {return arm64::extract(code,section.addr,u64::from(section.offset),slice_base,min_length);}
+            if arm64 {
+                return arm64::extract(
+                    code,
+                    section.addr,
+                    u64::from(section.offset),
+                    slice_base,
+                    min_length,
+                );
+            }
             let mut results = Vec::new();
             // push 1; pop rsi; mov edi, length; call allocator
             for start in memchr::memmem::find_iter(code, b"\x6a\x01\x5e\xbf").take(MAX_CANDIDATES) {
@@ -75,8 +83,8 @@ fn immediate(i: &Instruction) -> Option<u64> {
         OpKind::Immediate16 => u64::from(i.immediate16()),
         OpKind::Immediate32 => u64::from(i.immediate32()),
         OpKind::Immediate64 => i.immediate64(),
-        OpKind::Immediate8to64 => i.immediate8to64() as u64,
-        OpKind::Immediate32to64 => i.immediate32to64() as u64,
+        OpKind::Immediate8to64 => i.immediate8to64().cast_unsigned(),
+        OpKind::Immediate32to64 => i.immediate32to64().cast_unsigned(),
         _ => return None,
     })
 }

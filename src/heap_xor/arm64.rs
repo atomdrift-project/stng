@@ -202,7 +202,8 @@ fn decode(code: &Code<'_>, start: usize, min: usize) -> Option<(String, u32)> {
         return None;
     }
     code.seq(pos + 4, &[0x540001a0, 0xaa0003e0 | (a.base << 16)])?;
-    let length = 0x52800001 | ((a.bytes.len() as u32) << 5);
+    let len_u32 = u32::try_from(a.bytes.len()).ok()?;
+    let length = 0x52800001 | (len_u32 << 5);
     code.seq(pos + 12, &[length])?;
     let args = code.call(pos + 16)?;
     code.seq(
@@ -219,8 +220,7 @@ fn decode(code: &Code<'_>, start: usize, min: usize) -> Option<(String, u32)> {
     let load = code.word(pos + 24)?;
     let value = load & 31;
     if load & !31 != 0x39400000
-        || value < 4
-        || value >= 30
+        || !(4..30).contains(&value)
         || [a.base, b.base, count, desc_reg].contains(&value)
     {
         return None;

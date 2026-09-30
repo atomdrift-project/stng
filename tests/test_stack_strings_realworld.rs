@@ -1,9 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod common;
+
 use stng::{ExtractOptions, StringKind};
 
 #[test]
 fn test_stack_strings_themeforestrat() {
-    let sample_path = "testdata/malware/themeforestrat";
+    let sample_path = crate::common::path("testdata/malware/themeforestrat");
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - malware sample not found at {}", sample_path);
         return;

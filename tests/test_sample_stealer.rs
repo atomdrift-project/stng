@@ -6,11 +6,13 @@
 //! to exec.Command calls in Go binaries, including stack-based patterns
 //! used for variadic arguments and interface conversions.
 
+mod common;
+
 use stng::ExtractOptions;
 
 #[test]
 fn test_sample_stealer_short_strings() {
-    let sample_path = "testdata/malware/sample-stealer";
+    let sample_path = crate::common::path("testdata/malware/sample-stealer");
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - sample not found at {sample_path}");
         return;

@@ -1,14 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for ELF overlay/appended data detection (overlay.rs).
 
+mod common;
+
 use std::path::Path;
 use stng::{StringKind, detect_elf_overlay, extract_overlay_strings};
 
 fn read_hello_linux() -> Option<Vec<u8>> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/testdata/hello_linux_amd64"
-    );
+    let path = crate::common::path("tests/testdata/hello_linux_amd64");
     if Path::new(path).exists() {
         Some(std::fs::read(path).expect("Failed to read hello_linux_amd64"))
     } else {
@@ -228,10 +227,7 @@ fn test_overlay_url_ioc_preserves_classification() {
 #[test]
 fn test_extract_overlay_strings_non_elf_returns_empty() {
     // PE data — no ELF overlay possible
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/testdata/hello_windows.exe"
-    );
+    let path = crate::common::path("tests/testdata/hello_windows.exe");
     if !Path::new(path).exists() {
         return;
     }

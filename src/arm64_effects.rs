@@ -153,7 +153,7 @@ mod tests {
     fn every_independent_disassembly_write_mask_matches() {
         let rows = include_bytes!("../testdata/macho/rust_arm64_register_writes.bin");
         assert_eq!(rows.len(), 13064 * 8);
-        for row in rows.chunks_exact(8) {
+        for row in rows.as_chunks::<8>().0 {
             let word = u32::from_le_bytes([row[0], row[1], row[2], row[3]]);
             let expected = u32::from_le_bytes([row[4], row[5], row[6], row[7]]);
             assert_eq!(writes(word), Some(expected), "instruction {word:08x}");
@@ -250,7 +250,7 @@ mod tests {
         let rows = include_bytes!("../testdata/macho/rust_arm64_framed_register_writes.bin");
         assert!(rows.len() > 100 * 8);
         assert_eq!(rows.len() % 8, 0);
-        for row in rows.chunks_exact(8) {
+        for row in rows.as_chunks::<8>().0 {
             let word = u32::from_le_bytes([row[0], row[1], row[2], row[3]]);
             let expected = u32::from_le_bytes([row[4], row[5], row[6], row[7]]);
             assert_eq!(writes(word), Some(expected), "{word:08x}");

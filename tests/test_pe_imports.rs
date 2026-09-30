@@ -8,15 +8,15 @@
 //! and typed without r2, and the `caller_provides_symbols` hint must suppress
 //! the structured pass when the client (filefacts) already parses imports.
 
+mod common;
+
 use stng::{ExtractOptions, StringKind, extract_strings_with_options};
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/testdata/malware/sorry_ransomware.exe"
-);
+static FIXTURE: std::sync::LazyLock<&str> =
+    std::sync::LazyLock::new(|| crate::common::path("testdata/malware/sorry_ransomware.exe"));
 
 fn extract(caller_provides_symbols: bool) -> Vec<stng::ExtractedString> {
-    let data = std::fs::read(FIXTURE).expect("read PE fixture");
+    let data = std::fs::read(*FIXTURE).expect("read PE fixture");
     let opts = ExtractOptions {
         min_length: 4,
         filter_garbage: false,

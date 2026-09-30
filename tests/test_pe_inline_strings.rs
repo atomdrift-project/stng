@@ -14,12 +14,15 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod common;
+
 use stng::{ExtractOptions, StringKind, extract_strings_with_options};
 
-const SAMPLE: &str = "testdata/pe/gobump_windows_amd64.exe";
+static SAMPLE: std::sync::LazyLock<&str> =
+    std::sync::LazyLock::new(|| crate::common::path("testdata/pe/gobump_windows_amd64.exe"));
 
 fn load_strings() -> Vec<stng::ExtractedString> {
-    let data = std::fs::read(SAMPLE).expect("Failed to read gobump PE sample");
+    let data = std::fs::read(*SAMPLE).expect("Failed to read gobump PE sample");
     // Disable r2 so the assertions exercise stng's own extraction, not rizin.
     let opts = ExtractOptions {
         min_length: 4,
@@ -31,8 +34,8 @@ fn load_strings() -> Vec<stng::ExtractedString> {
 
 #[test]
 fn pe_inline_shell_command_recovered_without_r2() {
-    if !std::path::Path::new(SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {SAMPLE}");
+    if !std::path::Path::new(*SAMPLE).exists() {
+        eprintln!("skipping — sample missing at {}", *SAMPLE);
         return;
     }
     let strings = load_strings();
@@ -56,7 +59,7 @@ fn pe_inline_shell_command_recovered_without_r2() {
             hit.kind
         );
         assert!(
-            hit.data_offset < std::fs::metadata(SAMPLE).unwrap().len(),
+            hit.data_offset < std::fs::metadata(*SAMPLE).unwrap().len(),
             "PE string offset must be file-relative, got 0x{:x}",
             hit.data_offset
         );

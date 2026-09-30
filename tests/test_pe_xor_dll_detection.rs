@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod common;
+
 use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 
 /// Integration test against rtc.dll — a PE binary that uses XOR 0xC6 to hide
@@ -17,7 +19,7 @@ use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 ///                         GetWindowThreadProcessId
 #[test]
 fn test_pe_xor_c6_dll_and_api_detection() {
-    let sample_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testdata/rtc.dll");
+    let sample_path = crate::common::path("tests/testdata/rtc.dll");
 
     let data = match std::fs::read(sample_path) {
         Ok(data) => data,

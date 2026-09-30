@@ -186,11 +186,11 @@ fn parse_lcg_parameters(input: &str) -> Result<(u64, u64, u64, u8, usize, usize)
     let multiplier = parse_integer(fields[1])?;
     let modulus = parse_integer(fields[2])?;
     let mask = u8::try_from(parse_integer(fields[3])?)
-        .map_err(|_| anyhow::anyhow!("LCG mask must fit in one byte"))?;
+        .map_err(|e| anyhow::anyhow!("LCG mask must fit in one byte: {e}"))?;
     let offset = usize::try_from(parse_integer(fields[4])?)
-        .map_err(|_| anyhow::anyhow!("LCG offset is too large"))?;
+        .map_err(|e| anyhow::anyhow!("LCG offset is too large: {e}"))?;
     let length = usize::try_from(parse_integer(fields[5])?)
-        .map_err(|_| anyhow::anyhow!("LCG length is too large"))?;
+        .map_err(|e| anyhow::anyhow!("LCG length is too large: {e}"))?;
     if modulus == 0 || multiplier == 0 || length == 0 {
         anyhow::bail!("LCG multiplier, modulus, and length must be nonzero");
     }

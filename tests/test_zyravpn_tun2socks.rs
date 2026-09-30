@@ -16,12 +16,15 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod common;
+
 use stng::{ExtractedString, extract_strings};
 
-const SAMPLE: &str = "testdata/malware/zyravpn_tun2socks.exe";
+static SAMPLE: std::sync::LazyLock<&str> =
+    std::sync::LazyLock::new(|| crate::common::path("testdata/malware/zyravpn_tun2socks.exe"));
 
 fn load_strings() -> Vec<ExtractedString> {
-    let data = std::fs::read(SAMPLE).expect("Failed to read tun2socks sample");
+    let data = std::fs::read(*SAMPLE).expect("Failed to read tun2socks sample");
     extract_strings(&data, 4)
 }
 
@@ -35,8 +38,8 @@ fn values(strings: &[ExtractedString]) -> Vec<&str> {
 
 #[test]
 fn issue1_buildinfo_no_varint_prefix() {
-    if !std::path::Path::new(SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {SAMPLE}");
+    if !std::path::Path::new(*SAMPLE).exists() {
+        eprintln!("skipping — sample missing at {}", *SAMPLE);
         return;
     }
     let strings = load_strings();
@@ -76,8 +79,8 @@ fn issue1_buildinfo_no_varint_prefix() {
 
 #[test]
 fn issue2_stack_strings_assemble_win32_apis() {
-    if !std::path::Path::new(SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {SAMPLE}");
+    if !std::path::Path::new(*SAMPLE).exists() {
+        eprintln!("skipping — sample missing at {}", *SAMPLE);
         return;
     }
     let strings = load_strings();
@@ -111,8 +114,8 @@ fn issue2_stack_strings_assemble_win32_apis() {
 
 #[test]
 fn issue3_no_x86_register_garbage() {
-    if !std::path::Path::new(SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {SAMPLE}");
+    if !std::path::Path::new(*SAMPLE).exists() {
+        eprintln!("skipping — sample missing at {}", *SAMPLE);
         return;
     }
     let strings = load_strings();
@@ -139,8 +142,8 @@ fn issue3_no_x86_register_garbage() {
 
 #[test]
 fn issue4_no_mid_string_funcname_fragments() {
-    if !std::path::Path::new(SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {SAMPLE}");
+    if !std::path::Path::new(*SAMPLE).exists() {
+        eprintln!("skipping — sample missing at {}", *SAMPLE);
         return;
     }
     let strings = load_strings();
@@ -184,8 +187,8 @@ fn issue4_no_mid_string_funcname_fragments() {
 
 #[test]
 fn issue5_no_concatenated_megastrings() {
-    if !std::path::Path::new(SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {SAMPLE}");
+    if !std::path::Path::new(*SAMPLE).exists() {
+        eprintln!("skipping — sample missing at {}", *SAMPLE);
         return;
     }
     let strings = load_strings();

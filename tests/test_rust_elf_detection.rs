@@ -12,15 +12,12 @@
 //! `/rustc/<sha>` nor `index.crates.io`, only `library/std/src/...` panic
 //! locations. See `testdata/rust_elf/src`.
 
-use std::path::Path;
+mod common;
 
 use stng::{StringMethod, extract_strings, is_rust_binary};
 
 fn fixture(rel: &str) -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/testdata")
-        .join(rel);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    common::bytes(&format!("tests/testdata/{rel}"))
 }
 
 #[test]

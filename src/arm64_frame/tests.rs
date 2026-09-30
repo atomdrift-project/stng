@@ -1,4 +1,9 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cast_possible_truncation
+)]
 use super::*;
 fn pair(load: bool, pre: bool, a: u32, b: u32) -> u32 {
     // STP [SP,#-16]! / LDP [SP],#16.
@@ -149,7 +154,7 @@ fn exact_bounds_and_cache_independent_work_limits() {
 #[test]
 fn original_conversion_and_append_frame_pairs() {
     use goblin::{Object, mach::Mach};
-    let file = include_bytes!("../../testdata/macho/rust_heap_xor_installer_universal.macho");
+    let file = crate::test_fixture("testdata/macho/rust_heap_xor_installer_universal.macho");
     let Object::Mach(Mach::Fat(fat)) = Object::parse(file).unwrap() else {
         panic!("fat")
     };

@@ -907,9 +907,10 @@ mod tests {
         // Should find: 'open -a /bin/bash --args -c "sleep 3; rm -rf \'%s\'"'
         // Bug: Currently finding "ep 3; rm -rf '%s" at 0x4b135 instead
 
-        if let Ok(data) = std::fs::read("testdata/malware/brew_agent") {
+        {
+            let data = crate::test_fixture("testdata/malware/brew_agent");
             let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
-            let results = extract_custom_xor_strings(&data, key, 10, false);
+            let results = extract_custom_xor_strings(data, key, 10, false);
 
             // Check what we found in the region 0x4b100-0x4b200
             let in_region: Vec<_> = results
@@ -951,8 +952,6 @@ mod tests {
                 !found_truncated,
                 "Should NOT find truncated 'eep 3' without 'sleep'"
             );
-        } else {
-            eprintln!("Skipping test - brew_agent binary not found");
         }
     }
 

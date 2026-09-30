@@ -49,9 +49,9 @@ pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
 
     let key = des_string_to_key(KEY)?;
     let cipher = Des::new_from_slice(&key).ok()?;
-    let full_len = ciphertext.len() / 8 * 8;
+    let (chunks, remainder) = ciphertext.as_chunks::<8>();
     let mut plaintext = Vec::with_capacity(ciphertext.len());
-    for chunk in ciphertext[..full_len].chunks_exact(8) {
+    for chunk in chunks {
         let mut block = GenericArray::clone_from_slice(chunk);
         cipher.decrypt_block(&mut block);
         plaintext.extend_from_slice(&block);
@@ -59,9 +59,10 @@ pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
 
     // The historical reference decoder handles a final partial block with a
     // byte-position XOR after DES processing. Preserve that behavior.
-    let remainder = &ciphertext[full_len..];
+    let full_len = chunks.len() * 8;
     for (index, byte) in remainder.iter().enumerate() {
-        plaintext.push(byte ^ (full_len.wrapping_add(index) as u8));
+        let pos_byte = u8::try_from(full_len.wrapping_add(index) & 0xff).unwrap_or(0);
+        plaintext.push(byte ^ pos_byte);
     }
 
     if skip_delimiter {

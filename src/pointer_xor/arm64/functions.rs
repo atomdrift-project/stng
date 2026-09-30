@@ -110,10 +110,10 @@ pub(super) fn ranges(
     }
     let mut command = None;
     for load in &macho.load_commands {
-        if let CommandVariant::FunctionStarts(value) = &load.command {
-            if command.replace(value).is_some() {
-                return None;
-            }
+        if let CommandVariant::FunctionStarts(value) = &load.command
+            && command.replace(value).is_some()
+        {
+            return None;
         }
     }
     let command = command?;
@@ -136,7 +136,13 @@ pub(super) fn ranges(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::cast_possible_truncation,
+        clippy::single_range_in_vec_init
+    )]
     use super::*;
     #[test]
     fn all_reviewed_sites_share_the_complete_table_builder_range() {

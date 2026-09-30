@@ -6,14 +6,17 @@
 //! - No base64 false positives from ASN.1 certificate timestamps or x86 code
 //! - No PHP false positives from .reloc section random data
 
+mod common;
+
 use stng::{ExtractOptions, StringKind, StringMethod};
 
-const SAMPLE_PATH: &str = "testdata/malware/wizardnet_downloader.dll";
+static SAMPLE_PATH: std::sync::LazyLock<&str> =
+    std::sync::LazyLock::new(|| crate::common::path("testdata/malware/wizardnet_downloader.dll"));
 
 fn load_sample() -> Option<Vec<u8>> {
-    let path = std::path::Path::new(SAMPLE_PATH);
+    let path = std::path::Path::new(*SAMPLE_PATH);
     if !path.exists() {
-        eprintln!("Skipping - sample not found at {SAMPLE_PATH}");
+        eprintln!("Skipping - sample not found at {}", *SAMPLE_PATH);
         return None;
     }
     Some(std::fs::read(path).expect("Failed to read sample"))

@@ -120,7 +120,7 @@ pub(crate) fn extract_macho(
             kind: classify_string(&value),
             value,
             data_offset: offset,
-            data_len: len as u32,
+            data_len: u32::try_from(len).unwrap_or(u32::MAX),
             method: StringMethod::XorDecode,
             ..Default::default()
         });
@@ -470,6 +470,7 @@ fn operand(regs: &[Option<u64>; 5], i: &Instruction, op: u32) -> Option<u64> {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn fold_helper(code: &Region<'_>, addr: u64, base: u64, seed: u64) -> Option<u64> {
     let mut d = code.decoder(addr, 128)?;
     let push = d.decode();
@@ -491,7 +492,7 @@ fn fold_helper(code: &Region<'_>, addr: u64, base: u64, seed: u64) -> Option<u64
         }
         let dst = i.op0_register();
         let index = slot(dst)?;
-        let width = if gpr_width(dst) == 32 {
+        let width: u32 = if gpr_width(dst) == 32 {
             32
         } else if gpr_width(dst) == 64 {
             64
@@ -527,7 +528,7 @@ fn fold_helper(code: &Region<'_>, addr: u64, base: u64, seed: u64) -> Option<u64
             op => {
                 let a = read(&regs, dst)?;
                 let b = operand(&regs, &i, 1)?;
-                let shift = (b & (width as u64 - 1)) as u32;
+                let shift = (b & (u64::from(width) - 1)) as u32;
                 match op {
                     Mnemonic::Add => a.wrapping_add(b),
                     Mnemonic::Sub => a.wrapping_sub(b),
@@ -536,16 +537,18 @@ fn fold_helper(code: &Region<'_>, addr: u64, base: u64, seed: u64) -> Option<u64
                     Mnemonic::And => a & b,
                     Mnemonic::Imul => a.wrapping_mul(b),
                     Mnemonic::Shr => a >> shift,
-                    Mnemonic::Sar if width == 32 => ((a as i32) >> shift) as u32 as u64,
-                    Mnemonic::Sar => ((a as i64) >> shift) as u64,
+                    Mnemonic::Sar if width == 32 => {
+                        u64::from(((a as i32) >> shift).cast_unsigned())
+                    }
+                    Mnemonic::Sar => ((a as i64) >> shift).cast_unsigned(),
                     Mnemonic::Rol if width == 32 => u64::from((a as u32).rotate_left(shift)),
                     Mnemonic::Rol => a.rotate_left(shift),
                     Mnemonic::Shld => {
-                        let n = (operand(&regs, &i, 2)? & (width as u64 - 1)) as u32;
+                        let n = (operand(&regs, &i, 2)? & (u64::from(width) - 1)) as u32;
                         if n == 0 {
                             a
                         } else {
-                            (a << n) | (b >> (width as u32 - n))
+                            (a << n) | (b >> (width - n))
                         }
                     }
                     _ => return None,

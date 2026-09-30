@@ -1,10 +1,20 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cast_possible_truncation
+)]
 //! Static specimen and malformed-table regressions; never execute the payload.
+mod common;
+
 use sha2::{Digest, Sha256};
 use stng::{
     ExtractOptions, StringKind, StringMethod, decode_xor_fat_macho, extract_strings_with_options,
 };
-const FILE: &[u8] = include_bytes!("../testdata/macho/xor_fat_dropper.macho");
+
+static FILE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
+    crate::common::bytes("testdata/macho/xor_fat_dropper.macho").leak()
+});
 const START: usize = 0x6210;
 const LEN: usize = 153824;
 fn plain() -> Vec<u8> {
@@ -19,7 +29,7 @@ fn reject(b: &[u8]) {
 #[test]
 fn specimen_and_full_payload_match_independent_native_reconstruction() {
     assert_eq!(
-        hex::encode(Sha256::digest(FILE)),
+        hex::encode(Sha256::digest(*FILE)),
         "30c99015f9c432604d8a8206ce8dcb4fba7866b062e5bd1a8f0adb88fba8807c"
     );
     let got = decode_xor_fat_macho(&FILE[START..], 0x9c).unwrap();
@@ -38,7 +48,7 @@ fn public_string_pipeline_locates_key_with_exact_offset() {
         filter_garbage: true,
         ..Default::default()
     };
-    let strings = extract_strings_with_options(FILE, &opts);
+    let strings = extract_strings_with_options(*FILE, &opts);
     let keys: Vec<_> = strings
         .iter()
         .filter(|s| s.kind == Some(StringKind::XorKey) && s.data_offset == START as u64)

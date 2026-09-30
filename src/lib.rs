@@ -46,23 +46,22 @@ mod validation_thresholds;
 mod arm64_effects;
 mod arm64_frame;
 mod arm64_stack_xor;
-mod arm64_repeating_xor;
-mod x86_repeating_xor;
-mod swift_small_strings;
 pub mod binary;
 mod binary_net;
 mod cfml;
 mod detect;
 mod dotnet;
 mod entitlements;
+mod fmix_xor;
+mod heap_xor;
 mod imports;
 mod lcg_xor;
-mod heap_xor;
-mod pointer_xor;
 mod overlay;
 mod pe_xor;
+mod pointer_xor;
 mod raw;
 mod stack_strings;
+mod swift_small_strings;
 
 // Script deobfuscation
 pub mod script;
@@ -96,8 +95,7 @@ pub use ioc::{
     extract_iocs, is_external_ip,
 };
 pub use lcg_xor::{
-    decode_lcg_xor, decode_xor_fat_macho, extract_macho_arithmetic_strings, extract_macho_lcg_xor,
-    extract_macho_shuffled_xorshift_strings, extract_macho_xor_macho_strings,
+    decode_lcg_xor, decode_xor_fat_macho, extract_macho_lcg_xor, extract_macho_xor_macho_strings,
 };
 pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
 pub use string_cache::{
@@ -243,9 +241,9 @@ fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, usize)]) ->
     // relaxing the control-character check for unstructured machine-code noise.
     if s.method == StringMethod::InstructionPattern
         && s.value.trim().contains(['\n', '\r', '\t'])
-        && s.value.bytes().all(|b| {
-            (b' '..=b'~').contains(&b) || matches!(b, b'\n' | b'\r' | b'\t')
-        })
+        && s.value
+            .bytes()
+            .all(|b| (b' '..=b'~').contains(&b) || matches!(b, b'\n' | b'\r' | b'\t'))
     {
         return true;
     }
@@ -1974,17 +1972,10 @@ fn extract_from_object_inner(
             section_info = collect_macho_section_info(macho);
             strings.extend(heap_xor::extract_macho(macho, 0, min_length));
             strings.extend(pointer_xor::extract_macho(macho, 0, min_length));
-            strings.extend(arm64_repeating_xor::extract_macho(macho, 0, min_length));
-            strings.extend(x86_repeating_xor::extract_macho(macho, 0, min_length));
             strings.extend(swift_small_strings::extract_macho(macho, 0, min_length));
-            strings.extend(lcg_xor::extract_macho_arithmetic_strings(
-                macho, 0, min_length,
-            ));
+            strings.extend(fmix_xor::extract_macho(macho, 0, min_length));
             strings.extend(lcg_xor::extract_macho_lcg_xor(macho, data, 0, min_length));
             strings.extend(lcg_xor::extract_macho_xor_macho_strings(
-                macho, data, 0, min_length,
-            ));
-            strings.extend(lcg_xor::extract_macho_shuffled_xorshift_strings(
                 macho, data, 0, min_length,
             ));
             if macho_has_go_sections(macho) {
@@ -2126,19 +2117,14 @@ fn extract_from_object_inner(
                     // Keep whole-file raw scanning below to one pass.
                     strings.extend(heap_xor::extract_macho(&macho, slice_base, min_length));
                     strings.extend(pointer_xor::extract_macho(&macho, slice_base, min_length));
-                    strings.extend(arm64_repeating_xor::extract_macho(&macho, slice_base, min_length));
-                    strings.extend(x86_repeating_xor::extract_macho(&macho, slice_base, min_length));
-                    strings.extend(swift_small_strings::extract_macho(&macho, slice_base, min_length));
-                    strings.extend(lcg_xor::extract_macho_arithmetic_strings(
+                    strings.extend(swift_small_strings::extract_macho(
                         &macho, slice_base, min_length,
                     ));
+                    strings.extend(fmix_xor::extract_macho(&macho, slice_base, min_length));
                     strings.extend(lcg_xor::extract_macho_lcg_xor(
                         &macho, data, slice_base, min_length,
                     ));
                     strings.extend(lcg_xor::extract_macho_xor_macho_strings(
-                        &macho, data, slice_base, min_length,
-                    ));
-                    strings.extend(lcg_xor::extract_macho_shuffled_xorshift_strings(
                         &macho, data, slice_base, min_length,
                     ));
                     if first_macho.is_some() {
@@ -2878,6 +2864,21 @@ fn get_r2_strings(opts: &ExtractOptions) -> Option<Vec<ExtractedString>> {
     None
 }
 
+/// Reads the sample at `path` (relative to the crate root) at run time.
+/// Samples live in git gzip-compressed as `<path>.gz` and are never embedded
+/// with `include_bytes!`: no binary, test or otherwise, should carry malware.
+/// Mirrors `tests/common`, which unit tests cannot import.
+#[cfg(test)]
+pub(crate) fn test_fixture(path: &str) -> &'static [u8] {
+    use std::io::Read;
+    let full = format!("{}/{path}.gz", env!("CARGO_MANIFEST_DIR"));
+    let mut out = Vec::new();
+    std::fs::File::open(&full)
+        .and_then(|f| flate2::read::GzDecoder::new(f).read_to_end(&mut out))
+        .unwrap_or_else(|e| panic!("{full}: {e}"));
+    out.leak()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2955,6 +2956,3 @@ mod tests {
         assert!(unclaimed_raw_strings(raw, &claimed, 4).is_empty());
     }
 }
-
-#[cfg(test)]
-mod repeating_xor_tests;

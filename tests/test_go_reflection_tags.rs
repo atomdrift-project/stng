@@ -1,6 +1,13 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cast_possible_truncation
+)]
 //! Independent native-analysis offsets and digests, through the filtered public
 //! pipeline, with external disassembly and caching disabled.
+mod common;
+
 use sha2::{Digest, Sha256};
 use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 
@@ -28,10 +35,7 @@ fn both_native_go_architectures_keep_exact_tags_and_multiline_plist() {
             0x2717e3,
         ),
     ] {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("testdata/macho")
-            .join(name);
-        let data = std::fs::read(path).unwrap();
+        let data = crate::common::bytes(&format!("testdata/macho/{name}"));
         assert_eq!(hex::encode(Sha256::digest(&data)), sha);
         let strings = extract_strings_with_options(&data, &opts);
         for (value, offset) in [("json:\"iv\"", iv), ("json:\"ciphertext\"", ciphertext)] {

@@ -55,8 +55,9 @@ pub(crate) fn extract_macho(
     let mut regs = [Constant::default(); 31];
     let mut epoch = 1;
     let mut results = Vec::new();
-    for (index, bytes) in code.chunks_exact(4).enumerate() {
-        let w = u32::from_le_bytes(bytes.try_into().unwrap());
+    let (words, _) = code.as_chunks::<4>();
+    for (index, bytes) in words.iter().enumerate() {
+        let w = u32::from_le_bytes(*bytes);
         let rd = (w & 31) as usize;
         let op = w & 0x7f80_0000;
         if rd < 31 && (op == 0x5280_0000 || op == 0x7280_0000) {
@@ -108,12 +109,17 @@ pub(crate) fn extract_macho(
                     .all(|b| b.is_ascii_graphic() || *b == b' ')
                     && raw[len..15].iter().all(|b| *b == 0)
                 {
-                    let value = String::from_utf8(raw[..len].to_vec()).unwrap();
+                    let Ok(value) = String::from_utf8(raw[..len].to_vec()) else {
+                        continue;
+                    };
+                    let Ok(data_len) = u32::try_from((index + 1 - start) * 4) else {
+                        continue;
+                    };
                     results.push(ExtractedString {
                         kind: classify_string(&value),
                         value,
                         data_offset: base + (start * 4) as u64,
-                        data_len: ((index + 1 - start) * 4) as u32,
+                        data_len,
                         method: StringMethod::Structure,
                         ..Default::default()
                     });

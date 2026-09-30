@@ -1,4 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod common;
+
 /// Comprehensive tests for XOR string extraction to prevent regression
 /// Uses a sanitized subset of brew_agent malware (non-executable data only)
 use stng::{ExtractOptions, StringKind, StringMethod};
@@ -7,10 +9,7 @@ const BREW_AGENT_KEY: &[u8] = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
 /// Load the test fixture (sanitized region from brew_agent)
 fn load_test_fixture() -> Vec<u8> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/brew_agent_xor_region.bin"
-    );
+    let path = crate::common::path("tests/fixtures/brew_agent_xor_region.bin");
     std::fs::read(path).expect("Failed to load test fixture")
 }
 
@@ -413,8 +412,10 @@ fn test_c2_url_extraction_from_fixture() {
 }
 #[test]
 fn test_direct_c2_extraction() {
-    let data =
-        std::fs::read("tests/fixtures/brew_agent_xor_region.bin").expect("Failed to read fixture");
+    let data = std::fs::read(crate::common::path(
+        "tests/fixtures/brew_agent_xor_region.bin",
+    ))
+    .expect("Failed to read fixture");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10).with_xor_key(key.to_vec());

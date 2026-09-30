@@ -6,6 +6,8 @@
 //! on macOS system binaries. Deduplication correctness is verified through
 //! the full `extract_strings` pipeline.
 
+mod common;
+
 use std::path::Path;
 use stng::{
     ExtractOptions, StringKind, StringMethod, extract_strings, extract_strings_with_options, goblin,
@@ -137,10 +139,7 @@ fn test_macho_import_strings_have_library_field() {
 fn test_elf_extraction_completes_without_panic() {
     // Go ELF binaries are statically linked so may have no dynamic imports,
     // but the extraction pipeline must complete and return strings.
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/testdata/hello_linux_amd64"
-    );
+    let path = crate::common::path("tests/testdata/hello_linux_amd64");
     if !Path::new(path).exists() {
         return;
     }
@@ -159,10 +158,7 @@ fn test_elf_extraction_completes_without_panic() {
 #[test]
 fn test_elf_import_export_strings_have_nonempty_values_when_present() {
     // If the ELF has dynamic symbols, they must have non-empty names.
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/testdata/hello_linux_amd64"
-    );
+    let path = crate::common::path("tests/testdata/hello_linux_amd64");
     if !Path::new(path).exists() {
         return;
     }
@@ -196,10 +192,7 @@ fn test_elf_import_export_strings_have_nonempty_values_when_present() {
 fn test_full_pipeline_deduplicates_by_offset() {
     // The full extract_strings pipeline applies deduplicate_by_offset at the end.
     // No two strings in the output should share the same data_offset.
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/testdata/hello_linux_amd64"
-    );
+    let path = crate::common::path("tests/testdata/hello_linux_amd64");
     if !Path::new(path).exists() {
         return;
     }
@@ -220,10 +213,7 @@ fn test_full_pipeline_deduplicates_by_offset() {
 
 #[test]
 fn test_full_pipeline_pe_deduplicates_by_offset() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/testdata/hello_windows.exe"
-    );
+    let path = crate::common::path("tests/testdata/hello_windows.exe");
     if !Path::new(path).exists() {
         return;
     }

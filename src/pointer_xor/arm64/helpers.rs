@@ -108,6 +108,12 @@ impl<'a, 'data> Cache<'a, 'data> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::cast_possible_truncation
+    )]
     use super::*;
     fn run(words: &[u32]) -> Option<u32> {
         let bytes: Vec<_> = words.iter().flat_map(|x| x.to_le_bytes()).collect();
@@ -126,7 +132,7 @@ mod tests {
         let rows = include_bytes!("../../../testdata/macho/rust_arm64_helper_writes.bin");
         assert_eq!(rows.len() % 12, 0);
         assert!(rows.len() / 12 > 650);
-        for row in rows.chunks_exact(12) {
+        for row in rows.as_chunks::<12>().0 {
             let entry = u64::from_le_bytes([
                 row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7],
             ]);
@@ -199,8 +205,9 @@ mod tests {
     fn introduced_saved_register_writes_are_never_reported_as_preserved() {
         let original = super::super::tests::code();
         let mut bytes = original.bytes.to_vec();
-        for row in
-            include_bytes!("../../../testdata/macho/rust_arm64_helper_writes.bin").chunks_exact(12)
+        for row in include_bytes!("../../../testdata/macho/rust_arm64_helper_writes.bin")
+            .as_chunks::<12>()
+            .0
         {
             let entry = u64::from_le_bytes([
                 row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7],

@@ -1,7 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
 use goblin::{Object, mach::Mach};
-const FILE: &[u8] = include_bytes!("../../testdata/macho/rust_heap_xor_installer_universal.macho");
+static FILE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
+    crate::test_fixture("testdata/macho/rust_heap_xor_installer_universal.macho")
+});
 fn path_strings(bytes: &[u8]) -> Vec<ExtractedString> {
     let Object::Mach(Mach::Binary(m)) = Object::parse(bytes).unwrap() else {
         panic!("thin")
@@ -51,7 +53,7 @@ fn public_pipeline_recovers_all_six_reviewed_sql_literal_boundaries() {
         filter_garbage: true,
         ..Default::default()
     };
-    let out = crate::extract_strings_with_options(FILE, &opts);
+    let out = crate::extract_strings_with_options(*FILE, &opts);
     for (text, offset) in [
         (
             "SELECT origin_url, username_value, password_value FROM logins;",

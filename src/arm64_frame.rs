@@ -24,7 +24,7 @@ pub(crate) struct State {
 }
 impl State {
     pub(crate) fn new() -> Self {
-        let mut registers = std::array::from_fn(|r| Value::Initial(r as u8));
+        let mut registers = std::array::from_fn(|r| Value::Initial(u8::try_from(r).unwrap_or(0)));
         registers[31] = Value::Stack(0);
         Self {
             registers,
@@ -58,7 +58,7 @@ impl State {
                 if !(-i64::from(STACK_BOUND)..=i64::from(STACK_BOUND)).contains(&result) {
                     return None;
                 }
-                Value::Stack(result as i32)
+                Value::Stack(i32::try_from(result).ok()?)
             }
             Value::Constant(v) => Value::Constant(v.wrapping_add_signed(delta)),
             _ if delta == 0 => value,
@@ -227,8 +227,8 @@ impl State {
         if self.registers[31] != Value::Stack(0) || self.registers[30] != Value::Initial(30) {
             return None;
         }
-        Some((0..30).fold(0, |mask, r| {
-            mask | if self.registers[r] == Value::Initial(r as u8) {
+        Some((0u8..30).fold(0u32, |mask, r| {
+            mask | if self.registers[usize::from(r)] == Value::Initial(r) {
                 0
             } else {
                 1 << r

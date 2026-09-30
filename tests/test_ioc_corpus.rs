@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+mod common;
+
 use stng::{
     ExtractOptions, Ioc, IocKind, KeyAlgorithm, KeyMetadata, StringMethod, extract_iocs,
     extract_strings_with_options,
@@ -127,26 +129,26 @@ fn existing_testdata_ioc_manifest_is_exact() {
     };
     assert_exact(
         "sanitized Brew XOR region",
-        "tests/fixtures/brew_agent_xor_region.bin",
+        crate::common::path("tests/fixtures/brew_agent_xor_region.bin"),
         &brew_options(),
         &brew,
     );
     assert_exact(
         "Brew full sample",
-        "testdata/malware/brew_agent",
+        crate::common::path("testdata/malware/brew_agent"),
         &brew_options(),
         &brew,
     );
     assert_exact(
         "Brew XOR sample",
-        "testdata/xor/brew_agent_xor_sample",
+        crate::common::path("testdata/xor/brew_agent_xor_sample"),
         &brew_options(),
         &brew,
     );
 
     assert_exact(
         "DynamicHub ARM64 stack XOR",
-        "testdata/malware/dynamichub/DynamicHub",
+        crate::common::path("testdata/malware/dynamichub/DynamicHub"),
         &ExtractOptions::new(4),
         &[
             xor_key(
@@ -174,7 +176,7 @@ fn existing_testdata_ioc_manifest_is_exact() {
 
     assert_exact(
         "PoolRat",
-        "testdata/malware/poolrat",
+        crate::common::path("testdata/malware/poolrat"),
         &ExtractOptions::new(4),
         &[
             expected(
@@ -195,7 +197,7 @@ fn existing_testdata_ioc_manifest_is_exact() {
     );
     assert_exact(
         "ThemeForest RAT",
-        "testdata/malware/themeforestrat",
+        crate::common::path("testdata/malware/themeforestrat"),
         &ExtractOptions::new(4),
         &[expected(
             IocKind::Hostname,
@@ -208,7 +210,7 @@ fn existing_testdata_ioc_manifest_is_exact() {
 
     assert_exact(
         "WizardNet/QQ downloader",
-        "testdata/malware/wizardnet_downloader.dll",
+        crate::common::path("testdata/malware/wizardnet_downloader.dll"),
         &ExtractOptions::new(10),
         &[
             expected(
@@ -265,9 +267,9 @@ fn existing_testdata_ioc_manifest_is_exact() {
 
     assert_exact(
         "Kimwolf sockaddr C2",
-        "testdata/malware/kimwolf_installer",
+        crate::common::path("testdata/malware/kimwolf_installer"),
         &ExtractOptions::new(4)
-            .with_r2("testdata/malware/kimwolf_installer")
+            .with_r2(crate::common::path("testdata/malware/kimwolf_installer"))
             .with_garbage_filter(true),
         &[expected(
             IocKind::Ip,
@@ -279,7 +281,7 @@ fn existing_testdata_ioc_manifest_is_exact() {
     );
     assert_exact(
         "vget",
-        "testdata/malware/vget_sample",
+        crate::common::path("testdata/malware/vget_sample"),
         &ExtractOptions::new(4),
         &[expected(
             IocKind::Hostname,
@@ -291,7 +293,7 @@ fn existing_testdata_ioc_manifest_is_exact() {
     );
     assert_exact(
         "wallet report",
-        "testdata/macho/wallet_report_objc",
+        crate::common::path("testdata/macho/wallet_report_objc"),
         &ExtractOptions::new(4),
         &[expected(
             IocKind::Hostname,
@@ -303,7 +305,7 @@ fn existing_testdata_ioc_manifest_is_exact() {
     );
     assert_exact(
         "BrickStorm",
-        "tests/testdata/brickstorm_linux_amd64",
+        crate::common::path("tests/testdata/brickstorm_linux_amd64"),
         &ExtractOptions::new(4),
         &[
             expected(
@@ -371,57 +373,57 @@ fn existing_testdata_ioc_manifest_is_exact() {
     for (label, path, options) in [
         (
             "clean Linux",
-            "tests/testdata/hello_linux_amd64",
+            crate::common::path("tests/testdata/hello_linux_amd64"),
             ExtractOptions::new(10),
         ),
         (
             "clean Windows",
-            "tests/testdata/does-nothing-windows-amd64.exe",
+            crate::common::path("tests/testdata/does-nothing-windows-amd64.exe"),
             ExtractOptions::new(10).with_xor(Some(10)),
         ),
         (
             "hello Windows",
-            "tests/testdata/hello_windows.exe",
+            crate::common::path("tests/testdata/hello_windows.exe"),
             ExtractOptions::new(4),
         ),
         (
             "goodboy certificate metadata",
-            "testdata/malware/goodboy-stage-01.exe",
+            crate::common::path("testdata/malware/goodboy-stage-01.exe"),
             ExtractOptions::new(4),
         ),
         (
             "sample stealer runtime paths",
-            "testdata/malware/sample-stealer",
+            crate::common::path("testdata/malware/sample-stealer"),
             ExtractOptions::new(4),
         ),
         (
             "sorry ransomware",
-            "testdata/malware/sorry_ransomware.exe",
+            crate::common::path("testdata/malware/sorry_ransomware.exe"),
             ExtractOptions::new(4),
         ),
         (
             "ZyraVPN runtime paths",
-            "testdata/malware/zyravpn_tun2socks.exe",
+            crate::common::path("testdata/malware/zyravpn_tun2socks.exe"),
             ExtractOptions::new(4),
         ),
         (
             "KWorker malformed URL",
-            "testdata/kworker_samples/kworker_obfuscated_1",
+            crate::common::path("testdata/kworker_samples/kworker_obfuscated_1"),
             ExtractOptions::new(4),
         ),
         (
             "ThreadRacer version and certificate metadata",
-            "tests/testdata/malware/threadracer.exe",
+            crate::common::path("tests/testdata/malware/threadracer.exe"),
             ExtractOptions::new(4),
         ),
         (
             "RTC clean DLL",
-            "tests/testdata/rtc.dll",
+            crate::common::path("tests/testdata/rtc.dll"),
             ExtractOptions::new(4),
         ),
         (
             "Go PE compiler metadata",
-            "testdata/pe/gobump_windows_amd64.exe",
+            crate::common::path("testdata/pe/gobump_windows_amd64.exe"),
             ExtractOptions::new(4),
         ),
     ] {
@@ -430,16 +432,11 @@ fn existing_testdata_ioc_manifest_is_exact() {
 
     for entry in std::fs::read_dir("testdata/garble").expect("read garble corpus") {
         let entry = entry.expect("read garble entry");
-        let path = entry.path();
-        if !path.is_file()
-            || matches!(
-                path.extension().and_then(|extension| extension.to_str()),
-                Some("go" | "txt")
-            )
-        {
-            continue;
-        }
-        let path = path.to_str().expect("UTF-8 fixture path");
+        let name = entry.file_name();
+        let Some(sample) = name.to_str().and_then(|n| n.strip_suffix(".gz")) else {
+            continue; // Go sources and notes sit beside the compressed samples.
+        };
+        let path = crate::common::path(&format!("testdata/garble/{sample}"));
         assert_empty(path, path, &ExtractOptions::new(4));
     }
 }
@@ -451,29 +448,29 @@ fn print_ioc_corpus_inventory() {
     for (name, path, options) in [
         (
             "brew-region",
-            "tests/fixtures/brew_agent_xor_region.bin",
+            crate::common::path("tests/fixtures/brew_agent_xor_region.bin"),
             ExtractOptions::new(10)
                 .with_xor_key(BREW_AGENT_KEY.to_vec())
                 .with_garbage_filter(true),
         ),
         (
             "dynamichub",
-            "testdata/malware/dynamichub/DynamicHub",
+            crate::common::path("testdata/malware/dynamichub/DynamicHub"),
             ExtractOptions::new(4),
         ),
         (
             "poolrat",
-            "testdata/malware/poolrat",
+            crate::common::path("testdata/malware/poolrat"),
             ExtractOptions::new(4),
         ),
         (
             "wizardnet",
-            "testdata/malware/wizardnet_downloader.dll",
+            crate::common::path("testdata/malware/wizardnet_downloader.dll"),
             ExtractOptions::new(10),
         ),
         (
             "brickstorm",
-            "tests/testdata/brickstorm_linux_amd64",
+            crate::common::path("tests/testdata/brickstorm_linux_amd64"),
             ExtractOptions::new(4),
         ),
     ] {

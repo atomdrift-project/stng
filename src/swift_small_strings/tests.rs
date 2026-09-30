@@ -1,8 +1,15 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cast_possible_truncation
+)]
 use super::*;
 use goblin::{Object, mach::Mach};
 use sha2::{Digest, Sha256};
-const FILE: &[u8] = include_bytes!("../../testdata/macho/swift_small_strings_webview.macho");
+static FILE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
+    crate::test_fixture("testdata/macho/swift_small_strings_webview.macho")
+});
 fn extract(bytes: &[u8], base: u64, min: usize) -> Vec<ExtractedString> {
     let Object::Mach(Mach::Binary(m)) = Object::parse(bytes).unwrap() else {
         panic!("thin Mach-O")
@@ -66,10 +73,10 @@ fn pair(text: &[u8], first: u32) -> Vec<u32> {
 #[test]
 fn original_specimen_has_exact_independently_reviewed_values_and_spans() {
     assert_eq!(
-        hex::encode(Sha256::digest(FILE)),
+        hex::encode(Sha256::digest(*FILE)),
         "e804a52fe033d7e99f4e51c5b7f70bd5101e61de1478f5c619219fea8ef8a957"
     );
-    let out = extract(FILE, 0, 4);
+    let out = extract(*FILE, 0, 4);
     for (value, start, end) in [
         ("index", 0x1ee8, 0x1ef8),
         ("html", 0x1ef8, 0x1f04),
@@ -86,14 +93,14 @@ fn original_specimen_has_exact_independently_reviewed_values_and_spans() {
         assert_eq!(found[0].method, StringMethod::Structure);
     }
     assert!(!out.iter().any(|s| s.value == "standart"));
-    let rebased = extract(FILE, 0x10000, 4);
+    let rebased = extract(*FILE, 0x10000, 4);
     assert_eq!(out.len(), rebased.len());
     for (a, b) in out.iter().zip(rebased) {
         assert_eq!(a.value, b.value);
         assert_eq!(a.data_offset + 0x10000, b.data_offset);
     }
-    assert!(extract(FILE, u64::MAX, 4).is_empty());
-    assert!(extract(FILE, 0, 16).is_empty());
+    assert!(extract(*FILE, u64::MAX, 4).is_empty());
+    assert!(extract(*FILE, 0, 16).is_empty());
 }
 #[test]
 fn canonical_lengths_and_register_edges() {
@@ -174,7 +181,7 @@ fn public_filtered_pipeline_preserves_specimen_small_strings() {
         filter_garbage: true,
         ..Default::default()
     };
-    let out = crate::extract_strings_with_options(FILE, &opts);
+    let out = crate::extract_strings_with_options(*FILE, &opts);
     for (value, start, length) in [
         ("index", 0x1ee8, 16),
         ("html", 0x1ef8, 12),

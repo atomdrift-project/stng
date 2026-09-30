@@ -15,6 +15,8 @@
 //!   2. section-relative offsets collided in the offset-only dedup, dropping
 //!      e.g. `find` (`__cstring:0`) against `__mh_execute_header` (`:0`).
 
+mod common;
+
 use stng::{ExtractOptions, extract_strings_with_options};
 
 /// Extract with the same options a downstream pipeline client uses: a plain
@@ -22,11 +24,7 @@ use stng::{ExtractOptions, extract_strings_with_options};
 /// `ExtractOptions` leaves `use_r2 == false`), so the test is hermetic and
 /// exercises the native parser only.
 fn fixture_bytes() -> Vec<u8> {
-    std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/testdata/macho/wallet_report_objc"
-    ))
-    .expect("read fixture")
+    std::fs::read(crate::common::path("testdata/macho/wallet_report_objc")).expect("read fixture")
 }
 
 fn native_strings() -> Vec<stng::ExtractedString> {
@@ -107,11 +105,8 @@ fn caller_provides_symbols_skips_typing_but_keeps_strings() {
     // When the caller owns symbol extraction (e.g. filefacts), stng must not
     // redo the structured pass — but the names must still SURVIVE as strings so
     // nothing is lost; only the typing is suppressed.
-    let data = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/testdata/macho/wallet_report_objc"
-    ))
-    .expect("read fixture");
+    let data = std::fs::read(crate::common::path("testdata/macho/wallet_report_objc"))
+        .expect("read fixture");
     let opts = ExtractOptions {
         min_length: 4,
         filter_garbage: false,
@@ -139,11 +134,8 @@ fn from_object_matches_full_parse() {
     // and hand the goblin object to stng, skipping a second parse. Guard that it
     // yields the same string set as the parse-it-yourself path, so the
     // double-parse optimisation is behaviour-preserving.
-    let data = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/testdata/macho/wallet_report_objc"
-    ))
-    .expect("read fixture");
+    let data = std::fs::read(crate::common::path("testdata/macho/wallet_report_objc"))
+        .expect("read fixture");
     let opts = ExtractOptions {
         min_length: 4,
         filter_garbage: false,

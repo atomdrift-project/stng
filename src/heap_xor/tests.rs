@@ -1,8 +1,15 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cast_possible_truncation
+)]
 use super::*;
 use goblin::{Object, mach::Mach};
 use sha2::{Digest, Sha256};
-const FILE: &[u8] = include_bytes!("../../testdata/macho/rust_heap_xor_installer_universal.macho");
+static FILE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
+    crate::test_fixture("testdata/macho/rust_heap_xor_installer_universal.macho")
+});
 const HASH: &str = "23627563d528164b23449ca26ef9a8202bafd87d2d64454165107b76a0a2987f";
 fn thin() -> &'static [u8] {
     &FILE[8192..8192 + 4143304]
@@ -31,7 +38,7 @@ fn check(value: &str) {
 #[test]
 fn original_specimen_prompt_and_provenance_match_independent_reconstruction() {
     assert_eq!(
-        hex::encode(Sha256::digest(FILE)),
+        hex::encode(Sha256::digest(*FILE)),
         "78371a85a51dee581823243272525e119ce88255e2ad75bc5980870681999970"
     );
     let (addr, bytes, start) = code();
@@ -132,7 +139,7 @@ fn public_pipeline_preserves_full_prompt_in_universal_specimen() {
         filter_garbage: true,
         ..Default::default()
     };
-    let out = crate::extract_strings_with_options(FILE, &opts);
+    let out = crate::extract_strings_with_options(*FILE, &opts);
     let s = out
         .iter()
         .find(|s| {

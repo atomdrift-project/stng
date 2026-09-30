@@ -2,12 +2,18 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod common;
+
 use stng::recover_repeating_xor_pe;
 
 /// MSVC console PE32+ (AMD64), 10 KiB.
-const PE: &[u8] = include_bytes!("testdata/pe_small/msvc_console_amd64.exe");
+static PE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
+    crate::common::bytes("tests/testdata/pe_small/msvc_console_amd64.exe").leak()
+});
 /// Unsigned .NET PE32 DLL (i386), 3 KiB.
-const DOTNET_DLL: &[u8] = include_bytes!("testdata/pe_small/dotnet_unsigned_x86.dll");
+static DOTNET_DLL: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
+    crate::common::bytes("tests/testdata/pe_small/dotnet_unsigned_x86.dll").leak()
+});
 
 fn xor(bytes: &[u8], key: &[u8]) -> Vec<u8> {
     bytes
@@ -50,12 +56,12 @@ fn hex(s: &str) -> Vec<u8> {
 fn recovers_keys_of_every_tested_length() {
     for (len, seed) in [(1, 11), (4, 12), (16, 13), (32, 14), (33, 15), (64, 16)] {
         let key = key_of_len(len, seed);
-        let enc = xor(PE, &key);
+        let enc = xor(*PE, &key);
         let found =
             recover_repeating_xor_pe(&enc).unwrap_or_else(|| panic!("len {len} not detected"));
         assert_eq!(found.bytes(), key.as_slice(), "len {len}");
         assert_eq!(found.period(), len, "len {len}");
-        assert_eq!(found.decode(&enc), PE, "len {len}");
+        assert_eq!(found.decode(&enc), *PE, "len {len}");
     }
 }
 
@@ -63,18 +69,18 @@ fn recovers_keys_of_every_tested_length() {
 #[test]
 fn recovers_the_hvnc_sample_key() {
     let key = hex("5564ee586f83b8022fcd6064d450a4c0981ffb2d8dedf7ffad4560962406e943");
-    let enc = xor(PE, &key);
+    let enc = xor(*PE, &key);
     let found = recover_repeating_xor_pe(&enc).unwrap();
     assert_eq!(found.bytes(), key.as_slice());
     assert_eq!(found.period(), 32);
-    assert_eq!(found.decode(&enc), PE);
+    assert_eq!(found.decode(&enc), *PE);
 }
 
 #[test]
 fn recovers_a_dword_key_with_zero_bytes() {
     // `0x000000ab` stored little-endian: its period-1 vote is all zero.
     let key = [0xab, 0x00, 0x00, 0x00];
-    let found = recover_repeating_xor_pe(&xor(PE, &key)).unwrap();
+    let found = recover_repeating_xor_pe(&xor(*PE, &key)).unwrap();
     assert_eq!(found.bytes(), key.as_slice());
 }
 
@@ -82,7 +88,7 @@ fn recovers_a_dword_key_with_zero_bytes() {
 fn reports_the_smallest_period() {
     // A 4-byte key repeated to 16 is the same encoding at period 4.
     let key = key_of_len(4, 21).repeat(4);
-    let found = recover_repeating_xor_pe(&xor(PE, &key)).unwrap();
+    let found = recover_repeating_xor_pe(&xor(*PE, &key)).unwrap();
     assert_eq!(found.period(), 4);
     assert_eq!(found.bytes(), &key[..4]);
 }
@@ -90,7 +96,7 @@ fn reports_the_smallest_period() {
 #[test]
 fn recovers_a_dotnet_image() {
     let key = key_of_len(8, 31);
-    let found = recover_repeating_xor_pe(&xor(DOTNET_DLL, &key)).unwrap();
+    let found = recover_repeating_xor_pe(&xor(*DOTNET_DLL, &key)).unwrap();
     assert_eq!(found.bytes(), key.as_slice());
 }
 
@@ -113,8 +119,8 @@ fn recovers_a_borland_header_through_the_reserved_zeros() {
 
 #[test]
 fn plaintext_pe_is_not_an_encoding() {
-    assert_eq!(recover_repeating_xor_pe(PE), None);
-    assert_eq!(recover_repeating_xor_pe(DOTNET_DLL), None);
+    assert_eq!(recover_repeating_xor_pe(*PE), None);
+    assert_eq!(recover_repeating_xor_pe(*DOTNET_DLL), None);
 }
 
 #[test]
@@ -143,7 +149,7 @@ fn zip_is_not_an_encoded_pe() {
 #[test]
 fn truncated_or_tiny_input_is_rejected() {
     let key = key_of_len(4, 51);
-    let enc = xor(PE, &key);
+    let enc = xor(*PE, &key);
     assert_eq!(recover_repeating_xor_pe(&enc[..0x7f]), None);
     // e_lfanew points past a truncated file.
     let lfanew = u32::from_le_bytes(PE[0x3c..0x40].try_into().unwrap());
@@ -155,8 +161,8 @@ fn truncated_or_tiny_input_is_rejected() {
 #[test]
 fn decode_round_trips() {
     let key = key_of_len(33, 61);
-    let found = recover_repeating_xor_pe(&xor(PE, &key)).unwrap();
-    assert_eq!(found.decode(&found.decode(PE)), PE);
+    let found = recover_repeating_xor_pe(&xor(*PE, &key)).unwrap();
+    assert_eq!(found.decode(&found.decode(*PE)), *PE);
     assert!(found.decode(&[]).is_empty());
 }
 
@@ -196,7 +202,7 @@ fn hostile_e_lfanew_is_rejected() {
 fn recovers_odd_periods() {
     for (len, seed) in [(3, 81), (7, 82), (13, 83), (63, 84)] {
         let key = key_of_len(len, seed);
-        let found = recover_repeating_xor_pe(&xor(DOTNET_DLL, &key)).unwrap();
+        let found = recover_repeating_xor_pe(&xor(*DOTNET_DLL, &key)).unwrap();
         assert_eq!(found.bytes(), key.as_slice(), "len {len}");
     }
 }
@@ -206,7 +212,7 @@ fn recovers_odd_periods() {
 #[test]
 fn xor_scan_surfaces_the_key() {
     let key = hex("5564ee586f83b8022fcd6064d450a4c0981ffb2d8dedf7ffad4560962406e943");
-    let enc = xor(PE, &key);
+    let enc = xor(*PE, &key);
     let opts = stng::ExtractOptions::new(4).with_xor(None);
     let strings = stng::extract_strings_with_options(&enc, &opts);
     let found: Vec<_> = strings
@@ -336,7 +342,7 @@ fn lazy_recovery_matches_the_reference() {
     let mut accepted = 0;
     for seed in 1..=3000u64 {
         let r = noise(seed, 8);
-        let base = if r[0] & 1 == 0 { PE } else { DOTNET_DLL };
+        let base = if r[0] & 1 == 0 { *PE } else { *DOTNET_DLL };
         let len = 1 + usize::from(r[1]) % 64;
         // Low-entropy keys make ties and zero bytes common.
         let key: Vec<u8> = noise(seed ^ 0x55, len).iter().map(|k| k & r[2]).collect();

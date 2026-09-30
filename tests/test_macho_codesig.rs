@@ -6,6 +6,8 @@
 //! - Code signature hashes (CD hashes) in __LINKEDIT section
 //! - Application identifiers and individual entitlement keys
 
+mod common;
+
 use std::fs;
 use std::path::Path;
 use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
@@ -93,7 +95,7 @@ fn test_codesig_base64_categorization() {
 
 #[test]
 fn test_entitlements_extraction_brew_agent() {
-    let sample_path = "testdata/malware/brew_agent";
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     if !Path::new(sample_path).exists() {
         eprintln!("Skipping test: {} not found", sample_path);
@@ -435,7 +437,7 @@ fn test_no_entitlements_in_clean_binaries() {
 
 #[test]
 fn test_entitlements_offset_accuracy() {
-    let sample_path = "testdata/malware/brew_agent";
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     if !Path::new(sample_path).exists() {
         eprintln!("Skipping test: {} not found", sample_path);

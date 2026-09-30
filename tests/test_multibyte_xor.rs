@@ -1,4 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod common;
+
 /// Tests for multi-byte XOR string extraction
 ///
 /// This tests the pattern-free brute-force scanning approach for multi-byte XOR,
@@ -93,7 +95,7 @@ fn test_multibyte_xor_with_newlines() {
 #[test]
 fn test_multibyte_xor_real_malware() {
     // Test against real malware sample (DPRK brew_agent)
-    let sample_path = "testdata/xor/brew_agent_xor_sample";
+    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
 
     // Skip if sample doesn't exist (e.g., in CI)
     if !std::path::Path::new(sample_path).exists() {

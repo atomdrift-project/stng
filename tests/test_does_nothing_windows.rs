@@ -19,21 +19,22 @@
 //! doesn't currently reach the library-level classifier in a way this test can
 //! observe, so it's covered here via the CLI integration test.
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
-const SAMPLE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/testdata/does-nothing-windows-amd64.exe"
-);
+static SAMPLE_PATH: std::sync::LazyLock<&str> = std::sync::LazyLock::new(|| {
+    crate::common::path("tests/testdata/does-nothing-windows-amd64.exe")
+});
 
 fn load_sample() -> Option<Vec<u8>> {
-    if !Path::new(SAMPLE_PATH).exists() {
-        eprintln!("Skipping - sample not found at {SAMPLE_PATH}");
+    if !Path::new(*SAMPLE_PATH).exists() {
+        eprintln!("Skipping - sample not found at {}", *SAMPLE_PATH);
         return None;
     }
-    Some(std::fs::read(SAMPLE_PATH).expect("Failed to read does-nothing-windows-amd64.exe"))
+    Some(std::fs::read(*SAMPLE_PATH).expect("Failed to read does-nothing-windows-amd64.exe"))
 }
 
 fn r2_available() -> bool {
@@ -127,7 +128,7 @@ fn test_no_email_false_positives_from_go_module_paths() {
 
 #[test]
 fn test_no_hex_false_positive_from_runtime_poison_pattern_via_cli() {
-    if !Path::new(SAMPLE_PATH).exists() {
+    if !Path::new(*SAMPLE_PATH).exists() {
         return;
     }
     if !r2_available() {
@@ -140,7 +141,7 @@ fn test_no_hex_false_positive_from_runtime_poison_pattern_via_cli() {
     // JSON output.
     let output = Command::new(env!("CARGO_BIN_EXE_stng"))
         .arg("--json")
-        .arg(SAMPLE_PATH)
+        .arg(*SAMPLE_PATH)
         .output()
         .expect("Failed to run stng CLI");
     assert!(

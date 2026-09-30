@@ -1,5 +1,6 @@
 //! Bounded register-only folding for ARM64 pointer-derived XOR keys.
 //! The caller must first validate the literal setup and complete decoding loop.
+#![allow(clippy::cast_possible_truncation)]
 use super::Region;
 use crate::arm64_effects as effects;
 mod functions;
@@ -30,7 +31,7 @@ fn shifted(value: u32, kind: u32, amount: u32) -> u32 {
     match kind {
         0 => value.wrapping_shl(amount),
         1 => value.wrapping_shr(amount),
-        2 => ((value as i32) >> amount) as u32,
+        2 => ((value as i32) >> amount).cast_unsigned(),
         _ => value.rotate_right(amount),
     }
 }
@@ -178,7 +179,7 @@ pub(super) fn fold(code: &Region<'_>, start: u64, base: u64, seed: u32) -> Optio
                 return None;
             }
             match (inst >> 29) & 3 {
-                0 if s == 31 => ((source()? as i32) >> r) as u32,
+                0 if s == 31 => ((source()? as i32) >> r).cast_unsigned(),
                 2 if s == 31 => source()? >> r,
                 1 => {
                     let mask = u32::MAX >> (31 - (s - r));
@@ -389,7 +390,8 @@ pub(super) fn extract(
     }
     for setup in setups(code) {
         if let Some(value) = immediate::extract(code, constants, &setup, slice_base, min)
-            .or_else(|| short_tail::extract(code, constants, &setup, slice_base, min)) {
+            .or_else(|| short_tail::extract(code, constants, &setup, slice_base, min))
+        {
             out.push(value);
             continue;
         }
@@ -437,7 +439,7 @@ pub(super) fn extract(
             kind: crate::classify_string(&value),
             value,
             data_offset: offset,
-            data_len: literal.length as u32,
+            data_len: u32::try_from(literal.length).unwrap_or(u32::MAX),
             method: crate::StringMethod::XorDecode,
             ..Default::default()
         });

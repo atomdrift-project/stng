@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration tests for stng library.
 
+mod common;
+
 use stng::{
     ExtractOptions, ExtractedString, StringKind, StringMethod, detect_language, extract_strings,
     extract_strings_with_options, is_garbage, is_go_binary, is_rust_binary,
@@ -957,10 +959,7 @@ mod cross_compiled_tests {
     use std::path::Path;
 
     fn get_go_elf_binary() -> Option<Vec<u8>> {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/testdata/hello_linux_amd64"
-        );
+        let path = crate::common::path("tests/testdata/hello_linux_amd64");
         if Path::new(path).exists() {
             std::fs::read(path).ok()
         } else {
@@ -969,10 +968,7 @@ mod cross_compiled_tests {
     }
 
     fn get_go_pe_binary() -> Option<Vec<u8>> {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/testdata/hello_windows.exe"
-        );
+        let path = crate::common::path("tests/testdata/hello_windows.exe");
         if Path::new(path).exists() {
             std::fs::read(path).ok()
         } else {
@@ -1276,10 +1272,7 @@ mod api_tests {
 
     #[test]
     fn test_extract_from_elf_object() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/testdata/hello_linux_amd64"
-        );
+        let path = crate::common::path("tests/testdata/hello_linux_amd64");
         if !std::path::Path::new(path).exists() {
             return;
         }
@@ -1293,10 +1286,7 @@ mod api_tests {
 
     #[test]
     fn test_extract_from_pe_object() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/testdata/hello_windows.exe"
-        );
+        let path = crate::common::path("tests/testdata/hello_windows.exe");
         if !std::path::Path::new(path).exists() {
             return;
         }
@@ -1543,7 +1533,7 @@ mod wide_string_tests {
     #[test]
     fn test_pe_with_embedded_wide_strings() {
         // Use the real Windows binary which is a valid PE
-        let path = std::path::Path::new("tests/testdata/hello_windows.exe");
+        let path = std::path::Path::new(crate::common::path("tests/testdata/hello_windows.exe"));
         if !path.exists() {
             return; // Skip if test data not available
         }
@@ -1585,7 +1575,7 @@ mod wide_string_tests {
     #[test]
     fn test_real_windows_binary_wide_strings() {
         // Test with the real Windows Go binary in testdata
-        let path = std::path::Path::new("tests/testdata/hello_windows.exe");
+        let path = std::path::Path::new(crate::common::path("tests/testdata/hello_windows.exe"));
         if !path.exists() {
             return; // Skip if test data not available
         }
@@ -1671,7 +1661,7 @@ mod wide_string_tests {
     #[test]
     fn test_wide_string_min_length() {
         // Test min_length filtering with the real Windows binary
-        let path = std::path::Path::new("tests/testdata/hello_windows.exe");
+        let path = std::path::Path::new(crate::common::path("tests/testdata/hello_windows.exe"));
         if !path.exists() {
             return;
         }
@@ -2261,7 +2251,7 @@ mod testdata_binary_tests {
 
     #[test]
     fn test_linux_elf_imports() {
-        let path = Path::new("tests/testdata/hello_linux_amd64");
+        let path = Path::new(crate::common::path("tests/testdata/hello_linux_amd64"));
         if !path.exists() {
             return;
         }
@@ -2283,7 +2273,7 @@ mod testdata_binary_tests {
 
     #[test]
     fn test_windows_pe_extraction() {
-        let path = Path::new("tests/testdata/hello_windows.exe");
+        let path = Path::new(crate::common::path("tests/testdata/hello_windows.exe"));
         if !path.exists() {
             return;
         }
@@ -2305,7 +2295,7 @@ mod testdata_binary_tests {
 
     #[test]
     fn test_linux_elf_with_min_length() {
-        let path = Path::new("tests/testdata/hello_linux_amd64");
+        let path = Path::new(crate::common::path("tests/testdata/hello_linux_amd64"));
         if !path.exists() {
             return;
         }
@@ -2333,7 +2323,7 @@ mod testdata_binary_tests {
     fn test_brickstorm_xor_pair_extraction() {
         use stng::StringMethod;
 
-        let path = Path::new("tests/testdata/brickstorm_linux_amd64");
+        let path = Path::new(crate::common::path("tests/testdata/brickstorm_linux_amd64"));
         if !path.exists() {
             return;
         }
@@ -3177,7 +3167,7 @@ mod sockaddr_extraction_tests {
     #[test]
     fn test_kimwolf_installer_ip_extraction() {
         // Test IP extraction from ARM32 sockaddr_in structures
-        let path = "testdata/malware/kimwolf_installer";
+        let path = crate::common::path("testdata/malware/kimwolf_installer");
         let data = fs::read(path).expect("Failed to read kimwolf_installer test sample");
 
         let opts = ExtractOptions::new(4)
@@ -3226,7 +3216,7 @@ mod sockaddr_extraction_tests {
     #[test]
     fn test_kimwolf_installer_string_deduplication() {
         // Test that overlapping strings at same offset only keep the longest
-        let path = "testdata/malware/kimwolf_installer";
+        let path = crate::common::path("testdata/malware/kimwolf_installer");
         let data = fs::read(path).expect("Failed to read kimwolf_installer test sample");
 
         let opts = ExtractOptions::new(4)
@@ -3295,7 +3285,7 @@ mod string_deduplication_tests {
     #[test]
     fn test_kimwolf_installer_section_names() {
         // Test that we extract all section names that GNU strings finds
-        let path = "testdata/malware/kimwolf_installer";
+        let path = crate::common::path("testdata/malware/kimwolf_installer");
         let data = fs::read(path).expect("Failed to read kimwolf_installer test sample");
 
         let opts = ExtractOptions::new(4);
@@ -3349,7 +3339,7 @@ mod string_deduplication_tests {
 /// payload to reach a rule.
 #[test]
 fn npm_charcode_rot_packer_exposes_aes_staging() {
-    let src = include_bytes!("fixtures/npm-charcode-rot-packer.js");
+    let src = crate::common::bytes("tests/fixtures/npm-charcode-rot-packer.js").leak();
     let results = stng::script::deobfuscate_script(src);
     let decoded: String = results.iter().map(|r| r.decoded.as_str()).collect();
 

@@ -14,7 +14,7 @@
 //! stripped (`-s -w -trimpath`) the way that implant was, for darwin/amd64,
 //! darwin/arm64 and linux/amd64. `src/` holds the source and the build line.
 
-use std::path::Path;
+mod common;
 
 use stng::{ExtractedString, StringMethod, extract_strings};
 
@@ -27,10 +27,7 @@ const FUNCTIONS: [&str; 3] = [
 ];
 
 fn fixture(name: &str) -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/testdata/go_pclntab")
-        .join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    crate::common::bytes(&format!("tests/testdata/go_pclntab/{name}"))
 }
 
 /// Every copy of `value` stng reported, as pclntab symbols.

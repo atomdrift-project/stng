@@ -1,10 +1,16 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cast_possible_truncation
+)]
 use super::*;
 use goblin::{Object, mach::Mach};
-const FILE: &[u8] =
-    include_bytes!("../../../testdata/macho/rust_heap_xor_installer_universal.macho");
+static FILE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
+    crate::test_fixture("testdata/macho/rust_heap_xor_installer_universal.macho")
+});
 fn code() -> (Code<'static>, u64, u64) {
-    let Object::Mach(Mach::Fat(fat)) = Object::parse(FILE).unwrap() else {
+    let Object::Mach(Mach::Fat(fat)) = Object::parse(*FILE).unwrap() else {
         panic!("fat")
     };
     let arch = fat
@@ -182,7 +188,7 @@ fn allocation_prefix_attempt_budget_includes_invalid_candidates() {
 }
 #[test]
 fn public_arm_only_pipeline_recovers_prompt_and_benign_control_stays_clean() {
-    let Object::Mach(Mach::Fat(fat)) = Object::parse(FILE).unwrap() else {
+    let Object::Mach(Mach::Fat(fat)) = Object::parse(*FILE).unwrap() else {
         panic!("fat")
     };
     let arch = fat
@@ -203,7 +209,7 @@ fn public_arm_only_pipeline_recovers_prompt_and_benign_control_stays_clean() {
         .find(|s| s.value == PROMPT && s.method == crate::StringMethod::XorDecode)
         .unwrap();
     assert_eq!((found.data_offset, found.data_len), (0x28fa0, 1468));
-    let benign = include_bytes!("../../../testdata/macho/swift_small_strings_webview.macho");
+    let benign = crate::test_fixture("testdata/macho/swift_small_strings_webview.macho");
     let Object::Mach(Mach::Binary(m)) = Object::parse(benign).unwrap() else {
         panic!("benign")
     };

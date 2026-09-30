@@ -1,10 +1,16 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cast_possible_truncation
+)]
 use super::*;
 use goblin::{Object, mach::Mach};
-const FILE: &[u8] =
-    include_bytes!("../../../testdata/macho/rust_heap_xor_installer_universal.macho");
+static FILE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
+    crate::test_fixture("testdata/macho/rust_heap_xor_installer_universal.macho")
+});
 pub(super) fn code() -> Region<'static> {
-    let Object::Mach(Mach::Fat(fat)) = Object::parse(FILE).unwrap() else {
+    let Object::Mach(Mach::Fat(fat)) = Object::parse(*FILE).unwrap() else {
         panic!("fat")
     };
     for arch in fat.iter_arches() {
@@ -529,7 +535,7 @@ fn all_298_complete_id_loops_match_independent_cipher_reads_and_lengths() {
 }
 
 fn constant_bytes(addr: u64, len: usize) -> Vec<u8> {
-    let Object::Mach(Mach::Fat(fat)) = Object::parse(FILE).unwrap() else {
+    let Object::Mach(Mach::Fat(fat)) = Object::parse(*FILE).unwrap() else {
         panic!("fat")
     };
     for arch in fat.iter_arches() {
@@ -731,7 +737,7 @@ fn loops_fail_closed_on_truncation_alignment_and_address_overflow() {
 }
 
 pub(super) fn arm_slice() -> (&'static [u8], u64) {
-    let Object::Mach(Mach::Fat(fat)) = Object::parse(FILE).unwrap() else {
+    let Object::Mach(Mach::Fat(fat)) = Object::parse(*FILE).unwrap() else {
         panic!("fat")
     };
     let arch = fat
@@ -840,7 +846,7 @@ fn public_pipeline_recovers_297_arm_ids_without_an_x86_slice() {
 }
 #[test]
 fn benign_swift_webview_has_no_pointer_xor_matches() {
-    let bytes = include_bytes!("../../../testdata/macho/swift_small_strings_webview.macho");
+    let bytes = crate::test_fixture("testdata/macho/swift_small_strings_webview.macho");
     let Object::Mach(Mach::Binary(m)) = Object::parse(bytes).unwrap() else {
         panic!("thin benign")
     };

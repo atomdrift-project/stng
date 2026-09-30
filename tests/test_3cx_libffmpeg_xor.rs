@@ -9,6 +9,8 @@
 //!
 //! This sample is the x86_64 slice of the fat binary, which carries the config.
 
+mod common;
+
 use stng::{ExtractOptions, StringMethod};
 
 /// The ten fake-CDN C2 domains embedded in the macOS 3CX config block.
@@ -27,7 +29,7 @@ const C2_DOMAINS: &[&str] = &[
 
 #[test]
 fn test_3cx_libffmpeg_xor_config() {
-    let sample_path = "testdata/xor/libffmpeg_3cx_x64_xor";
+    let sample_path = crate::common::path("testdata/xor/libffmpeg_3cx_x64_xor");
 
     // Skip if sample doesn't exist (large real-world binary may be omitted).
     if !std::path::Path::new(sample_path).exists() {

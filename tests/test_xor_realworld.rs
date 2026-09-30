@@ -1,11 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod common;
+
 /// Real-world test for multi-byte XOR extraction using actual malware sample
 use stng::{ExtractOptions, StringMethod};
 
 #[test]
 fn test_xor_brew_agent_malware() {
     // Test against real DPRK malware sample
-    let sample_path = "testdata/xor/brew_agent_xor_sample";
+    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
 
     // Skip if sample doesn't exist
     if !std::path::Path::new(sample_path).exists() {
@@ -81,7 +83,7 @@ fn test_xor_brew_agent_malware() {
 #[test]
 fn test_xor_display_multiline() {
     // Verify that multi-line XOR strings are properly decoded
-    let sample_path = "testdata/xor/brew_agent_xor_sample";
+    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
 
     if !std::path::Path::new(sample_path).exists() {
         return;
@@ -122,7 +124,7 @@ fn test_xor_display_multiline() {
 #[test]
 fn test_xor_url_extraction() {
     // Test that we correctly extract URLs, specifically http://46.30.191.141
-    let sample_path = "testdata/xor/brew_agent_xor_sample";
+    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
 
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - malware sample not found");
@@ -169,7 +171,7 @@ fn test_xor_url_extraction() {
 #[test]
 fn test_xor_shell_commands() {
     // Test that we extract shell commands correctly with natural endpoints
-    let sample_path = "testdata/xor/brew_agent_xor_sample";
+    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
 
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - malware sample not found");
@@ -236,7 +238,7 @@ fn test_xor_shell_commands() {
 #[test]
 fn test_xor_application_paths() {
     // Test that we extract application and wallet paths correctly
-    let sample_path = "testdata/xor/brew_agent_xor_sample";
+    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
 
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - malware sample not found");
@@ -291,7 +293,7 @@ fn test_xor_application_paths() {
 #[test]
 fn test_xor_file_extensions() {
     // Test that we correctly extract strings ending with file extensions
-    let sample_path = "testdata/xor/brew_agent_xor_sample";
+    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
 
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - malware sample not found");
@@ -328,7 +330,7 @@ fn test_xor_file_extensions() {
 #[test]
 fn test_xor_crypto_wallets() {
     // Test that we extract cryptocurrency wallet paths
-    let sample_path = "testdata/xor/brew_agent_xor_sample";
+    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
 
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - malware sample not found");
@@ -389,7 +391,7 @@ fn test_xor_crypto_wallets() {
 fn test_xor_brew_agent_malware_full_sample() {
     // Test against full brew_agent binary with explicit key
     // Validates comprehensive extraction of critical malware indicators
-    let sample_path = "testdata/malware/brew_agent";
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - malware sample not found at {}", sample_path);
@@ -461,7 +463,7 @@ fn test_xor_brew_agent_malware_full_sample() {
 #[test]
 fn test_xor_brew_agent_extraction_comparison() {
     // Verify extraction quality with and without garbage filtering
-    let sample_path = "testdata/malware/brew_agent";
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - malware sample not found");
@@ -546,7 +548,7 @@ fn test_xor_brew_agent_extraction_comparison() {
 fn test_xor_brew_agent_auto_detection() {
     // Test automatic XOR key detection WITHOUT providing the key explicitly
     // This validates that auto-detection works (or documents why it doesn't)
-    let sample_path = "testdata/malware/brew_agent";
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     if !std::path::Path::new(sample_path).exists() {
         eprintln!("Skipping - malware sample not found");

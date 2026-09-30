@@ -9,6 +9,9 @@
 //! Profile ARM64:  cargo bench --bench extract -- "dynamichub_arm64_stack_xor"
 //! With flamegraph: cargo flamegraph --bench extract -- --bench "go_garble_3mb"
 
+#[path = "../tests/common/mod.rs"]
+mod common;
+
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use std::time::Duration;
 use stng::ExtractOptions;
@@ -28,28 +31,40 @@ fn bench_extract(c: &mut Criterion) {
     g.measurement_time(Duration::from_secs(15));
 
     let samples: &[(&str, &str)] = &[
-        ("go_garble_3mb", "testdata/garble/garble_linux_amd64_1"),
-        ("go_poolrat_2.7mb", "testdata/malware/poolrat"),
+        (
+            "go_garble_3mb",
+            crate::common::path("testdata/garble/garble_linux_amd64_1"),
+        ),
+        (
+            "go_poolrat_2.7mb",
+            crate::common::path("testdata/malware/poolrat"),
+        ),
         (
             "pe_wizardnet_1.2mb",
-            "testdata/malware/wizardnet_downloader.dll",
+            crate::common::path("testdata/malware/wizardnet_downloader.dll"),
         ),
-        ("go_vget_1.7mb", "testdata/malware/vget_sample"),
+        (
+            "go_vget_1.7mb",
+            crate::common::path("testdata/malware/vget_sample"),
+        ),
         (
             "dynamichub_arm64_stack_xor",
-            "testdata/malware/dynamichub/DynamicHub",
+            crate::common::path("testdata/malware/dynamichub/DynamicHub"),
         ),
-        ("elf_stealer_8.5mb", "testdata/malware/sample-stealer"),
+        (
+            "elf_stealer_8.5mb",
+            crate::common::path("testdata/malware/sample-stealer"),
+        ),
         (
             "script_kworker_23kb",
-            "testdata/kworker_samples/kworker_obfuscated_1",
+            crate::common::path("testdata/kworker_samples/kworker_obfuscated_1"),
         ),
         // Stripped Go PE — exercises the pkgnamestab varint scanner,
         // null-separated funcnametab scanner, and stack-string extractor
         // added for the ZyraPrivateVPN tun2socks payload recovery.
         (
             "go_pe_zyravpn_8.4mb",
-            "testdata/malware/zyravpn_tun2socks.exe",
+            crate::common::path("testdata/malware/zyravpn_tun2socks.exe"),
         ),
     ];
 
@@ -76,9 +91,18 @@ fn bench_extract_filtered(c: &mut Criterion) {
     g.measurement_time(Duration::from_secs(15));
 
     let samples: &[(&str, &str)] = &[
-        ("go_garble_3mb", "testdata/garble/garble_linux_amd64_1"),
-        ("go_poolrat_2.7mb", "testdata/malware/poolrat"),
-        ("elf_stealer_8.5mb", "testdata/malware/sample-stealer"),
+        (
+            "go_garble_3mb",
+            crate::common::path("testdata/garble/garble_linux_amd64_1"),
+        ),
+        (
+            "go_poolrat_2.7mb",
+            crate::common::path("testdata/malware/poolrat"),
+        ),
+        (
+            "elf_stealer_8.5mb",
+            crate::common::path("testdata/malware/sample-stealer"),
+        ),
     ];
 
     for (name, path) in samples {
@@ -111,8 +135,14 @@ fn bench_extract_xor(c: &mut Criterion) {
     g.measurement_time(Duration::from_secs(20));
 
     let samples: &[(&str, &str)] = &[
-        ("xor_brew_agent_363kb", "testdata/xor/brew_agent_xor_sample"),
-        ("brew_agent_363kb", "testdata/malware/brew_agent"),
+        (
+            "xor_brew_agent_363kb",
+            crate::common::path("testdata/xor/brew_agent_xor_sample"),
+        ),
+        (
+            "brew_agent_363kb",
+            crate::common::path("testdata/malware/brew_agent"),
+        ),
     ];
 
     for (name, path) in samples {
@@ -140,7 +170,7 @@ fn bench_validation(c: &mut Criterion) {
     let mut g = c.benchmark_group("validation");
 
     // Extract strings from a sample first, then benchmark is_garbage on them
-    let Some(data) = load("testdata/malware/poolrat") else {
+    let Some(data) = load(crate::common::path("testdata/malware/poolrat")) else {
         return;
     };
     let strings = stng::extract_strings(&data, 4);

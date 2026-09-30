@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for language and file type detection (detect.rs, binary.rs detection functions).
 
+mod common;
+
 use std::path::Path;
 use stng::script::detect::{ScriptLanguage, detect_script_language};
 use stng::{detect_language, is_go_binary, is_rust_binary, is_text_file};
@@ -193,10 +195,7 @@ fn test_is_rust_binary_false_for_text() {
 
 #[test]
 fn test_detect_language_with_real_go_binary() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/testdata/hello_linux_amd64"
-    );
+    let path = crate::common::path("tests/testdata/hello_linux_amd64");
     if !Path::new(path).exists() {
         return; // Skip if fixture not available
     }
@@ -210,10 +209,7 @@ fn test_detect_language_with_real_go_binary() {
 
 #[test]
 fn test_is_go_binary_true_for_real_go_binary() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/testdata/hello_linux_amd64"
-    );
+    let path = crate::common::path("tests/testdata/hello_linux_amd64");
     if !Path::new(path).exists() {
         return;
     }
@@ -226,10 +222,7 @@ fn test_is_go_binary_true_for_real_go_binary() {
 
 #[test]
 fn test_is_rust_binary_false_for_go_binary() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/testdata/hello_linux_amd64"
-    );
+    let path = crate::common::path("tests/testdata/hello_linux_amd64");
     if !Path::new(path).exists() {
         return;
     }

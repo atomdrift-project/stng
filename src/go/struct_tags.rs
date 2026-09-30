@@ -50,8 +50,8 @@ pub(super) fn extract(macho: &MachO<'_>, min_length: usize) -> Vec<ExtractedStri
     let mut remaining_fields = 65536usize;
     let mut remaining_bytes = 1024 * 1024usize;
     let mut out = Vec::new();
-    for link in links.chunks_exact(4) {
-        let relative = i32::from_le_bytes([link[0], link[1], link[2], link[3]]);
+    for link in links.as_chunks::<4>().0 {
+        let relative = i32::from_le_bytes(*link);
         let Ok(mut ty) = usize::try_from(relative) else {
             continue;
         };
@@ -84,8 +84,9 @@ pub(super) fn extract(macho: &MachO<'_>, min_length: usize) -> Vec<ExtractedStri
             continue;
         };
         remaining_fields -= count;
-        for field in fields.chunks_exact(24) {
-            let va = u64::from_le_bytes(field[..8].try_into().unwrap());
+        for field in fields.as_chunks::<24>().0 {
+            let (qwords, _) = field.as_chunks::<8>();
+            let va = u64::from_le_bytes(qwords[0]);
             let Some(name) = offset(va) else {
                 continue;
             };
@@ -118,11 +119,14 @@ pub(super) fn extract(macho: &MachO<'_>, min_length: usize) -> Vec<ExtractedStri
             let Some(data_offset) = base.checked_add(tag as u64) else {
                 continue;
             };
+            let Ok(data_len) = u32::try_from(len) else {
+                continue;
+            };
             remaining_bytes -= len;
             out.push(ExtractedString {
                 value: value.to_owned(),
                 data_offset,
-                data_len: len as u32,
+                data_len,
                 method: StringMethod::Structure,
                 ..Default::default()
             });

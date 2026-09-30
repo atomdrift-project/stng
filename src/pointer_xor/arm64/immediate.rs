@@ -9,10 +9,10 @@ fn read(code: &Region<'_>, constants: &[Region<'_>], start: u64) -> Option<[u8; 
         &[0xd2800008, 0xd280000c, 0x52800029, 0xd65f03c0],
     )?;
     let mut cipher = 0u64;
-    for i in 0..4 {
-        let w = word(code, start + 4 + i * 4)?;
+    for i in 0u32..4 {
+        let w = word(code, start + 4 + u64::from(i) * 4)?;
         let opcode = if i == 0 { 0xd280000a } else { 0xf280000a };
-        if w & 0xffe0001f != opcode | ((i as u32) << 21) {
+        if w & 0xffe0001f != opcode | (i << 21) {
             return None;
         }
         cipher |= u64::from((w >> 5) & 0xffff) << (i * 16);

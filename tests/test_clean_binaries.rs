@@ -4,6 +4,8 @@
 //! These tests verify that legitimate binaries without obfuscation don't trigger
 //! false positive detections for XOR, base85, URL encoding, etc.
 
+mod common;
+
 use std::fs;
 use std::path::Path;
 use stng::{ExtractOptions, StringKind, extract_strings_with_options};
@@ -174,7 +176,7 @@ fn test_bin_cat_clean() {
 /// File paths like "library/alloc/src/raw_vec/mod.rs" are not base85 encoded.
 #[test]
 fn test_vget_sample_no_base85() {
-    let sample_path = "testdata/malware/vget_sample";
+    let sample_path = crate::common::path("testdata/malware/vget_sample");
 
     if !Path::new(sample_path).exists() {
         eprintln!("Skipping test: {} not found", sample_path);

@@ -1,10 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
 use goblin::{Object, mach::Mach};
-const SAMPLE: &[u8] =
-    include_bytes!("../../testdata/macho/rust_heap_xor_installer_universal.macho");
+static SAMPLE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
+    crate::test_fixture("testdata/macho/rust_heap_xor_installer_universal.macho")
+});
 fn arm() -> (&'static [u8], u64) {
-    let Object::Mach(Mach::Fat(fat)) = Object::parse(SAMPLE).unwrap() else {
+    let Object::Mach(Mach::Fat(fat)) = Object::parse(*SAMPLE).unwrap() else {
         panic!("fat")
     };
     let arch = fat

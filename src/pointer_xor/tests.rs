@@ -1,7 +1,14 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::cast_possible_truncation
+)]
 use super::*;
 use goblin::{Object, mach::Mach};
-const FILE: &[u8] = include_bytes!("../../testdata/macho/rust_heap_xor_installer_universal.macho");
+static FILE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
+    crate::test_fixture("testdata/macho/rust_heap_xor_installer_universal.macho")
+});
 fn thin() -> &'static [u8] {
     &FILE[8192..8192 + 4143304]
 }
@@ -151,7 +158,7 @@ fn helper_grammar_rejects_memory_unknown_calls_truncation_and_work_overflow() {
         vec![0x48, 0x8b, 0x07],
         vec![0xe8, 0, 0, 0, 0],
         vec![0x0f, 0x0b],
-        vec![0x48, 0x89, 0xf8].repeat(25),
+        [0x48, 0x89, 0xf8].repeat(25),
     ] {
         let mut b = prefix.to_vec();
         b.extend(middle);

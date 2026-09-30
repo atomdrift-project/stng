@@ -1,9 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod common;
+
 use stng::{ExtractOptions, StringKind};
 
 #[test]
 fn test_kworker_character_assembly_detection() {
-    let sample_path = "testdata/kworker_samples/kworker_obfuscated_1";
+    let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
     if !std::path::Path::new(sample_path).exists() {
         eprintln!(
             "Skipping - kworker malware sample not found at {}",
@@ -127,7 +129,7 @@ fn test_kworker_character_assembly_detection() {
 
 #[test]
 fn test_kworker_missing_strings_utf16_url() {
-    let sample_path = "testdata/kworker_samples/kworker_obfuscated_1";
+    let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
     if !std::path::Path::new(sample_path).exists() {
         eprintln!(
             "Skipping - kworker malware sample not found at {}",
@@ -161,7 +163,7 @@ fn test_kworker_missing_strings_utf16_url() {
 
 #[test]
 fn test_kworker_missing_persistence_strings() {
-    let sample_path = "testdata/kworker_samples/kworker_obfuscated_1";
+    let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
     if !std::path::Path::new(sample_path).exists() {
         eprintln!(
             "Skipping - kworker malware sample not found at {}",
@@ -205,7 +207,7 @@ fn test_kworker_missing_persistence_strings() {
 
 #[test]
 fn test_kworker_stack_string_assembly_patterns() {
-    let sample_path = "testdata/kworker_samples/kworker_obfuscated_1";
+    let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
     if !std::path::Path::new(sample_path).exists() {
         eprintln!(
             "Skipping - kworker malware sample not found at {}",
@@ -262,7 +264,7 @@ fn test_kworker_stack_string_assembly_patterns() {
 
 #[test]
 fn test_kworker_utf16_url_content() {
-    let sample_path = "testdata/kworker_samples/kworker_obfuscated_1";
+    let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
     if !std::path::Path::new(sample_path).exists() {
         eprintln!(
             "Skipping - kworker malware sample not found at {}",
