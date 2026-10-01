@@ -114,6 +114,21 @@ fn test_cli_json_output() {
 }
 
 #[test]
+fn test_cli_decodes_vbscript_encoder_in_binary_classified_asp() {
+    let sample = common::path("testdata/script/vbscript-encoded-malformed-asp.asp");
+    let output = stng_cmd()
+        .args(["--json", "--no-r2", "--no-xor"])
+        .arg(sample)
+        .output()
+        .expect("Failed to execute stng");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("ScriptDecode"));
+    assert!(stdout.contains("wscript.shell"));
+}
+
+#[test]
 fn test_cli_simple_output() {
     let binary_path = if Path::new("/bin/ls").exists() {
         "/bin/ls".to_string()

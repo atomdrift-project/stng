@@ -1107,14 +1107,14 @@ fn decode_mov_imm32(text_data: &[u8], p: usize) -> Option<(u8, u64)> {
             u64::from(u32::from_le_bytes(imm.try_into().ok()?)),
         ));
     }
-    // MOV r64, imm32 (sign-extended): (48|4C) C7 C0+r.
-    if (first == 0x48 || first == 0x4C) && *text_data.get(p + 1)? == 0xC7 {
+    // MOV r64, imm32 (sign-extended): REX.W C7 /0 with ModRM.mod = 11. The
+    // destination is ModRM.rm, so REX.B (bit 0) selects r8–r15.
+    if first & 0xF8 == 0x48 && *text_data.get(p + 1)? == 0xC7 {
         let modrm = *text_data.get(p + 2)?;
         if (0xC0..=0xC7).contains(&modrm) {
             let imm = text_data.get(p + 3..p + 7)?;
-            let reg_hi: u8 = if first == 0x4C { 0x08 } else { 0x00 };
             return Some((
-                (modrm - 0xC0) | reg_hi,
+                (modrm - 0xC0) | (first & 1) << 3,
                 u64::from(u32::from_le_bytes(imm.try_into().ok()?)),
             ));
         }
@@ -1246,6 +1246,33 @@ pub(crate) fn is_valid_utf8_string(s: &str) -> bool {
         .count();
 
     (printable as f64 / s.chars().count() as f64) > 0.5
+}
+
+#[cfg(test)]
+mod mov_imm32_tests {
+    use super::decode_mov_imm32;
+
+    #[test]
+    fn rex_b_selects_the_high_registers() {
+        // mov eax, 5 ; mov r9d, 5
+        assert_eq!(decode_mov_imm32(&[0xB8, 5, 0, 0, 0], 0), Some((0, 5)));
+        assert_eq!(decode_mov_imm32(&[0x41, 0xB9, 5, 0, 0, 0], 0), Some((9, 5)));
+        // mov rax, 5 ; mov r8, 5 ; REX.R is not part of the destination.
+        assert_eq!(
+            decode_mov_imm32(&[0x48, 0xC7, 0xC0, 5, 0, 0, 0], 0),
+            Some((0, 5))
+        );
+        assert_eq!(
+            decode_mov_imm32(&[0x49, 0xC7, 0xC0, 5, 0, 0, 0], 0),
+            Some((8, 5))
+        );
+        assert_eq!(
+            decode_mov_imm32(&[0x4C, 0xC7, 0xC0, 5, 0, 0, 0], 0),
+            Some((0, 5))
+        );
+        // mov [rax], 5 (ModRM.mod != 11) is not a register load.
+        assert_eq!(decode_mov_imm32(&[0x48, 0xC7, 0x00, 5, 0, 0, 0], 0), None);
+    }
 }
 
 #[cfg(test)]

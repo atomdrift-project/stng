@@ -20,6 +20,37 @@ pub fn code_ranges_from_sections(sections: &[SectionInfo]) -> Vec<(usize, usize)
     ranges
 }
 
+/// `data[offset..offset + size]` when that range lies wholly in `data`.
+/// Offsets and sizes come from file headers; this and [`file_range_clamped`]
+/// are where they become slices.
+pub(crate) fn file_range(data: &[u8], offset: u64, size: u64) -> Option<&[u8]> {
+    let start = usize::try_from(offset).ok()?;
+    data.get(start..start.checked_add(usize::try_from(size).ok()?)?)
+}
+
+/// The part of `data[offset..offset + size]` the file actually holds, cut at
+/// the end of `data` as in a truncated sample. `None` when nothing remains.
+pub(crate) fn file_range_clamped(data: &[u8], offset: u64, size: u64) -> Option<&[u8]> {
+    let start = usize::try_from(offset).ok()?;
+    let size = usize::try_from(size).unwrap_or(usize::MAX);
+    let end = start.saturating_add(size).min(data.len());
+    (start < end).then(|| &data[start..end])
+}
+
+/// The first ELF section named `name`: its virtual address and bytes, when
+/// they lie wholly in `data`.
+pub(crate) fn elf_section<'a>(
+    elf: &goblin::elf::Elf<'_>,
+    data: &'a [u8],
+    name: &str,
+) -> Option<(u64, &'a [u8])> {
+    let sh = elf
+        .section_headers
+        .iter()
+        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name) == Some(name))?;
+    Some((sh.sh_addr, file_range(data, sh.sh_offset, sh.sh_size)?))
+}
+
 /// Heuristic: is this binary signed by a platform vendor (Apple, Microsoft)?
 ///
 /// Only *platform* signatures — the chains that sign the OS itself — are

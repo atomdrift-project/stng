@@ -308,10 +308,7 @@ pub(super) fn setup(code: &Region<'_>, call: u64) -> Option<Setup> {
     if page & 0x9f00001f != 0x90000008 || offset & 0xffc003ff != 0x91000108 {
         return None;
     }
-    let delta = i64::from(((page >> 5) & 0x7ffff) << 2 | ((page >> 29) & 3));
-    let address = (start & !4095)
-        .checked_add_signed((delta << 43 >> 43) << 12)?
-        .checked_add(u64::from((offset >> 10) & 0xfff))?;
+    let address = crate::arm64::adrp_add(start, page, offset)?;
     let bias = word(code, start.checked_add(8)?)?;
     let store = start.checked_add(12)?;
     let base = if bias & 0xffe0001f == 0x92800009 {

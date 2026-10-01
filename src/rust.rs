@@ -269,7 +269,7 @@ impl RustStringExtractor {
         // in .data.rel.ro zero on disk; the loader fills it from a RELATIVE
         // relocation. The structure scan above reads the bytes, sees (0, len),
         // and recovers nothing, so read the pointers from the relocations.
-        if let Some((rodata_addr, rodata_data)) = self.find_section(elf, data, ".rodata") {
+        if let Some((rodata_addr, rodata_data)) = crate::binary::elf_section(elf, data, ".rodata") {
             strings.extend(relative_reloc_strings(
                 elf,
                 data,
@@ -280,8 +280,8 @@ impl RustStringExtractor {
         }
 
         // Perform instruction pattern analysis for inline literals
-        let text_info = self.find_section(elf, data, ".text");
-        let rodata_info = self.find_section(elf, data, ".rodata");
+        let text_info = crate::binary::elf_section(elf, data, ".text");
+        let rodata_info = crate::binary::elf_section(elf, data, ".rodata");
 
         if let (Some((text_addr, text_data)), Some((rodata_addr, rodata_data))) =
             (text_info, rodata_info)
@@ -342,13 +342,14 @@ impl RustStringExtractor {
             return Vec::new();
         };
 
-        let rdata_file_start = rdata.pointer_to_raw_data as usize;
-        let rdata_size = rdata.size_of_raw_data as usize;
-        let rdata_file_end = rdata_file_start.saturating_add(rdata_size).min(data.len());
-        if rdata_file_start >= rdata_file_end {
+        let Some(rdata_bytes) = crate::binary::file_range_clamped(
+            data,
+            u64::from(rdata.pointer_to_raw_data),
+            u64::from(rdata.size_of_raw_data),
+        ) else {
             return Vec::new();
-        }
-        let rdata_bytes = &data[rdata_file_start..rdata_file_end];
+        };
+        let rdata_file_start = rdata.pointer_to_raw_data as usize;
         let rdata_va = image_base + u64::from(rdata.virtual_address);
 
         // Scan candidate sections for `(ptr, len)` pairs whose pointer falls
@@ -364,16 +365,12 @@ impl RustStringExtractor {
                 if !candidate_names.contains(&name.as_str()) {
                     return None;
                 }
-                let start = usize::try_from(sec.pointer_to_raw_data).ok()?;
-                let size = usize::try_from(sec.size_of_raw_data).ok()?;
-                let end = start.checked_add(size)?.min(data.len());
-                if start >= end {
-                    return None;
-                }
-                Some((
-                    image_base + u64::from(sec.virtual_address),
-                    &data[start..end],
-                ))
+                let bytes = crate::binary::file_range_clamped(
+                    data,
+                    u64::from(sec.pointer_to_raw_data),
+                    u64::from(sec.size_of_raw_data),
+                )?;
+                Some((image_base + u64::from(sec.virtual_address), bytes))
             })
             .collect();
 
@@ -402,28 +399,6 @@ impl RustStringExtractor {
             .collect()
     }
 
-    /// Helper to find a section by name and return its address and data.
-    fn find_section<'a>(
-        &self,
-        elf: &Elf<'_>,
-        data: &'a [u8],
-        section_name: &str,
-    ) -> Option<(u64, &'a [u8])> {
-        for sh in &elf.section_headers {
-            let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
-            if name == section_name {
-                let offset = sh.sh_offset as usize;
-                let size = sh.sh_size as usize;
-                if let Some(end) = offset.checked_add(size)
-                    && end <= data.len()
-                {
-                    return Some((sh.sh_addr, &data[offset..end]));
-                }
-            }
-        }
-        None
-    }
-
     fn extract_from_section(
         &self,
         elf: &Elf<'_>,
@@ -431,7 +406,7 @@ impl RustStringExtractor {
         target_section: &str,
         info: &BinaryInfo,
     ) -> Option<Vec<ExtractedString>> {
-        let (section_addr, section_data) = self.find_section(elf, data, target_section)?;
+        let (section_addr, section_data) = crate::binary::elf_section(elf, data, target_section)?;
         let section_size = section_data.len();
 
         // Search all sections for string structures pointing into this section
@@ -1054,8 +1029,6 @@ mod tests {
 
     #[test]
     fn test_find_section_not_found() {
-        let extractor = RustStringExtractor::new(4);
-
         // Create minimal ELF-like data
         let mut data = vec![0u8; 512];
         data[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
@@ -1064,7 +1037,7 @@ mod tests {
 
         // Parse as ELF and try to find a non-existent section
         if let Ok(goblin::Object::Elf(elf)) = goblin::Object::parse(&data) {
-            let result = extractor.find_section(&elf, &data, ".nonexistent");
+            let result = crate::binary::elf_section(&elf, &data, ".nonexistent");
             assert!(result.is_none());
         }
     }

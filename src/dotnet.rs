@@ -15,6 +15,7 @@
 //!           -> #US Heap: compressed-length UTF-16LE strings
 //! ```
 
+use crate::bytes::{u16_le, u32_le};
 use crate::{ExtractedString, StringMethod};
 use goblin::pe::PE;
 use std::collections::HashSet;
@@ -53,42 +54,27 @@ pub(crate) fn extract_us_heap_strings(
         return results;
     };
 
-    // Read CLR header to get metadata RVA
-    // CLR header structure: https://docs.microsoft.com/en-us/dotnet/standard/metadata-and-self-describing-components
-    // Offset 8: MetaData RVA (4 bytes)
-    // Offset 12: MetaData Size (4 bytes)
-    if clr_offset + 16 > data.len() {
+    // CLR header: metadata RVA at offset 8, metadata size at 12.
+    // https://docs.microsoft.com/en-us/dotnet/standard/metadata-and-self-describing-components
+    let (Some(metadata_rva), Some(metadata_size)) = (
+        u32_le(data, clr_offset.saturating_add(8)),
+        u32_le(data, clr_offset.saturating_add(12)),
+    ) else {
         return results;
-    }
-
-    let metadata_rva = u32::from_le_bytes([
-        data[clr_offset + 8],
-        data[clr_offset + 9],
-        data[clr_offset + 10],
-        data[clr_offset + 11],
-    ]);
-
-    let metadata_size = u32::from_le_bytes([
-        data[clr_offset + 12],
-        data[clr_offset + 13],
-        data[clr_offset + 14],
-        data[clr_offset + 15],
-    ]) as usize;
-
+    };
+    let metadata_size = metadata_size as usize;
     if metadata_size == 0 || metadata_size > 100 * 1024 * 1024 {
         return results; // Invalid metadata size
     }
-
-    // Convert metadata RVA to file offset
     let Some(metadata_offset) = rva_to_offset(pe, metadata_rva) else {
         return results;
     };
-
-    if metadata_offset + metadata_size > data.len() {
+    let Some(metadata) = metadata_offset
+        .checked_add(metadata_size)
+        .and_then(|end| data.get(metadata_offset..end))
+    else {
         return results;
-    }
-
-    let metadata = &data[metadata_offset..metadata_offset + metadata_size];
+    };
 
     // Parse metadata root to find #US stream
     if let Some((us_offset, us_size)) = find_us_stream(metadata) {
@@ -131,8 +117,7 @@ fn find_us_stream(metadata: &[u8]) -> Option<(usize, usize)> {
     // 8-12: Reserved
     // 12-16: Version string length (rounded up to 4-byte boundary)
 
-    let version_len =
-        u32::from_le_bytes([metadata[12], metadata[13], metadata[14], metadata[15]]) as usize;
+    let version_len = u32_le(metadata, 12)? as usize;
 
     // Version length must be reasonable
     if version_len > 256 || 16 + version_len > metadata.len() {
@@ -144,13 +129,7 @@ fn find_us_stream(metadata: &[u8]) -> Option<(usize, usize)> {
 
     // After version string: 2 bytes flags, 2 bytes stream count
     let streams_offset = 16 + version_len_padded;
-    if streams_offset + 4 > metadata.len() {
-        return None;
-    }
-
-    // Skip flags (2 bytes)
-    let stream_count =
-        u16::from_le_bytes([metadata[streams_offset + 2], metadata[streams_offset + 3]]) as usize;
+    let stream_count = u16_le(metadata, streams_offset + 2)? as usize;
 
     if stream_count > 10 {
         return None; // Too many streams, likely corrupt
@@ -160,24 +139,9 @@ fn find_us_stream(metadata: &[u8]) -> Option<(usize, usize)> {
     let mut pos = streams_offset + 4;
 
     for _ in 0..stream_count {
-        if pos + 8 > metadata.len() {
-            return None;
-        }
-
         // Stream header: offset (4), size (4), name (null-terminated, 4-byte aligned)
-        let stream_offset = u32::from_le_bytes([
-            metadata[pos],
-            metadata[pos + 1],
-            metadata[pos + 2],
-            metadata[pos + 3],
-        ]) as usize;
-
-        let stream_size = u32::from_le_bytes([
-            metadata[pos + 4],
-            metadata[pos + 5],
-            metadata[pos + 6],
-            metadata[pos + 7],
-        ]) as usize;
+        let stream_offset = u32_le(metadata, pos)? as usize;
+        let stream_size = u32_le(metadata, pos + 4)? as usize;
 
         pos += 8;
 

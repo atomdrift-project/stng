@@ -36,10 +36,7 @@ fn address(code: &Region<'_>, pc: u64) -> Option<u64> {
     if page & 0x9f00001f != 0x90000008 || low & 0xffc003ff != 0x91000108 {
         return None;
     }
-    let delta = i64::from(((page >> 5) & 0x7ffff) << 2 | ((page >> 29) & 3));
-    (pc & !4095)
-        .checked_add_signed((delta << 43 >> 43) << 12)?
-        .checked_add(u64::from((low >> 10) & 0xfff))
+    crate::arm64::adrp_add(pc, page, low)
 }
 
 /// Validate complete constant-input decoding and a following matching length.

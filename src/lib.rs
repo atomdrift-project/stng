@@ -43,11 +43,13 @@ mod validation;
 mod validation_thresholds;
 
 // Binary format modules
+mod arm64;
 mod arm64_effects;
 mod arm64_frame;
 mod arm64_stack_xor;
 pub mod binary;
 mod binary_net;
+mod bytes;
 mod cfml;
 mod detect;
 mod dotnet;
@@ -982,6 +984,15 @@ fn append_script_deobfuscation(
     }
 }
 
+/// Script deobfuscation normally runs only for inputs identified as text. A
+/// self-identifying VBScript.Encode marker is also sufficient evidence: its
+/// encoded body can contain enough control/high bytes to classify an ASP page
+/// as binary. Check strings already extracted by the normal scan so binary
+/// inputs without the marker pay no additional full-file scan.
+fn should_deobfuscate_script(data: &[u8], strings: &[ExtractedString]) -> bool {
+    is_text_file(data) || strings.iter().any(|s| s.value.contains("#@~^"))
+}
+
 /// Extract strings with additional options.
 ///
 /// Provides fine-grained control over the extraction process through the
@@ -1062,7 +1073,7 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
         tracing::debug!("TIME: Extraction took {:?}", t0.elapsed());
 
         // For text files parsed by goblin (e.g. as Unknown), also run script deobfuscation
-        if is_text_file(data) {
+        if should_deobfuscate_script(data, &strings) {
             append_script_deobfuscation(&mut strings, data, opts);
         }
 
@@ -1135,7 +1146,7 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
         decode_spaced_strings(&mut strings, opts.min_length);
 
         // Script deobfuscation for text files that didn't parse as a known binary format
-        if is_text_file(data) {
+        if should_deobfuscate_script(data, &strings) {
             append_script_deobfuscation(&mut strings, data, opts);
         }
 
@@ -1262,7 +1273,7 @@ pub fn extract_strings_from_object(
         return extract_strings_inner(data, opts);
     }
     let mut strings = extract_from_object(object, data, opts);
-    if is_text_file(data) {
+    if should_deobfuscate_script(data, &strings) {
         append_script_deobfuscation(&mut strings, data, opts);
     }
     deduplicate_by_offset(strings)

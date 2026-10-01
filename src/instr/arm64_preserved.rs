@@ -181,10 +181,8 @@ impl<'a> Context<'a> {
                         }
                     }
                 }
-                let delta = i64::from(((page >> 5) & 0x7ffff) << 2 | ((page >> 29) & 3));
-                let address = (self.addr.checked_add((pc - 4) as u64)? & !4095)
-                    .checked_add_signed((delta << 43 >> 43) << 12)?
-                    .checked_add(u64::from((w >> 10) & 4095))?;
+                let address =
+                    crate::arm64::adrp_add(self.addr.checked_add((pc - 4) as u64)?, page, w)?;
                 return Some((
                     decode_rodata_string(address, len, data, data_addr)?,
                     address,

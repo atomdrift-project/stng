@@ -22,10 +22,7 @@ fn read(code: &Region<'_>, constants: &[Region<'_>], start: u64) -> Option<[u8; 
     if page & 0x9f00001f != 0x9000000b || low & 0xffc003ff != 0x9100016b {
         return None;
     }
-    let delta = i64::from(((page >> 5) & 0x7ffff) << 2 | ((page >> 29) & 3));
-    let address = ((start + 20) & !4095)
-        .checked_add_signed((delta << 43 >> 43) << 12)?
-        .checked_add(u64::from((low >> 10) & 0xfff))?;
+    let address = crate::arm64::adrp_add(start + 20, page, low)?;
     // The initializer sets W9=1; the helper clears it. Exactly one iteration.
     sequence(code, start + 28, &[0x36000069])?;
     sequence(

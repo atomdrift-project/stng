@@ -691,3 +691,20 @@ fn test_binary_files_not_affected() {
         "Binary files should not trigger script deobfuscation"
     );
 }
+
+#[test]
+fn vbscript_encode_in_binary_classified_asp_is_deobfuscated() {
+    let sample = include_bytes!("../testdata/script/vbscript-encoded-malformed-asp.asp");
+    assert!(
+        !stng::is_text_file(sample),
+        "fixture must exercise the encoded ASP binary-classification path"
+    );
+
+    let strings = stng::extract_strings_with_options(sample, &ExtractOptions::new(4));
+    assert!(
+        strings.iter().any(|s| {
+            s.method == StringMethod::ScriptDecode && s.value.contains("wscript.shell")
+        }),
+        "encoded VBScript payload should be exposed as decoded strings"
+    );
+}

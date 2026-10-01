@@ -44,10 +44,7 @@ fn prefix4(
     if page & 0x9f00001f != 0x9000000c || low & 0xffc003ff != 0x9100018c {
         return None;
     }
-    let delta = i64::from(((page >> 5) & 0x7ffff) << 2 | ((page >> 29) & 3));
-    let address = (pc & !4095)
-        .checked_add_signed((delta << 43 >> 43) << 12)?
-        .checked_add(u64::from((low >> 10) & 4095))?;
+    let address = crate::arm64::adrp_add(pc, page, low)?;
     sequence(code, pc.checked_add(8)?, &[0x36000068])?;
     sequence(
         code,
@@ -156,10 +153,7 @@ fn prefix(code: &Region<'_>, regions: &[Region<'_>], start: u64) -> Option<(u64,
     {
         return None;
     }
-    let delta = i64::from(((page >> 5) & 0x7ffff) << 2 | ((page >> 29) & 3));
-    let address = (pc & !4095)
-        .checked_add_signed((delta << 43 >> 43) << 12)?
-        .checked_add(u64::from((low >> 10) & 4095))?;
+    let address = crate::arm64::adrp_add(pc, page, low)?;
     sequence(code, pc.checked_add(8)?, &[0x36000068])?;
     sequence(code, branch_target(code, pc.checked_add(12)?)?, &body)?;
     sequence(code, pc.checked_add(16)?, &[0x3707ffe8])?;

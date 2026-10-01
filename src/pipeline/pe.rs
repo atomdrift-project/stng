@@ -69,22 +69,17 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
             if !matches!(name.as_str(), ".rdata" | ".rodata") {
                 continue;
             }
-            let Some(start) = usize::try_from(sec.pointer_to_raw_data).ok() else {
+            let start = u64::from(sec.pointer_to_raw_data);
+            let Some(section_bytes) =
+                binary::file_range_clamped(data, start, u64::from(sec.size_of_raw_data))
+            else {
                 continue;
             };
-            let Some(size) = usize::try_from(sec.size_of_raw_data).ok() else {
-                continue;
-            };
-            let end = start.saturating_add(size).min(data.len());
-            if start >= end {
-                continue;
-            }
-            let section_bytes = &data[start..end];
             let (varints, nulls) = rayon::join(
                 || {
                     extract_varint_prefixed_strings(
                         section_bytes,
-                        start as u64,
+                        start,
                         Some(name.as_str()),
                         min_length,
                     )
@@ -92,7 +87,7 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
                 || {
                     extract_null_separated_strings(
                         section_bytes,
-                        start as u64,
+                        start,
                         Some(name.as_str()),
                         min_length,
                     )

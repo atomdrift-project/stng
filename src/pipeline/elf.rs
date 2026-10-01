@@ -205,15 +205,10 @@ fn extract_go_text_xor_strings(
     let Some((text_start, text_vma, text)) = elf
         .section_headers
         .iter()
-        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("") == ".text")
+        .find(|sh| elf.shdr_strtab.get_at(sh.sh_name) == Some(".text"))
         .and_then(|sh| {
-            // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only)
-            #[allow(clippy::cast_possible_truncation)]
-            let start = sh.sh_offset as usize;
-            #[allow(clippy::cast_possible_truncation)]
-            let end = start.saturating_add(sh.sh_size as usize);
-            let text = scan_data.get(start..end)?;
-            Some((start, sh.sh_addr, text))
+            let text = binary::file_range(scan_data, sh.sh_offset, sh.sh_size)?;
+            Some((usize::try_from(sh.sh_offset).ok()?, sh.sh_addr, text))
         })
     else {
         return Vec::new();
@@ -254,14 +249,11 @@ fn extract_elf_pclntab_strings(
         return Vec::new();
     };
 
+    let Some(section_bytes) = binary::file_range_clamped(scan_data, sh.sh_offset, sh.sh_size)
+    else {
+        return Vec::new();
+    };
     let Ok(start) = usize::try_from(sh.sh_offset) else {
-        return Vec::new();
-    };
-    let Ok(size) = usize::try_from(sh.sh_size) else {
-        return Vec::new();
-    };
-    let end = start.saturating_add(size).min(scan_data.len());
-    let Some(section_bytes) = scan_data.get(start..end) else {
         return Vec::new();
     };
 

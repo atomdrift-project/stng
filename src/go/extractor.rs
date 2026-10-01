@@ -191,32 +191,15 @@ impl GoStringExtractor {
         };
 
         // Find .text section for inline string extraction
-        let text_info = elf
-            .section_headers
-            .iter()
-            .find(|sh| elf.shdr_strtab.get_at(sh.sh_name) == Some(".text"))
-            .and_then(|sh| {
-                let start = sh.sh_offset as usize;
-                let end = start.checked_add(sh.sh_size as usize)?;
-                if end <= data.len() {
-                    Some((sh.sh_addr, &data[start..end]))
-                } else {
-                    None
-                }
-            });
+        let text_info = crate::binary::elf_section(elf, data, ".text");
 
         // Search all data sections for string structures in parallel
         let sections_info: Vec<_> = elf
             .section_headers
             .iter()
             .filter_map(|sh| {
-                let start = sh.sh_offset as usize;
-                let end = start.checked_add(sh.sh_size as usize)?;
-                if end <= data.len() && sh.sh_size > 0 {
-                    Some((sh.sh_addr, &data[start..end]))
-                } else {
-                    None
-                }
+                let bytes = crate::binary::file_range(data, sh.sh_offset, sh.sh_size)?;
+                (!bytes.is_empty()).then_some((sh.sh_addr, bytes))
             })
             .collect();
 
@@ -437,19 +420,7 @@ impl GoStringExtractor {
     /// Find .rodata section in ELF
     fn find_rodata_elf<'a>(&self, elf: &Elf<'_>, data: &'a [u8]) -> Option<(u64, &'a [u8])> {
         // Try .rodata first
-        let rodata_sh = elf
-            .section_headers
-            .iter()
-            .find(|sh| elf.shdr_strtab.get_at(sh.sh_name) == Some(".rodata"))?;
-
-        let start = rodata_sh.sh_offset as usize;
-        let end = start.checked_add(rodata_sh.sh_size as usize)?;
-
-        if end <= data.len() {
-            Some((rodata_sh.sh_addr, &data[start..end]))
-        } else {
-            None
-        }
+        crate::binary::elf_section(elf, data, ".rodata")
     }
 
     /// Find .rodata or .rdata section in PE
@@ -457,14 +428,15 @@ impl GoStringExtractor {
         // Try .rodata or .rdata
         for section in &pe.sections {
             let name = crate::binary::pe_section_name(&section.name);
-            if name.contains("rodata") || name.contains(".rdata") {
-                let start = section.pointer_to_raw_data as usize;
-                let size = section.size_of_raw_data as usize;
-                let end = start.saturating_add(size);
-
-                if end <= data.len() && size > 0 {
-                    return Some((u64::from(section.virtual_address), &data[start..end]));
-                }
+            if (name.contains("rodata") || name.contains(".rdata"))
+                && let Some(bytes) = crate::binary::file_range(
+                    data,
+                    u64::from(section.pointer_to_raw_data),
+                    u64::from(section.size_of_raw_data),
+                )
+                && !bytes.is_empty()
+            {
+                return Some((u64::from(section.virtual_address), bytes));
             }
         }
         None
