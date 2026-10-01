@@ -12,6 +12,9 @@ readme = "README.md"
 repository = "https://github.com/atomdrift-project/stng"
 keywords = ["binary", "strings", "go", "rust", "reverse-engineering"]
 categories = ["command-line-utilities", "development-tools"]
+# The crate itself. Samples, tests and CI stay in the repository: testdata alone
+# is ~90 MB.
+include = ["/src", "/README.md", "/LICENSE"]
 
 [dependencies]
 # Binary parsing
@@ -29,8 +32,18 @@ memchr = "2.8"
 # Multi-pattern matching
 aho-corasick = "1.1"
 
-# CLI
-clap = { version = "4.6", features = ["derive"] }
+# The `stng` command only; see the `cli` feature.
+clap = { version = "4.6", features = ["derive"], optional = true }
+anyhow = { version = "1.0", optional = true }
+dirs = { version = "6.0", optional = true }
+# Hashing. 0.11 does ARM/x86 hardware SHA acceleration automatically, so it
+# replaces the old `asm` feature without the sha2-asm dependency that pulled
+# in. sha2-asm ships GAS-syntax .S files MSVC's assembler cannot build, and
+# because cargo unifies features across the graph, enabling `asm` here broke
+# the x86_64-pc-windows-msvc build for every crate sharing this sha2. Matches
+# cleave and fletch, both on 0.11.
+sha2 = { version = "0.11", optional = true }
+terminal_size = { version = "0.4", optional = true }
 
 # Serialization (for JSON output)
 serde = { version = "1.0", features = ["derive"] }
@@ -59,22 +72,8 @@ flate2 = "1.1"
 # Base32/Base85 encoding
 data-encoding = "2.11"
 
-# Error handling
-anyhow = "1.0"
-
-# Hashing. 0.11 does ARM/x86 hardware SHA acceleration automatically, so it
-# replaces the old `asm` feature without the sha2-asm dependency that pulled
-# in. sha2-asm ships GAS-syntax .S files MSVC's assembler cannot build, and
-# because cargo unifies features across the graph, enabling `asm` here broke
-# the x86_64-pc-windows-msvc build for every crate sharing this sha2. Matches
-# cleave and fletch, both on 0.11.
-sha2 = "0.11"
-
 # x86-64 instruction decoding (for garble emulation)
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "intel"] }
-
-# OS-appropriate paths (cache directories)
-dirs = "6.0"
 
 # Logging (modern structured logging with tracing)
 tracing = "0.1"
@@ -85,10 +84,7 @@ tracing = "0.1"
 # forged import directory turns that into a CPU livelock. scan already asks for
 # this, but Cargo unifies features across the graph, so a default-features
 # dependency here re-arms the bridge for the whole binary.
-tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi", "smallvec", "std"] }
-
-# Terminal utilities
-terminal_size = "0.4"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi", "smallvec", "std"], optional = true }
 
 # Use jemalloc on unix systems where it isn't already the system allocator.
 # FreeBSD/DragonFlyBSD/NetBSD ship jemalloc as the default (NetBSD's libc malloc
@@ -97,15 +93,28 @@ terminal_size = "0.4"
 # format is incompatible with tikv-jemalloc-sys's configure script. illumos
 # and Solaris ship libumem (a comparable arena allocator).
 [target.'cfg(all(unix, not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd", target_os = "illumos", target_os = "solaris"))))'.dependencies]
-tikv-jemallocator = "0.7"
+tikv-jemallocator = { version = "0.7", optional = true }
 
 [features]
+default = ["cli"]
+# The `stng` command and what only it needs: argument parsing, logging setup,
+# the terminal, jemalloc, and the rizin cache. Library users turn default
+# features off and build none of it.
+cli = [
+    "dep:clap",
+    "dep:anyhow",
+    "dep:dirs",
+    "dep:sha2",
+    "dep:terminal_size",
+    "dep:tracing-subscriber",
+    "dep:tikv-jemallocator",
+]
 # Enables jemalloc heap profiling. Build with:
 #   cargo build --profile profiling --features jemalloc-prof --bin stng
 # Run with (note the `_RJEM_` prefix — tikv-jemalloc renames MALLOC_CONF):
 #   _RJEM_MALLOC_CONF="prof:true,prof_active:true,prof_final:true,lg_prof_interval:28,prof_prefix:out/heap/jeprof" \
 #     out/stng.heap <path>
-jemalloc-prof = ["tikv-jemallocator/profiling"]
+jemalloc-prof = ["cli", "tikv-jemallocator/profiling"]
 
 [lib]
 name = "stng"
@@ -114,6 +123,13 @@ path = "src/lib.rs"
 [[bin]]
 name = "stng"
 path = "src/main.rs"
+required-features = ["cli"]
+
+# Some of these run the `stng` binary.
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+required-features = ["cli"]
 
 [profile.release]
 lto = true
@@ -223,6 +239,7 @@ match_same_arms = "warn"                 # merge identical match arms
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+sha2 = "0.11"
 
 [[bench]]
 name = "classify"

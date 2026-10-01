@@ -83,7 +83,7 @@ The key characteristic is **immediate values that decode to valid ASCII characte
 
 ### Test Results
 
-From `tests/test_kworker_obfuscation.rs`:
+From `tests/it/kworker_obfuscation.rs`:
 ```
 Total strings extracted: 83
 Suspicious strings found: 2
@@ -106,5 +106,5 @@ Stack-constructed strings found: 1
   - SHA256: `caa69b10b0bfca561dec90cbd1132b6dcb2c8a44d76a272a0b70b5c64776ff6c`
   - Linked against: libcurl-gnutls, libc
   - Compiled: GCC 10.2.1
-  - Test case: `tests/test_kworker_obfuscation.rs`
+  - Test case: `tests/it/kworker_obfuscation.rs`
 

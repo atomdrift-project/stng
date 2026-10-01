@@ -100,9 +100,7 @@ fn fixtures() -> Vec<String> {
         }
     }
     let mut out = Vec::new();
-    for dir in ["testdata", "tests/testdata"] {
-        walk(&Path::new(ROOT).join(dir), &mut out);
-    }
+    walk(&Path::new(ROOT).join("testdata"), &mut out);
     out.sort();
     out
 }

@@ -1,0 +1,34 @@
+#!/bin/sh
+# Show exactly which strings changed between REV (default HEAD) and the working
+# tree. Dumps the golden corpus (tests/it/golden.rs) at both and diffs the dumps.
+#
+#   scripts/golden-diff [REV]
+#
+# Exits 0 when output is identical, 1 when it differs.
+set -eu
+
+rev=${1:-HEAD}
+root=$(git rev-parse --show-toplevel)
+out="$root/target/golden-diff"
+tree="$out/base-src"
+
+git -C "$root" worktree prune
+rm -rf "$out"
+mkdir -p "$out"
+git -C "$root" worktree add --detach --quiet "$tree" "$rev"
+trap 'git -C "$root" worktree remove --force "$tree"' EXIT
+
+# REV may predate the golden harness, so run today's harness against it, as a
+# test target of its own.
+mkdir -p "$tree/tests/common" "$tree/tests/golden_diff"
+cp "$root/tests/it/golden.rs" "$tree/tests/golden_diff/golden.rs"
+cp "$root/tests/common/mod.rs" "$tree/tests/common/mod.rs"
+printf '#[path = "../common/mod.rs"]\nmod common;\nmod golden;\n' >"$tree/tests/golden_diff/main.rs"
+
+echo "golden-diff: dumping $rev" >&2
+(cd "$tree" && CARGO_TARGET_DIR="$root/target/golden-base" \
+    STNG_GOLDEN_DUMP="$out/base" cargo test -q --locked --test golden_diff >/dev/null)
+echo "golden-diff: dumping working tree" >&2
+(cd "$root" && STNG_GOLDEN_DUMP="$out/head" cargo test -q --locked --test it golden >/dev/null)
+
+diff -ru "$out/base" "$out/head" && echo "golden-diff: identical to $rev" >&2

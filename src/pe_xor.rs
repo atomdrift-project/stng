@@ -789,13 +789,8 @@ mod tests {
             "hello_windows.exe",
             "does-nothing-windows-amd64.exe",
         ] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/testdata")
-                .join(name);
-            let Ok(bytes) = std::fs::read(path) else {
-                continue;
-            };
-            let Ok(pe) = PE::parse(&bytes) else {
+            let bytes = crate::test_fixture(&format!("testdata/pe/{name}"));
+            let Ok(pe) = PE::parse(bytes) else {
                 continue;
             };
             if pe.header.coff_header.machine != 0x14c || pe.is_64 {
@@ -807,7 +802,7 @@ mod tests {
             let start = Instant::now();
             for _ in 0..1000 {
                 assert!(
-                    extract(&pe, &bytes, 4).is_empty(),
+                    extract(&pe, bytes, 4).is_empty(),
                     "unexpected decode in {name}"
                 );
             }

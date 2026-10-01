@@ -27,5 +27,5 @@ all three decompilations, and function coverage are preserved in
 provenance, malformed tables/slices, truncation, arbitrary keys and size limits
 in stng; Cleave additionally tests candidate/output budgets, deduplication,
 conservative nesting and standalone/archive recursive analysis.
-See `tests/test_xor_fat_macho.rs` in stng and
+See `tests/it/xor_fat_macho.rs` in stng and
 `src/extractors/encoded_payload_xor_test.rs`, `tests/xor_macho_payload.rs` in Cleave.

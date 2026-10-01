@@ -1,3 +1,4 @@
+filefacts	testdata/elf/hello_linux_amd64	7384	50fde82a802495ad	Base64Decode=1 InstructionPattern=917 PclntabSymbol=2749 RawScan=3067 Structure=650
 filefacts	testdata/garble/build/trim.txt	1	aa60946b98098493	RawScan=1
 filefacts	testdata/garble/garble_fresh_linux_amd64	10344	8ce8a312486ef699	Base64Decode=3 InstructionPattern=968 PclntabSymbol=8728 RawScan=182 Structure=461 XorStackPair=2
 filefacts	testdata/garble/garble_fresh_shuffle1	11274	59553d00fea5a02c	Base64Decode=3 InstructionPattern=902 PclntabSymbol=9461 RawScan=489 Structure=419
@@ -45,7 +46,16 @@ filefacts	testdata/garble/garble_test_5	11397	cc0c8c90ce3dd105	Base64Decode=4 In
 filefacts	testdata/garble/go.mod	2	01ec06548f45bf64	RawScan=2
 filefacts	testdata/garble/main.go	16	063fbbae50fdbc2e	RawScan=16
 filefacts	testdata/garble/simple_test.go	12	f45b044f19657328	RawScan=12
-filefacts	testdata/kworker_samples/README.md	74	f7a3aa9abc92d54c	RawScan=74
+filefacts	testdata/go_pclntab/README.md	19	0e7cffe352cee720	RawScan=19
+filefacts	testdata/go_pclntab/darwin_amd64	6421	b9bb945ec3eae632	Heuristic=1 InstructionPattern=885 PclntabSymbol=3191 RawScan=1790 Structure=554
+filefacts	testdata/go_pclntab/darwin_arm64	6297	cd4175d832411ea2	Heuristic=1 InstructionPattern=823 PclntabSymbol=3163 RawScan=1745 Structure=565
+filefacts	testdata/go_pclntab/linux_amd64	6101	884768cd1e328935	InstructionPattern=888 PclntabSymbol=3018 RawScan=1597 Structure=598
+filefacts	testdata/go_pclntab/linux_arm64	5981	f4a680d0401714b6	InstructionPattern=833 PclntabSymbol=2986 RawScan=1554 Structure=608
+filefacts	testdata/go_pclntab/src/go.mod	2	ed9c94e353d9affc	RawScan=2
+filefacts	testdata/go_pclntab/src/main.go	36	567533a8707ffa64	RawScan=36
+filefacts	testdata/go_pclntab/windows_amd64	6318	dfb1a36dfe43a50e	Base64Decode=1 Heuristic=1 InstructionPattern=963 PclntabSymbol=4414 RawScan=77 StackString=17 Structure=841 WideString=4
+filefacts	testdata/go_pclntab/windows_arm64	6248	c7aacfac6cf929bb	Base64Decode=1 Heuristic=1 InstructionPattern=897 PclntabSymbol=4364 RawScan=75 Structure=906 WideString=4
+filefacts	testdata/kworker_samples/README.md	74	5fb4ff8619bb8500	RawScan=74
 filefacts	testdata/kworker_samples/kworker_obfuscated_1	70	3895c211a916dc01	RawScan=69 WideString=1
 filefacts	testdata/macho/arm64_lcg_xor_universal.macho	89	95fee40e2c3a33c8	RawScan=88 XorDecode=1
 filefacts	testdata/macho/arm64_lcg_xor_universal.md	11	73b9d08d52497305	RawScan=11
@@ -72,8 +82,9 @@ filefacts	testdata/macho/swift_small_strings_webview.macho	641	ceb97b9316b68f05	
 filefacts	testdata/macho/swift_small_strings_webview.md	27	8f30f4319450f250	RawScan=27
 filefacts	testdata/macho/wallet_report_objc	70	f99b20a72d9f1e19	RawScan=70
 filefacts	testdata/macho/xor_fat_dropper.macho	452	5b038e9a1f07be91	Heuristic=60 RawScan=197 StackString=2 XorDecode=193
-filefacts	testdata/macho/xor_fat_dropper.md	25	d4bd4fe58092a8e2	RawScan=25
+filefacts	testdata/macho/xor_fat_dropper.md	25	b11abd614e59418b	RawScan=25
 filefacts	testdata/malware/brew_agent	764	32a66833862a5463	CodeSignature=1 RawScan=489 StackString=3 XorDecode=269 XorStackPair=2
+filefacts	testdata/malware/brickstorm_linux_amd64	11797	73b935a7eaf2fdf7	Base64Decode=6 InstructionPattern=2083 PclntabSymbol=7593 RawScan=491 Structure=1095 WideString=15 XorStackPair=514
 filefacts	testdata/malware/dynamichub/DynamicHub	709	447805656cbe3504	CodeSignature=12 RawScan=429 XorStackPair=268
 filefacts	testdata/malware/goodboy-stage-01.exe	306	023be02bf5c35d60	RawScan=154 StackString=2 Structure=133 WideString=17
 filefacts	testdata/malware/kimwolf_installer	7	4ff5718ea951e095	RawScan=7
@@ -81,40 +92,35 @@ filefacts	testdata/malware/poolrat	13396	c62a51db17e06a01	Base64Decode=3 HexDeco
 filefacts	testdata/malware/sample-stealer	23749	ca2a95637273cc9f	Base64Decode=15 InstructionPattern=2159 PclntabSymbol=8949 RawScan=11186 SpacedAscii=1 Structure=1409 UrlDecode=10 WideString=20
 filefacts	testdata/malware/sorry_ransomware.exe	752	a58413420f5b804e	RawScan=95 StackString=2 Structure=655
 filefacts	testdata/malware/themeforestrat	13489	70864f7fcbbfce8c	Base64Decode=3 HexDecode=2 RawScan=13434 SpacedAscii=1 StackString=30 UrlDecode=13 WideString=1 XorStackPair=5
+filefacts	testdata/malware/threadracer.exe	726	b02730e4afbbf319	RawScan=532 WideString=194
 filefacts	testdata/malware/vget_sample	1608	c7ecf6a2f60f69c2	Base64Decode=1 HexDecode=2 InstructionPattern=98 RawScan=893 SpacedAscii=1 StackString=9 Structure=588 WideString=15 XorDecode=1
 filefacts	testdata/malware/wizardnet_downloader.dll	3297	8725a2eae84f2d40	RawScan=2298 UrlDecode=1 WideString=998
 filefacts	testdata/malware/zyravpn_tun2socks.exe	24138	0bb2a6ed48925a10	Base64Decode=7 InstructionPattern=3747 PclntabSymbol=18218 RawScan=183 StackString=45 Structure=1922 UrlDecode=1 WideString=15
 filefacts	testdata/nsis/4d49_Constraining.Opm	5	c524f223250ba7cd	RawScan=1 StackString=2 XorDecode=2
 filefacts	testdata/nsis/57527_Hokerer118.hex	20	bbfe109af10cdaee	RawScan=1 XorDecode=19
+filefacts	testdata/pe/does-nothing-windows-amd64.exe	7993	4b31b3c4b710d47d	Base64Decode=1 InstructionPattern=1084 PclntabSymbol=5707 RawScan=89 Structure=1105 WideString=7
+filefacts	testdata/pe/dotnet_unsigned_x86.dll	31	cebbfcc1ae12e70d	RawScan=19 WideString=12
 filefacts	testdata/pe/gobump_windows_amd64.exe	26022	70c65d03167739a2	Base64Decode=3 Heuristic=2 InstructionPattern=2162 PclntabSymbol=11701 RawScan=10472 Structure=1675 WideString=7
+filefacts	testdata/pe/hello_windows.exe	8726	80925b94f1a00c47	Base64Decode=1 InstructionPattern=932 PclntabSymbol=3976 RawScan=3004 Structure=809 WideString=4
+filefacts	testdata/pe/msvc_console_amd64.exe	83	05c125e4838bcb57	Base64Decode=1 RawScan=79 StackString=2 UnicodeEscapeDecode=1
+filefacts	testdata/pe/rtc.dll	83	eaba7a40bd6ba111	RawScan=48 WideString=25 XorDecode=10
+filefacts	testdata/rust_elf/README.md	8	23e54d34a63c9ab4	RawScan=8
+filefacts	testdata/rust_elf/linux_amd64	344	40f864420f0343c6	Base64Decode=1 InstructionPattern=35 RawScan=241 StackString=8 Structure=59
+filefacts	testdata/rust_elf/src/Cargo.lock	6	d89f21d2c339c9d2	RawScan=6
+filefacts	testdata/rust_elf/src/Cargo.toml	7	2b2120750c2a6a41	RawScan=7
+filefacts	testdata/rust_elf/src/src/main.rs	13	711ea6b7ba31b202	RawScan=13
 filefacts	testdata/script/batch-cp708-powershell-dropper-db9.bat	8	544916ffb1ea4aa0	RawScan=8
 filefacts	testdata/script/batch-cp708-powershell-dropper-e289.bat	8	23a1b873cee42d0f	RawScan=8
 filefacts	testdata/script/batch-remap-sample.unknown	43	37dc6c72e83a959c	RawScan=43
+filefacts	testdata/script/npm-charcode-rot-packer.js	5	206e67d414694ac0	RawScan=1 ScriptDecode=4
+filefacts	testdata/script/npm-charcode-rot-packer.md	14	5412b99ae26f17d7	RawScan=13 SpacedAscii=1
 filefacts	testdata/script/vbscript-encode.asp	3	6e339038a82f4e43	RawScan=2 ScriptDecode=1
+filefacts	testdata/script/vbscript-encoded-malformed-asp.asp	1887	ddac148097475ea9	RawScan=378 ScriptDecode=1509
+filefacts	testdata/xor/brew_agent_xor_region.bin	666	faedef923cde0edd	RawScan=397 XorDecode=269
+filefacts	testdata/xor/brew_agent_xor_region.md	32	c9f9cc364a848190	RawScan=32
 filefacts	testdata/xor/brew_agent_xor_sample	764	32a66833862a5463	CodeSignature=1 RawScan=489 StackString=3 XorDecode=269 XorStackPair=2
 filefacts	testdata/xor/libffmpeg_3cx_x64_xor	7226	43771b2111c21899	Base64Decode=2 CodeSignature=27 Heuristic=655 InstructionPattern=30 RawScan=5500 Structure=770 UrlDecode=9 XorDecode=233
-filefacts	tests/testdata/brickstorm_linux_amd64	11797	73b935a7eaf2fdf7	Base64Decode=6 InstructionPattern=2083 PclntabSymbol=7593 RawScan=491 Structure=1095 WideString=15 XorStackPair=514
-filefacts	tests/testdata/does-nothing-windows-amd64.exe	7993	4b31b3c4b710d47d	Base64Decode=1 InstructionPattern=1084 PclntabSymbol=5707 RawScan=89 Structure=1105 WideString=7
-filefacts	tests/testdata/go_pclntab/README.md	19	fe5faa23fda78e99	RawScan=19
-filefacts	tests/testdata/go_pclntab/darwin_amd64	6421	b9bb945ec3eae632	Heuristic=1 InstructionPattern=885 PclntabSymbol=3191 RawScan=1790 Structure=554
-filefacts	tests/testdata/go_pclntab/darwin_arm64	6297	cd4175d832411ea2	Heuristic=1 InstructionPattern=823 PclntabSymbol=3163 RawScan=1745 Structure=565
-filefacts	tests/testdata/go_pclntab/linux_amd64	6101	884768cd1e328935	InstructionPattern=888 PclntabSymbol=3018 RawScan=1597 Structure=598
-filefacts	tests/testdata/go_pclntab/linux_arm64	5981	f4a680d0401714b6	InstructionPattern=833 PclntabSymbol=2986 RawScan=1554 Structure=608
-filefacts	tests/testdata/go_pclntab/src/go.mod	2	ed9c94e353d9affc	RawScan=2
-filefacts	tests/testdata/go_pclntab/src/main.go	36	567533a8707ffa64	RawScan=36
-filefacts	tests/testdata/go_pclntab/windows_amd64	6318	dfb1a36dfe43a50e	Base64Decode=1 Heuristic=1 InstructionPattern=963 PclntabSymbol=4414 RawScan=77 StackString=17 Structure=841 WideString=4
-filefacts	tests/testdata/go_pclntab/windows_arm64	6248	c7aacfac6cf929bb	Base64Decode=1 Heuristic=1 InstructionPattern=897 PclntabSymbol=4364 RawScan=75 Structure=906 WideString=4
-filefacts	tests/testdata/hello_linux_amd64	7384	50fde82a802495ad	Base64Decode=1 InstructionPattern=917 PclntabSymbol=2749 RawScan=3067 Structure=650
-filefacts	tests/testdata/hello_windows.exe	8726	80925b94f1a00c47	Base64Decode=1 InstructionPattern=932 PclntabSymbol=3976 RawScan=3004 Structure=809 WideString=4
-filefacts	tests/testdata/malware/threadracer.exe	726	b02730e4afbbf319	RawScan=532 WideString=194
-filefacts	tests/testdata/pe_small/dotnet_unsigned_x86.dll	31	cebbfcc1ae12e70d	RawScan=19 WideString=12
-filefacts	tests/testdata/pe_small/msvc_console_amd64.exe	83	05c125e4838bcb57	Base64Decode=1 RawScan=79 StackString=2 UnicodeEscapeDecode=1
-filefacts	tests/testdata/rtc.dll	83	eaba7a40bd6ba111	RawScan=48 WideString=25 XorDecode=10
-filefacts	tests/testdata/rust_elf/README.md	8	c85657635532dbf3	RawScan=8
-filefacts	tests/testdata/rust_elf/linux_amd64	344	40f864420f0343c6	Base64Decode=1 InstructionPattern=35 RawScan=241 StackString=8 Structure=59
-filefacts	tests/testdata/rust_elf/src/Cargo.lock	6	d89f21d2c339c9d2	RawScan=6
-filefacts	tests/testdata/rust_elf/src/Cargo.toml	7	2b2120750c2a6a41	RawScan=7
-filefacts	tests/testdata/rust_elf/src/src/main.rs	13	711ea6b7ba31b202	RawScan=13
+default	testdata/elf/hello_linux_amd64	16329	ffe3b2b239c42292	Base64Decode=1 InstructionPattern=1199 PclntabSymbol=2751 RawScan=11723 SpacedAscii=1 Structure=650 WideString=4
 default	testdata/garble/build/trim.txt	1	aa60946b98098493	RawScan=1
 default	testdata/garble/garble_fresh_linux_amd64	18184	c6a4a8c732ba39c6	Base64Decode=3 InstructionPattern=1249 PclntabSymbol=8797 RawScan=7628 SpacedAscii=1 Structure=461 WideString=7 XorStackPair=38
 default	testdata/garble/garble_fresh_shuffle1	15143	5f8551667c765585	Base64Decode=3 InstructionPattern=1180 PclntabSymbol=9526 RawScan=4014 SpacedAscii=1 Structure=419
@@ -162,7 +168,16 @@ default	testdata/garble/garble_test_5	15481	d3f1cb7ef6760411	Base64Decode=4 Inst
 default	testdata/garble/go.mod	2	01ec06548f45bf64	RawScan=2
 default	testdata/garble/main.go	16	063fbbae50fdbc2e	RawScan=16
 default	testdata/garble/simple_test.go	12	f45b044f19657328	RawScan=12
-default	testdata/kworker_samples/README.md	80	b4f6b0eee9c62eee	RawScan=80
+default	testdata/go_pclntab/README.md	20	963b2ccebd236b6d	RawScan=20
+default	testdata/go_pclntab/darwin_amd64	8767	6a5c7da44841bc0e	Heuristic=1 InstructionPattern=1167 PclntabSymbol=3193 RawScan=3851 SpacedAscii=1 Structure=554
+default	testdata/go_pclntab/darwin_arm64	7920	1bdd2e9b42145569	Heuristic=1 InstructionPattern=1099 PclntabSymbol=3164 RawScan=3090 SpacedAscii=1 Structure=565
+default	testdata/go_pclntab/linux_amd64	8342	ba7d6a037cc51218	InstructionPattern=1169 PclntabSymbol=3020 RawScan=3550 SpacedAscii=1 Structure=598 WideString=4
+default	testdata/go_pclntab/linux_arm64	7377	7bbe4b221ad2228a	InstructionPattern=1114 PclntabSymbol=2988 RawScan=2659 SpacedAscii=1 Structure=608 WideString=7
+default	testdata/go_pclntab/src/go.mod	2	ed9c94e353d9affc	RawScan=2
+default	testdata/go_pclntab/src/main.go	39	be1ab335470a8845	RawScan=39
+default	testdata/go_pclntab/windows_amd64	6898	4ae680407db6fc47	Base64Decode=1 Heuristic=1 InstructionPattern=1232 PclntabSymbol=4589 RawScan=200 SpacedAscii=1 StackString=23 Structure=841 WideString=10
+default	testdata/go_pclntab/windows_arm64	6819	9c2a1cee0328a53e	Base64Decode=1 Heuristic=1 InstructionPattern=1167 PclntabSymbol=4538 RawScan=197 SpacedAscii=1 Structure=906 WideString=8
+default	testdata/kworker_samples/README.md	80	6428459c29316c60	RawScan=80
 default	testdata/kworker_samples/kworker_obfuscated_1	84	f258c7bb2a0d2663	RawScan=81 StackString=1 Structure=1 WideString=1
 default	testdata/macho/arm64_lcg_xor_universal.macho	548	23b07ede789a1e22	RawScan=547 XorDecode=1
 default	testdata/macho/arm64_lcg_xor_universal.md	11	73b9d08d52497305	RawScan=11
@@ -189,8 +204,9 @@ default	testdata/macho/swift_small_strings_webview.macho	728	2a439894450aed34	Co
 default	testdata/macho/swift_small_strings_webview.md	36	fa643c6bd7f29e44	RawScan=36
 default	testdata/macho/wallet_report_objc	77	ea508df2f1eb8f19	RawScan=77
 default	testdata/macho/xor_fat_dropper.macho	642	22eed4d1e6621939	Heuristic=92 RawScan=355 StackString=2 XorDecode=193
-default	testdata/macho/xor_fat_dropper.md	26	acfe4193e091cbcf	RawScan=26
+default	testdata/macho/xor_fat_dropper.md	26	2a451dc070522c08	RawScan=26
 default	testdata/malware/brew_agent	1912	8edce6eb2ea4852d	CodeSignature=1 RawScan=1888 StackString=8 XorStackPair=15
+default	testdata/malware/brickstorm_linux_amd64	17664	2c0a9c03e0dfbcf0	Base64Decode=6 InstructionPattern=2497 PclntabSymbol=7596 RawScan=5766 SpacedAscii=3 Structure=1095 WideString=73 XorStackPair=628
 default	testdata/malware/dynamichub/DynamicHub	1017	f7e01fd809716420	CodeSignature=12 RawScan=735 XorStackPair=270
 default	testdata/malware/goodboy-stage-01.exe	1205	5406ff850fbf668d	RawScan=953 StackString=2 Structure=229 WideString=21
 default	testdata/malware/kimwolf_installer	7	4ff5718ea951e095	RawScan=7
@@ -198,37 +214,31 @@ default	testdata/malware/poolrat	17988	05f0db6b3abaf6a7	Base64Decode=3 HexDecode
 default	testdata/malware/sample-stealer	55423	ca16c0f2fe48a8ba	Base64Decode=15 InstructionPattern=2559 PclntabSymbol=8952 RawScan=42393 SpacedAscii=5 Structure=1409 UrlDecode=10 WideString=80
 default	testdata/malware/sorry_ransomware.exe	2467	fa9568b03463aed5	RawScan=1670 StackString=7 Structure=787 WideString=3
 default	testdata/malware/themeforestrat	18092	3af58571a207de6f	Base64Decode=3 HexDecode=2 RawScan=18004 SpacedAscii=1 StackString=48 Structure=1 UrlDecode=13 WideString=9 XorStackPair=11
+default	testdata/malware/threadracer.exe	2396	14a3e9fb6b1cd851	RawScan=1872 Structure=1 WideString=522 XorStackPair=1
 default	testdata/malware/vget_sample	7537	6ae4f3716e52e3b5	Base64Decode=1 HexDecode=2 InstructionPattern=119 RawScan=6752 SpacedAscii=3 StackString=15 Structure=588 WideString=56 XorStackPair=1
 default	testdata/malware/wizardnet_downloader.dll	8010	7cbac890fcf44b73	RawScan=6561 Structure=9 UrlDecode=1 WideString=1439
 default	testdata/malware/zyravpn_tun2socks.exe	25773	40e578cd64fa761a	Base64Decode=7 InstructionPattern=4230 PclntabSymbol=18622 RawScan=863 SpacedAscii=3 StackString=54 Structure=1921 WideString=73
 default	testdata/nsis/4d49_Constraining.Opm	5	c524f223250ba7cd	RawScan=1 StackString=2 XorDecode=2
 default	testdata/nsis/57527_Hokerer118.hex	20	bbfe109af10cdaee	RawScan=1 XorDecode=19
+default	testdata/pe/does-nothing-windows-amd64.exe	8673	8891213ffa105003	Base64Decode=1 InstructionPattern=1379 PclntabSymbol=5907 RawScan=266 SpacedAscii=1 Structure=1105 WideString=14
+default	testdata/pe/dotnet_unsigned_x86.dll	40	6442fa0d97134257	RawScan=26 WideString=14
 default	testdata/pe/gobump_windows_amd64.exe	49556	267abd76e721d9b0	Base64Decode=3 Heuristic=2 InstructionPattern=2658 PclntabSymbol=11989 RawScan=33202 SpacedAscii=2 Structure=1675 WideString=25
+default	testdata/pe/hello_windows.exe	16256	628b0e2699876b2e	Base64Decode=1 InstructionPattern=1202 PclntabSymbol=4152 RawScan=10082 SpacedAscii=1 Structure=809 WideString=9
+default	testdata/pe/msvc_console_amd64.exe	141	0796a2ea50b64b12	Base64Decode=1 RawScan=137 StackString=2 UnicodeEscapeDecode=1
+default	testdata/pe/rtc.dll	133	bc865de31d6bf600	RawScan=105 WideString=28
+default	testdata/rust_elf/README.md	9	40f49e6d64d4c1c1	RawScan=9
+default	testdata/rust_elf/linux_amd64	973	a7e888ce51f424c2	Base64Decode=1 InstructionPattern=44 RawScan=855 SpacedAscii=1 StackString=8 Structure=59 WideString=5
+default	testdata/rust_elf/src/Cargo.lock	6	d89f21d2c339c9d2	RawScan=6
+default	testdata/rust_elf/src/Cargo.toml	7	2b2120750c2a6a41	RawScan=7
+default	testdata/rust_elf/src/src/main.rs	14	c1ac2d55923c42be	RawScan=14
 default	testdata/script/batch-cp708-powershell-dropper-db9.bat	8	544916ffb1ea4aa0	RawScan=8
 default	testdata/script/batch-cp708-powershell-dropper-e289.bat	8	23a1b873cee42d0f	RawScan=8
 default	testdata/script/batch-remap-sample.unknown	43	37dc6c72e83a959c	RawScan=43
+default	testdata/script/npm-charcode-rot-packer.js	5	206e67d414694ac0	RawScan=1 ScriptDecode=4
+default	testdata/script/npm-charcode-rot-packer.md	15	792d793b37789957	RawScan=14 SpacedAscii=1
 default	testdata/script/vbscript-encode.asp	5	55d8533c6b016d8f	RawScan=4 ScriptDecode=1
+default	testdata/script/vbscript-encoded-malformed-asp.asp	3740	1b6332390ce587e5	RawScan=2229 ScriptDecode=1509 SpacedAscii=2
+default	testdata/xor/brew_agent_xor_region.bin	1227	16d34d3647c21576	RawScan=1227
+default	testdata/xor/brew_agent_xor_region.md	34	7b896319b3b64d5d	RawScan=34
 default	testdata/xor/brew_agent_xor_sample	1912	8edce6eb2ea4852d	CodeSignature=1 RawScan=1888 StackString=8 XorStackPair=15
 default	testdata/xor/libffmpeg_3cx_x64_xor	14685	6d0a784ad83bcea7	Base64Decode=2 CodeSignature=31 Heuristic=937 InstructionPattern=46 RawScan=12875 SpacedAscii=15 Structure=774 UrlDecode=5
-default	tests/testdata/brickstorm_linux_amd64	17664	2c0a9c03e0dfbcf0	Base64Decode=6 InstructionPattern=2497 PclntabSymbol=7596 RawScan=5766 SpacedAscii=3 Structure=1095 WideString=73 XorStackPair=628
-default	tests/testdata/does-nothing-windows-amd64.exe	8673	8891213ffa105003	Base64Decode=1 InstructionPattern=1379 PclntabSymbol=5907 RawScan=266 SpacedAscii=1 Structure=1105 WideString=14
-default	tests/testdata/go_pclntab/README.md	20	aefe84b9d4058e4e	RawScan=20
-default	tests/testdata/go_pclntab/darwin_amd64	8767	6a5c7da44841bc0e	Heuristic=1 InstructionPattern=1167 PclntabSymbol=3193 RawScan=3851 SpacedAscii=1 Structure=554
-default	tests/testdata/go_pclntab/darwin_arm64	7920	1bdd2e9b42145569	Heuristic=1 InstructionPattern=1099 PclntabSymbol=3164 RawScan=3090 SpacedAscii=1 Structure=565
-default	tests/testdata/go_pclntab/linux_amd64	8342	ba7d6a037cc51218	InstructionPattern=1169 PclntabSymbol=3020 RawScan=3550 SpacedAscii=1 Structure=598 WideString=4
-default	tests/testdata/go_pclntab/linux_arm64	7377	7bbe4b221ad2228a	InstructionPattern=1114 PclntabSymbol=2988 RawScan=2659 SpacedAscii=1 Structure=608 WideString=7
-default	tests/testdata/go_pclntab/src/go.mod	2	ed9c94e353d9affc	RawScan=2
-default	tests/testdata/go_pclntab/src/main.go	39	be1ab335470a8845	RawScan=39
-default	tests/testdata/go_pclntab/windows_amd64	6898	4ae680407db6fc47	Base64Decode=1 Heuristic=1 InstructionPattern=1232 PclntabSymbol=4589 RawScan=200 SpacedAscii=1 StackString=23 Structure=841 WideString=10
-default	tests/testdata/go_pclntab/windows_arm64	6819	9c2a1cee0328a53e	Base64Decode=1 Heuristic=1 InstructionPattern=1167 PclntabSymbol=4538 RawScan=197 SpacedAscii=1 Structure=906 WideString=8
-default	tests/testdata/hello_linux_amd64	16329	ffe3b2b239c42292	Base64Decode=1 InstructionPattern=1199 PclntabSymbol=2751 RawScan=11723 SpacedAscii=1 Structure=650 WideString=4
-default	tests/testdata/hello_windows.exe	16256	628b0e2699876b2e	Base64Decode=1 InstructionPattern=1202 PclntabSymbol=4152 RawScan=10082 SpacedAscii=1 Structure=809 WideString=9
-default	tests/testdata/malware/threadracer.exe	2396	14a3e9fb6b1cd851	RawScan=1872 Structure=1 WideString=522 XorStackPair=1
-default	tests/testdata/pe_small/dotnet_unsigned_x86.dll	40	6442fa0d97134257	RawScan=26 WideString=14
-default	tests/testdata/pe_small/msvc_console_amd64.exe	141	0796a2ea50b64b12	Base64Decode=1 RawScan=137 StackString=2 UnicodeEscapeDecode=1
-default	tests/testdata/rtc.dll	133	bc865de31d6bf600	RawScan=105 WideString=28
-default	tests/testdata/rust_elf/README.md	9	b6b64ad80eb30f1d	RawScan=9
-default	tests/testdata/rust_elf/linux_amd64	973	a7e888ce51f424c2	Base64Decode=1 InstructionPattern=44 RawScan=855 SpacedAscii=1 StackString=8 Structure=59 WideString=5
-default	tests/testdata/rust_elf/src/Cargo.lock	6	d89f21d2c339c9d2	RawScan=6
-default	tests/testdata/rust_elf/src/Cargo.toml	7	2b2120750c2a6a41	RawScan=7
-default	tests/testdata/rust_elf/src/src/main.rs	14	c1ac2d55923c42be	RawScan=14

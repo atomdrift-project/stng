@@ -16,14 +16,9 @@
 #     a read-only token and no access to secrets. This workflow passes no
 #     secrets to build.yml at all — CI artifacts get an ad-hoc macOS signature,
 #     and the Developer ID identity is reachable only from release.yml.
-#   * Every cargo invocation is `--locked`. Without it a drifting git dep or a
-#     compromised registry could swap a dependency out from under a release
-#     build, and Cargo.lock is the only thing pinning cleave/fletch/filefacts/
-#     stng/proclist to reviewed revisions.
-#
-# Smoke tests are deliberately `--version`/`--help` only: a real scan
-# bootstraps the model bundle over the network on first run (see
-# src/models_repo.rs), which we don't want CI depending on.
+#   * Every cargo invocation is `--locked`. Without it a compromised registry
+#     could swap a dependency out from under a release build; Cargo.lock is
+#     what pins each one to a reviewed version.
 
 name: ci
 
@@ -47,8 +42,8 @@ env:
 jobs:
   # Cheapest job, highest value. A `[patch]` entry pointing at a sibling
   # checkout is easy to commit by accident while a cross-repo change is in
-  # flight (see the comment block at the bottom of Cargo.toml). Shipping one
-  # would build a release nobody else can reproduce. Mirrors scripts/pre-commit.
+  # flight. Shipping one would build a release nobody else can reproduce.
+  # Mirrors scripts/pre-commit.
   guard:
     name: guard
     runs-on: ubuntu-24.04
@@ -73,9 +68,8 @@ jobs:
       - name: Cache cargo home
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          # Registry + git checkouts only, never target/. The five git deps are
-          # large and re-cloned on every miss; target/ dirs for this graph run
-          # to tens of GB and would blow the 10 GB per-repo cache budget.
+          # Registry + git checkouts only, never target/: target/ dirs run to
+          # tens of GB and would blow the 10 GB per-repo cache budget.
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
@@ -86,7 +80,10 @@ jobs:
       - run: cargo fmt --all --check
 
       # Matches `make lint` exactly, so a clean local run means a clean CI run.
-      - run: cargo clippy --locked -- -D warnings
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      # The library alone, as its users build it: nothing outside src/cli and
+      # src/main.rs may reach for a `cli`-only dependency.
+      - run: cargo clippy --locked --no-default-features --lib -- -D warnings
 
       # A `--locked` build fails outright on a stale lockfile, but this catches
       # the subtler case of a lockfile that resolves but wasn't committed.

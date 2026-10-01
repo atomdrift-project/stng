@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use stng::ExtractOptions;
 
 const COLD_RUNS: usize = 15;
-const COLD_FILE: &str = "tests/testdata/pe_small/msvc_console_amd64.exe.gz";
+const COLD_FILE: &str = "testdata/pe/msvc_console_amd64.exe.gz";
 
 fn opts(name: &str) -> ExtractOptions {
     match name {
@@ -134,7 +134,7 @@ fn main() {
     }
     if paths.is_empty() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        paths = vec![root.join("testdata"), root.join("tests/testdata")];
+        paths = vec![root.join("testdata")];
     }
     let mut files = Vec::new();
     for p in &paths {

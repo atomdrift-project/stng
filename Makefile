@@ -139,6 +139,7 @@ lint: ## Run code formatting and linting checks
 	@echo ""
 	@echo "Running clippy with workspace lints..."
 	@cargo clippy --workspace --all-targets --all-features -- -D warnings
+	@cargo clippy --no-default-features --lib -- -D warnings
 	@echo "✓ Clippy passed"
 	@echo ""
 	@echo "Checking for unused dependencies..."
