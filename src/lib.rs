@@ -165,7 +165,7 @@ fn extract_stack_strings_from_ranges(
             let section_data = data.get(start..end)?;
             let mut results = extract_stack_strings(section_data, min_length);
             for r in &mut results {
-                r.data_offset += start as u64;
+                r.rebase(start as u64);
             }
             Some(results)
         })
@@ -393,7 +393,7 @@ fn scan_macho_sections(
         ) {
             // The raw scanner offsets are relative to `section_bytes`; lift them
             // to the file by adding the section's file offset.
-            s.data_offset += start as u64;
+            s.rebase(start as u64);
             if seen.insert(s.value.clone()) {
                 out.push(s);
             }
@@ -778,7 +778,7 @@ fn extract_go_text_xor_strings(
         extract_stack_strings_with_context(text, min_length, scan_data, text_vma, image_base);
     // Adjust data_offset to file-relative position.
     for r in &mut xor_results {
-        r.data_offset += text_start as u64;
+        r.rebase(text_start as u64);
     }
     xor_results
         .into_iter()
@@ -1573,7 +1573,7 @@ fn append_script_deobfuscation(
         for s in &mut payload_strings {
             s.method = StringMethod::ScriptDecode;
             s.kind = classifier::classify_string(&s.value);
-            s.data_offset += base_offset;
+            s.rebase(base_offset);
         }
 
         strings.extend(payload_strings);
@@ -2109,7 +2109,6 @@ fn extract_from_object_inner(
             let mut is_go = false;
             let mut is_rust = false;
             let mut segments = Vec::new();
-            let mut section_info = std::collections::HashMap::new();
             let mut first_macho: Option<MachO<'_>> = None;
             // Fat-header offsets of each slice within the whole file, so a slice's
             // strings can be rebased onto the file (a slice's own load commands are
@@ -2152,7 +2151,13 @@ fn extract_from_object_inner(
                         continue;
                     }
                     segments = collect_macho_segments(&macho);
+                    // A slice's load commands are slice-relative; the
+                    // whole-file passes here and after the match need file
+                    // offsets.
                     section_info = collect_macho_section_info(&macho);
+                    for info in section_info.values_mut() {
+                        info.file_offset += slice_base;
+                    }
                     if macho_has_go_sections(&macho) {
                         is_go = true;
                         is_go_binary = true;
@@ -2164,7 +2169,11 @@ fn extract_from_object_inner(
 
                         // See macho_has_go_sections branch above for why we
                         // skip-scan the Go string-blob sections.
-                        let skip = macho_go_skip_ranges(&macho);
+                        let base = usize::try_from(slice_base).unwrap_or(usize::MAX);
+                        let skip: Vec<_> = macho_go_skip_ranges(&macho)
+                            .into_iter()
+                            .map(|r| r.start.saturating_add(base)..r.end.saturating_add(base))
+                            .collect();
                         let new_raw: Vec<_> = {
                             let known: HashSet<&str> =
                                 strings.iter().map(|s| s.value.as_str()).collect();
@@ -2444,7 +2453,7 @@ fn extract_from_object_inner(
                         scan_data.get(start..end).map(|text| {
                             let mut results = extract_stack_strings(text, min_length);
                             for r in &mut results {
-                                r.data_offset += start as u64;
+                                r.rebase(start as u64);
                             }
                             results
                         })
@@ -2893,6 +2902,30 @@ pub(crate) fn test_fixture(path: &str) -> &'static [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stack_string_spans_are_file_offsets() {
+        // mov dword [rbp-0x10], "hell"; mov dword [rbp-0xc], "o wo";
+        // mov dword [rbp-8], "rld\0"; ret — 4 KB into the file.
+        let code = [
+            0xC7, 0x45, 0xF0, b'h', b'e', b'l', b'l', 0xC7, 0x45, 0xF4, b'o', b' ', b'w', b'o',
+            0xC7, 0x45, 0xF8, b'r', b'l', b'd', 0, 0xC3,
+        ];
+        let mut data = vec![0u8; 4096];
+        data.extend_from_slice(&code);
+        let found = extract_stack_strings_from_ranges(&data, 4, &[(4096, data.len())]);
+        let s = found
+            .iter()
+            .find(|s| s.value.starts_with("hello"))
+            .unwrap_or_else(|| panic!("no stack string in {found:?}"));
+        assert!(s.fragments.is_some(), "{s:?}");
+        for (offset, len) in s.source_spans() {
+            assert!(
+                offset >= 4096 && offset + len <= data.len() as u64,
+                "span {offset}+{len} outside the code: {s:?}"
+            );
+        }
+    }
 
     #[test]
     fn instruction_referenced_text_preserves_layout_without_exempting_raw_noise() {

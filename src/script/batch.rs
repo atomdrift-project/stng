@@ -139,6 +139,11 @@ impl Expander {
                     let body = &rest[..end];
                     if let Some(v) = self.lookup(body) {
                         out.push_str(&v);
+                        // A short line of references to a long value
+                        // expands without bound; stop at the output cap.
+                        if out.len() > MAX_OUTPUT {
+                            return out;
+                        }
                     } else {
                         out.push('%');
                         out.push_str(body);
@@ -168,6 +173,9 @@ impl Expander {
                     if self.vars.contains_key(&key) {
                         let v = self.lookup(body).unwrap_or_default();
                         out.push_str(&v);
+                        if out.len() > MAX_OUTPUT {
+                            return out;
+                        }
                         rest = &after[end + 1..];
                         continue;
                     }
@@ -471,6 +479,16 @@ mod tests {
         expand_batch_variables(src.as_bytes())
             .map(|r| r.decoded)
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn expansion_stops_at_output_cap() {
+        // 32 KB value referenced from one 2 MB line: ~20 GB if unbounded.
+        let value = "A".repeat(MAX_VALUE);
+        let refs = "%a%".repeat((MAX_INPUT - MAX_VALUE - 64) / 3);
+        let src = format!("@echo off\nset a={value}\necho {refs}\n");
+        let out = expand(&src);
+        assert!(out.len() <= MAX_OUTPUT + 2 * MAX_VALUE, "{}", out.len());
     }
 
     #[test]

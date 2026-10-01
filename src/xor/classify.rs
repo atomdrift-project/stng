@@ -13,6 +13,7 @@ use super::{MAX_AUTO_DETECT_SIZE, MAX_XOR_SCAN_SIZE, SKIP_XOR_KEYS};
 use crate::{ExtractedString, StringKind, StringMethod, classifier::classify_string};
 use rayon::prelude::*;
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 pub(crate) fn trim_consonant_clusters(s: &str) -> String {
     if s.len() < 8 {
@@ -173,6 +174,27 @@ fn value_is_key_echo(value_lower: &str, key_lower: &str) -> bool {
     })
 }
 
+/// Strings that, decoded under a candidate key, make it worth a full scan.
+#[allow(clippy::expect_used)] // static patterns
+static KILLER_PATTERNS: LazyLock<aho_corasick::AhoCorasick> = LazyLock::new(|| {
+    aho_corasick::AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build([
+            "osascript",
+            "screencapture",
+            "/bin/sh",
+            "/bin/bash",
+            "2>&1",
+            "http://",
+            "https://",
+            "launchctl",
+            "electrum",
+            "ethereum",
+            "exodus",
+        ])
+        .expect("killer patterns")
+});
+
 pub(crate) fn auto_detect_xor_key(
     data: &[u8],
     candidate_strings: &[ExtractedString],
@@ -224,25 +246,6 @@ pub(crate) fn auto_detect_xor_key(
     // Skip candidates that don't decode killer IOCs in first 32KB - saves time by avoiding full extraction
     let quick_scan_size = std::cmp::min(32768, data.len());
     let quick_data = &data[..quick_scan_size];
-    let killer_patterns = [
-        "osascript",
-        "screencapture",
-        "/bin/sh",
-        "/bin/bash",
-        "2>&1",
-        "http://",
-        "https://",
-        "launchctl",
-        "electrum",
-        "ethereum",
-        "exodus",
-    ];
-
-    // Build Aho-Corasick automaton for all killer patterns (byte-level, no UTF-8 needed)
-    let killer_ac = aho_corasick::AhoCorasick::builder()
-        .ascii_case_insensitive(true)
-        .build(killer_patterns)
-        .ok();
 
     let mut promising_candidates = Vec::new();
     for (offset, candidate) in &candidates {
@@ -254,7 +257,7 @@ pub(crate) fn auto_detect_xor_key(
             .collect();
 
         // Search decoded bytes directly — no UTF-8 conversion needed
-        let found = killer_ac.as_ref().is_some_and(|ac| ac.is_match(&decoded));
+        let found = KILLER_PATTERNS.is_match(&decoded);
         if found {
             promising_candidates.push((*offset, *candidate));
         }
@@ -436,25 +439,16 @@ pub(crate) fn extract_xor_strings(
         return Vec::new();
     }
 
-    let (ac, pattern_info) = if scan_wide {
-        &*super::scan::AUTOMATON_WITH_WIDE
-    } else {
-        &*super::scan::AUTOMATON_ASCII
-    };
     let mut results = Vec::new();
     let mut seen: HashSet<(u64, String)> = HashSet::new();
 
-    // Single pass through the data using overlapping matches
-    for mat in ac.find_overlapping_iter(data) {
-        let mat: aho_corasick::Match = mat;
-        let info = &pattern_info[mat.pattern().as_usize()];
-        let pos = mat.start();
+    for (pos, key, is_wide) in super::scan::single_byte_xor_anchors(data, scan_wide) {
         // Wide (UTF-16LE) and narrow matches differ only in the expander and the
         // provenance suffix; the recording is identical.
-        let expanded = if info.is_wide {
-            expand_xor_wide_string(data, pos, info.key, min_length)
+        let expanded = if is_wide {
+            expand_xor_wide_string(data, pos, key, min_length)
         } else {
-            expand_xor_string(data, pos, info.key, min_length)
+            expand_xor_string(data, pos, key, min_length)
         };
         if let Some((decoded, start, end)) = expanded
             && let Some(kind) = classify_xor_string(&decoded)
@@ -778,6 +772,9 @@ pub(crate) fn scan_dotted_patterns(
     }
 }
 
+/// Longest DNS name (RFC 1035): a longer run of hostname bytes is not one.
+const MAX_HOSTNAME: usize = 253;
+
 /// Extract a hostname starting from a dot position.
 pub(crate) fn extract_hostname_at_dot(
     data: &[u8],
@@ -785,29 +782,22 @@ pub(crate) fn extract_hostname_at_dot(
     key: u8,
     min_length: usize,
 ) -> Option<(String, usize, usize)> {
-    // Expand backward
+    let is_host_byte = |i: usize| {
+        let decoded = data[i] ^ key;
+        decoded.is_ascii_alphanumeric() || decoded == b'-' || decoded == b'.'
+    };
+    // Expand at most one byte past the longest legal name each way: callers
+    // try every dot, so an unbounded walk is quadratic in a long run.
     let mut start = dot_pos;
-    while start > 0 {
-        let decoded = data[start - 1] ^ key;
-        if decoded.is_ascii_alphanumeric() || decoded == b'-' || decoded == b'.' {
-            start -= 1;
-        } else {
-            break;
-        }
+    while start > 0 && dot_pos - start <= MAX_HOSTNAME && is_host_byte(start - 1) {
+        start -= 1;
     }
-
-    // Expand forward
     let mut end = dot_pos + 1;
-    while end < data.len() {
-        let decoded = data[end] ^ key;
-        if decoded.is_ascii_alphanumeric() || decoded == b'-' || decoded == b'.' {
-            end += 1;
-        } else {
-            break;
-        }
+    while end < data.len() && end - dot_pos <= MAX_HOSTNAME && is_host_byte(end) {
+        end += 1;
     }
 
-    if end - start < min_length {
+    if end - start < min_length || end - start > MAX_HOSTNAME {
         return None;
     }
 
@@ -1054,8 +1044,11 @@ pub(crate) fn expand_xor_wide_string(
     key: u8,
     min_length: usize,
 ) -> Option<(String, usize, usize)> {
+    // Same reach as the narrow expander, in UTF-16 units: callers expand
+    // every hit, so an unbounded walk is quadratic in a long run.
+    let reach = 2 * MAX_EXPAND_DISTANCE;
     let mut start = match_pos;
-    while start >= 2 {
+    while start >= 2 && match_pos - start < reach {
         let lo = data[start - 2] ^ key;
         let hi = data[start - 1] ^ key;
         if hi != 0 || !is_printable_char(lo) {
@@ -1065,7 +1058,7 @@ pub(crate) fn expand_xor_wide_string(
     }
 
     let mut end = match_pos;
-    while end + 1 < data.len() {
+    while end + 1 < data.len() && end - match_pos < reach {
         let lo = data[end] ^ key;
         let hi = data[end + 1] ^ key;
         if hi != 0 || !is_printable_char(lo) {

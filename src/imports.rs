@@ -10,7 +10,7 @@ pub(crate) fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec
     let mut seen: HashSet<String> = HashSet::new();
 
     // Extract imports with their source library
-    if let Ok(imports) = macho.imports() {
+    if let Some(imports) = crate::binary::contain(|| macho.imports()) {
         for import in imports {
             if import.name.len() >= min_length && seen.insert(import.name.to_string()) {
                 // Convert virtual address to file offset
@@ -27,7 +27,7 @@ pub(crate) fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec
     }
 
     // Extract exports
-    if let Ok(exports) = macho.exports() {
+    if let Some(exports) = crate::binary::contain(|| macho.exports()) {
         for export in exports {
             if export.name.len() >= min_length && seen.insert(export.name.clone()) {
                 // Convert virtual address to file offset

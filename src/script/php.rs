@@ -146,15 +146,7 @@ fn try_eval_rot13(source: &str) -> Vec<DeobfuscationResult> {
 /// Raw deflate decompression (no zlib/gzip header).
 /// This is what PHP's `gzinflate()` expects.
 fn inflate_raw(data: &[u8]) -> Option<Vec<u8>> {
-    use flate2::read::DeflateDecoder;
-    use std::io::Read;
-    let mut decoder = DeflateDecoder::new(data);
-    let mut out = Vec::new();
-    decoder.read_to_end(&mut out).ok()?;
-    if out.is_empty() {
-        return None;
-    }
-    Some(out)
+    super::decode_chain::inflate(flate2::read::DeflateDecoder::new(data))
 }
 
 #[cfg(test)]

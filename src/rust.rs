@@ -174,7 +174,7 @@ impl RustStringExtractor {
                     // extract_raw_strings offsets are relative to the __cstring
                     // slice; lift onto the section's VA so the VA->file pass below
                     // resolves them like every other phase.
-                    s.data_offset += cstring_addr;
+                    s.rebase(cstring_addr);
                     s
                 })
                 .collect();
@@ -448,24 +448,8 @@ impl RustStringExtractor {
         target_section: &str,
         info: &BinaryInfo,
     ) -> Option<Vec<ExtractedString>> {
-        // Find the target section
-        let mut section_info: Option<(u64, usize, usize)> = None;
-
-        for sh in &elf.section_headers {
-            let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
-            if name == target_section {
-                section_info = Some((sh.sh_addr, sh.sh_offset as usize, sh.sh_size as usize));
-                break;
-            }
-        }
-
-        let (section_addr, section_offset, section_size) = section_info?;
-
-        if section_offset + section_size > data.len() {
-            return None;
-        }
-
-        let section_data = &data[section_offset..section_offset + section_size];
+        let (section_addr, section_data) = self.find_section(elf, data, target_section)?;
+        let section_size = section_data.len();
 
         // Search all sections for string structures pointing into this section
         let mut all_structs = Vec::new();

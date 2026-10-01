@@ -6,7 +6,7 @@
 use base64::Engine;
 
 /// Maximum decoded output size to prevent memory exhaustion (10 MB).
-const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024;
+pub(crate) const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024;
 
 /// Maximum recursion depth for nested obfuscation.
 pub const MAX_DECODE_DEPTH: usize = 3;
@@ -100,6 +100,19 @@ pub fn apply_chain(input: &[u8], steps: &[DecodeStep]) -> Option<DecodeResult> {
     })
 }
 
+/// Read a decompressor to the end, refusing empty output and output larger
+/// than [`MAX_DECODED_SIZE`]: a few KB of crafted deflate stream can expand to
+/// gigabytes, so the limit applies while inflating, not after.
+pub(crate) fn inflate(decoder: impl std::io::Read) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    decoder
+        .take(MAX_DECODED_SIZE as u64 + 1)
+        .read_to_end(&mut out)
+        .ok()?;
+    (!out.is_empty() && out.len() <= MAX_DECODED_SIZE).then_some(out)
+}
+
 /// Apply a single decode step to a byte buffer.
 fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
     match step {
@@ -111,28 +124,8 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
                 .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(input))
                 .ok()
         }
-        DecodeStep::Zlib => {
-            use flate2::read::ZlibDecoder;
-            use std::io::Read;
-            let mut decoder = ZlibDecoder::new(input);
-            let mut out = Vec::new();
-            decoder.read_to_end(&mut out).ok()?;
-            if out.is_empty() {
-                return None;
-            }
-            Some(out)
-        }
-        DecodeStep::Gzip => {
-            use flate2::read::GzDecoder;
-            use std::io::Read;
-            let mut decoder = GzDecoder::new(input);
-            let mut out = Vec::new();
-            decoder.read_to_end(&mut out).ok()?;
-            if out.is_empty() {
-                return None;
-            }
-            Some(out)
-        }
+        DecodeStep::Zlib => inflate(flate2::read::ZlibDecoder::new(input)),
+        DecodeStep::Gzip => inflate(flate2::read::GzDecoder::new(input)),
         DecodeStep::Xor(key) => Some(input.iter().map(|b| b ^ key).collect()),
         DecodeStep::Rot13 => Some(
             input
@@ -186,6 +179,25 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inflate_refuses_decompression_bombs() {
+        use std::io::Write;
+        // 16 MB of zeros compresses to ~16 KB; inflating must stop at the cap.
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(&vec![0u8; 16 * 1024 * 1024]).unwrap();
+        let bomb = encoder.finish().unwrap();
+        assert!(bomb.len() < 64 * 1024);
+        assert_eq!(apply_step(&bomb, &DecodeStep::Zlib), None);
+
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(b"echo hello").unwrap();
+        let small = encoder.finish().unwrap();
+        assert_eq!(
+            apply_step(&small, &DecodeStep::Zlib).as_deref(),
+            Some(&b"echo hello"[..])
+        );
+    }
 
     #[test]
     fn test_base64_step() {

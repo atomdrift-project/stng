@@ -988,8 +988,9 @@ fn is_reloc_table_pattern(s: &str, len: usize) -> bool {
 
 /// Returns true if the string has excessive non-ASCII content indicating corrupted/garbage data.
 fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bool {
-    let non_ascii_count = len - stats.ascii_count;
-    if non_ascii_count == 0 {
+    // Bytes, not characters: `len` is a byte length (see is_garbage_with_context).
+    let non_ascii_bytes = len - stats.ascii_count;
+    if non_ascii_bytes == 0 {
         return false;
     }
 
@@ -1024,24 +1025,24 @@ fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bool {
             )
         });
         if (alpha_percentage < MIN_NON_ASCII_ALPHABETIC_RATIO || has_noise_punct)
-            && non_ascii_count * 100 / len > MAX_NON_ASCII_RATIO
+            && non_ascii_bytes * 100 / len > MAX_NON_ASCII_RATIO
         {
             return true;
         }
-        if len < SHORT_NON_ASCII_CHECK_LEN && non_ascii_count >= MIN_NON_ASCII_COUNT_SHORT {
+        if len < SHORT_NON_ASCII_CHECK_LEN && non_ascii_bytes >= MIN_NON_ASCII_COUNT_SHORT {
             return true;
         }
 
         // Multiple non-ASCII chars in short strings with mixed case is likely garbage
         // e.g., "uDuntßñ6OlÇÕ" - even if they're alphabetic, the pattern is random
-        if non_ascii_count >= 3 && len < 20 && stats.upper > 0 && stats.lower > 0 {
+        if non_ascii_bytes >= 3 && len < 20 && stats.upper > 0 && stats.lower > 0 {
             // If has digits mixed in, even more suspicious
             if stats.digit > 0 {
                 return true;
             }
             // If has 3+ non-ASCII characters in a short string, likely garbage
             // unless it's a recognizable language pattern
-            let non_ascii_ratio = non_ascii_count * 100 / len;
+            let non_ascii_ratio = non_ascii_bytes * 100 / len;
             if non_ascii_ratio > 25 {
                 return true;
             }
@@ -1049,23 +1050,23 @@ fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bool {
 
         // Repetitive patterns with non-ASCII are likely misaligned binary data
         // e.g., "zçz&zÇzÌzhzµzyz½z{zHz}zQz..." - single char repeated with noise
-        if non_ascii_count >= 3 && stats.noise_punct >= 3 {
+        if non_ascii_bytes >= 3 && stats.noise_punct >= 3 {
             return true;
         }
     } else {
         // Longer strings (>=30 chars)
-        if non_ascii_count * 100 / len > 30 {
+        if non_ascii_bytes * 100 / len > 30 {
             return true;
         }
         // Repetitive patterns with non-ASCII and noise punctuation
-        if non_ascii_count >= 3 && stats.noise_punct >= 3 {
+        if non_ascii_bytes >= 3 && stats.noise_punct >= 3 {
             return true;
         }
     }
 
     // Detect repetitive single-char patterns like "zçz&zÇz..." where one letter
     // appears very frequently (>30% of chars) with non-ASCII mixed in
-    if non_ascii_count >= 1 && len >= 10 {
+    if non_ascii_bytes >= 1 && len >= 10 {
         let mut char_counts = [0u8; 128]; // ASCII frequency counter
         for c in s.chars() {
             if c.is_ascii() {
@@ -1086,7 +1087,7 @@ fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bool {
     // Short strings (4-8 chars) starting with digit + non-ASCII are garbage
     // e.g., "7üĐō", "4ÛŷƮ", "6Æťƒ" - random bytes decoded as UTF-8
     // Use char_count for proper Unicode handling
-    if non_ascii_count >= 1 && stats.char_count <= 8 && stats.first_char.is_ascii_digit() {
+    if non_ascii_bytes >= 1 && stats.char_count <= 8 && stats.first_char.is_ascii_digit() {
         return true;
     }
 
@@ -1999,7 +2000,11 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bo
         return false;
     }
 
-    // Statistical analysis (character distribution, patterns, transitions)
+    // Statistical analysis (character distribution, patterns, transitions).
+    // `len` stays the byte length although `CharStats` counts characters: a
+    // multi-byte character then weighs more in every ratio, which keeps the
+    // filter strict on non-ASCII text. The thresholds are tuned to that;
+    // character counts admit Unicode-table noise (measured 2026-10-01).
     let stats = CharStats::from_str(trimmed);
     is_statistical_garbage(trimmed, len, &stats, ctx)
 }

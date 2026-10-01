@@ -1194,6 +1194,34 @@ mod tests {
     }
 
     #[test]
+    fn rolling_xor_region_decodes_with_key_aligned_to_match() {
+        // A 3-byte key, and anchors 4 KB in: the decoded region starts 4096
+        // bytes before the match, which is not a multiple of the key length.
+        let key = [0x01, 0x02, 0x03];
+        let mut data = vec![0u8; 10_000];
+        for (at, text) in [
+            (5003, &b"%USERPROFILE%\\Documents\\stealer.log"[..]),
+            (5204, &b"HKEY_CURRENT_USER\\Software\\Run"[..]),
+        ] {
+            for (i, &b) in text.iter().enumerate() {
+                data[at + i] = b ^ key[i % key.len()];
+            }
+        }
+        let values: Vec<String> = extract_rolling_xor_with_known_plaintext(&data, 8, &[])
+            .into_iter()
+            .map(|s| s.value)
+            .collect();
+        assert!(
+            values.contains(&"%USERPROFILE%\\Documents\\stealer.log".to_owned()),
+            "{values:?}"
+        );
+        assert!(
+            values.contains(&"HKEY_CURRENT_USER\\Software\\Run".to_owned()),
+            "{values:?}"
+        );
+    }
+
+    #[test]
     fn test_rolling_xor_no_false_positives() {
         // Random data should not produce false positives
         let data: Vec<u8> = (0..500u32)

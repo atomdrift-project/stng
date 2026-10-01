@@ -130,7 +130,7 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
                     // Everything else stays as Overlay
                     _ => Some(StringKind::Overlay),
                 };
-                s.data_offset += start as u64;
+                s.rebase(start as u64);
             }
 
             // Extract wide strings
@@ -169,7 +169,7 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
                     // Everything else stays as OverlayWide
                     _ => Some(StringKind::OverlayWide),
                 };
-                s.data_offset += start as u64;
+                s.rebase(start as u64);
                 strings.push(s);
             }
         }

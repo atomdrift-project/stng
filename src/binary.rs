@@ -24,44 +24,116 @@ pub fn code_ranges_from_sections(
 
 /// Heuristic: is this binary signed by a platform vendor (Apple, Microsoft)?
 ///
-/// Only *platform* signatures — the CAs that ship the OS — are treated as
-/// trustworthy-enough to skip expensive pattern scans. Third-party developer
-/// signatures (including malware that managed to get signed) are NOT matched
-/// here.
+/// Only *platform* signatures — the chains that sign the OS itself — are
+/// treated as trustworthy-enough to skip expensive pattern scans. Third-party
+/// signatures (including malware that managed to get signed) are NOT matched:
 ///
-/// Implemented as a bounded memmem scan for CA subject strings that appear
-/// verbatim in the embedded code signature / Authenticode blob. We scan both
-/// the head and the tail of the file because Mach-O places
-/// `LC_CODE_SIGNATURE` after `__LINKEDIT` (near the file tail) and PE's
-/// Certificate Table directory typically lives near the end as well.
+/// - Apple: the "Software Signing" leaf issued by Apple's platform CA. Every
+///   Apple chain, Developer ID included, ends in "Apple Root CA", so that name
+///   proves nothing (3CX's trojanized libffmpeg carries it).
+/// - Microsoft: the Windows Production PCA, which issues only Windows
+///   components. Microsoft's timestamp countersignatures (rooted in "Microsoft
+///   Root Certificate Authority") and WHQL-attested third-party drivers
+///   ("Microsoft Windows Hardware Compatibility Publisher") do not chain to it.
+///
+/// Names are looked for only inside the embedded signature
+/// ([`signature_blobs`]); anywhere else they are just bytes a sample can carry
+/// to opt out of scanning. Signatures are not verified, so a binary carrying a
+/// copied platform signature blob still passes.
 #[must_use]
 pub fn is_platform_signed(data: &[u8]) -> bool {
-    // Apple platform CAs — match only Apple's own OS/system binaries, not
-    // Developer ID third-party signatures.
-    const APPLE_PLATFORM_CAS: &[&[u8]] = &[
-        b"Apple Root CA",
-        b"Apple Mac OS Application Signing",
-        b"Software Signing",
-    ];
-    // Microsoft platform CAs — Windows system binaries, driver signing.
-    const MICROSOFT_PLATFORM_CAS: &[&[u8]] = &[
-        b"Microsoft Windows Production PCA",
-        b"Microsoft Windows",
-        b"Microsoft Root Certificate Authority",
-    ];
-    const HEAD_WINDOW: usize = 4 * 1024 * 1024;
-    const TAIL_WINDOW: usize = 4 * 1024 * 1024;
-    let head_end = data.len().min(HEAD_WINDOW);
-    let tail_start = data.len().saturating_sub(TAIL_WINDOW).max(head_end);
-    let head = &data[..head_end];
-    let tail = &data[tail_start..];
-    APPLE_PLATFORM_CAS
-        .iter()
-        .chain(MICROSOFT_PLATFORM_CAS.iter())
-        .any(|needle| {
-            memchr::memmem::find(head, needle).is_some()
-                || memchr::memmem::find(tail, needle).is_some()
-        })
+    signature_blobs(data).iter().any(|blob| {
+        let has = |name: &[u8]| memchr::memmem::find(blob, name).is_some();
+        let apple = has(b"Apple Code Signing Certification Authority")
+            && has(b"Software Signing")
+            && !has(b"Developer ID");
+        let microsoft = has(b"Microsoft Windows Production PCA");
+        apple || microsoft
+    })
+}
+
+/// The code-signature data embedded in a binary: a PE's Authenticode
+/// certificate table, or the `LC_CODE_SIGNATURE` blob of a Mach-O (of each
+/// slice, for a universal binary). Headers are read with bounds checks, so a
+/// malformed one yields fewer blobs, never a panic.
+fn signature_blobs(data: &[u8]) -> Vec<&[u8]> {
+    let span = |start: u64, len: u64| {
+        let start = usize::try_from(start).ok()?;
+        data.get(start..start.checked_add(usize::try_from(len).ok()?)?)
+    };
+    let bytes = |at: usize, n: usize| data.get(at..at.checked_add(n)?);
+    let u16_le = |at| Some(u16::from_le_bytes(bytes(at, 2)?.try_into().ok()?));
+    let u32_le = |at| Some(u32::from_le_bytes(bytes(at, 4)?.try_into().ok()?));
+    let u32_be = |at| Some(u32::from_be_bytes(bytes(at, 4)?.try_into().ok()?));
+    let u64_be = |at| Some(u64::from_be_bytes(bytes(at, 8)?.try_into().ok()?));
+
+    // LC_CODE_SIGNATURE of the thin Mach-O at `base`.
+    let macho = |base: usize| -> Option<&[u8]> {
+        const LC_CODE_SIGNATURE: u32 = 0x1d;
+        // Inside the file, so the small offsets added below cannot overflow.
+        data.get(base..)?;
+        let header_len = match u32_le(base)? {
+            0xfeed_face => 28,
+            0xfeed_facf => 32,
+            _ => return None,
+        };
+        let ncmds = u32_le(base + 16)?;
+        let mut at = base.checked_add(header_len)?;
+        for _ in 0..ncmds.min(4096) {
+            let (cmd, size) = (u32_le(at)?, u32_le(at + 4)?);
+            if cmd == LC_CODE_SIGNATURE {
+                let (offset, len) = (u32_le(at + 8)?, u32_le(at + 12)?);
+                return span(base as u64 + u64::from(offset), u64::from(len));
+            }
+            if size < 8 {
+                return None;
+            }
+            at = at.checked_add(usize::try_from(size).ok()?)?;
+        }
+        None
+    };
+
+    match data.get(..4) {
+        Some([b'M', b'Z', ..]) => {
+            // Authenticode: data directory 4, whose "address" is a file offset.
+            let pe = usize::try_from(u32_le(0x3c).unwrap_or(0)).unwrap_or(0);
+            let optional = pe + 24;
+            let directories = match (data.get(pe..pe + 4), u16_le(optional)) {
+                (Some(b"PE\0\0"), Some(0x10b)) => optional + 96,
+                (Some(b"PE\0\0"), Some(0x20b)) => optional + 112,
+                _ => return Vec::new(),
+            };
+            let count = u32_le(directories - 4).unwrap_or(0);
+            let entry = directories + 4 * 8;
+            if count <= 4 {
+                return Vec::new();
+            }
+            match (u32_le(entry), u32_le(entry + 4)) {
+                (Some(offset), Some(len)) => span(u64::from(offset), u64::from(len))
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            }
+        }
+        Some([0xca, 0xfe, 0xba, 0xbe | 0xbf]) => {
+            // Universal binary: big-endian slice table (64-bit offsets for 0xcafebabf).
+            let wide = data[3] == 0xbf;
+            let entry_len = if wide { 32 } else { 20 };
+            let slices = u32_be(4).unwrap_or(0).min(64) as usize;
+            (0..slices)
+                .filter_map(|i| {
+                    let entry = 8 + i * entry_len;
+                    let offset = if wide {
+                        u64_be(entry + 8)?
+                    } else {
+                        u64::from(u32_be(entry + 8)?)
+                    };
+                    macho(usize::try_from(offset).ok()?)
+                })
+                .collect()
+        }
+        _ => macho(0).into_iter().collect(),
+    }
 }
 
 /// Convert a PE section name ([u8; 8]) to a String, trimming NUL bytes.
@@ -100,6 +172,19 @@ impl SectionInfo {
         let end = start.saturating_add(size);
         (start, end)
     }
+}
+
+/// Run one of goblin's lazy walks, treating a panic as a parse failure.
+///
+/// goblin's Mach-O bind-opcode interpreter (`MachO::imports`, goblin 0.10
+/// `mach/imports.rs`) indexes the segment and dylib tables with ordinals read
+/// from the file, so a crafted binary panics it. A hostile file should cost
+/// its imports, not the whole extraction. This is stng's only `catch_unwind`:
+/// confine it to third-party walks we cannot bound ourselves.
+pub(crate) fn contain<T, E>(walk: impl FnOnce() -> Result<T, E>) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(walk))
+        .ok()?
+        .ok()
 }
 
 /// Collect segment and section names from a Mach-O binary.
@@ -525,4 +610,135 @@ pub(crate) fn macho_vaddr_to_file_offset(macho: &MachO<'_>, vaddr: u64) -> u64 {
 
     // If not found in any segment, return the vaddr as-is
     vaddr
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CA: &[u8] = b"Microsoft Windows Production PCA 2011";
+
+    fn put(data: &mut [u8], at: usize, bytes: &[u8]) {
+        data[at..at + bytes.len()].copy_from_slice(bytes);
+    }
+
+    /// A PE32+ header whose certificate table covers `[0x300, 0x400)`.
+    fn pe() -> Vec<u8> {
+        let mut data = vec![0u8; 0x400];
+        put(&mut data, 0, b"MZ");
+        put(&mut data, 0x3c, &0x80u32.to_le_bytes());
+        put(&mut data, 0x80, b"PE\0\0");
+        let optional = 0x80 + 24;
+        put(&mut data, optional, &0x20bu16.to_le_bytes());
+        put(&mut data, optional + 108, &16u32.to_le_bytes());
+        put(&mut data, optional + 112 + 32, &0x300u32.to_le_bytes());
+        put(&mut data, optional + 112 + 36, &0x100u32.to_le_bytes());
+        data
+    }
+
+    /// A 64-bit Mach-O whose LC_CODE_SIGNATURE covers `[0x200, 0x300)`.
+    fn macho() -> Vec<u8> {
+        let mut data = vec![0u8; 0x300];
+        put(&mut data, 0, &0xfeed_facfu32.to_le_bytes());
+        put(&mut data, 16, &1u32.to_le_bytes());
+        for (i, word) in [0x1du32, 16, 0x200, 0x100].iter().enumerate() {
+            put(&mut data, 32 + 4 * i, &word.to_le_bytes());
+        }
+        data
+    }
+
+    #[test]
+    fn platform_ca_counts_only_inside_the_signature() {
+        let mut signed = pe();
+        put(&mut signed, 0x320, CA);
+        assert!(is_platform_signed(&signed));
+        let mut planted = pe();
+        put(&mut planted, 0x200, CA);
+        assert!(
+            !is_platform_signed(&planted),
+            "CA name outside the certificate table"
+        );
+
+        let mut signed = macho();
+        put(&mut signed, 0x210, CA);
+        assert!(is_platform_signed(&signed));
+        let mut planted = macho();
+        put(&mut planted, 0x100, CA);
+        assert!(
+            !is_platform_signed(&planted),
+            "CA name outside LC_CODE_SIGNATURE"
+        );
+
+        // Universal binary: one slice at 0x1000, its blob relative to the slice.
+        let mut fat = vec![0u8; 0x1000];
+        put(&mut fat, 0, &0xcafe_babeu32.to_be_bytes());
+        put(&mut fat, 4, &1u32.to_be_bytes());
+        put(&mut fat, 8 + 8, &0x1000u32.to_be_bytes());
+        put(&mut fat, 8 + 12, &0x300u32.to_be_bytes());
+        fat.extend(signed);
+        assert!(is_platform_signed(&fat));
+        assert!(!is_platform_signed(CA));
+    }
+
+    #[test]
+    fn third_party_chains_are_not_platform() {
+        let signed_with = |names: &[&[u8]]| {
+            let mut data = macho();
+            let mut at = 0x200;
+            for name in names {
+                put(&mut data, at, name);
+                at += name.len() + 1;
+            }
+            is_platform_signed(&data)
+        };
+        let platform: &[&[u8]] = &[
+            b"Software Signing",
+            b"Apple Code Signing Certification Authority",
+            b"Apple Root CA",
+        ];
+        assert!(signed_with(platform));
+        // 3CX's trojanized libffmpeg: a Developer ID chain to the same root.
+        assert!(!signed_with(&[
+            b"Developer ID Application: 3CX (33CF4654HL)",
+            b"Developer ID Certification Authority",
+            b"Apple Root CA",
+        ]));
+
+        let authenticode_with = |names: &[&[u8]]| {
+            let mut data = pe();
+            let mut at = 0x300;
+            for name in names {
+                put(&mut data, at, name);
+                at += name.len() + 1;
+            }
+            is_platform_signed(&data)
+        };
+        // A vendor signature with a Microsoft timestamp countersignature.
+        assert!(!authenticode_with(&[
+            b"Microsoft Time-Stamp PCA 2010",
+            b"Microsoft Root Certificate Authority 2010",
+        ]));
+        // A WHQL-attested third-party driver.
+        assert!(!authenticode_with(&[
+            b"Microsoft Windows Hardware Compatibility Publisher",
+            b"Microsoft Windows Third Party Component CA 2014",
+        ]));
+    }
+
+    #[test]
+    fn signature_walk_survives_hostile_headers() {
+        let mut data = macho();
+        put(&mut data, 16, &u32::MAX.to_le_bytes()); // ncmds
+        put(&mut data, 32 + 4, &0u32.to_le_bytes()); // cmdsize 0
+        put(&mut data, 32, &0x19u32.to_le_bytes());
+        assert!(!is_platform_signed(&data));
+        let mut data = pe();
+        put(&mut data, 0x3c, &u32::MAX.to_le_bytes());
+        assert!(!is_platform_signed(&data));
+        let mut fat = vec![0u8; 64];
+        put(&mut fat, 0, &0xcafe_babfu32.to_be_bytes());
+        put(&mut fat, 4, &u32::MAX.to_be_bytes());
+        put(&mut fat, 8 + 8, &u64::MAX.to_be_bytes());
+        assert!(!is_platform_signed(&fat));
+    }
 }

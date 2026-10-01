@@ -106,6 +106,16 @@ impl ExtractedString {
         }
     }
 
+    /// Move this string's source location by `delta` bytes: its offset and
+    /// every fragment. Extractors report offsets relative to the bytes they
+    /// were given; callers lift them into the file with this.
+    pub(crate) fn rebase(&mut self, delta: u64) {
+        self.data_offset += delta;
+        for fragment in self.fragments.iter_mut().flat_map(|f| f.iter_mut()) {
+            fragment.offset += delta;
+        }
+    }
+
     /// Source byte length of this string's single contiguous extent: the
     /// recorded `data_len`, or the value's byte length when unrecorded (only
     /// the byte-identical scans leave it unrecorded). A string decoded from

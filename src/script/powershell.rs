@@ -206,12 +206,20 @@ fn try_iex_replace(source: &str) -> Vec<DeobfuscationResult> {
             let replace_chain = cap.get(2)?.as_str();
             let offset = cap.get(0)?.start();
 
-            // Apply all .replace() calls in order
+            // Apply all .replace() calls in order. .NET rejects an empty
+            // search string, and each replace can multiply the length, so
+            // bound the result rather than trust the chain.
             let mut result = base_str;
             for rcap in REPLACE_PAIR_RE.captures_iter(replace_chain) {
                 let from = rcap.get(1)?.as_str();
                 let to = rcap.get(2)?.as_str();
+                if from.is_empty() {
+                    return None;
+                }
                 result = result.replace(from, to);
+                if result.len() > super::decode_chain::MAX_DECODED_SIZE {
+                    return None;
+                }
             }
 
             if result.is_empty() {
@@ -232,6 +240,16 @@ fn try_iex_replace(source: &str) -> Vec<DeobfuscationResult> {
 mod tests {
     use super::*;
     use base64::Engine;
+
+    #[test]
+    fn replace_chain_with_empty_search_is_rejected() {
+        // `"".replace` would insert between every character, 10x per call.
+        let chain = ".replace('','xxxxxxxxx')".repeat(12);
+        let src = format!("iex('aaaa'{chain})");
+        assert!(try_iex_replace(&src).is_empty());
+        let ok = try_iex_replace("iex('hXXps://evil.example'.replace('XX','tt'))");
+        assert_eq!(ok[0].decoded, "https://evil.example");
+    }
 
     #[test]
     fn test_encoded_command() {

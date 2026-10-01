@@ -1011,13 +1011,13 @@ fn decode_ascii85(s: &str) -> Option<Vec<u8>> {
     let mut result = Vec::new();
     let mut group = Vec::new();
 
+    // Only the Adobe `<~ … ~>` frame is syntax; `<` and `>` inside it are
+    // digits (27 and 29), and a stray `~` is invalid.
+    let s = s.trim();
+    let s = s.strip_prefix("<~").unwrap_or(s);
+    let s = s.strip_suffix("~>").unwrap_or(s);
     for ch in s.chars() {
         match ch {
-            // Skip ASCII85 delimiters and whitespace first
-            '<' | '~' | '>' => {
-                // Skip ASCII85 delimiters (<~ and ~>)
-                continue;
-            }
             ' ' | '\t' | '\n' | '\r' => {
                 // Skip whitespace
                 continue;
@@ -1473,6 +1473,12 @@ mod tests {
     #[test]
     fn test_ascii85_decode_with_delimiters() {
         // Test that delimiters are properly skipped
+        assert_eq!(decode_ascii85("<!!!!"), Some(vec![0x54, 0x01, 0xfe, 0xab]));
+        assert_eq!(
+            decode_ascii85("<~>u<!!~>"),
+            Some(vec![0x5d, 0x51, 0x27, 0xd4])
+        );
+        assert_eq!(decode_ascii85("9j~qo^"), None);
         let decoded = decode_ascii85("<~9jqo^~>").unwrap();
         assert_eq!(decoded, b"Man ");
     }

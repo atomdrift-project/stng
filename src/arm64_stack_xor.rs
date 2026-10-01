@@ -87,9 +87,8 @@ pub(crate) fn extract_arm64_stack_xor_strings(
 }
 
 fn imports_system(macho: &MachO<'_>) -> bool {
-    macho
-        .imports()
-        .is_ok_and(|imports| imports.iter().any(|import| is_system_import(import.name)))
+    crate::binary::contain(|| macho.imports())
+        .is_some_and(|imports| imports.iter().any(|import| is_system_import(import.name)))
 }
 
 fn is_system_import(name: &str) -> bool {

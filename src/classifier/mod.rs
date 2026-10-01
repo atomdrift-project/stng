@@ -91,108 +91,11 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
         return Some(kind);
     }
 
-    // Email addresses (often used in ransomware) - use memchr for speed
-    if len >= 6 && memchr::memchr(b'@', bytes).is_some() && memchr::memchr(b'.', bytes).is_some() {
-        let at_count = memchr::memchr_iter(b'@', s.as_bytes()).count();
-        if at_count == 1 {
-            // Must be mostly ASCII (>95%) - reject garbage with non-ASCII chars
-            let ascii_count = s.bytes().filter(u8::is_ascii).count();
-            if ascii_count * 100 / len < 95 {
-                return None; // Skip - has too much non-ASCII
-            }
-
-            // Reject consecutive dots (invalid email format)
-            if s.contains("..") {
-                return None; // Skip - has consecutive dots
-            }
-
-            // Split on @ to validate structure (exactly one @ guaranteed above)
-            if let Some((local, domain)) = s.split_once('@') {
-                // Local part must exist, not be empty, and start with alphanumeric
-                let starts_with_alnum = local.chars().next().is_some_and(char::is_alphanumeric);
-                if !starts_with_alnum {
-                    return None; // Skip - starts with @ or non-alphanumeric
-                }
-
-                // Local part must have at least one alphanumeric character
-                if !local.chars().any(char::is_alphanumeric) {
-                    return None; // Skip - local part has no alphanumeric
-                }
-
-                // Local part may only contain the RFC-5321 atext subset we care about.
-                // Reject slashes (common in Go module paths like "pkg/sub@v1.0.0/file.go")
-                // and other symbols that are not legal in email addresses.
-                if !local
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '%'))
-                {
-                    return None; // Skip - local part contains non-email chars
-                }
-
-                // Domain must have a dot (not @domain or @.domain)
-                if !domain.contains('.') || domain.starts_with('.') {
-                    return None; // Skip - invalid domain structure
-                }
-
-                // Domain may only contain hostname-legal characters (letters, digits,
-                // dots, hyphens). Reject slashes — `logr@v1.4.1/logr.go` is a Go
-                // module path, not an email.
-                if !domain
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
-                {
-                    return None; // Skip - domain contains non-hostname chars
-                }
-
-                // Domain must have at least one letter (not just numbers/symbols like @0.x)
-                let domain_has_letter = domain.chars().any(|c| c.is_ascii_alphabetic());
-                if !domain_has_letter {
-                    return None; // Skip - domain has no letters
-                }
-
-                // Reject domains whose first label is a bare version token like
-                // "v1" or "v2" — these come from Go module paths (`pkg@v1.4.1`).
-                if let Some(first_label) = domain.split('.').next() {
-                    let is_version_token = first_label.len() >= 2
-                        && first_label.starts_with('v')
-                        && first_label[1..].chars().all(|c| c.is_ascii_digit());
-                    if is_version_token {
-                        return None; // Skip - Go module version, not email domain
-                    }
-                }
-
-                // Extract TLD (everything after last dot)
-                if let Some(last_dot_pos) = domain.rfind('.') {
-                    let tld = &domain[last_dot_pos + 1..];
-                    // TLD must be at least 2 chars and all alphabetic
-                    if tld.len() < 2 || !tld.chars().all(|c| c.is_ascii_alphabetic()) {
-                        return None; // Skip - invalid TLD
-                    }
-                }
-
-                // The main domain part (before TLD) must contain at least one letter
-                // and be at least 2 characters long. Reject cases like "0.x" or "E.MM"
-                if let Some(dot_pos) = domain.find('.') {
-                    let main_domain = &domain[..dot_pos];
-                    if main_domain.len() < 2 {
-                        return None; // Skip - main domain too short (e.g., E.MM)
-                    }
-                    let main_has_letter = main_domain.chars().any(|c| c.is_ascii_alphabetic());
-                    if !main_has_letter {
-                        return None; // Skip - main domain has no letters (e.g., 0.x)
-                    }
-                }
-
-                // Valid email chars check
-                let valid_chars = s
-                    .chars()
-                    .filter(|c| c.is_alphanumeric() || matches!(c, '@' | '.' | '-' | '_' | '+'))
-                    .count();
-                if valid_chars * 100 / len >= 85 {
-                    return Some(StringKind::Email);
-                }
-            }
-        }
+    // Email addresses (often used in ransomware). A string that merely
+    // contains `@` and `.` but is not an email falls through to the URL, path
+    // and command checks below (`https://user@host/`, `git@host:org/repo`).
+    if let Some(kind) = classify_email(s) {
+        return Some(kind);
     }
 
     // Tor/Onion addresses
@@ -334,10 +237,10 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
     // Injection wrappers (;, |, $()) are stronger signals than generic command keywords.
     // JavaScript/PHP code might contain command strings but should be detected as code first.
     if memchr::memchr3(b';', b'|', b'$', bytes).is_some() {
-        // Classic injection: ; cat, | whoami, etc.
-        if (s.contains("; ") && (s.contains("cat") || s.contains("wget") || s.contains("curl")))
-            || (s.contains("| ")
-                && (s.contains("whoami") || s.contains("id") || s.contains("uname")))
+        // Classic injection: `; cat`, `| whoami`: the command right after the
+        // separator, as a whole word ("valid | hidden" is not `| id`).
+        if command_follows(s, ';', &["cat", "wget", "curl"])
+            || command_follows(s, '|', &["whoami", "id", "uname"])
         {
             return Some(StringKind::CommandInjection);
         }
@@ -678,6 +581,128 @@ fn classify_prefix(prefix: &str) -> Option<StringKind> {
         return Some(StringKind::ShellCmd);
     }
 
+    None
+}
+
+/// Whether some `separator` in `s` is followed, after spaces, by one of
+/// `commands` as a whole word.
+fn command_follows(s: &str, separator: char, commands: &[&str]) -> bool {
+    s.match_indices(separator).any(|(i, _)| {
+        let rest = s[i + 1..].trim_start_matches(' ');
+        commands.iter().any(|command| {
+            rest.strip_prefix(command)
+                .is_some_and(|after| !after.starts_with(|c: char| c.is_ascii_alphanumeric()))
+        })
+    })
+}
+
+/// `Some(Email)` for a plausible email address. Every `None` here only means
+/// "not an email"; the caller goes on to try other kinds.
+fn classify_email(s: &str) -> Option<StringKind> {
+    let (bytes, len) = (s.as_bytes(), s.len());
+    if len < 6 || memchr::memchr(b'@', bytes).is_none() || memchr::memchr(b'.', bytes).is_none() {
+        return None;
+    }
+    let at_count = memchr::memchr_iter(b'@', s.as_bytes()).count();
+    if at_count == 1 {
+        // Must be mostly ASCII (>95%) - reject garbage with non-ASCII chars
+        let ascii_count = s.bytes().filter(u8::is_ascii).count();
+        if ascii_count * 100 / len < 95 {
+            return None; // Skip - has too much non-ASCII
+        }
+
+        // Reject consecutive dots (invalid email format)
+        if s.contains("..") {
+            return None; // Skip - has consecutive dots
+        }
+
+        // Split on @ to validate structure (exactly one @ guaranteed above)
+        if let Some((local, domain)) = s.split_once('@') {
+            // Local part must exist, not be empty, and start with alphanumeric
+            let starts_with_alnum = local.chars().next().is_some_and(char::is_alphanumeric);
+            if !starts_with_alnum {
+                return None; // Skip - starts with @ or non-alphanumeric
+            }
+
+            // Local part must have at least one alphanumeric character
+            if !local.chars().any(char::is_alphanumeric) {
+                return None; // Skip - local part has no alphanumeric
+            }
+
+            // Local part may only contain the RFC-5321 atext subset we care about.
+            // Reject slashes (common in Go module paths like "pkg/sub@v1.0.0/file.go")
+            // and other symbols that are not legal in email addresses.
+            if !local
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '%'))
+            {
+                return None; // Skip - local part contains non-email chars
+            }
+
+            // Domain must have a dot (not @domain or @.domain)
+            if !domain.contains('.') || domain.starts_with('.') {
+                return None; // Skip - invalid domain structure
+            }
+
+            // Domain may only contain hostname-legal characters (letters, digits,
+            // dots, hyphens). Reject slashes — `logr@v1.4.1/logr.go` is a Go
+            // module path, not an email.
+            if !domain
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+            {
+                return None; // Skip - domain contains non-hostname chars
+            }
+
+            // Domain must have at least one letter (not just numbers/symbols like @0.x)
+            let domain_has_letter = domain.chars().any(|c| c.is_ascii_alphabetic());
+            if !domain_has_letter {
+                return None; // Skip - domain has no letters
+            }
+
+            // Reject domains whose first label is a bare version token like
+            // "v1" or "v2" — these come from Go module paths (`pkg@v1.4.1`).
+            if let Some(first_label) = domain.split('.').next() {
+                let is_version_token = first_label.len() >= 2
+                    && first_label.starts_with('v')
+                    && first_label[1..].chars().all(|c| c.is_ascii_digit());
+                if is_version_token {
+                    return None; // Skip - Go module version, not email domain
+                }
+            }
+
+            // Extract TLD (everything after last dot)
+            if let Some(last_dot_pos) = domain.rfind('.') {
+                let tld = &domain[last_dot_pos + 1..];
+                // TLD must be at least 2 chars and all alphabetic
+                if tld.len() < 2 || !tld.chars().all(|c| c.is_ascii_alphabetic()) {
+                    return None; // Skip - invalid TLD
+                }
+            }
+
+            // The main domain part (before TLD) must contain at least one letter
+            // and be at least 2 characters long. Reject cases like "0.x" or "E.MM"
+            if let Some(dot_pos) = domain.find('.') {
+                let main_domain = &domain[..dot_pos];
+                if main_domain.len() < 2 {
+                    return None; // Skip - main domain too short (e.g., E.MM)
+                }
+                let main_has_letter = main_domain.chars().any(|c| c.is_ascii_alphabetic());
+                if !main_has_letter {
+                    return None; // Skip - main domain has no letters (e.g., 0.x)
+                }
+            }
+
+            // Valid email chars check
+            let valid_chars = s
+                .chars()
+                .filter(|c| c.is_alphanumeric() || matches!(c, '@' | '.' | '-' | '_' | '+'))
+                .count();
+            if valid_chars * 100 / len >= 85 {
+                return Some(StringKind::Email);
+            }
+        }
+    }
     None
 }
 
