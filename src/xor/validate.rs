@@ -5,7 +5,7 @@
 //! paths). Shared by the classify and scan submodules.
 
 use aho_corasick::AhoCorasick;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 pub(crate) fn is_printable_char(b: u8) -> bool {
     // Accept ASCII printable characters
@@ -23,15 +23,15 @@ pub(crate) fn is_printable_char(b: u8) -> bool {
 pub(crate) fn is_valid_xor_string(s: &str) -> bool {
     // Check for specific malicious indicators (not just any system path)
     // Uses cached case-insensitive Aho-Corasick automata — no allocation
-    let has_shell_command = shell_command_automaton().is_match(s);
+    let has_shell_command = SHELL_COMMAND_AC.is_match(s);
 
-    let has_suspicious_path = suspicious_path_automaton().is_match(s)
+    let has_suspicious_path = SUSPICIOUS_PATH_AC.is_match(s)
         || s.contains("/tmp/") && (s.contains(".sh") || s.contains("payload"));
 
     // Windows API names dynamically resolved via GetProcAddress to evade static analysis.
     // These have long consonant runs (e.g., "BCryptS..." = 7 consonsants) that would
     // otherwise fail the is_meaningful_string linguistic check.
-    let has_win_api = win_api_automaton().is_match(s);
+    let has_win_api = WIN_API_AC.is_match(s);
 
     let has_suspicious_url = s.contains("://") && !s.contains("apple.com");
 
@@ -273,134 +273,119 @@ const COMMON_WORDS: &[&str] = &[
     "secret",
 ];
 
-/// Cached case-insensitive AhoCorasick automaton for COMMON_WORDS.
+/// Case-insensitive automaton for [`COMMON_WORDS`].
 #[allow(clippy::expect_used)]
-pub(crate) fn get_common_words_automaton() -> &'static AhoCorasick {
-    static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        AhoCorasick::builder()
-            .ascii_case_insensitive(true)
-            .build(COMMON_WORDS)
-            .expect("static patterns")
-    })
-}
+static COMMON_WORDS_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build(COMMON_WORDS)
+        .expect("static patterns")
+});
 
-/// Cached automaton for shell command indicators (case-insensitive).
+/// Automaton for shell command indicators (case-insensitive).
 #[allow(clippy::expect_used)]
-fn shell_command_automaton() -> &'static AhoCorasick {
-    static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        AhoCorasick::builder()
-            .ascii_case_insensitive(true)
-            .build([
-                "osascript",
-                "screencapture",
-                "bash ",
-                "sh -",
-                "curl ",
-                "wget ",
-                "chmod ",
-                "python ",
-                "perl ",
-                "ruby ",
-                "/bin/",
-                "sleep ",
-                " rm ",
-                "rm -",
-                "echo ",
-                "kill ",
-                "ps ",
-                "powershell",
-                "cmd.exe",
-                "xattr",
-            ])
-            .expect("static patterns")
-    })
-}
+static SHELL_COMMAND_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build([
+            "osascript",
+            "screencapture",
+            "bash ",
+            "sh -",
+            "curl ",
+            "wget ",
+            "chmod ",
+            "python ",
+            "perl ",
+            "ruby ",
+            "/bin/",
+            "sleep ",
+            " rm ",
+            "rm -",
+            "echo ",
+            "kill ",
+            "ps ",
+            "powershell",
+            "cmd.exe",
+            "xattr",
+        ])
+        .expect("static patterns")
+});
 
-/// Cached automaton for suspicious path indicators (case-insensitive).
+/// Automaton for suspicious path indicators (case-insensitive).
 #[allow(clippy::expect_used)]
-fn suspicious_path_automaton() -> &'static AhoCorasick {
-    static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        AhoCorasick::builder()
-            .ascii_case_insensitive(true)
-            .build([
-                "ethereum/keystore",
-                "/etc/passwd",
-                "/etc/shadow",
-                "appdata",
-                "programdata",
-                "launchagents",
-                "launchdaemons",
-                // Linux rootkit indicators
-                "/proc/net/",
-                "ld.so.preload",
-                "/proc/self/",
-            ])
-            .expect("static patterns")
-    })
-}
+static SUSPICIOUS_PATH_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build([
+            "ethereum/keystore",
+            "/etc/passwd",
+            "/etc/shadow",
+            "appdata",
+            "programdata",
+            "launchagents",
+            "launchdaemons",
+            // Linux rootkit indicators
+            "/proc/net/",
+            "ld.so.preload",
+            "/proc/self/",
+        ])
+        .expect("static patterns")
+});
 
-/// Cached automaton for Windows API names resolved via GetProcAddress (dynamic loading).
+/// Automaton for Windows API names resolved via GetProcAddress (dynamic loading).
 /// These indicate covert capability loading and commonly fail linguistic checks due to
 /// long consonant runs (e.g., "BCryptS..." = 7 consecutive consonants).
 #[allow(clippy::expect_used)]
-fn win_api_automaton() -> &'static AhoCorasick {
-    static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        AhoCorasick::new([
-            // Windows crypto API (AES-CBC decryption capability)
-            "BCrypt",
-            // Windows process injection / execution APIs
-            "CreateProcess",
-            "VirtualAlloc",
-            "WriteProcessMemory",
-            "ReadProcessMemory",
-            "GetProcAddress",
-            "LoadLibrary",
-            "FindWindow",
-            "GetWindow",
-            "ShowWindow",
-            // Registry / persistence APIs
-            "RegOpenKey",
-            "RegSetValue",
-            "RegCreateKey",
-        ])
-        .expect("static patterns")
-    })
-}
+static WIN_API_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        // Windows crypto API (AES-CBC decryption capability)
+        "BCrypt",
+        // Windows process injection / execution APIs
+        "CreateProcess",
+        "VirtualAlloc",
+        "WriteProcessMemory",
+        "ReadProcessMemory",
+        "GetProcAddress",
+        "LoadLibrary",
+        "FindWindow",
+        "GetWindow",
+        "ShowWindow",
+        // Registry / persistence APIs
+        "RegOpenKey",
+        "RegSetValue",
+        "RegCreateKey",
+    ])
+    .expect("static patterns")
+});
 
-/// Cached automaton for common file extensions.
+/// Automaton for common file extensions.
 #[allow(clippy::expect_used)]
-fn file_extension_automaton() -> &'static AhoCorasick {
-    static CACHE: OnceLock<AhoCorasick> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        AhoCorasick::new([
-            ".plist",
-            ".json",
-            ".conf",
-            ".sqlite",
-            ".jpg",
-            ".png",
-            ".txt",
-            ".log",
-            ".xml",
-            ".db",
-            ".dat",
-            ".wallet",
-            ".keystore",
-            ".dll",
-            ".exe",
-        ])
-        .expect("static patterns")
-    })
-}
+static FILE_EXTENSION_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        ".plist",
+        ".json",
+        ".conf",
+        ".sqlite",
+        ".jpg",
+        ".png",
+        ".txt",
+        ".log",
+        ".xml",
+        ".db",
+        ".dat",
+        ".wallet",
+        ".keystore",
+        ".dll",
+        ".exe",
+    ])
+    .expect("static patterns")
+});
 
 /// Count how many distinct COMMON_WORDS appear in `s` (matched case-insensitively).
 /// Stops counting after reaching `limit` to allow early exits in callers.
 pub(crate) fn count_common_word_matches(s: &str, limit: usize) -> usize {
-    let ac = get_common_words_automaton();
+    let ac = &*COMMON_WORDS_AC;
     let mut matched = [false; COMMON_WORDS.len()];
     let mut count = 0;
     for mat in ac.find_iter(s) {
@@ -471,7 +456,7 @@ pub(crate) fn is_meaningful_string(s: &str) -> bool {
     }
 
     // Check for common file extensions (exfiltration targets)
-    let has_file_extension = file_extension_automaton().is_match(s);
+    let has_file_extension = FILE_EXTENSION_AC.is_match(s);
 
     if has_file_extension {
         // File paths are high value - just check basic quality

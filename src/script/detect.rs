@@ -6,13 +6,19 @@
 /// Detected script language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptLanguage {
+    /// Python.
     Python,
+    /// JavaScript.
     JavaScript,
+    /// PHP.
     Php,
+    /// PowerShell.
     PowerShell,
 }
 
 impl ScriptLanguage {
+    /// The language's lowercase name: `"python"`, `"javascript"`, `"php"` or
+    /// `"powershell"`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {

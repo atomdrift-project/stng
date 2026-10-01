@@ -795,15 +795,13 @@ mod tests {
             let results = scan_binary_ips(&data, 4, e_machine, None, None);
             assert!(
                 !results.is_empty(),
-                "Should process {} architecture",
-                arch_name
+                "Should process {arch_name} architecture"
             );
             assert!(
                 results
                     .iter()
                     .any(|r| r.value.contains("192.168.1.50:8080")),
-                "Should find IP for {} architecture",
-                arch_name
+                "Should find IP for {arch_name} architecture"
             );
         }
     }

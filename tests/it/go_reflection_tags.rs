@@ -34,7 +34,7 @@ fn both_native_go_architectures_keep_exact_tags_and_multiline_plist() {
         ),
     ] {
         let data = crate::common::bytes(&format!("testdata/macho/{name}"));
-        assert_eq!(hex::encode(Sha256::digest(&data)), sha);
+        assert_eq!(crate::common::hex(&Sha256::digest(&data)), sha);
         let strings = extract_strings_with_options(&data, &opts);
         for (value, offset) in [("json:\"iv\"", iv), ("json:\"ciphertext\"", ciphertext)] {
             let found: Vec<_> = strings
@@ -69,7 +69,7 @@ fn both_native_go_architectures_keep_exact_tags_and_multiline_plist() {
         let s = found[0];
         assert_eq!(s.source_spans().collect::<Vec<_>>(), vec![(plist, 415)]);
         assert_eq!(
-            hex::encode(Sha256::digest(s.value.as_bytes())),
+            crate::common::hex(&Sha256::digest(s.value.as_bytes())),
             "1205faad2dd8e307d0b7f91aa3f996115f21e09435e941ab692ba568e73f8c90"
         );
         assert_eq!(

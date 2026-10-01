@@ -1150,17 +1150,6 @@ fn looks_like_word_like(s: &str, len: usize, stats: &CharStats) -> bool {
     max_run >= 2
 }
 
-/// Returns true if the string is a file-glob pattern like `*.exe`, `*.dll`,
-/// or `*.tmp` — a literal asterisk + dot + 1–6 alphanumeric characters.
-/// These are common malware indicators (search patterns, dropped-file
-/// extensions) and the bare extension form (`.exe`) is already accepted.
-fn is_file_glob(s: &str) -> bool {
-    let Some(ext) = s.strip_prefix("*.") else {
-        return false;
-    };
-    !ext.is_empty() && ext.len() <= 6 && ext.bytes().all(|b| b.is_ascii_alphanumeric())
-}
-
 /// Returns true if the string's character class run pattern indicates random/garbage data.
 fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
     if len < 6 {
@@ -1458,7 +1447,9 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
     // File-glob patterns (`*.exe`, `*.dll`, `*.tmp`) — high-value malware
     // indicators that would otherwise be killed by the short-string
     // noise-punctuation filter because `*` is in the noise set.
-    if is_file_glob(s) {
+    if s.strip_prefix("*.").is_some_and(|ext| {
+        !ext.is_empty() && ext.len() <= 6 && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+    }) {
         return true;
     }
     // Crypto and malware IOCs
@@ -2406,8 +2397,7 @@ mod tests {
             let result = is_garbage(s);
             assert!(
                 !result,
-                "Obfuscated JavaScript should NOT be garbage: {} - got is_garbage={}",
-                desc, result
+                "Obfuscated JavaScript should NOT be garbage: {desc} - got is_garbage={result}"
             );
         }
     }
@@ -2845,8 +2835,7 @@ mod tests {
         for s in &garbage_strings {
             assert!(
                 is_garbage(s),
-                "XOR garbage string should be filtered: {:?}",
-                s
+                "XOR garbage string should be filtered: {s:?}"
             );
         }
     }

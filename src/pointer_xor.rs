@@ -194,7 +194,7 @@ fn read_setup(code: &Region<'_>, addr: u64) -> Option<Setup> {
         || !memory(&s[4], RCX, NoReg, 0)
         || s[4].op1_kind() != OpKind::Immediate32
         || s[5].mnemonic() != Mnemonic::Lea
-        || !(gpr_width(s[5].op0_register()) == 64)
+        || gpr_width(s[5].op0_register()) != 64
         || matches!(s[5].op0_register(), RDI | RSI | RBP | Register::RSP)
         || !memory(
             &s[5],
@@ -319,7 +319,7 @@ fn read_loop(code: &Region<'_>, setup: &Setup) -> Option<(u64, usize)> {
     let tmp = s[2].op0_register();
     let output = s[4].memory_displacement64();
     if s[2].mnemonic() != Mnemonic::Mov
-        || !(gpr_width(tmp) == 64)
+        || gpr_width(tmp) != 64
         || [counter, src, RAX, RBP, Register::RSP].contains(&tmp)
         || s[2].op1_kind() != OpKind::Memory
         || s[2].memory_size() != MemorySize::UInt64
@@ -402,7 +402,7 @@ fn matching_call_length(code: &Region<'_>, exit: u64, len: u64) -> bool {
 }
 
 fn gpr_width(r: Register) -> u32 {
-    use Register::*;
+    use Register::{AL, AX, EAX, R15, R15D, R15L, R15W, RAX};
     if AL <= r && r <= R15L {
         8
     } else if AX <= r && r <= R15W {
@@ -417,25 +417,29 @@ fn gpr_width(r: Register) -> u32 {
 }
 
 fn wide_reg(r: Register) -> Option<Register> {
-    use Register::*;
+    use Register::{
+        EAX, R8, R9, R10, R11, R12, R13, R14, R15, RAX, RBP, RBX, RCX, RDI, RDX, RSI, RSP,
+    };
     const GPRS: [Register; 16] = [
         RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8, R9, R10, R11, R12, R13, R14, R15,
     ];
-    if !(gpr_width(r) == 32) {
-        return Option::None;
+    if gpr_width(r) != 32 {
+        return None;
     }
     GPRS.get((r as usize).checked_sub(EAX as usize)?).copied()
 }
 
 fn slot(r: Register) -> Option<usize> {
-    use Register::*;
+    use Register::{
+        AL, AX, CL, CX, DI, DIL, DL, DX, EAX, ECX, EDI, EDX, ESI, RAX, RCX, RDI, RDX, RSI, SI, SIL,
+    };
     Some(match r {
         RAX | EAX | AX | AL => 0,
         RCX | ECX | CX | CL => 1,
         RDX | EDX | DX | DL => 2,
         RSI | ESI | SI | SIL => 3,
         RDI | EDI | DI | DIL => 4,
-        _ => return Option::None,
+        _ => return None,
     })
 }
 
@@ -540,7 +544,7 @@ fn fold_helper(code: &Region<'_>, addr: u64, base: u64, seed: u64) -> Option<u64
                     Mnemonic::Sar if width == 32 => {
                         u64::from(((a as i32) >> shift).cast_unsigned())
                     }
-                    Mnemonic::Sar => ((a as i64) >> shift).cast_unsigned(),
+                    Mnemonic::Sar => (a.cast_signed() >> shift).cast_unsigned(),
                     Mnemonic::Rol if width == 32 => u64::from((a as u32).rotate_left(shift)),
                     Mnemonic::Rol => a.rotate_left(shift),
                     Mnemonic::Shld => {

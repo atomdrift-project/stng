@@ -264,7 +264,7 @@ fn test_string_method_variants() {
     ];
     for method in methods {
         // Just verify they can be formatted
-        let _ = format!("{:?}", method);
+        let _ = format!("{method:?}");
     }
 }
 
@@ -1259,7 +1259,7 @@ mod edge_case_tests {
             Some(StringKind::Export),
         ];
         for kind in kinds {
-            let s = format!("{:?}", kind);
+            let s = format!("{kind:?}");
             assert!(!s.is_empty());
         }
     }
@@ -1275,7 +1275,7 @@ mod edge_case_tests {
             StringMethod::R2Symbol,
         ];
         for method in methods {
-            let s = format!("{:?}", method);
+            let s = format!("{method:?}");
             assert!(!s.is_empty());
         }
     }
@@ -1403,7 +1403,7 @@ mod wide_string_tests {
     fn test_wide_string_method_exists() {
         // Verify the WideString method variant is available
         let method = StringMethod::WideString;
-        assert_eq!(format!("{:?}", method), "WideString");
+        assert_eq!(format!("{method:?}"), "WideString");
     }
 
     #[test]
@@ -1467,7 +1467,7 @@ mod wide_string_tests {
 
         // Windows binaries typically have some wide strings
         // (Go binaries may have fewer, but should still have some from runtime)
-        println!("Found {} wide strings in hello_windows.exe", wide_count);
+        println!("Found {wide_count} wide strings in hello_windows.exe");
 
         // The test passes as long as extraction completes without error
         // Wide string count may vary based on binary content
@@ -1921,8 +1921,7 @@ mod extract_from_tests {
             values
                 .iter()
                 .any(|v| v.contains("hello") || v.contains("test")),
-            "Should extract strings from ELF: {:?}",
-            values
+            "Should extract strings from ELF: {values:?}"
         );
     }
 
@@ -1938,8 +1937,7 @@ mod extract_from_tests {
             values
                 .iter()
                 .any(|v| v.contains("hello") || v.contains("test")),
-            "Should extract strings from Mach-O: {:?}",
-            values
+            "Should extract strings from Mach-O: {values:?}"
         );
     }
 
@@ -1961,8 +1959,7 @@ mod extract_from_tests {
         let values: Vec<&str> = strings.iter().map(|s| s.value.as_str()).collect();
         assert!(
             values.iter().any(|v| v.contains("hello")),
-            "Should extract strings from PE: {:?}",
-            values
+            "Should extract strings from PE: {values:?}"
         );
     }
 
@@ -2054,8 +2051,7 @@ mod extract_from_tests {
         assert_eq!(
             usize::try_from(s.data_offset).unwrap(),
             first_string_offset,
-            "First overlay string offset should be absolute file offset 0x{:x}, not relative to overlay",
-            first_string_offset
+            "First overlay string offset should be absolute file offset 0x{first_string_offset:x}, not relative to overlay"
         );
         assert_eq!(
             s.kind,
@@ -2067,8 +2063,7 @@ mod extract_from_tests {
         assert_eq!(
             usize::try_from(s.data_offset).unwrap(),
             second_string_offset,
-            "Second overlay string offset should be absolute file offset 0x{:x}, not relative to overlay",
-            second_string_offset
+            "Second overlay string offset should be absolute file offset 0x{second_string_offset:x}, not relative to overlay"
         );
         assert_eq!(
             s.kind,
@@ -2648,10 +2643,7 @@ mod string_kind_tests {
         let xored: Vec<u8> = plaintext.iter().map(|&b| b ^ xor_key).collect();
 
         // Hex-encode the XOR'd data (simulating malware obfuscation)
-        let hex_encoded = xored
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect::<String>();
+        let hex_encoded = xored.iter().map(|b| format!("{b:02X}")).collect::<String>();
 
         // Create binary with the hex-encoded string
         let data = minimal_elf_with_string(&hex_encoded);
@@ -2719,8 +2711,7 @@ mod severity_tests {
                     severity,
                     Severity::Info | Severity::Low | Severity::Medium | Severity::High
                 ),
-                "{:?} should have a valid severity",
-                kind
+                "{kind:?} should have a valid severity"
             );
         }
     }
@@ -3104,23 +3095,19 @@ mod string_deduplication_tests {
         // Section names that GNU strings finds
         assert!(
             values.contains(&".shstrtab"),
-            "Should find .shstrtab section name. Found: {:?}",
-            values
+            "Should find .shstrtab section name. Found: {values:?}"
         );
         assert!(
             values.contains(&".text"),
-            "Should find .text section name. Found: {:?}",
-            values
+            "Should find .text section name. Found: {values:?}"
         );
         assert!(
             values.contains(&".data"),
-            "Should find .data section name. Found: {:?}",
-            values
+            "Should find .data section name. Found: {values:?}"
         );
         assert!(
             values.contains(&".ARM.attributes"),
-            "Should find .ARM.attributes section name. Found: {:?}",
-            values
+            "Should find .ARM.attributes section name. Found: {values:?}"
         );
     }
 }

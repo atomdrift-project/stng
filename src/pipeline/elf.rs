@@ -18,7 +18,6 @@ use crate::extract_stack_strings;
 use crate::extract_stack_strings_with_context;
 use crate::extract_varint_prefixed_strings;
 use crate::extract_wide_strings;
-use crate::get_r2_strings;
 use crate::scan_binary_ips;
 use crate::unclaimed_raw_strings;
 use crate::{ExtractOptions, ExtractedString};
@@ -109,17 +108,13 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         // unknown ELF gets. Before content detection this branch only
         // saw dylibs; now it sees every Rust executable, and dropping
         // the raw scan would have lost strings they used to report.
-        if let Some(r2_strings) = get_r2_strings(opts) {
-            strings.extend(r2_strings);
-        }
+        strings.extend(opts.r2_strings.iter().flatten().cloned());
         let raw = extract_raw_strings(scan_data, min_length, &segments, &[]);
         let fresh = unclaimed_raw_strings(raw, &strings, min_length);
         strings.extend(fresh);
     } else {
         // Unknown ELF (C, C++, assembly, etc.) - use r2 if available + raw scan.
-        if let Some(r2_strings) = get_r2_strings(opts) {
-            strings.extend(r2_strings);
-        }
+        strings.extend(opts.r2_strings.iter().flatten().cloned());
         strings.extend(extract_raw_strings(scan_data, min_length, &segments, &[]));
     }
 

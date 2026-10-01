@@ -66,7 +66,7 @@ impl Image<'_, '_> {
 /// aliases are accepted: a high-byte alias (`AH`) would carry provenance for a
 /// byte other than the one `Value::source` names, so it is rejected instead.
 fn reg(r: Register) -> Option<(usize, u32)> {
-    use Register::*;
+    use Register::{AL, BL, CL, DL, EAX, EBX, ECX, EDI, EDX, ESI};
     Some(match r {
         EAX => (0, u32::MAX),
         ECX => (1, u32::MAX),
@@ -78,7 +78,7 @@ fn reg(r: Register) -> Option<(usize, u32)> {
         CL => (1, 255),
         DL => (2, 255),
         BL => (3, 255),
-        _ => return Option::None,
+        _ => return None,
     })
 }
 fn get(regs: &[Value; 8], r: Register) -> Option<Value> {

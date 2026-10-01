@@ -6,7 +6,7 @@ use stng::{ExtractOptions, StringKind};
 fn test_stack_strings_themeforestrat() {
     let sample_path = crate::common::path("testdata/malware/themeforestrat");
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found at {}", sample_path);
+        eprintln!("Skipping - malware sample not found at {sample_path}");
         return;
     }
 
@@ -27,7 +27,7 @@ fn test_stack_strings_themeforestrat() {
 
     println!("Found {} stack strings", stack_strings.len());
     for s in &stack_strings {
-        println!("  - {}", s);
+        println!("  - {s}");
     }
 
     // Check for the main C2 URL parts

@@ -737,7 +737,7 @@ fn relative_reloc_strings(
     let rodata_end = rodata_addr + rodata.len() as u64;
     let mut seen: HashSet<(u64, u64)> = HashSet::new();
     let mut out = Vec::new();
-    for rel in elf.dynrelas.iter() {
+    for rel in &elf.dynrelas {
         if rel.r_type != relative {
             continue;
         }
@@ -1121,7 +1121,7 @@ mod tests {
                 && let Ok(elf) = goblin::elf::Elf::parse(&data)
             {
                 let strings = extractor.extract_elf(&elf, &data);
-                assert!(!strings.is_empty(), "Should find strings in {}", path);
+                assert!(!strings.is_empty(), "Should find strings in {path}");
                 for s in &strings {
                     assert!(s.value.len() >= 4, "String too short: '{}'", s.value);
                 }

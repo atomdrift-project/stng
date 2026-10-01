@@ -96,17 +96,17 @@ fn try_deobfuscate_js_base64(input: &str) -> Option<String> {
     // Apply detected substitutions
     for (from, to) in substitutions {
         // Handle patterns like ' + 'A' + '
-        let pattern_single = format!("' + '{}' + '", from);
+        let pattern_single = format!("' + '{from}' + '");
         cleaned = cleaned.replace(&pattern_single, &to.to_string());
 
-        let pattern_double = format!("\" + \"{}\" + \"", from);
+        let pattern_double = format!("\" + \"{from}\" + \"");
         cleaned = cleaned.replace(&pattern_double, &to.to_string());
 
         // Also handle end patterns
-        let pattern_end1 = format!("' + '{}'", from);
+        let pattern_end1 = format!("' + '{from}'");
         cleaned = cleaned.replace(&pattern_end1, &to.to_string());
 
-        let pattern_end2 = format!("'{}'  + '", from);
+        let pattern_end2 = format!("'{from}'  + '");
         cleaned = cleaned.replace(&pattern_end2, &to.to_string());
     }
 
@@ -388,7 +388,7 @@ fn is_meaningful_decoded(s: &str) -> bool {
         || s.to_lowercase().contains("http")
         || s.to_lowercase().contains("powershell")
         || s.to_lowercase().contains("script")
-        || s.contains("$")
+        || s.contains('$')
         || s.contains("://");
 
     has_spaces || has_common_words

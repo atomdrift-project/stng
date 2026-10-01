@@ -52,8 +52,8 @@ fn seal(seed: u32, plain: &[u8]) -> Vec<u8> {
 fn decrypts_sample_record() {
     // Known-answer vector: one 40-byte record from the sample named in the
     // module docs (a Chrome wallet-extension ID).
-    let bytes = hex::decode(
-        "8bcd0f676348d3192887db21d206cf3b088ba6452f181d5ae1349f14dafd2eae5335fac000000000",
+    let bytes = crate::bytes::from_hex(
+        b"8bcd0f676348d3192887db21d206cf3b088ba6452f181d5ae1349f14dafd2eae5335fac000000000",
     )
     .unwrap();
     assert_eq!(

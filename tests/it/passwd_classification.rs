@@ -8,14 +8,14 @@ use std::process::Command;
 fn test_passwd_entries_not_misclassified() {
     // Create a test file with passwd-style entries
     let test_file = "/tmp/stng_test_passwd.txt";
-    let content = r#"_assetcache:*:235:235:Asset Cache Service:/var/empty:/usr/bin/false
+    let content = r"_assetcache:*:235:235:Asset Cache Service:/var/empty:/usr/bin/false
 _mobileasset:*:253:253:MobileAsset User:/var/ma:/usr/bin/false
 _datadetectors:*:257:257:DataDetectors:/var/db/datadetectors:/usr/bin/false
 _mmaintenanced:*:283:283:mmaintenanced:/var/db/mmaintenanced:/usr/bin/false
 _biome:*:289:289:Biome:/var/db/biome:/usr/bin/false
 _terminusd:*:295:295:Terminus:/var/db/terminus:/usr/bin/false
 _nsurlsessiond:*:242:242:NSURLSession Daemon:/var/db/nsurlsessiond:/usr/bin/false
-"#;
+";
     fs::write(test_file, content).expect("failed to write test file");
 
     // Run stng on the file
@@ -39,13 +39,11 @@ _nsurlsessiond:*:242:242:NSURLSession Daemon:/var/db/nsurlsessiond:/usr/bin/fals
 
     assert!(
         !has_applescript,
-        "Passwd entries should not be classified as applescript:\n{}",
-        stdout
+        "Passwd entries should not be classified as applescript:\n{stdout}"
     );
     assert!(
         !has_base85,
-        "Passwd entries should not be classified as base85:\n{}",
-        stdout
+        "Passwd entries should not be classified as base85:\n{stdout}"
     );
 
     // Clean up
@@ -79,8 +77,7 @@ path to desktop folder
 
     assert!(
         has_applescript,
-        "Real AppleScript should still be detected:\n{}",
-        stdout
+        "Real AppleScript should still be detected:\n{stdout}"
     );
 
     // Clean up

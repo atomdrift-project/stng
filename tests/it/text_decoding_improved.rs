@@ -1,7 +1,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for improved text file decoding with embedded base64 extraction
 
-use stng::{StringKind, classify_string};
+use stng::{ExtractedString, StringKind, StringMethod, classify_string};
+
+/// What stng's decoders make of `value` with `method`.
+fn decoded(value: &str, method: StringMethod) -> Vec<String> {
+    let input = ExtractedString {
+        value: value.into(),
+        ..Default::default()
+    };
+    stng::decode_encoded_strings(&[input])
+        .into_iter()
+        .filter(|s| s.method == method)
+        .map(|s| s.value)
+        .collect()
+}
 
 #[test]
 fn test_base64_classification_short_strings() {
@@ -94,16 +107,13 @@ fn test_base64_decoding() {
 #[test]
 fn test_hex_decoding() {
     let encoded = "48656c6c6f20576f726c6421";
-    let decoded = hex::decode(encoded).unwrap();
-    let text = String::from_utf8(decoded).unwrap();
-    assert_eq!(text, "Hello World!");
+    assert_eq!(decoded(encoded, StringMethod::HexDecode), ["Hello World!"]);
 }
 
 #[test]
 fn test_url_decoding() {
-    let encoded = "Hello%20World%21";
-    let decoded = urlencoding::decode(encoded).unwrap();
-    assert_eq!(decoded, "Hello World!");
+    let encoded = "Hello%20World%21%3F";
+    assert_eq!(decoded(encoded, StringMethod::UrlDecode), ["Hello World!?"]);
 }
 
 #[test]
@@ -176,18 +186,18 @@ fn test_invalid_base64_not_decoded() {
 #[test]
 fn test_odd_length_hex_not_decoded() {
     // Odd length hex should not be valid
-    let odd_hex = "48656c6c6f2"; // 11 chars (odd)
-    let result = hex::decode(odd_hex);
-    assert!(result.is_err());
+    let odd_hex = "48656c6c6f20576f726c642"; // 23 chars (odd)
+    assert!(decoded(odd_hex, StringMethod::HexDecode).is_empty());
 }
 
 #[test]
 fn test_malformed_url_encoding() {
-    // Malformed URL encoding should handle gracefully
-    let malformed = "Hello%2World"; // Missing one hex digit
-    let decoded = urlencoding::decode(malformed).unwrap();
-    // Should decode what it can
-    assert!(decoded.contains("Hello"));
+    // A `%` without two hex digits after it stays as it is; the rest decodes.
+    let malformed = "Hello%2World%20%21%3F";
+    assert_eq!(
+        decoded(malformed, StringMethod::UrlDecode),
+        ["Hello%2World !?"]
+    );
 }
 
 #[test]
@@ -264,12 +274,13 @@ fn test_base64_padding_variations() {
 #[test]
 fn test_case_sensitivity() {
     // Hex should be case-insensitive
-    let lower = "48656c6c6f";
-    let upper = "48656C6C6F";
+    let lower = "48656c6c6f20576f726c6421";
+    let upper = "48656C6C6F20576F726C6421";
 
-    let decoded_lower = hex::decode(lower).unwrap();
-    let decoded_upper = hex::decode(upper).unwrap();
+    let decoded_lower = decoded(lower, StringMethod::HexDecode);
+    let decoded_upper = decoded(upper, StringMethod::HexDecode);
 
+    assert_eq!(decoded_lower, ["Hello World!"]);
     assert_eq!(decoded_lower, decoded_upper);
 }
 

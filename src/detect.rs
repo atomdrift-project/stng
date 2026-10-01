@@ -2,6 +2,8 @@
 
 use crate::binary::{is_go_binary, is_rust_binary};
 
+/// The language `data` was written in, as far as strings are concerned:
+/// `"go"`, `"rust"`, `"text"` for text files, or `"unknown"`.
 #[must_use]
 pub fn detect_language(data: &[u8]) -> &'static str {
     if is_go_binary(data) {

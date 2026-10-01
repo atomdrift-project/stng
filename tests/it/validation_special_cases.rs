@@ -35,10 +35,7 @@ fn test_shell_commands_with_redirections() {
             .any(|s| s.value.contains(expected_substring));
 
         if !found {
-            println!(
-                "Failed to find '{}' in command '{}'",
-                expected_substring, cmd
-            );
+            println!("Failed to find '{expected_substring}' in command '{cmd}'");
             println!(
                 "Extracted strings: {:?}",
                 extracted.iter().map(|s| &s.value).collect::<Vec<_>>()
@@ -47,8 +44,7 @@ fn test_shell_commands_with_redirections() {
 
         assert!(
             found,
-            "Shell command '{}' should NOT be filtered out (looking for '{}')",
-            cmd, expected_substring
+            "Shell command '{cmd}' should NOT be filtered out (looking for '{expected_substring}')"
         );
     }
 }
@@ -107,7 +103,7 @@ fn test_locale_strings_pass_filter() {
         let extracted = stng::extract_strings_with_options(&xored, &opts);
         let found = extracted.iter().any(|s| s.value.contains(locale));
 
-        assert!(found, "Locale '{}' should NOT be filtered out", locale);
+        assert!(found, "Locale '{locale}' should NOT be filtered out");
     }
 }
 
@@ -130,7 +126,7 @@ fn test_xml_tags_pass_filter() {
         let extracted = stng::extract_strings_with_options(&xored, &opts);
         let found = extracted.iter().any(|s| s.value.contains(tag));
 
-        assert!(found, "XML tag '{}' should NOT be filtered out", tag);
+        assert!(found, "XML tag '{tag}' should NOT be filtered out");
     }
 }
 
@@ -182,8 +178,7 @@ fn test_stderr_redirection_patterns() {
 
         assert!(
             found,
-            "Redirection pattern '{}' should NOT be filtered out",
-            redir
+            "Redirection pattern '{redir}' should NOT be filtered out"
         );
     }
 }
@@ -194,9 +189,9 @@ fn test_c2_url_not_garbage() {
     // The actual C2 URL from brew_agent malware
     let c2_url = "http://46.30.191.141n;uJ";
 
-    println!("\nTesting: {:?}", c2_url);
+    println!("\nTesting: {c2_url:?}");
     let result = is_garbage(c2_url);
-    println!("is_garbage() returned: {}", result);
+    println!("is_garbage() returned: {result}");
 
     assert!(!result, "C2 URL should NOT be marked as garbage");
 }
@@ -206,9 +201,9 @@ fn test_competing_garbage_string() {
     // The garbage string at offset -1 from C2
     let garbage = "fWWz^/21MU6.Tw";
 
-    println!("\nTesting: {:?}", garbage);
+    println!("\nTesting: {garbage:?}");
     let result = is_garbage(garbage);
-    println!("is_garbage() returned: {}", result);
+    println!("is_garbage() returned: {result}");
 
     // This one might be garbage
     println!(

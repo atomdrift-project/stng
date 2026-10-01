@@ -364,7 +364,7 @@ pub(super) fn is_javascript_code(s: &str) -> bool {
         matches += 1;
     }
     // Arrow functions: => {
-    if s.contains("=>") && s.contains("{") {
+    if s.contains("=>") && s.contains('{') {
         matches += 1;
     }
 
@@ -406,7 +406,7 @@ pub(super) fn is_php_code(s: &str) -> bool {
     let mut matches = 0;
 
     // PHP variable assignment: $var =
-    if s.contains("$") && s.contains(" = ") {
+    if s.contains('$') && s.contains(" = ") {
         matches += 1;
     }
 
@@ -416,7 +416,7 @@ pub(super) fn is_php_code(s: &str) -> bool {
     }
 
     // PHP function with $ variable in body
-    if s.contains("function ") && s.contains("$") && s.contains("{") {
+    if s.contains("function ") && s.contains('$') && s.contains('{') {
         matches += 1;
     }
 

@@ -240,13 +240,6 @@ struct R2Section {
     #[serde(default)]
     vsize: u64,
 }
-fn get_sections(tool: &str, path: &str, use_cache: bool) -> Vec<R2Section> {
-    if let Some(output) = run_tool_command_with_cache(tool, path, "iSj", use_cache) {
-        serde_json::from_str::<Vec<R2Section>>(&output).unwrap_or_default()
-    } else {
-        Vec::new()
-    }
-}
 fn vaddr_to_paddr(vaddr: u64, sections: &[R2Section]) -> Option<u64> {
     for s in sections {
         if s.vsize > 0 && vaddr >= s.vaddr && vaddr < s.vaddr + s.vsize {
@@ -266,7 +259,9 @@ fn xor_key_offsets(path: &str, use_cache: bool) -> Vec<u64> {
     let Some(tool) = get_tool() else {
         return Vec::new();
     };
-    let sections = get_sections(tool, path, use_cache);
+    let sections: Vec<R2Section> = run_tool_command_with_cache(tool, path, "iSj", use_cache)
+        .and_then(|output| serde_json::from_str(&output).ok())
+        .unwrap_or_default();
     let mut offsets = Vec::new();
     let mut seen_keys = HashSet::new();
     let mut xor_instrs = Vec::new();

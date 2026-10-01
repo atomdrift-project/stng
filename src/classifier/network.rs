@@ -184,15 +184,14 @@ pub(super) fn is_ipv4(s: &str) -> bool {
     // These are legitimate IOCs even if they match version-like patterns
     let is_known_dns = matches!(
         octets,
-        [8, 8, 8, 8]      // Google DNS
-        | [8, 8, 4, 4]    // Google DNS secondary
-        | [1, 1, 1, 1]    // Cloudflare DNS
-        | [1, 0, 0, 1]    // Cloudflare DNS secondary
-        | [9, 9, 9, 9]    // Quad9 DNS
-        | [4, 2, 2, 1]    // Level3 DNS
-        | [4, 2, 2, 2]    // Level3 DNS
-        | [208, 67, 222, 222] // OpenDNS
-        | [208, 67, 220, 220] // OpenDNS
+        [8, 8, 8, 8]
+            | [8, 8, 4, 4]
+            | [1, 1, 1, 1]
+            | [1, 0, 0, 1]
+            | [9, 9, 9, 9]
+            | [4, 2, 2, 1 | 2]
+            | [208, 67, 222, 222]
+            | [208, 67, 220, 220] // OpenDNS
     );
     if is_known_dns {
         return true;

@@ -14,7 +14,7 @@ static QUOTED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]"#).expect("static regex"));
 
 /// Matches base64-like substrings within larger strings (e.g. embedded in shell
-/// commands). The `{8,}` run only *starts* a candidate — [`accept_embedded`]
+/// commands). The `{8,}` run only *starts* a candidate — [`extract_embedded_base64`]
 /// then decides whether a run this short is trustworthy. A 6-byte payload is 8
 /// base64 chars, so this is the floor below which nothing meaningful decodes.
 #[allow(clippy::expect_used)]
@@ -23,7 +23,7 @@ static EMBEDDED_B64_RE: LazyLock<Regex> =
 
 /// The alphabet-char count above which an embedded run is trusted on its own —
 /// long enough (9 decoded bytes) that a false positive is unlikely. Shorter
-/// runs need a corroborating signal; see [`accept_embedded`].
+/// runs need a corroborating signal; see [`extract_embedded_base64`].
 const EMBEDDED_B64_TRUSTED_LEN: usize = 12;
 
 /// Matches hex runs embedded in a larger string — the shape droppers use when
@@ -44,32 +44,6 @@ static EMBEDDED_HEX_RE: LazyLock<Regex> =
 /// rather than input: random bytes almost never survive [`decoded_to_text`],
 /// which requires the result to be printable text end to end.
 const EMBEDDED_HEX_TRUSTED_LEN: usize = 32;
-
-/// Whether an embedded base64 run is worth decoding, given its length, how many
-/// `=` pad it, and whether a decode command sits in the same string.
-///
-/// A short run alone is indistinguishable from an ordinary identifier, so it is
-/// only taken with a corroborating signal:
-/// - **padding** — a trailing `=` is base64's own tell and almost never follows
-///   an identifier, so a padded short run is trustworthy on its own;
-/// - **a decode command** — `base64 -d`/`--decode`/`-D` in the string vouches
-///   for its argument, catching the unpadded 6–8 byte payloads that have none.
-///
-/// A run at or above [`EMBEDDED_B64_TRUSTED_LEN`] is taken unconditionally, as
-/// the old fixed `{12,}` floor did.
-fn accept_embedded(alnum_len: usize, pad: usize, has_command: bool) -> bool {
-    alnum_len >= EMBEDDED_B64_TRUSTED_LEN || pad > 0 || has_command
-}
-
-/// Whether a string invokes a base64 *decode* command — GNU `base64 -d` /
-/// `base64 --decode`, or BSD/macOS `base64 -D`. The argument to such a command
-/// is base64 by construction, so a shorter run is trustworthy there than it
-/// would be in free text.
-fn has_base64_decode_command(s: &str) -> bool {
-    ["base64 -d", "base64 --decode", "base64 -D"]
-        .iter()
-        .any(|m| s.contains(m))
-}
 
 /// Minimum length for base64 strings to attempt decoding.
 ///
@@ -215,7 +189,12 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
         .par_iter()
         .flat_map_iter(|s| {
             let mut local = Vec::new();
-            let has_command = has_base64_decode_command(&s.value);
+            // A base64 *decode* command — GNU `base64 -d`/`--decode`, BSD and
+            // macOS `base64 -D` — takes base64 by construction, so a shorter
+            // run is trustworthy there than it would be in free text.
+            let has_command = ["base64 -d", "base64 --decode", "base64 -D"]
+                .iter()
+                .any(|m| s.value.contains(m));
             for cap in EMBEDDED_B64_RE.captures_iter(&s.value) {
                 if let Some(b64_match) = cap.get(1) {
                     let b64_str = b64_match.as_str();
@@ -231,10 +210,13 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
                         continue;
                     }
 
-                    // A short run is trusted only when padding or a decode
-                    // command corroborates it; a long run stands on its own.
+                    // A short run alone is indistinguishable from an ordinary
+                    // identifier, so it is taken only when padding (base64's
+                    // own tell, which almost never follows an identifier) or a
+                    // decode command corroborates it. A run of
+                    // EMBEDDED_B64_TRUSTED_LEN stands on its own.
                     let pad = b64_str.bytes().rev().take_while(|&b| b == b'=').count();
-                    if !accept_embedded(b64_str.len() - pad, pad, has_command) {
+                    if b64_str.len() - pad < EMBEDDED_B64_TRUSTED_LEN && pad == 0 && !has_command {
                         continue;
                     }
 
@@ -301,7 +283,7 @@ pub(crate) fn extract_embedded_hex(strings: &[ExtractedString]) -> Vec<Extracted
                     continue;
                 }
 
-                let Ok(decoded) = hex::decode(hex_str) else {
+                let Some(decoded) = crate::bytes::from_hex(hex_str.as_bytes()) else {
                     continue;
                 };
                 // Rejects the digests, ids, and key material that make up most
@@ -459,7 +441,7 @@ fn decode_hex_variants(s: &ExtractedString) -> Vec<ExtractedString> {
     if s.value.len() < MIN_HEX_LENGTH || !s.value.len().is_multiple_of(2) {
         return Vec::new();
     }
-    let Ok(decoded) = hex::decode(s.value.trim()) else {
+    let Some(decoded) = crate::bytes::from_hex(s.value.trim().as_bytes()) else {
         return Vec::new();
     };
 
@@ -578,9 +560,23 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
         return None;
     }
 
-    // URL decode (into_owned reuses the String when decode allocated one,
-    // instead of copying the Cow's contents again).
-    let decoded = urlencoding::decode(&s.value).ok()?.into_owned();
+    // Percent-decode. A `%` not followed by two hex digits stays as it is, and
+    // `+` stays a plus.
+    let mut bytes = Vec::with_capacity(s.value.len());
+    let mut rest = s.value.as_bytes();
+    while let Some((&b, tail)) = rest.split_first() {
+        if b == b'%'
+            && let [h, l, ..] = tail
+            && let (Some(h), Some(l)) = (crate::bytes::hex_digit(*h), crate::bytes::hex_digit(*l))
+        {
+            bytes.push(h << 4 | l);
+            rest = &tail[2..];
+        } else {
+            bytes.push(b);
+            rest = tail;
+        }
+    }
+    let decoded = String::from_utf8(bytes).ok()?;
 
     // Must be different from original (actually encoded)
     if decoded == s.value {
@@ -714,8 +710,7 @@ fn parse_hex_escape(chars: &[char], start: usize, width: usize) -> Option<char> 
         return None;
     }
     let hex: String = chars[start..end].iter().collect();
-    let code_point = u32::from_str_radix(&hex, 16).ok()?;
-    char::from_u32(code_point)
+    char::from_u32(crate::bytes::hex_number(&hex)?)
 }
 
 /// Check if a string looks like base64-encoded data.
@@ -999,15 +994,9 @@ fn decode_base85_string(s: &ExtractedString) -> Option<ExtractedString> {
     })
 }
 
-/// Try to decode ASCII85 encoded data. Public for validation purposes.
-/// Returns None if decoding fails.
-pub(crate) fn try_decode_ascii85(s: &str) -> Option<Vec<u8>> {
-    decode_ascii85(s)
-}
-
-/// Decode ASCII85 encoded data.
+/// Decode ASCII85 encoded data; `None` if it is not valid ASCII85.
 /// ASCII85 uses characters from '!' (33) to 'u' (117), plus 'z' for four zero bytes.
-fn decode_ascii85(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn decode_ascii85(s: &str) -> Option<Vec<u8>> {
     let mut result = Vec::new();
     let mut group = Vec::new();
 
@@ -1666,7 +1655,7 @@ mod tests {
         for (index, byte) in b"http://example.test".iter().enumerate() {
             decoded[index] = byte ^ key;
         }
-        let encoded = hex::encode(decoded);
+        let encoded = crate::bytes::to_hex(&decoded);
         let results = decode_hex_variants(&make_string(&encoded, Some(StringKind::HexEncoded)));
         assert!(
             results
@@ -1762,26 +1751,26 @@ mod tests {
 
     #[test]
     fn test_base85_with_whitespace() {
-        if let Some(decoded) = try_decode_ascii85("<~9jqo^\n  \t~>") {
+        if let Some(decoded) = decode_ascii85("<~9jqo^\n  \t~>") {
             assert_eq!(decoded, b"Man ");
         }
     }
 
     #[test]
     fn test_base85_z_shorthand() {
-        if let Some(decoded) = try_decode_ascii85("z") {
+        if let Some(decoded) = decode_ascii85("z") {
             assert_eq!(decoded, vec![0u8; 4]);
         }
     }
 
     #[test]
     fn test_base85_invalid_char() {
-        assert!(try_decode_ascii85("9jqo^~invalid~").is_none());
+        assert!(decode_ascii85("9jqo^~invalid~").is_none());
     }
 
     #[test]
     fn test_base85_overflow_protection() {
-        assert!(try_decode_ascii85("uuuuu").is_none());
+        assert!(decode_ascii85("uuuuu").is_none());
     }
 
     #[test]
@@ -1816,8 +1805,7 @@ mod tests {
             let result = decode_base64_strings(&[make_string(input, None)]);
             assert!(
                 result.is_empty(),
-                "Should reject '{}' as false positive base64",
-                input
+                "Should reject '{input}' as false positive base64"
             );
         }
     }
@@ -1990,7 +1978,7 @@ mod tests {
         // Nested Python code - common in malware
         // Inner: "import os; os.system('whoami')"
         let inner_b64 = "aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ3dob2FtaScp";
-        let input = make_string(&format!("exec(base64.b64decode('{}'))", inner_b64), None);
+        let input = make_string(&format!("exec(base64.b64decode('{inner_b64}'))"), None);
         let results = extract_embedded_base64(&[input]);
         assert_eq!(results.len(), 1);
         assert!(results[0].value.contains("import os"));

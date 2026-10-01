@@ -287,15 +287,13 @@ fn test_xor_performance() {
     // Release: ~0.3s. Debug builds are significantly slower, allow up to 10s.
     assert!(
         elapsed.as_secs() < 10,
-        "XOR extraction took too long: {:?}",
-        elapsed
+        "XOR extraction took too long: {elapsed:?}"
     );
 
     // Should find reasonable number of strings (not 0, not thousands)
     assert!(
         xor_count > 50 && xor_count < 500,
-        "Expected 50-500 XOR strings, found {}",
-        xor_count
+        "Expected 50-500 XOR strings, found {xor_count}"
     );
 
     println!(
@@ -393,7 +391,7 @@ fn test_c2_url_extraction_from_fixture() {
         println!("\nAll IPs extracted:");
         for s in xor_strings
             .iter()
-            .filter(|s| matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort)))
+            .filter(|s| matches!(s.kind, Some(StringKind::IP | StringKind::IPPort)))
         {
             println!("  0x{:x}: {:?}", s.data_offset, s.value);
         }
@@ -637,7 +635,7 @@ fn test_brew_agent_comprehensive_extraction() {
     println!("\n=== Summary ===");
     println!("Total IOC categories found: {}", found_categories.len());
     for (category, count) in &found_categories {
-        println!("  {}: {}", category, count);
+        println!("  {category}: {count}");
     }
 
     // Minimum thresholds

@@ -16,7 +16,7 @@ fn test_imports_not_marked_as_codesig() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -24,10 +24,7 @@ fn test_imports_not_marked_as_codesig() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -59,7 +56,7 @@ fn test_only_base64_gets_codesig_hash_kind() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -67,10 +64,7 @@ fn test_only_base64_gets_codesig_hash_kind() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -124,7 +118,7 @@ fn test_linkedit_const_strings_selective_codesig() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -132,10 +126,7 @@ fn test_linkedit_const_strings_selective_codesig() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -252,7 +243,7 @@ fn test_codesig_method_on_signatures() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -260,10 +251,7 @@ fn test_codesig_method_on_signatures() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -367,7 +355,7 @@ fn test_no_base64_kind_in_linkedit() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -375,10 +363,7 @@ fn test_no_base64_kind_in_linkedit() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -416,7 +401,7 @@ fn test_cert_strings_not_marked_as_hashes() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -424,10 +409,7 @@ fn test_cert_strings_not_marked_as_hashes() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -461,7 +443,7 @@ fn test_exact_hash_count() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -469,10 +451,7 @@ fn test_exact_hash_count() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -496,14 +475,11 @@ fn test_exact_hash_count() {
 
     assert!(
         hash_count >= 1,
-        "/bin/ls should expose at least one promoted CD hash, found {}",
-        hash_count
+        "/bin/ls should expose at least one promoted CD hash, found {hash_count}"
     );
     assert!(
         arch_count == 0 || hash_count <= arch_count,
-        "/bin/ls should not expose more CD hashes than architectures (hashes={}, arches={})",
-        hash_count,
-        arch_count
+        "/bin/ls should not expose more CD hashes than architectures (hashes={hash_count}, arches={arch_count})"
     );
 
     // Count CodeSignature method strings (includes hashes + XML)
@@ -515,9 +491,7 @@ fn test_exact_hash_count() {
     // Should have more than just the hashes (includes XML/plist)
     assert!(
         codesig_count >= hash_count,
-        "CodeSignature method count ({}) should be >= hash count ({}) (includes XML/plist)",
-        codesig_count,
-        hash_count
+        "CodeSignature method count ({codesig_count}) should be >= hash count ({hash_count}) (includes XML/plist)"
     );
 
     // Count AppId strings (bundle identifiers)
@@ -529,7 +503,6 @@ fn test_exact_hash_count() {
     // /bin/ls should have at least 1 AppId (com.apple.ls)
     assert!(
         appid_count >= 1,
-        "/bin/ls should have at least 1 AppId (com.apple.ls), found {}",
-        appid_count
+        "/bin/ls should have at least 1 AppId (com.apple.ls), found {appid_count}"
     );
 }

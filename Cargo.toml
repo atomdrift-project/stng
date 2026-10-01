@@ -55,12 +55,6 @@ base64 = "0.22"
 # DES is used only by the signature-gated legacy ColdFusion template decoder.
 des = "0.8"
 
-# Hex decoding
-hex = "0.4"
-
-# URL decoding
-urlencoding = "2.1"
-
 # Hostname canonicalization and public-suffix validation. `psl` embeds a static
 # snapshot, so analysis never performs network I/O and remains reproducible.
 idna = "1.1"
@@ -174,6 +168,9 @@ unused_must_use = "deny"
 unused_imports = "deny"
 unused_mut = "deny"
 rust_2018_idioms = { level = "deny", priority = -1 }
+
+# Every public item says what it is
+missing_docs = "warn"
 
 # Catch silent no-ops and dead code
 noop_method_call = "warn"

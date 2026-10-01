@@ -63,7 +63,7 @@ pub(super) fn extract(macho: &MachO<'_>, min_length: usize) -> Vec<ExtractedStri
             ty = elem;
         }
         if ty >= data.len()
-            || !data.get(ty + 23).is_some_and(|k| k & 31 == 25)
+            || data.get(ty + 23).is_none_or(|k| k & 31 != 25)
             || !seen_types.insert(ty)
         {
             continue;

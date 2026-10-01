@@ -9,7 +9,7 @@ fn test_crypto_wallet_paths_from_brew_agent() {
 
     // Skip if sample doesn't exist
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found at {}", sample_path);
+        eprintln!("Skipping - malware sample not found at {sample_path}");
         return;
     }
 
@@ -58,10 +58,10 @@ fn test_crypto_wallet_paths_from_brew_agent() {
 
         if found {
             found_count += 1;
-            println!("✓ Found: {} ({})", wallet_path, description);
+            println!("✓ Found: {wallet_path} ({description})");
         } else {
             missing.push((wallet_path, description));
-            eprintln!("✗ Missing: {} ({})", wallet_path, description);
+            eprintln!("✗ Missing: {wallet_path} ({description})");
         }
     }
 
@@ -76,7 +76,7 @@ fn test_crypto_wallet_paths_from_brew_agent() {
     if !missing.is_empty() {
         eprintln!("\nMissing {} wallet paths:", missing.len());
         for (path, desc) in &missing {
-            eprintln!("  - {} ({})", path, desc);
+            eprintln!("  - {path} ({desc})");
         }
     }
 
@@ -125,7 +125,7 @@ fn test_wallet_keyword_detection() {
         wallet_strings.len()
     );
     for s in wallet_strings.iter().take(10) {
-        println!("  - {}", s);
+        println!("  - {s}");
     }
 
     // Should find at least 10 wallet-related strings
@@ -175,7 +175,7 @@ fn test_crypto_terms_detection() {
             term,
             xor_strings.len()
         );
-        println!("✓ Found strings containing '{}'", term);
+        println!("✓ Found strings containing '{term}'");
     }
 
     println!("✓ Crypto terms detection test passed");

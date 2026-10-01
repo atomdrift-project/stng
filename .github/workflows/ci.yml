@@ -85,6 +85,11 @@ jobs:
       # src/main.rs may reach for a `cli`-only dependency.
       - run: cargo clippy --locked --no-default-features --lib -- -D warnings
 
+      # The public API's docs: broken or private links fail here.
+      - run: cargo doc --locked --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       # A `--locked` build fails outright on a stale lockfile, but this catches
       # the subtler case of a lockfile that resolves but wasn't committed.
       - name: Cargo.lock unchanged

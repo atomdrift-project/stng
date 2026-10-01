@@ -15,7 +15,6 @@ use crate::extract_raw_strings;
 use crate::extract_stack_strings_from_ranges;
 use crate::extract_varint_prefixed_strings;
 use crate::extract_wide_strings;
-use crate::get_r2_strings;
 use crate::pe_go_skip_ranges;
 use crate::pe_is_rust;
 use crate::pe_rust_skip_ranges;
@@ -138,7 +137,7 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         stack_strings,
     ] = parallel([
         &|| dotnet::extract_us_heap_strings(pe, data, min_length),
-        &|| get_r2_strings(opts).unwrap_or_default(),
+        &|| opts.r2_strings.clone().unwrap_or_default(),
         &|| extract_wide_strings(data, min_length, &segments, &pe_skip),
         &|| {
             scan_binary_ips(
@@ -203,7 +202,7 @@ pub(crate) fn suppress_version_info_ips(strings: &mut [ExtractedString], pe: &go
     }
 
     for s in strings.iter_mut() {
-        if matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort))
+        if matches!(s.kind, Some(StringKind::IP | StringKind::IPPort))
             && version_strings.iter().any(|v| v == &s.value)
         {
             tracing::debug!("Suppressing version-info false positive IP: {}", s.value);

@@ -131,7 +131,7 @@ impl State {
         } else {
             let opc = (inst >> 22) & 3;
             let scale = inst >> 30;
-            if (!vector && opc > 1) || (vector && opc > 1 && scale != 0) {
+            if opc > 1 && (!vector || scale != 0) {
                 return None;
             }
             let size = if vector && opc > 1 {

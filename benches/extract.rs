@@ -8,6 +8,10 @@
 //! Profile one:    cargo bench --bench extract -- "go_garble_3mb"
 //! Profile ARM64:  cargo bench --bench extract -- "dynamichub_arm64_stack_xor"
 //! With flamegraph: cargo flamegraph --bench extract -- --bench "go_garble_3mb"
+#![allow(
+    missing_docs,
+    reason = "criterion_group! generates an undocumented pub fn"
+)]
 
 #[path = "../tests/common/mod.rs"]
 mod common;

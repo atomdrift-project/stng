@@ -132,8 +132,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value == "http://evil.com"),
-            "Should find URL with XOR key 0x42. Results: {:?}",
-            results
+            "Should find URL with XOR key 0x42. Results: {results:?}"
         );
     }
 
@@ -157,8 +156,7 @@ mod tests {
         let results = extract_xor_strings(&data, 8, false);
         assert!(
             results.iter().any(|r| r.value == "192.168.1.100"),
-            "Should find IP with XOR key 0x5A. Results: {:?}",
-            results
+            "Should find IP with XOR key 0x5A. Results: {results:?}"
         );
     }
 
@@ -170,8 +168,7 @@ mod tests {
         let results = extract_xor_strings(&data, 8, false);
         assert!(
             results.iter().any(|r| r.value == "10.0.0.1:8080"),
-            "IP:port should be detected with XOR key 0x3C. Results: {:?}",
-            results
+            "IP:port should be detected with XOR key 0x3C. Results: {results:?}"
         );
     }
 
@@ -183,8 +180,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value == "/etc/passwd"),
-            "Should find path with XOR key 0xAB. Results: {:?}",
-            results
+            "Should find path with XOR key 0xAB. Results: {results:?}"
         );
     }
 
@@ -196,8 +192,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value == "password=secret123"),
-            "Should find password string with XOR key 0x77. Results: {:?}",
-            results
+            "Should find password string with XOR key 0x77. Results: {results:?}"
         );
     }
 
@@ -223,8 +218,7 @@ mod tests {
         // Key 0x20 is skipped, so the plaintext must not be recovered.
         assert!(
             !results.iter().any(|r| r.value == "GOROOT OBJECT"),
-            "Should skip key 0x20. Results: {:?}",
-            results
+            "Should skip key 0x20. Results: {results:?}"
         );
     }
 
@@ -236,8 +230,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value == "evil.malware.com"),
-            "Hostname should be detected with XOR key 0x55. Results: {:?}",
-            results
+            "Hostname should be detected with XOR key 0x55. Results: {results:?}"
         );
     }
 
@@ -262,8 +255,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value.contains("Mozilla")),
-            "Mozilla user agent should be detected with XOR key 0x42. Results: {:?}",
-            results
+            "Mozilla user agent should be detected with XOR key 0x42. Results: {results:?}"
         );
     }
 
@@ -280,8 +272,7 @@ mod tests {
             !results
                 .iter()
                 .any(|r| r.value == "12.32.12.2" && r.kind == Some(StringKind::IP)),
-            "XAML margin commas must not produce false IP via XOR key 0x02. Results: {:?}",
-            results
+            "XAML margin commas must not produce false IP via XOR key 0x02. Results: {results:?}"
         );
     }
 
@@ -297,8 +288,7 @@ mod tests {
             results
                 .iter()
                 .any(|r| r.value == "http://malware.example.com"),
-            "Custom single-byte XOR should decode URL. Results: {:?}",
-            results
+            "Custom single-byte XOR should decode URL. Results: {results:?}"
         );
     }
 
@@ -318,8 +308,7 @@ mod tests {
             results
                 .iter()
                 .any(|r| r.value == "secret password: admin123"),
-            "Custom multi-byte XOR should decode password. Results: {:?}",
-            results
+            "Custom multi-byte XOR should decode password. Results: {results:?}"
         );
     }
 
@@ -340,8 +329,7 @@ mod tests {
             results
                 .iter()
                 .any(|r| r.value == "https://c2server.evil.com/api/"),
-            "Custom string XOR key should decode C2 URL. Results: {:?}",
-            results
+            "Custom string XOR key should decode C2 URL. Results: {results:?}"
         );
     }
 
@@ -378,8 +366,7 @@ mod tests {
         let results = extract_custom_xor_strings(&xored, key, 8, false);
         assert!(
             results.iter().any(|r| r.value.contains("192.168.1.100")),
-            "Custom XOR should detect IP addresses with context. Results: {:?}",
-            results
+            "Custom XOR should detect IP addresses with context. Results: {results:?}"
         );
     }
 
@@ -397,8 +384,7 @@ mod tests {
         let results = extract_custom_xor_strings(&xored, key, 4, false);
         assert!(
             results.iter().any(|r| r.value == "/bin/bash"),
-            "Custom XOR should detect paths. Results: {:?}",
-            results
+            "Custom XOR should detect paths. Results: {results:?}"
         );
     }
 
@@ -420,8 +406,7 @@ mod tests {
                 .iter()
                 .any(|r| r.kind == Some(StringKind::SuspiciousPath)
                     && r.value.contains("/Library/Ethereum/keystore")),
-            "Should detect Ethereum keystore path. Results: {:?}",
-            results
+            "Should detect Ethereum keystore path. Results: {results:?}"
         );
     }
 
@@ -441,8 +426,7 @@ mod tests {
             results
                 .iter()
                 .any(|r| r.kind == Some(StringKind::ShellCmd) && r.value.contains("screencapture")),
-            "Should detect screencapture command even with trailing garbage. Results: {:?}",
-            results
+            "Should detect screencapture command even with trailing garbage. Results: {results:?}"
         );
     }
 
@@ -460,8 +444,7 @@ mod tests {
         let results = extract_custom_xor_strings(&xored, key, 10, false);
         assert!(
             !results.iter().any(|r| r.kind == Some(StringKind::ShellCmd)),
-            "Garbage with backtick should NOT be shell command. Results: {:?}",
-            results
+            "Garbage with backtick should NOT be shell command. Results: {results:?}"
         );
     }
 
@@ -518,8 +501,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value.contains("Library")),
-            "Should detect Library in XOR'd path. Results: {:?}",
-            results
+            "Should detect Library in XOR'd path. Results: {results:?}"
         );
     }
 
@@ -532,8 +514,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             results.iter().any(|r| r.value.contains("Ethereum")),
-            "Should detect Ethereum in XOR'd path. Results: {:?}",
-            results
+            "Should detect Ethereum in XOR'd path. Results: {results:?}"
         );
     }
 
@@ -546,8 +527,7 @@ mod tests {
         let results = extract_xor_strings(&data, 10, false);
         assert!(
             !results.is_empty(),
-            "Should detect format string with ' %s ' pattern. Results: {:?}",
-            results
+            "Should detect format string with ' %s ' pattern. Results: {results:?}"
         );
     }
 
@@ -566,9 +546,7 @@ mod tests {
             let entropy = calculate_entropy(key.as_bytes());
             assert!(
                 is_good_xor_key_candidate(key, entropy),
-                "Known XOR key '{}' should qualify (entropy: {:.2})",
-                key,
-                entropy
+                "Known XOR key '{key}' should qualify (entropy: {entropy:.2})"
             );
         }
     }
@@ -589,8 +567,7 @@ mod tests {
             let entropy = calculate_entropy(key.as_bytes());
             assert!(
                 !is_good_xor_key_candidate(key, entropy),
-                "Bad key candidate '{}' should NOT qualify",
-                key
+                "Bad key candidate '{key}' should NOT qualify"
             );
         }
     }
@@ -602,24 +579,21 @@ mod tests {
         let entropy1 = calculate_entropy(uniform.as_bytes());
         assert!(
             entropy1 > 2.9 && entropy1 < 3.1,
-            "Uniform distribution should have ~3.0 bits entropy, got {:.2}",
-            entropy1
+            "Uniform distribution should have ~3.0 bits entropy, got {entropy1:.2}"
         );
 
         let repeated = "aaaaaaaa"; // All same = 0 bits
         let entropy2 = calculate_entropy(repeated.as_bytes());
         assert!(
             entropy2 < 0.1,
-            "All same character should have ~0 bits entropy, got {:.2}",
-            entropy2
+            "All same character should have ~0 bits entropy, got {entropy2:.2}"
         );
 
         let mixed = "aAbBcCdD1!2@3#"; // High entropy
         let entropy3 = calculate_entropy(mixed.as_bytes());
         assert!(
             entropy3 > 3.5,
-            "Mixed characters should have high entropy, got {:.2}",
-            entropy3
+            "Mixed characters should have high entropy, got {entropy3:.2}"
         );
     }
 
@@ -684,8 +658,7 @@ mod tests {
                 detected_str.contains("http")
                     || detected_str.contains("evil")
                     || detected_str.contains(".com"),
-                "Should extract meaningful strings from the key, got: '{}'",
-                detected_str
+                "Should extract meaningful strings from the key, got: '{detected_str}'"
             );
         }
         // Note: We don't assert that a key MUST be detected, because the extraction
@@ -1008,8 +981,7 @@ mod tests {
             let found = results.iter().any(|r| r.value == *garbage);
             if found {
                 eprintln!(
-                    "WARNING: Garbage string '{}' was extracted (may need better filtering)",
-                    garbage
+                    "WARNING: Garbage string '{garbage}' was extracted (may need better filtering)"
                 );
             }
         }

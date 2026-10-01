@@ -16,7 +16,7 @@ fn test_elf_rootkit_xor_detection() {
     let sample_path = "../../../data/bad/datasets/mbdl/rootkit/3b378846bc429fdf9bec08b9635885267d8d269f6d941ab1d6e526a03304331b.elf";
 
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - rootkit sample not found at {}", sample_path);
+        eprintln!("Skipping - rootkit sample not found at {sample_path}");
         return;
     }
 
@@ -32,20 +32,17 @@ fn test_elf_rootkit_xor_detection() {
 
     assert!(
         xor_results.contains(&"ld.so.preload"),
-        "Should detect XOR 0xFE-encoded 'ld.so.preload' (LD_PRELOAD rootkit injection). Found XOR strings: {:?}",
-        xor_results
+        "Should detect XOR 0xFE-encoded 'ld.so.preload' (LD_PRELOAD rootkit injection). Found XOR strings: {xor_results:?}"
     );
 
     assert!(
         xor_results.contains(&"/proc/net/tcp"),
-        "Should detect XOR 0xFE-encoded '/proc/net/tcp' (network connection hiding). Found XOR strings: {:?}",
-        xor_results
+        "Should detect XOR 0xFE-encoded '/proc/net/tcp' (network connection hiding). Found XOR strings: {xor_results:?}"
     );
 
     assert!(
         xor_results.contains(&"/proc/net/tcp6"),
-        "Should detect XOR 0xFE-encoded '/proc/net/tcp6' (IPv6 connection hiding). Found XOR strings: {:?}",
-        xor_results
+        "Should detect XOR 0xFE-encoded '/proc/net/tcp6' (IPv6 connection hiding). Found XOR strings: {xor_results:?}"
     );
 
     // Verify the method and key annotation

@@ -1,14 +1,18 @@
 //! ARM64 instruction fields shared by the instruction-pattern decoders.
 
-/// The address an `ADRP` (`page`) at `pc` and the `ADD #imm12` (`low`) after
-/// it form: the 4 KiB page `ADRP` selects relative to `pc`'s page, plus the
-/// low 12 bits. `None` when that falls outside the address space.
-pub(crate) fn adrp_add(pc: u64, page: u32, low: u32) -> Option<u64> {
+/// The 4 KiB page an `ADRP` at `pc` selects, relative to `pc`'s page. `None`
+/// when that falls outside the address space.
+pub(crate) fn adrp_page(pc: u64, adrp: u32) -> Option<u64> {
     // immhi (bits 5..24) and immlo (bits 29..31) form a signed 21-bit page count.
-    let pages = i64::from(((page >> 5) & 0x7ffff) << 2 | ((page >> 29) & 3));
-    (pc & !4095)
-        .checked_add_signed((pages << 43 >> 43) << 12)?
-        .checked_add(u64::from((low >> 10) & 0xfff))
+    let pages = i64::from(((adrp >> 5) & 0x7ffff) << 2 | ((adrp >> 29) & 3));
+    (pc & !4095).checked_add_signed((pages << 43 >> 43) << 12)
+}
+
+/// The address an `ADRP` (`page`) at `pc` and the `ADD #imm12` (`low`) after
+/// it form: [`adrp_page`] plus the low 12 bits. `None` when that falls outside
+/// the address space.
+pub(crate) fn adrp_add(pc: u64, page: u32, low: u32) -> Option<u64> {
+    adrp_page(pc, page)?.checked_add(u64::from((low >> 10) & 0xfff))
 }
 
 #[cfg(test)]

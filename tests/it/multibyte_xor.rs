@@ -44,18 +44,15 @@ fn test_multibyte_xor_basic() {
 
     assert!(
         found_hello,
-        "Should find 'hello world'. Found: {:?}",
-        xor_strings
+        "Should find 'hello world'. Found: {xor_strings:?}"
     );
     assert!(
         found_test,
-        "Should find 'test string'. Found: {:?}",
-        xor_strings
+        "Should find 'test string'. Found: {xor_strings:?}"
     );
     assert!(
         found_osascript,
-        "Should find 'osascript'. Found: {:?}",
-        xor_strings
+        "Should find 'osascript'. Found: {xor_strings:?}"
     );
 }
 
@@ -189,8 +186,7 @@ fn test_multibyte_xor_offsets() {
 
     assert!(
         !xor_strings.is_empty(),
-        "Should find XOR'd string. Found: {:?}",
-        xor_strings
+        "Should find XOR'd string. Found: {xor_strings:?}"
     );
 
     // Check offset is correct (within a few bytes due to scanning step)
@@ -201,9 +197,7 @@ fn test_multibyte_xor_offsets() {
     assert!(
         found_offset.is_some()
             && (found_offset.unwrap() >= start_offset && found_offset.unwrap() <= start_offset + 4),
-        "Offset should be near start of XOR'd data. Expected ~{}, found {:?}",
-        start_offset,
-        found_offset
+        "Offset should be near start of XOR'd data. Expected ~{start_offset}, found {found_offset:?}"
     );
 }
 
@@ -248,13 +242,11 @@ fn test_multibyte_xor_independent_cycling() {
 
     assert!(
         found_test1,
-        "Should find first string. Found: {:?}",
-        xor_strings
+        "Should find first string. Found: {xor_strings:?}"
     );
     assert!(
         found_test2,
-        "Should find second string. Found: {:?}",
-        xor_strings
+        "Should find second string. Found: {xor_strings:?}"
     );
 }
 
@@ -302,7 +294,7 @@ fn test_multibyte_xor_min_length() {
     // Should find a long string (exact match may vary due to overlap detection)
     let has_long_string = xor_strings.iter().any(|s| s.len() >= 10);
     if !has_long_string {
-        eprintln!("XOR strings found: {:?}", xor_strings);
+        eprintln!("XOR strings found: {xor_strings:?}");
     }
     assert!(
         has_long_string,

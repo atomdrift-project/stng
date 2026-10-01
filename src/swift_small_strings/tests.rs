@@ -73,7 +73,7 @@ fn pair(text: &[u8], first: u32) -> Vec<u32> {
 #[test]
 fn original_specimen_has_exact_independently_reviewed_values_and_spans() {
     assert_eq!(
-        hex::encode(Sha256::digest(*FILE)),
+        crate::bytes::to_hex(&Sha256::digest(*FILE)),
         "e804a52fe033d7e99f4e51c5b7f70bd5101e61de1478f5c619219fea8ef8a957"
     );
     let out = extract(*FILE, 0, 4);

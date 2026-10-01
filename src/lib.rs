@@ -228,15 +228,17 @@ fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, usize)]) ->
     }
     if matches!(
         s.kind,
-        Some(StringKind::EntitlementsXml)
-            | Some(StringKind::Section)
-            | Some(StringKind::Base64)
-            | Some(StringKind::Base32)
-            | Some(StringKind::Base85)
-            | Some(StringKind::HexEncoded)
-            | Some(StringKind::UrlEncoded)
-            | Some(StringKind::UnicodeEscaped)
-            | Some(StringKind::XorKey)
+        Some(
+            StringKind::EntitlementsXml
+                | StringKind::Section
+                | StringKind::Base64
+                | StringKind::Base32
+                | StringKind::Base85
+                | StringKind::HexEncoded
+                | StringKind::UrlEncoded
+                | StringKind::UnicodeEscaped
+                | StringKind::XorKey
+        )
     ) {
         return true;
     }
@@ -247,8 +249,11 @@ fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, usize)]) ->
     let in_code_section = if code_ranges.is_empty() {
         None
     } else {
+        // The ranges are sorted and disjoint: find the last one starting at or
+        // before the offset.
         let off = usize::try_from(s.data_offset).unwrap_or(usize::MAX);
-        Some(offset_in_ranges(off, code_ranges))
+        let i = code_ranges.partition_point(|&(start, _)| start <= off);
+        Some(i > 0 && off < code_ranges[i - 1].1)
     };
     let ctx = crate::types::StringContext {
         kind: s.kind,
@@ -258,12 +263,6 @@ fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, usize)]) ->
         arch: None,
     };
     !validation::is_garbage_with_context(&s.value, &ctx)
-}
-
-/// True if `offset` falls in any of the sorted, non-overlapping `ranges`.
-fn offset_in_ranges(offset: usize, ranges: &[(usize, usize)]) -> bool {
-    let i = ranges.partition_point(|&(start, _)| start <= offset);
-    i > 0 && offset < ranges[i - 1].1
 }
 
 /// Run XOR scanning and extend `strings` with any decoded results.
@@ -461,6 +460,8 @@ pub enum FormatHint {
     Text,
 }
 
+/// How to extract strings. Start from [`ExtractOptions::new`] and adjust with
+/// the `with_*` builders.
 #[derive(Debug, Clone)]
 pub struct ExtractOptions {
     /// Minimum string length to extract
@@ -509,6 +510,8 @@ impl Default for ExtractOptions {
 }
 
 impl ExtractOptions {
+    /// Options for strings of at least `min_length` bytes, with every optional
+    /// pass (garbage filter, XOR scan) off.
     #[must_use]
     pub fn new(min_length: usize) -> Self {
         Self {
@@ -1018,10 +1021,6 @@ fn should_deobfuscate_script(data: &[u8], strings: &[ExtractedString]) -> bool {
 /// ```
 #[must_use]
 pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
-    extract_strings_inner(data, opts)
-}
-
-fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
     // Fast-fail on already-cancelled callers.
     if opts.is_cancelled() {
         return Vec::new();
@@ -1061,7 +1060,11 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
     // a class stores a plausible JVM major version in bytes 6..8 followed by
     // a constant-pool count and tag. Walk that pool directly: it is both
     // cheaper and more exact than treating Java as an unknown binary.
-    if looks_like_java_class(data) {
+    // filefacts uses the same bound, which also keeps malformed CAFEBABE input
+    // out of Goblin's fat-architecture loop.
+    if let Some(&[0xCA, 0xFE, 0xBA, 0xBE, a, b, c, d]) = data.get(..8)
+        && u32::from_be_bytes([a, b, c, d]) > 16
+    {
         return extract_java_class_strings(data, opts);
     }
 
@@ -1072,7 +1075,7 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
 
     if let Some(object) = parsed_binary {
         let t0 = std::time::Instant::now();
-        let mut strings = extract_from_object(&object, data, opts);
+        let mut strings = pipeline::extract(&object, data, opts);
         tracing::debug!("TIME: Extraction took {:?}", t0.elapsed());
 
         // For text files parsed by goblin (e.g. as Unknown), also run script deobfuscation
@@ -1084,9 +1087,7 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
     } else {
         // Unknown format - use r2 if available, plus raw scan
         let mut strings = Vec::new();
-        if let Some(r2_strings) = get_r2_strings(opts) {
-            strings.extend(r2_strings);
-        }
+        strings.extend(opts.r2_strings.iter().flatten().cloned());
 
         // Check if this looks like a PE (MZ header) even if goblin failed to parse
         let is_pe = data.len() >= 2 && data[0] == 0x4D && data[1] == 0x5A;
@@ -1162,18 +1163,6 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
 
         deduplicate_by_offset(strings)
     }
-}
-
-/// Distinguish JVM class files from big-endian fat Mach-O files, which use the
-/// same four-byte magic. The shared word after the magic is either the JVM
-/// `(minor, major)` pair or Mach-O's architecture count. Real universal Mach-O
-/// files have a small count; Java's major version alone makes the word larger.
-/// The same bound is used by filefacts, keeping malformed CAFEBABE input away
-/// from Goblin's fat-architecture loop too.
-fn looks_like_java_class(data: &[u8]) -> bool {
-    data.len() >= 8
-        && data[..4] == [0xCA, 0xFE, 0xBA, 0xBE]
-        && u32::from_be_bytes([data[4], data[5], data[6], data[7]]) > 16
 }
 
 /// Extract the JVM constant-pool UTF-8 entries directly. Besides being one
@@ -1273,32 +1262,13 @@ pub fn extract_strings_from_object(
     // (duplicating ~80 lines of decoder pipeline here) is the kind of
     // drift that creates exactly the bug we're fixing.
     if matches!(object, Object::Unknown(_)) {
-        return extract_strings_inner(data, opts);
+        return extract_strings_with_options(data, opts);
     }
-    let mut strings = extract_from_object(object, data, opts);
+    let mut strings = pipeline::extract(object, data, opts);
     if should_deobfuscate_script(data, &strings) {
         append_script_deobfuscation(&mut strings, data, opts);
     }
     deduplicate_by_offset(strings)
-}
-
-/// Extract strings from a pre-parsed binary object.
-///
-/// Dispatches to the appropriate language-aware extractor based on the binary format
-/// (Mach-O, ELF, PE) and detected language (Go, Rust, unknown). Runs XOR scanning,
-/// stack string extraction, import enrichment, and section enrichment after the
-/// primary extraction pass.
-fn extract_from_object(
-    object: &Object<'_>,
-    data: &[u8],
-    opts: &ExtractOptions,
-) -> Vec<ExtractedString> {
-    pipeline::extract(object, data, opts)
-}
-
-/// Strings an external rizin run found, when the caller supplied them.
-fn get_r2_strings(opts: &ExtractOptions) -> Option<Vec<ExtractedString>> {
-    opts.r2_strings.clone()
 }
 
 /// Reads the sample at `path` (relative to the crate root) at run time.

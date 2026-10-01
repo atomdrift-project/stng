@@ -94,7 +94,7 @@ fn test_python_exec_zlib_b64_xor() {
     let encoded = base64::engine::general_purpose::STANDARD.encode(&compressed);
 
     let src = format!(
-        r#"# -*- coding: utf-8 -*-
+        r"# -*- coding: utf-8 -*-
 abc = __import__('base64')
 xyz = __import__('zlib')
 key = {xor_key}
@@ -103,7 +103,7 @@ blob = '{encoded}'
 decoded = xyz.decompress(abc.b64decode(blob))
 result = xorfn(decoded, key)
 exec(compile(result, '<>', 'exec'))
-"#
+"
     );
 
     let opts = ExtractOptions::new(4);
@@ -263,9 +263,9 @@ eval(Buffer.from("{encoded}", "base64").toString())
 #[test]
 fn test_javascript_string_fromcharcode() {
     // eval(String.fromCharCode(...)) — hex char codes for "alert(1)"
-    let src = br#"var x = 1;
+    let src = br"var x = 1;
 eval(String.fromCharCode(97, 108, 101, 114, 116, 40, 39, 120, 115, 115, 39, 41))
-"#;
+";
     // Decodes to: alert('xss')
 
     let opts = ExtractOptions::new(4);

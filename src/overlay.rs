@@ -108,25 +108,27 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
                 let classified_kind = classify_string(&s.value);
                 s.kind = match classified_kind {
                     // Keep highly specific/interesting classifications
-                    Some(StringKind::Base32)
-                    | Some(StringKind::Base58)
-                    | Some(StringKind::Base64)
-                    | Some(StringKind::Base85)
-                    | Some(StringKind::CryptoWallet)
-                    | Some(StringKind::MiningPool)
-                    | Some(StringKind::IP)
-                    | Some(StringKind::IPPort)
-                    | Some(StringKind::Hostname)
-                    | Some(StringKind::Url)
-                    | Some(StringKind::Email)
-                    | Some(StringKind::TorAddress)
-                    | Some(StringKind::ShellCmd)
-                    | Some(StringKind::SuspiciousPath)
-                    | Some(StringKind::XorKey)
-                    | Some(StringKind::HexEncoded)
-                    | Some(StringKind::APIKey)
-                    | Some(StringKind::JWT)
-                    | Some(StringKind::CTFFlag) => classified_kind,
+                    Some(
+                        StringKind::Base32
+                        | StringKind::Base58
+                        | StringKind::Base64
+                        | StringKind::Base85
+                        | StringKind::CryptoWallet
+                        | StringKind::MiningPool
+                        | StringKind::IP
+                        | StringKind::IPPort
+                        | StringKind::Hostname
+                        | StringKind::Url
+                        | StringKind::Email
+                        | StringKind::TorAddress
+                        | StringKind::ShellCmd
+                        | StringKind::SuspiciousPath
+                        | StringKind::XorKey
+                        | StringKind::HexEncoded
+                        | StringKind::APIKey
+                        | StringKind::JWT
+                        | StringKind::CTFFlag,
+                    ) => classified_kind,
                     // Everything else stays as Overlay
                     _ => Some(StringKind::Overlay),
                 };
@@ -140,25 +142,27 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
                 let classified_kind = classify_string(&s.value);
                 s.kind = match classified_kind {
                     // Keep highly specific/interesting classifications
-                    Some(StringKind::Base32)
-                    | Some(StringKind::Base58)
-                    | Some(StringKind::Base64)
-                    | Some(StringKind::Base85)
-                    | Some(StringKind::CryptoWallet)
-                    | Some(StringKind::MiningPool)
-                    | Some(StringKind::IP)
-                    | Some(StringKind::IPPort)
-                    | Some(StringKind::Hostname)
-                    | Some(StringKind::Url)
-                    | Some(StringKind::Email)
-                    | Some(StringKind::TorAddress)
-                    | Some(StringKind::ShellCmd)
-                    | Some(StringKind::SuspiciousPath)
-                    | Some(StringKind::XorKey)
-                    | Some(StringKind::HexEncoded)
-                    | Some(StringKind::APIKey)
-                    | Some(StringKind::JWT)
-                    | Some(StringKind::CTFFlag) => classified_kind,
+                    Some(
+                        StringKind::Base32
+                        | StringKind::Base58
+                        | StringKind::Base64
+                        | StringKind::Base85
+                        | StringKind::CryptoWallet
+                        | StringKind::MiningPool
+                        | StringKind::IP
+                        | StringKind::IPPort
+                        | StringKind::Hostname
+                        | StringKind::Url
+                        | StringKind::Email
+                        | StringKind::TorAddress
+                        | StringKind::ShellCmd
+                        | StringKind::SuspiciousPath
+                        | StringKind::XorKey
+                        | StringKind::HexEncoded
+                        | StringKind::APIKey
+                        | StringKind::JWT
+                        | StringKind::CTFFlag,
+                    ) => classified_kind,
                     // Everything else stays as OverlayWide
                     _ => Some(StringKind::OverlayWide),
                 };

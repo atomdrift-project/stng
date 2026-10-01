@@ -162,7 +162,17 @@ fn parse_xor_key(input: &str) -> Result<Vec<u8>> {
         anyhow::bail!("XOR key cannot be empty");
     }
 
-    hex::decode(hex_str).map_err(|e| anyhow::anyhow!("Invalid hex key '{hex_str}': {e}"))
+    let digit = |c: u8| char::from(c).to_digit(16);
+    let key: Option<Vec<u8>> = match hex_str.as_bytes().as_chunks::<2>() {
+        (pairs, []) => pairs
+            .iter()
+            .map(|&[h, l]| u8::try_from(digit(h)? << 4 | digit(l)?).ok())
+            .collect(),
+        _ => None,
+    };
+    key.ok_or_else(|| {
+        anyhow::anyhow!("Invalid hex key '{hex_str}': not an even number of hex digits")
+    })
 }
 
 fn parse_integer(input: &str) -> Result<u64> {
@@ -346,7 +356,7 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     if cli.flush_cache {
         let target = path.to_string_lossy();
         if let Err(e) = cli::rizin::flush_cache(target.as_ref()) {
-            eprintln!("Warning: failed to flush cache: {}", e);
+            eprintln!("Warning: failed to flush cache: {e}");
         }
     }
 
@@ -499,28 +509,12 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
 
     let mut keep_indices = HashSet::new();
     for indices in offset_map.values() {
-        if indices.len() == 1 {
-            keep_indices.insert(indices[0]);
-        } else {
-            // Multiple strings at same offset - prefer decoded strings, then longest
-            // indices.len() > 1 here, so max_by always returns Some
-            #[allow(clippy::unwrap_used)]
-            let best_idx = indices
-                .iter()
-                .max_by(|&&a, &&b| {
-                    let method_a = strings[a].method.display_priority();
-                    let method_b = strings[b].method.display_priority();
-
-                    // Higher priority method first
-                    method_a
-                        .cmp(&method_b)
-                        // Then longer string
-                        .then_with(|| strings[a].value.len().cmp(&strings[b].value.len()))
-                })
-                .copied()
-                .unwrap();
-
-            keep_indices.insert(best_idx);
+        // Of the strings at one offset, prefer decoded strings, then the longest.
+        if let Some(&best) = indices
+            .iter()
+            .max_by_key(|&&i| (strings[i].method.display_priority(), strings[i].value.len()))
+        {
+            keep_indices.insert(best);
         }
     }
 
@@ -574,7 +568,7 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         let size = data.len();
         let mut hasher = Sha256::new();
         hasher.update(&data);
-        let hash = hex::encode(hasher.finalize());
+        let hash = cli::hex(&hasher.finalize());
 
         // Format custom XOR key for display
         // Check for XOR key (custom or auto-detected)
@@ -660,10 +654,10 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
 
         // Sort notable items by priority: IPs first, then shell/suspicious, then base64, then URLs
         notable.sort_by_key(|s| match s.kind {
-            Some(stng::StringKind::IP) | Some(stng::StringKind::IPPort) => 0,
-            Some(stng::StringKind::ShellCmd) | Some(stng::StringKind::SuspiciousPath) => 1,
+            Some(stng::StringKind::IP | stng::StringKind::IPPort) => 0,
+            Some(stng::StringKind::ShellCmd | stng::StringKind::SuspiciousPath) => 1,
             Some(stng::StringKind::Base64) => 2,
-            Some(stng::StringKind::Overlay) | Some(stng::StringKind::OverlayWide) => 3,
+            Some(stng::StringKind::Overlay | stng::StringKind::OverlayWide) => 3,
             Some(stng::StringKind::Url) => 4,
             _ => 5,
         });

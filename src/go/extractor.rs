@@ -185,8 +185,8 @@ impl GoStringExtractor {
         let info = BinaryInfo::from_elf(elf.is_64, elf.little_endian);
 
         // Find .rodata section (contains string data)
-        let rodata_info = self.find_rodata_elf(elf, data);
-        let Some((rodata_addr, rodata_data)) = rodata_info else {
+        let Some((rodata_addr, rodata_data)) = crate::binary::elf_section(elf, data, ".rodata")
+        else {
             return strings;
         };
 
@@ -417,12 +417,6 @@ impl GoStringExtractor {
         strings
     }
 
-    /// Find .rodata section in ELF
-    fn find_rodata_elf<'a>(&self, elf: &Elf<'_>, data: &'a [u8]) -> Option<(u64, &'a [u8])> {
-        // Try .rodata first
-        crate::binary::elf_section(elf, data, ".rodata")
-    }
-
     /// Find .rodata or .rdata section in PE
     fn find_rodata_pe<'a>(&self, pe: &PE<'_>, data: &'a [u8]) -> Option<(u64, &'a [u8])> {
         // Try .rodata or .rdata
@@ -505,7 +499,7 @@ fn extract_url_literals(data: &[u8], sink: &mut PackedLiteralSink) {
 
     for scheme in URL_SCHEMES {
         let mut cursor = 0;
-        while let Some(relative) = find_subslice(&data[cursor..], scheme) {
+        while let Some(relative) = memchr::memmem::find(&data[cursor..], scheme) {
             let start = cursor + relative;
             let end = trim_url_end(data, start, scheme.len());
             sink.add_candidate(data, start, end);
@@ -519,15 +513,22 @@ fn extract_find_command_fragments(data: &[u8], sink: &mut PackedLiteralSink) {
     const MAX_COMMAND_FRAGMENT: usize = 256;
 
     let mut cursor = 0;
-    while let Some(relative) = find_subslice(&data[cursor..], FIND_TRIGGER) {
+    while let Some(relative) = memchr::memmem::find(&data[cursor..], FIND_TRIGGER) {
         let start = cursor + relative;
-        let raw_end = command_fragment_end(data, start, MAX_COMMAND_FRAGMENT);
+        let hard_end = start.saturating_add(MAX_COMMAND_FRAGMENT).min(data.len());
+        let mut raw_end = start;
+        while raw_end < hard_end && is_command_fragment_byte(data[raw_end]) {
+            raw_end += 1;
+        }
         let Some(candidate) = std::str::from_utf8(&data[start..raw_end]).ok() else {
             cursor = start + FIND_TRIGGER.len();
             continue;
         };
         let candidate = trim_find_command_fragment(candidate);
-        if candidate_has_find_selector(candidate) {
+        if candidate.contains("-iname")
+            || candidate.contains("-name")
+            || candidate.contains("-exec")
+        {
             let end = start + candidate.len();
             sink.add_candidate(data, start, end);
         }
@@ -537,13 +538,19 @@ fn extract_find_command_fragments(data: &[u8], sink: &mut PackedLiteralSink) {
 
 fn trim_url_end(data: &[u8], start: usize, scheme_len: usize) -> usize {
     let mut end = start;
-    while end < data.len() && is_url_byte(data[end]) {
+    while end < data.len()
+        && (data[end].is_ascii_alphanumeric()
+            || matches!(
+                data[end],
+                b'.' | b'_' | b':' | b'/' | b'@' | b'-' | b'?' | b'=' | b'&' | b'%' | b'#' | b'+'
+            ))
+    {
         end += 1;
     }
 
     let search_start = start.saturating_add(scheme_len);
     if search_start < end
-        && let Some(relative) = find_subslice(&data[search_start..end], b"http2:")
+        && let Some(relative) = memchr::memmem::find(&data[search_start..end], b"http2:")
     {
         end = search_start + relative;
     }
@@ -557,23 +564,6 @@ fn trim_url_end(data: &[u8], start: usize, scheme_len: usize) -> usize {
         end -= 1;
     }
 
-    end
-}
-
-fn is_url_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric()
-        || matches!(
-            byte,
-            b'.' | b'_' | b':' | b'/' | b'@' | b'-' | b'?' | b'=' | b'&' | b'%' | b'#' | b'+'
-        )
-}
-
-fn command_fragment_end(data: &[u8], start: usize, max_len: usize) -> usize {
-    let hard_end = start.saturating_add(max_len).min(data.len());
-    let mut end = start;
-    while end < hard_end && is_command_fragment_byte(data[end]) {
-        end += 1;
-    }
     end
 }
 
@@ -649,17 +639,6 @@ fn long_hex_run_start(s: &str) -> Option<usize> {
         }
     }
     None
-}
-
-fn candidate_has_find_selector(s: &str) -> bool {
-    s.contains("-iname") || s.contains("-name") || s.contains("-exec")
-}
-
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
-    }
-    memchr::memmem::find(haystack, needle)
 }
 
 /// Extract strings from a Go pclntab `pkgnamestab`-style table.

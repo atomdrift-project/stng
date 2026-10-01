@@ -40,13 +40,16 @@ fn direct(bytes: &[u8], cpu: u32) -> Vec<stng::ExtractedString> {
 #[test]
 fn both_slices_decode_the_same_command_and_keep_file_offsets() {
     assert_eq!(
-        hex::encode(Sha256::digest(FILE)),
+        crate::common::hex(&Sha256::digest(FILE)),
         "8202c3887b75b107f76385fe36e7949860b7931cebd2c65899649556c37e30bc"
     );
     for (cpu, offset) in [(CPU_TYPE_X86_64, 0x4c90), (CPU_TYPE_ARM64, 0x14de0)] {
         let found = direct(FILE, cpu);
         assert_eq!(found.len(), 1);
-        assert_eq!(hex::encode(Sha256::digest(found[0].value.as_bytes())), HASH);
+        assert_eq!(
+            crate::common::hex(&Sha256::digest(found[0].value.as_bytes())),
+            HASH
+        );
         assert_eq!(found[0].value.len(), 37_076);
         assert!(found[0].value.starts_with("osascript -e 'run script"));
         assert!(found[0].value.contains("charge0x.at"));
@@ -72,7 +75,10 @@ fn both_slices_decode_the_same_command_and_keep_file_offsets() {
             })
             .collect();
         assert_eq!(found.len(), 1);
-        assert_eq!(hex::encode(Sha256::digest(found[0].value.as_bytes())), HASH);
+        assert_eq!(
+            crate::common::hex(&Sha256::digest(found[0].value.as_bytes())),
+            HASH
+        );
     }
 }
 

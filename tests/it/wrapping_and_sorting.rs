@@ -48,8 +48,7 @@ fn test_text_file_offset_sorting() {
     // Verify offsets are in ascending order
     assert!(
         offsets.windows(2).all(|w| w[0] <= w[1]),
-        "Offsets should be in ascending order: {:?}",
-        offsets
+        "Offsets should be in ascending order: {offsets:?}"
     );
 
     // Verify we have the expected offsets
@@ -119,8 +118,7 @@ fn test_offset_calculation_multiline() {
     assert!(offsets.contains(&5), "Should have offset 5 (BBBBBBBB)");
     assert!(
         offsets.contains(&14),
-        "Should have offset 14/0xe (CCCC), got: {:?}",
-        offsets
+        "Should have offset 14/0xe (CCCC), got: {offsets:?}"
     );
 
     // Clean up
@@ -165,9 +163,7 @@ fn test_empty_file() {
     // Should handle empty file gracefully with "No strings found" message
     assert!(
         stdout.contains("No strings found") || stderr.contains("No strings found"),
-        "Should handle empty file gracefully with 'No strings found' message. stdout: '{}', stderr: '{}'",
-        stdout,
-        stderr
+        "Should handle empty file gracefully with 'No strings found' message. stdout: '{stdout}', stderr: '{stderr}'"
     );
 
     // Clean up
@@ -212,8 +208,7 @@ fn test_single_long_line_wrapping() {
         for i in 1..offsets.len() {
             assert!(
                 offsets[i] > offsets[i - 1],
-                "Wrapped line offsets should increase: {:?}",
-                offsets
+                "Wrapped line offsets should increase: {offsets:?}"
             );
         }
     }
@@ -273,8 +268,7 @@ fn test_flat_mode_sorting() {
     // In flat mode, offsets should still be sorted
     assert!(
         offsets.windows(2).all(|w| w[0] <= w[1]),
-        "Flat mode should also sort by offset: {:?}",
-        offsets
+        "Flat mode should also sort by offset: {offsets:?}"
     );
 
     // Clean up

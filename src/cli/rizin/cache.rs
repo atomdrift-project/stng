@@ -89,10 +89,7 @@ impl R2Cache {
 
         let hash = compute_file_hash(file_path).ok()?;
         let filename = sanitize_command_for_filename(command);
-        let cache_path = self
-            .cache_dir
-            .join(&hash)
-            .join(format!("{}.json", filename));
+        let cache_path = self.cache_dir.join(&hash).join(format!("{filename}.json"));
 
         // Validate cache is still valid
         if !self.is_cache_valid(file_path, &hash) {
@@ -124,7 +121,7 @@ impl R2Cache {
 
         // Write command output
         let filename = sanitize_command_for_filename(command);
-        let output_path = cache_dir.join(format!("{}.json", filename));
+        let output_path = cache_dir.join(format!("{filename}.json"));
 
         fs::write(output_path, output)?;
 
@@ -227,7 +224,7 @@ fn compute_file_hash(path: &str) -> Result<String, std::io::Error> {
     // Cache miss - compute hash
     let data = fs::read(path)?;
     let hash = Sha256::digest(&data);
-    let hash_hex = hex::encode(hash);
+    let hash_hex = crate::cli::hex(&hash);
 
     // Update cache (skip on mutex poison — next call will recompute the hash)
     match HASH_CACHE.lock() {
@@ -260,7 +257,7 @@ fn sanitize_command_for_filename(cmd: &str) -> String {
         // Use SHA256 hash for long commands to ensure safe filename
         let mut hasher = Sha256::new();
         hasher.update(cmd.as_bytes());
-        format!("cmd_{}", hex::encode(hasher.finalize()))
+        format!("cmd_{}", crate::cli::hex(&hasher.finalize()))
     }
 }
 
@@ -556,14 +553,13 @@ mod behavior_tests {
         ];
 
         for (i, cmd) in commands.iter().enumerate() {
-            let output = format!(r#"[{{"result":{}}}]"#, i);
+            let output = format!(r#"[{{"result":{i}}}]"#);
             cache.set(file_path, cmd, &output).unwrap();
 
             let cached = cache.get(file_path, cmd);
             assert!(
                 cached.is_some(),
-                "Should cache command with special chars: {}",
-                cmd
+                "Should cache command with special chars: {cmd}"
             );
             assert_eq!(cached.unwrap(), output);
         }
@@ -661,7 +657,7 @@ mod behavior_tests {
 
         // Generate large output (simulating large function list)
         let large_output = format!(
-            r#"[{}]"#,
+            r"[{}]",
             (0..1000)
                 .map(|i| format!(r#"{{"name":"func{}","addr":{}}}"#, i, i * 100))
                 .collect::<Vec<_>>()

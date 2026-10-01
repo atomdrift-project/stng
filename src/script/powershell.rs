@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn test_char_array() {
         // "hello" as char codes
-        let src = r#"iex([char[]](104,101,108,108,111) -join '')"#;
+        let src = r"iex([char[]](104,101,108,108,111) -join '')";
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].decoded, "hello");

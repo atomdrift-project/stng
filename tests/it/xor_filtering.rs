@@ -36,10 +36,7 @@ fn test_xor_extraction(test_strings: &[&str], test_name: &str) {
 
     // Debug: print all extracted strings if we didn't find any XOR ones
     if xor_strings.is_empty() && !test_strings.is_empty() {
-        eprintln!(
-            "{}: No XOR strings found. All extracted strings:",
-            test_name
-        );
+        eprintln!("{test_name}: No XOR strings found. All extracted strings:");
         for s in &extracted {
             eprintln!("  {:?} (method: {:?})", s.value, s.method);
         }
@@ -49,19 +46,14 @@ fn test_xor_extraction(test_strings: &[&str], test_name: &str) {
     // Just verify we extracted SOME strings as a sanity check
     assert!(
         !extracted.is_empty() || test_strings.is_empty(),
-        "{}: Should extract some strings. Found: {:?}",
-        test_name,
-        extracted
+        "{test_name}: Should extract some strings. Found: {extracted:?}"
     );
 
     // Log any missing strings but don't fail the test
     for expected in test_strings {
         let found = xor_strings.iter().any(|s| s.contains(expected));
         if !found {
-            eprintln!(
-                "{}: Warning - expected string not found: {:?}",
-                test_name, expected
-            );
+            eprintln!("{test_name}: Warning - expected string not found: {expected:?}");
         }
     }
 }

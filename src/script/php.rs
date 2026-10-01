@@ -47,7 +47,7 @@ static EVAL_ROT13_DOUBLE_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// eval(str_rot13('...')) — single-quote delimited
 #[allow(clippy::expect_used)]
 static EVAL_ROT13_SINGLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"eval\s*\(\s*str_rot13\s*\(\s*'([^']+)'\s*\)"#).expect("static regex")
+    Regex::new(r"eval\s*\(\s*str_rot13\s*\(\s*'([^']+)'\s*\)").expect("static regex")
 });
 
 /// Extract all obfuscated payloads from a PHP source.
@@ -90,7 +90,10 @@ fn try_eval_gzinflate_b64(source: &str) -> Vec<DeobfuscationResult> {
             let decoded_b64 = base64::engine::general_purpose::STANDARD
                 .decode(blob.as_bytes())
                 .ok()?;
-            let inflated = inflate_raw(&decoded_b64)?;
+            // Raw deflate, no zlib or gzip header: what gzinflate() expects.
+            let inflated = super::decode_chain::inflate(flate2::read::DeflateDecoder::new(
+                decoded_b64.as_slice(),
+            ))?;
             let payload = String::from_utf8(inflated).ok()?;
             if payload.is_empty() {
                 return None;
@@ -141,12 +144,6 @@ fn try_eval_rot13(source: &str) -> Vec<DeobfuscationResult> {
         })
     })
     .collect()
-}
-
-/// Raw deflate decompression (no zlib/gzip header).
-/// This is what PHP's `gzinflate()` expects.
-fn inflate_raw(data: &[u8]) -> Option<Vec<u8>> {
-    super::decode_chain::inflate(flate2::read::DeflateDecoder::new(data))
 }
 
 #[cfg(test)]

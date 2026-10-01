@@ -66,7 +66,7 @@ pub(crate) fn elf_section<'a>(
 ///   ("Microsoft Windows Hardware Compatibility Publisher") do not chain to it.
 ///
 /// Names are looked for only inside the embedded signature
-/// ([`signature_blobs`]); anywhere else they are just bytes a sample can carry
+/// (`signature_blobs`); anywhere else they are just bytes a sample can carry
 /// to opt out of scanning. Signatures are not verified, so a binary carrying a
 /// copied platform signature blob still passes.
 #[must_use]
@@ -178,13 +178,17 @@ pub(crate) fn pe_section_name(name: &[u8; 8]) -> String {
 }
 
 /// Section metadata including name, size, type, and byte range.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SectionInfo {
+    /// Section name as the header gives it (`.text`, `__cstring`, …).
     pub name: String,
     /// File offset of section payload (where raw bytes begin).
     pub file_offset: u64,
+    /// Size in bytes, as the section header records it.
     pub size: u64,
+    /// Holds machine code.
     pub is_executable: bool,
+    /// Writable at run time.
     pub is_writable: bool,
 }
 

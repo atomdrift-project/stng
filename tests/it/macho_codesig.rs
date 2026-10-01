@@ -23,7 +23,7 @@ fn test_codesig_base64_categorization() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -31,10 +31,7 @@ fn test_codesig_base64_categorization() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -96,7 +93,7 @@ fn test_entitlements_extraction_brew_agent() {
     let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     if !Path::new(sample_path).exists() {
-        eprintln!("Skipping test: {} not found", sample_path);
+        eprintln!("Skipping test: {sample_path} not found");
         return;
     }
 
@@ -160,7 +157,7 @@ fn test_entitlements_extraction_securityd() {
     let bin_path = "/usr/libexec/securityd_system";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -238,7 +235,7 @@ fn test_linkedit_section_enrichment() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -246,10 +243,7 @@ fn test_linkedit_section_enrichment() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -284,7 +278,7 @@ fn test_codesig_hash_format() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -292,10 +286,7 @@ fn test_codesig_hash_format() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -344,8 +335,7 @@ fn test_codesig_hash_format() {
             base64_part
                 .chars()
                 .all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '='),
-            "Code signature hash should contain only valid base64 characters, got: {}",
-            base64_part
+            "Code signature hash should contain only valid base64 characters, got: {base64_part}"
         );
     }
 }
@@ -355,7 +345,7 @@ fn test_entitlements_vs_codesign_count() {
     let bin_path = "/usr/libexec/securityd_system";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -383,16 +373,14 @@ fn test_entitlements_vs_codesign_count() {
     // securityd_system has many entitlement keys (11+)
     assert!(
         key_count >= 11,
-        "securityd_system should have at least 11 entitlement keys, found {}",
-        key_count
+        "securityd_system should have at least 11 entitlement keys, found {key_count}"
     );
 
     // Verify we're getting the full XML, not truncated
     let lines = ent_xml.lines().count();
     assert!(
         lines >= 20,
-        "Entitlements XML should have at least 20 lines, found {}",
-        lines
+        "Entitlements XML should have at least 20 lines, found {lines}"
     );
 }
 
@@ -402,7 +390,7 @@ fn test_no_entitlements_in_clean_binaries() {
     let bin_path = "/bin/ls";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -410,10 +398,7 @@ fn test_no_entitlements_in_clean_binaries() {
 
     // Skip if it's an ELF binary (Mach-O specific test)
     if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!(
-            "Skipping Mach-O specific test: {} is an ELF binary",
-            bin_path
-        );
+        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
         return;
     }
 
@@ -438,7 +423,7 @@ fn test_entitlements_offset_accuracy() {
     let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     if !Path::new(sample_path).exists() {
-        eprintln!("Skipping test: {} not found", sample_path);
+        eprintln!("Skipping test: {sample_path} not found");
         return;
     }
 
@@ -472,9 +457,7 @@ fn test_entitlements_offset_accuracy() {
     let xml_start = String::from_utf8_lossy(&data[offset..std::cmp::min(offset + 5, data.len())]);
     assert!(
         xml_start.starts_with("<?xml"),
-        "Data at offset 0x{:x} should start with '<?xml', got '{}'",
-        offset,
-        xml_start
+        "Data at offset 0x{offset:x} should start with '<?xml', got '{xml_start}'"
     );
 }
 
@@ -483,7 +466,7 @@ fn test_codesig_hashes_are_sha1() {
     let bin_path = "/bin/cat";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 

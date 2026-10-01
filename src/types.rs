@@ -18,7 +18,7 @@ pub struct StringStruct {
 
 /// Where a string lies in the file, as reported by an external disassembler
 /// (rizin `izzj`): used to aim XOR decoding at known string extents.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StringBoundary {
     /// File offset of the string's first byte.
     pub offset: u64,
@@ -78,6 +78,7 @@ fn is_zero_u32(v: &u32) -> bool {
 
 /// Iterator over a string's source byte spans — see
 /// [`ExtractedString::source_spans`].
+#[derive(Debug, Clone)]
 pub enum SourceSpans<'a> {
     /// The single contiguous extent of a normal string.
     Single(std::iter::Once<(u64, u64)>),
@@ -165,18 +166,31 @@ impl Default for ExtractedString {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Arch {
+    /// 32-bit x86.
     X86,
+    /// x86-64.
     X86_64,
+    /// 32-bit ARM.
     Arm,
+    /// 64-bit ARM.
     Aarch64,
+    /// 32-bit MIPS.
     Mips,
+    /// 64-bit MIPS.
     Mips64,
+    /// 32-bit PowerPC.
     PowerPc,
+    /// 64-bit PowerPC.
     PowerPc64,
+    /// 32-bit RISC-V.
     RiscV,
+    /// 64-bit RISC-V.
     RiscV64,
+    /// SPARC.
     Sparc,
+    /// WebAssembly.
     Wasm,
+    /// Any other architecture.
     Other,
 }
 
@@ -274,10 +288,7 @@ impl Arch {
 /// section can construct a richer context to suppress filters that
 /// don't apply to their input (e.g. an ARM binary skips the x86
 /// save-sequence filter; a `.rodata` string skips it too).
-///
-/// Lifetime `'a` borrows the section name; pass `None` if you don't
-/// have one.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct StringContext {
     /// Semantic kind from the extractor (URL, Path, Section, …).
     /// Same role as the `kind` parameter on `is_garbage_with_kind`.
@@ -761,8 +772,11 @@ impl StringKind {
 /// Binary information needed for string extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BinaryInfo {
+    /// A 64-bit binary.
     pub is_64bit: bool,
+    /// Little-endian byte order.
     pub is_little_endian: bool,
+    /// Pointer size in bytes: 8 for 64-bit binaries, 4 otherwise.
     pub ptr_size: usize,
 }
 
@@ -808,42 +822,6 @@ pub struct OverlayInfo {
     pub start_offset: u64,
     /// Size of the overlay data in bytes
     pub size: u64,
-}
-
-#[cfg(test)]
-impl BinaryInfo {
-    #[must_use]
-    pub fn new_64bit_le() -> Self {
-        Self {
-            is_64bit: true,
-            is_little_endian: true,
-            ptr_size: 8,
-        }
-    }
-    #[must_use]
-    pub fn new_32bit_le() -> Self {
-        Self {
-            is_64bit: false,
-            is_little_endian: true,
-            ptr_size: 4,
-        }
-    }
-    #[must_use]
-    pub fn new_64bit_be() -> Self {
-        Self {
-            is_64bit: true,
-            is_little_endian: false,
-            ptr_size: 8,
-        }
-    }
-    #[must_use]
-    pub fn new_32bit_be() -> Self {
-        Self {
-            is_64bit: false,
-            is_little_endian: false,
-            ptr_size: 4,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -898,7 +876,7 @@ mod tests {
 
     #[test]
     fn test_binary_info_64bit_le() {
-        let info = BinaryInfo::new_64bit_le();
+        let info = BinaryInfo::from_elf(true, true);
         assert!(info.is_64bit);
         assert!(info.is_little_endian);
         assert_eq!(info.ptr_size, 8);
@@ -906,7 +884,7 @@ mod tests {
 
     #[test]
     fn test_binary_info_32bit_le() {
-        let info = BinaryInfo::new_32bit_le();
+        let info = BinaryInfo::from_elf(false, true);
         assert!(!info.is_64bit);
         assert!(info.is_little_endian);
         assert_eq!(info.ptr_size, 4);
@@ -914,7 +892,7 @@ mod tests {
 
     #[test]
     fn test_binary_info_64bit_be() {
-        let info = BinaryInfo::new_64bit_be();
+        let info = BinaryInfo::from_elf(true, false);
         assert!(info.is_64bit);
         assert!(!info.is_little_endian);
         assert_eq!(info.ptr_size, 8);
@@ -922,7 +900,7 @@ mod tests {
 
     #[test]
     fn test_binary_info_32bit_be() {
-        let info = BinaryInfo::new_32bit_be();
+        let info = BinaryInfo::from_elf(false, false);
         assert!(!info.is_64bit);
         assert!(!info.is_little_endian);
         assert_eq!(info.ptr_size, 4);

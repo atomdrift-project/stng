@@ -35,13 +35,11 @@ fn test_pe_xor_c6_dll_and_api_detection() {
     // DLL names loaded via LoadLibraryW - indicate covert capability loading
     assert!(
         xor_strings.iter().any(|s| s.contains("bcrypt.dll")),
-        "Should detect XOR 0xC6-encoded 'bcrypt.dll' (AES capability). Found XOR strings: {:?}",
-        xor_strings
+        "Should detect XOR 0xC6-encoded 'bcrypt.dll' (AES capability). Found XOR strings: {xor_strings:?}"
     );
     assert!(
         xor_strings.iter().any(|s| s.contains("user32.dll")),
-        "Should detect XOR 0xC6-encoded 'user32.dll' (UI control). Found XOR strings: {:?}",
-        xor_strings
+        "Should detect XOR 0xC6-encoded 'user32.dll' (UI control). Found XOR strings: {xor_strings:?}"
     );
 
     // BCrypt API names resolved via GetProcAddress - full AES-CBC decryption capability
@@ -49,37 +47,31 @@ fn test_pe_xor_c6_dll_and_api_detection() {
         xor_strings
             .iter()
             .any(|s| s.contains("BCryptOpenAlgorithmProvider")),
-        "Should detect XOR 0xC6-encoded 'BCryptOpenAlgorithmProvider'. Found: {:?}",
-        xor_strings
+        "Should detect XOR 0xC6-encoded 'BCryptOpenAlgorithmProvider'. Found: {xor_strings:?}"
     );
     assert!(
         xor_strings
             .iter()
             .any(|s| s.contains("BCryptGenerateSymmetricKey")),
-        "Should detect XOR 0xC6-encoded 'BCryptGenerateSymmetricKey'. Found: {:?}",
-        xor_strings
+        "Should detect XOR 0xC6-encoded 'BCryptGenerateSymmetricKey'. Found: {xor_strings:?}"
     );
     assert!(
         xor_strings.iter().any(|s| s.contains("BCryptDecrypt")),
-        "Should detect XOR 0xC6-encoded 'BCryptDecrypt'. Found: {:?}",
-        xor_strings
+        "Should detect XOR 0xC6-encoded 'BCryptDecrypt'. Found: {xor_strings:?}"
     );
 
     // Process/window control APIs - indicate process injection or window manipulation
     assert!(
         xor_strings.iter().any(|s| s.contains("CreateProcessW")),
-        "Should detect XOR 0xC6-encoded 'CreateProcessW'. Found: {:?}",
-        xor_strings
+        "Should detect XOR 0xC6-encoded 'CreateProcessW'. Found: {xor_strings:?}"
     );
     assert!(
         xor_strings.iter().any(|s| s.contains("ShowWindow")),
-        "Should detect XOR 0xC6-encoded 'ShowWindow'. Found: {:?}",
-        xor_strings
+        "Should detect XOR 0xC6-encoded 'ShowWindow'. Found: {xor_strings:?}"
     );
     assert!(
         xor_strings.iter().any(|s| s.contains("FindWindowExW")),
-        "Should detect XOR 0xC6-encoded 'FindWindowExW'. Found: {:?}",
-        xor_strings
+        "Should detect XOR 0xC6-encoded 'FindWindowExW'. Found: {xor_strings:?}"
     );
 
     // Verify the key annotation (must be flagged as 0xC6)

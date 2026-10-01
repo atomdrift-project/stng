@@ -178,26 +178,22 @@ fn extract_arm64_stored_strings(
 
         // Branches end a straight-line run: B, BL, B.cond, CBZ/CBNZ, TBZ/TBNZ,
         // BR/BLR/RET. Nothing known before one can be trusted after it.
-        if is_arm64_branch(inst) {
+        let branch = (inst & 0x7C00_0000) == 0x1400_0000 // B, BL
+            || (inst & 0xFF00_0010) == 0x5400_0000 // B.cond
+            || (inst & 0x7E00_0000) == 0x3400_0000 // CBZ, CBNZ
+            || (inst & 0x7E00_0000) == 0x3600_0000 // TBZ, TBNZ
+            || (inst & 0xFE1F_FC1F) == 0xD61F_0000; // BR, BLR, RET
+        if branch {
             epoch = epoch.wrapping_add(1);
             continue;
         }
 
         // ADRP Xd, page
         if (inst & 0x9F00_0000) == 0x9000_0000 {
-            let immlo = (inst >> 29) & 0x3;
-            let immhi = (inst >> 5) & 0x7FFFF;
-            let mut page_offset = i64::from((immhi << 2) | immlo);
-            if (page_offset & 0x100000) != 0 {
-                page_offset |= !0x1FFFFF_i64;
-            }
-            let pc = text_addr as i64 + (idx * 4) as i64;
-            let page = (pc & !0xFFF_i64) + (page_offset << 12);
-            set(
-                &mut slots,
-                rd,
-                u64::try_from(page).map_or(Reg::Unknown, Reg::Page),
-            );
+            let page = text_addr
+                .checked_add((idx * 4) as u64)
+                .and_then(|pc| crate::arm64::adrp_page(pc, inst));
+            set(&mut slots, rd, page.map_or(Reg::Unknown, Reg::Page));
             continue;
         }
 
@@ -205,14 +201,10 @@ fn extract_arm64_stored_strings(
         if (inst & 0xFFC0_0000) == 0x9100_0000 {
             let rn = ((inst >> 5) & 0x1F) as usize;
             let reg = match get(&slots, rn) {
-                Reg::Page(page) => {
-                    let addr = page + u64::from((inst >> 10) & 0xFFF);
-                    if (rodata_addr..rodata_end).contains(&addr) {
-                        Reg::Ptr(addr)
-                    } else {
-                        Reg::Unknown
-                    }
-                }
+                Reg::Page(page) => page
+                    .checked_add(u64::from((inst >> 10) & 0xFFF))
+                    .filter(|addr| (rodata_addr..rodata_end).contains(addr))
+                    .map_or(Reg::Unknown, Reg::Ptr),
                 _ => Reg::Unknown,
             };
             set(&mut slots, rd, reg);
@@ -253,30 +245,17 @@ fn extract_arm64_stored_strings(
 
         // Every other store reads its registers; everything else that is not
         // a store may write Rd (and a load pair Rt2 as well).
-        if !is_arm64_store(inst) {
+        // A store is a load/store-class instruction with the L bit clear;
+        // load-literal has no L bit and is a load.
+        let load_store_class = (inst & 0x0A00_0000) == 0x0800_0000;
+        let load_literal = (inst & 0x3B00_0000) == 0x1800_0000;
+        if !(load_store_class && !load_literal && (inst & 0x0040_0000) == 0) {
             set(&mut slots, rd, Reg::Unknown);
             if (inst & 0x3A40_0000) == 0x2840_0000 {
                 set(&mut slots, ((inst >> 10) & 0x1F) as usize, Reg::Unknown);
             }
         }
     }
-}
-
-/// Whether an A64 instruction transfers control.
-fn is_arm64_branch(inst: u32) -> bool {
-    (inst & 0x7C00_0000) == 0x1400_0000 // B, BL
-        || (inst & 0xFF00_0010) == 0x5400_0000 // B.cond
-        || (inst & 0x7E00_0000) == 0x3400_0000 // CBZ, CBNZ
-        || (inst & 0x7E00_0000) == 0x3600_0000 // TBZ, TBNZ
-        || (inst & 0xFE1F_FC1F) == 0xD61F_0000 // BR, BLR, RET
-}
-
-/// Whether an A64 load/store-class instruction is a store (reads, never
-/// writes, its data registers). Load-literal has no L bit and is a load.
-fn is_arm64_store(inst: u32) -> bool {
-    let load_store_class = (inst & 0x0A00_0000) == 0x0800_0000;
-    let load_literal = (inst & 0x3B00_0000) == 0x1800_0000;
-    load_store_class && !load_literal && (inst & 0x0040_0000) == 0
 }
 
 /// A `len`-byte rodata string at virtual address `addr`, if it is text.
@@ -445,23 +424,8 @@ fn decode_arm64_string(
     rodata_addr: u64,
     rodata_end: u64,
 ) -> Option<(String, u64)> {
-    // Decode ADRP: extract page address
-    let immlo = (inst1 >> 29) & 0x3;
-    let immhi = (inst1 >> 5) & 0x7FFFF;
-    let mut page_offset = i64::from((immhi << 2) | immlo);
-    if (page_offset & 0x100000) != 0 {
-        page_offset |= !0x1FFFFF_i64;
-    }
-
-    let pc = text_addr as i64 + pos as i64;
-    let pc_page = pc & !0xFFF_i64;
-    let page_addr = pc_page + (page_offset << 12);
-
-    // Decode ADD: extract immediate
-    let add_imm = (inst2 >> 10) & 0xFFF;
-    let str_addr = u64::try_from(page_addr)
-        .unwrap_or(u64::MAX)
-        .wrapping_add(u64::from(add_imm));
+    // ADRP + ADD: the string's address.
+    let str_addr = crate::arm64::adrp_add(text_addr.checked_add(pos as u64)?, inst1, inst2)?;
 
     // Decode MOV/ORR: extract length
     let str_len = decode_arm_mov_immediate(inst3)?;
@@ -715,7 +679,12 @@ fn extract_amd64_stored_strings(
         };
         let end = op + 6;
         let ptr_reg = ((modrm >> 3) & 7) | ((rex >> 2) & 1) << 3;
-        let target = (text_addr as i64 + end as i64 + i64::from(disp)).cast_unsigned();
+        let Some(target) = text_addr
+            .checked_add(end as u64)
+            .and_then(|next| next.checked_add_signed(i64::from(disp)))
+        else {
+            continue;
+        };
         if !(rodata_addr..rodata_end).contains(&target) {
             continue;
         }
@@ -726,7 +695,14 @@ fn extract_amd64_stored_strings(
         // register for consecutive table elements, and pairing across that
         // reload was the main source of wrong-length strings.
         let mut limit = text.len().min(end + AMD64_STORED_AHEAD);
-        if let Some(next) = (end..limit).find(|&j| rip_lea_dest(text, j) == Some(ptr_reg)) {
+        // Stop at the next `LEA r64, [rip+disp32]` into the same register.
+        if let Some(next) = (end..limit).find(|&j| {
+            let Some(&[rex, op, modrm]) = text.get(j..j + 3) else {
+                return false;
+            };
+            let dest = ((modrm >> 3) & 7) | ((rex >> 2) & 1) << 3;
+            rex & 0xFB == 0x48 && op == 0x8D && modrm & 0xC7 == 0x05 && dest == ptr_reg
+        }) {
             limit = next;
         }
         let ahead = end..limit;
@@ -776,16 +752,6 @@ fn extract_amd64_stored_strings(
     }
 }
 
-/// Destination register of a `LEA r64, [rip+disp32]` starting at `at`.
-fn rip_lea_dest(b: &[u8], at: usize) -> Option<u8> {
-    let rex = *b.get(at)?;
-    if rex & 0xFB != 0x48 || *b.get(at + 1)? != 0x8D {
-        return None;
-    }
-    let modrm = *b.get(at + 2)?;
-    (modrm & 0xC7 == 0x05).then_some(((modrm >> 3) & 7) | ((rex >> 2) & 1) << 3)
-}
-
 fn read_i32(b: &[u8], at: usize) -> Option<i32> {
     Some(i32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
 }
@@ -815,7 +781,7 @@ fn mem_operand(b: &[u8], at: usize, rex: u8) -> Option<(u8, i64, usize)> {
     let disp = match md {
         0 => 0,
         1 => {
-            let d = i64::from(*b.get(at + len)? as i8);
+            let d = i64::from(b.get(at + len)?.cast_signed());
             len += 1;
             d
         }
@@ -1629,7 +1595,7 @@ mod tests {
     // 0x1000, rodata at 0x3000; `lea` at text offset `at` reaching rodata+off
     // needs disp = 0x3000 + off - (0x1000 + at + 7).
     fn lea(reg_rex: u8, modrm: u8, at: usize, off: u32) -> Vec<u8> {
-        let disp = (0x3000 + off) as i64 - (0x1000 + at as i64 + 7);
+        let disp = i64::from(0x3000 + off) - (0x1000 + at as i64 + 7);
         let mut v = vec![reg_rex, 0x8d, modrm];
         v.extend((disp as i32).to_le_bytes());
         v

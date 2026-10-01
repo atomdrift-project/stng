@@ -15,7 +15,7 @@ fn test_no_version_info_ip_false_positive() {
 
     let ip_values: Vec<&str> = extracted
         .iter()
-        .filter(|s| matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort)))
+        .filter(|s| matches!(s.kind, Some(StringKind::IP | StringKind::IPPort)))
         .map(|s| s.value.as_str())
         .collect();
 

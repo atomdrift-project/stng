@@ -182,7 +182,7 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
     if (first == b's' || memchr::memchr2(b':', b'p', bytes).is_some())
         && ((s.contains("stratum+tcp://") || s.contains("stratum+ssl://"))
             || ((s.contains("pool.") || s.contains("nanopool") || s.contains("minergate"))
-                && (s.contains(".com") || s.contains(".org") || s.contains(":"))))
+                && (s.contains(".com") || s.contains(".org") || s.contains(':'))))
     {
         return Some(StringKind::MiningPool);
     }
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn test_find_string_structures() {
-        let info = BinaryInfo::new_64bit_le();
+        let info = BinaryInfo::from_elf(true, true);
 
         // Create test data with a string structure
         // ptr = 0x1000, len = 5
@@ -855,7 +855,7 @@ mod tests {
 
     #[test]
     fn test_find_string_structures_32bit() {
-        let info = BinaryInfo::new_32bit_le();
+        let info = BinaryInfo::from_elf(false, true);
 
         // Create 32-bit structure: ptr = 0x1000, len = 5
         let mut section_data = vec![0u8; 16];
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn test_find_string_structures_big_endian() {
-        let info = BinaryInfo::new_64bit_be();
+        let info = BinaryInfo::from_elf(true, false);
 
         // Create big-endian structure
         let mut section_data = vec![0u8; 32];
@@ -887,7 +887,7 @@ mod tests {
 
     #[test]
     fn test_find_string_structures_out_of_range() {
-        let info = BinaryInfo::new_64bit_le();
+        let info = BinaryInfo::from_elf(true, true);
 
         // Create structure pointing outside blob range
         let mut section_data = vec![0u8; 32];
@@ -908,7 +908,7 @@ mod tests {
 
     #[test]
     fn test_find_string_structures_too_long() {
-        let info = BinaryInfo::new_64bit_le();
+        let info = BinaryInfo::from_elf(true, true);
 
         // Create structure with very long length
         let mut section_data = vec![0u8; 32];
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn test_find_string_structures_zero_length() {
-        let info = BinaryInfo::new_64bit_le();
+        let info = BinaryInfo::from_elf(true, true);
 
         // Create structure with zero length
         let mut section_data = vec![0u8; 32];

@@ -31,7 +31,7 @@ fn shifted(value: u32, kind: u32, amount: u32) -> u32 {
     match kind {
         0 => value.wrapping_shl(amount),
         1 => value.wrapping_shr(amount),
-        2 => ((value as i32) >> amount).cast_unsigned(),
+        2 => (value.cast_signed() >> amount).cast_unsigned(),
         _ => value.rotate_right(amount),
     }
 }
@@ -179,7 +179,7 @@ pub(super) fn fold(code: &Region<'_>, start: u64, base: u64, seed: u32) -> Optio
                 return None;
             }
             match (inst >> 29) & 3 {
-                0 if s == 31 => ((source()? as i32) >> r).cast_unsigned(),
+                0 if s == 31 => (source()?.cast_signed() >> r).cast_unsigned(),
                 2 if s == 31 => source()? >> r,
                 1 => {
                     let mask = u32::MAX >> (31 - (s - r));
@@ -251,14 +251,6 @@ fn base_store(code: &Region<'_>, call: u64, add: bool) -> Option<()> {
     sequence(code, pc, &[0xd65f03c0])
 }
 
-fn seed_store(code: &Region<'_>, call: u64) -> Option<()> {
-    sequence(
-        code,
-        branch_target(code, call)?,
-        &[0xb900b3e8, 0x9102c3e8, 0xd65f03c0],
-    )
-}
-
 /// Recognize argument setup only; does not establish a complete XOR literal.
 /// Saved-register seed expressions remain unresolved until preservation is proven.
 pub(super) fn setup(code: &Region<'_>, call: u64) -> Option<Setup> {
@@ -266,7 +258,13 @@ pub(super) fn setup(code: &Region<'_>, call: u64) -> Option<Setup> {
     let helper = branch_target(code, call)?;
     // Require a mapped helper, even before evaluating its arithmetic.
     word(code, helper)?;
-    let (start, seed) = if seed_store(code, call.checked_sub(8)?).is_some() {
+    // The call two instructions back is to a helper that stores the seed:
+    // `str w8, [sp, #0xb0]; add x8, sp, #0xb0; ret`.
+    let seed_call = call.checked_sub(8)?;
+    let (start, seed) = if branch_target(code, seed_call)
+        .and_then(|helper| sequence(code, helper, &[0xb900b3e8, 0x9102c3e8, 0xd65f03c0]))
+        .is_some()
+    {
         let low = word(code, call.checked_sub(16)?)?;
         let high = word(code, call.checked_sub(12)?)?;
         if low & 0xffe0001f == 0x52800008 && high & 0xffe0001f == 0x72a00008 {

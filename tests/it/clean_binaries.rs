@@ -16,7 +16,7 @@ fn test_bin_ls_clean() {
 
     // Skip test if /bin/ls doesn't exist on this system
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -54,7 +54,7 @@ fn test_bin_ls_clean() {
 
     // /bin/ls should have ZERO XOR false positives
     if xor_count > 0 {
-        eprintln!("Found {} XOR strings in /bin/ls:", xor_count);
+        eprintln!("Found {xor_count} XOR strings in /bin/ls:");
         for s in strings
             .iter()
             .filter(|s| s.method == stng::StringMethod::XorDecode)
@@ -67,29 +67,25 @@ fn test_bin_ls_clean() {
     }
     assert_eq!(
         xor_count, 0,
-        "Clean binary should have NO XOR strings, found {}",
-        xor_count
+        "Clean binary should have NO XOR strings, found {xor_count}"
     );
 
     // Base85 should not trigger on normal strings
     assert_eq!(
         base85_count, 0,
-        "Clean binary should have no base85 false positives, found {}",
-        base85_count
+        "Clean binary should have no base85 false positives, found {base85_count}"
     );
 
     // URL encoding should not trigger on printf format strings
     assert_eq!(
         urlenc_count, 0,
-        "Clean binary should have no urlenc false positives, found {}",
-        urlenc_count
+        "Clean binary should have no urlenc false positives, found {urlenc_count}"
     );
 
     // Base32 should not trigger on clean binaries (certificates are not base32)
     assert_eq!(
         base32_count, 0,
-        "Clean binary should have no base32 detections, found {}",
-        base32_count
+        "Clean binary should have no base32 detections, found {base32_count}"
     );
 
     // Verify no XOR key was detected
@@ -100,8 +96,7 @@ fn test_bin_ls_clean() {
 
     assert_eq!(
         xor_key_count, 0,
-        "Clean binary should have no detected XOR keys, found {}",
-        xor_key_count
+        "Clean binary should have no detected XOR keys, found {xor_key_count}"
     );
 
     // Base64: /bin/ls contains legitimate base64 in code signature (CD hashes)
@@ -115,7 +110,7 @@ fn test_bin_ls_clean() {
         .count();
 
     if base64_count > 0 {
-        eprintln!("Found {} base64 strings in /bin/ls:", base64_count);
+        eprintln!("Found {base64_count} base64 strings in /bin/ls:");
         for s in strings
             .iter()
             .filter(|s| s.kind == Some(StringKind::Base64))
@@ -130,14 +125,12 @@ fn test_bin_ls_clean() {
     // All base64 should be code signature hashes (in __LINKEDIT)
     assert_eq!(
         base64_count, codesig_base64_count,
-        "All base64 should be CodeSignature method, found {} base64 but only {} with CodeSignature method",
-        base64_count, codesig_base64_count
+        "All base64 should be CodeSignature method, found {base64_count} base64 but only {codesig_base64_count} with CodeSignature method"
     );
 
     assert!(
         base64_count <= 2,
-        "Clean binary should have minimal base64 (code sig hashes), found {}",
-        base64_count
+        "Clean binary should have minimal base64 (code sig hashes), found {base64_count}"
     );
 }
 
@@ -147,7 +140,7 @@ fn test_bin_cat_clean() {
     let bin_path = "/bin/cat";
 
     if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {} not found", bin_path);
+        eprintln!("Skipping test: {bin_path} not found");
         return;
     }
 
@@ -165,8 +158,7 @@ fn test_bin_cat_clean() {
     // /bin/cat should have no XOR-encoded strings
     assert_eq!(
         xor_count, 0,
-        "Clean binary /bin/cat should have no XOR strings, found {}",
-        xor_count
+        "Clean binary /bin/cat should have no XOR strings, found {xor_count}"
     );
 }
 
@@ -177,7 +169,7 @@ fn test_vget_sample_no_base85() {
     let sample_path = crate::common::path("testdata/malware/vget_sample");
 
     if !Path::new(sample_path).exists() {
-        eprintln!("Skipping test: {} not found", sample_path);
+        eprintln!("Skipping test: {sample_path} not found");
         return;
     }
 
@@ -196,7 +188,6 @@ fn test_vget_sample_no_base85() {
     // Quality heuristic filters most, but allow up to 1 false positive
     assert!(
         base85_count <= 1,
-        "Rust binary should have minimal base85 false positives, found {}",
-        base85_count
+        "Rust binary should have minimal base85 false positives, found {base85_count}"
     );
 }

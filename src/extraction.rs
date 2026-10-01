@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn test_find_string_structures_64bit_le() {
-        let info = BinaryInfo::new_64bit_le();
+        let info = BinaryInfo::from_elf(true, true);
 
         // Create section with one valid string structure
         // ptr = 0x1000, len = 5
@@ -288,14 +288,14 @@ mod tests {
 
     #[test]
     fn test_find_string_structures_empty() {
-        let info = BinaryInfo::new_64bit_le();
+        let info = BinaryInfo::from_elf(true, true);
         let structs = find_string_structures(&[], 0x2000, 0x1000, 0x100, &info);
         assert!(structs.is_empty());
     }
 
     #[test]
     fn test_find_string_structures_too_short() {
-        let info = BinaryInfo::new_64bit_le();
+        let info = BinaryInfo::from_elf(true, true);
         let section_data = vec![0u8; 8]; // Only 8 bytes, need 16 for struct
         let structs = find_string_structures(&section_data, 0x2000, 0x1000, 0x100, &info);
         assert!(structs.is_empty());
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_find_string_structures_32bit() {
-        let info = BinaryInfo::new_32bit_le();
+        let info = BinaryInfo::from_elf(false, true);
 
         let mut section_data = vec![0u8; 16];
         section_data[0..4].copy_from_slice(&0x1000u32.to_le_bytes());
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_find_string_structures_big_endian() {
-        let info = BinaryInfo::new_64bit_be();
+        let info = BinaryInfo::from_elf(true, false);
 
         let mut section_data = vec![0u8; 32];
         section_data[0..8].copy_from_slice(&0x1000u64.to_be_bytes());
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_find_string_structures_32bit_be() {
-        let info = BinaryInfo::new_32bit_be();
+        let info = BinaryInfo::from_elf(false, false);
 
         let mut section_data = vec![0u8; 16];
         section_data[0..4].copy_from_slice(&0x1000u32.to_be_bytes());

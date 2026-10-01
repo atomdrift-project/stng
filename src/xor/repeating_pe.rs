@@ -129,7 +129,7 @@ impl RepeatingXorKey {
     /// it was recovered from.
     pub(crate) fn to_key_string(self) -> ExtractedString {
         ExtractedString {
-            value: format!("0x{}", hex::encode(self.bytes())),
+            value: format!("0x{}", crate::bytes::to_hex(self.bytes())),
             data_offset: u64::from(self.pe_offset),
             data_len: KEY_SOURCE_LEN,
             method: StringMethod::XorRepeatingKey,

@@ -97,6 +97,7 @@ struct StackStringExtractor<'a> {
 
 #[derive(Debug, Clone)]
 struct StackWrite {
+    /// Printable ASCII only, so any byte index is a char boundary.
     string: String,
     disp: i64,
     instr_off: u64,
@@ -155,9 +156,10 @@ impl<'a> StackStringExtractor<'a> {
 
                     match (op0_kind, op1_kind) {
                         // mov reg, imm
-                        (OpKind::Register, OpKind::Immediate32)
-                        | (OpKind::Register, OpKind::Immediate64)
-                        | (OpKind::Register, OpKind::Immediate32to64) => {
+                        (
+                            OpKind::Register,
+                            OpKind::Immediate32 | OpKind::Immediate64 | OpKind::Immediate32to64,
+                        ) => {
                             let reg = instr.op0_register();
                             // Extract immediate bytes directly from the instruction's data if possible,
                             // or use iced's value. Using raw bytes is safer for printable check.
@@ -176,10 +178,9 @@ impl<'a> StackStringExtractor<'a> {
                             }
                         }
                         // mov [mem], imm
-                        (OpKind::Memory, OpKind::Immediate32)
-                        | (OpKind::Memory, OpKind::Immediate32to64) => {
+                        (OpKind::Memory, OpKind::Immediate32 | OpKind::Immediate32to64) => {
                             let base = instr.memory_base();
-                            let disp = instr.memory_displacement64() as i64;
+                            let disp = instr.memory_displacement64().cast_signed();
                             let imm_val = instr.immediate32().to_le_bytes();
 
                             if let Some(s) = check_printable(&imm_val, 4) {
@@ -191,7 +192,7 @@ impl<'a> StackStringExtractor<'a> {
                         // mov [mem], imm8
                         (OpKind::Memory, OpKind::Immediate8) => {
                             let base = instr.memory_base();
-                            let disp = instr.memory_displacement64() as i64;
+                            let disp = instr.memory_displacement64().cast_signed();
                             let b = instr.immediate8();
                             if b.is_ascii_graphic() || b == b' ' {
                                 self.add_write(base, disp, (b as char).to_string(), instr_off);
@@ -200,7 +201,7 @@ impl<'a> StackStringExtractor<'a> {
                         // mov [mem], reg
                         (OpKind::Memory, OpKind::Register) => {
                             let base = instr.memory_base();
-                            let disp = instr.memory_displacement64() as i64;
+                            let disp = instr.memory_displacement64().cast_signed();
                             let src_reg = instr.op1_register();
 
                             if let Some((s, _off)) = self.regs.get(&src_reg).cloned() {
@@ -237,7 +238,7 @@ impl<'a> StackStringExtractor<'a> {
                                 && let Some(data) = self.xmm_regs.get(&src_reg).cloned()
                             {
                                 let base = instr.memory_base();
-                                let disp = instr.memory_displacement64() as i64;
+                                let disp = instr.memory_displacement64().cast_signed();
                                 self.add_raw_blob(base, disp, data.to_vec(), instr_off);
                             }
                         }

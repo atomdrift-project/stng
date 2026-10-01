@@ -17,7 +17,6 @@ use crate::extract_raw_strings;
 use crate::extract_stack_strings_from_ranges;
 use crate::extract_varint_prefixed_strings;
 use crate::fmix_xor;
-use crate::get_r2_strings;
 use crate::heap_xor;
 use crate::lcg_xor;
 use crate::macho_go_skip_ranges;
@@ -90,9 +89,7 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
         strings.extend(extractor.extract_macho(macho, 0));
         // Same fallback an unknown Mach-O gets (see below): the Rust
         // passes only cover the literals Rust code names.
-        if let Some(r2_strings) = get_r2_strings(opts) {
-            strings.extend(r2_strings);
-        }
+        strings.extend(opts.r2_strings.iter().flatten().cloned());
         let extra: Vec<ExtractedString> = {
             let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
             let mut seen: HashSet<String> = HashSet::new();
@@ -112,9 +109,7 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
         // strings — and any IOC fragments split across literals — are
         // lost whenever r2 is unavailable. ELF and Go already always run
         // a raw scan for the same reason.
-        if let Some(r2_strings) = get_r2_strings(opts) {
-            strings.extend(r2_strings);
-        }
+        strings.extend(opts.r2_strings.iter().flatten().cloned());
         let extractor = RustStringExtractor::new(min_length);
         // Thin binary: the slice is the whole file, so no slice base.
         strings.extend(extractor.extract_macho(macho, 0));
@@ -249,9 +244,7 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
     // slices get it too, after their structure pass: that pass only
     // covers the literals Rust code names (see the thin branch).
     if !is_go {
-        if let Some(r2_strings) = get_r2_strings(opts) {
-            strings.extend(r2_strings);
-        }
+        strings.extend(opts.r2_strings.iter().flatten().cloned());
         // Also do raw scan to catch anything r2 missed
         let raw = extract_raw_strings(data, min_length, &segments, &[]);
         if is_rust {
@@ -386,7 +379,7 @@ fn apply_entitlements(
 
 /// Go function and package names from a Mach-O `__gopclntab` section.
 ///
-/// The Mach-O counterpart of [`extract_elf_pclntab_strings`]. The raw scan
+/// The Mach-O counterpart of `elf::extract_elf_pclntab_strings`. The raw scan
 /// skips `__gopclntab` (see `binary::macho_go_skip_ranges`) because its
 /// strings are packed without terminators the raw scanner understands, and the
 /// structure-based Go extractor recovers string literals rather than function

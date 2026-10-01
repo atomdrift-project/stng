@@ -172,7 +172,7 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
             // Already pre-parsed to bytes
             Some(codes.clone())
         }
-        DecodeStep::HexDecode => hex::decode(input).ok(),
+        DecodeStep::HexDecode => crate::bytes::from_hex(input),
     }
 }
 

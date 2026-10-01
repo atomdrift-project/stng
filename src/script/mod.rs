@@ -17,7 +17,7 @@ pub use batch::expand_batch_variables;
 use detect::ScriptLanguage;
 
 /// Result of successfully deobfuscating a script payload.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeobfuscationResult {
     /// The decoded payload text
     pub decoded: String,

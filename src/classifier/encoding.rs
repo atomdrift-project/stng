@@ -2,12 +2,25 @@
 //!
 //! Detects Base64, Base32, Base58, Base85, hex, Unicode escape, URL encoding, and cryptographic hashes.
 
+use crate::bytes::{hex_digit, hex_number};
+
+/// The bytes the hex digit pairs in `s` spell, skipping any pair that is not
+/// two hex digits.
+fn hex_pairs(s: &str) -> impl Iterator<Item = u8> + '_ {
+    s.as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter_map(|&[h, l]| Some(hex_digit(h)? << 4 | hex_digit(l)?))
+}
+
 /// Case-insensitive ASCII substring search without allocation.
 #[inline]
 pub(super) fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|w| w.eq_ignore_ascii_case(needle))
+    needle.is_empty()
+        || haystack
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
 /// Check if a string looks like a cryptographic hash (MD5, SHA1, SHA256, SHA512).
@@ -29,12 +42,10 @@ pub(super) fn is_cryptographic_hash(s: &str) -> bool {
     // Hashes decode to random bytes (<50% printable); hex-encoded text is >70% printable.
     let mut decoded_len = 0usize;
     let mut printable = 0usize;
-    for i in (0..s.len()).step_by(2) {
-        if let Ok(b) = u8::from_str_radix(&s[i..i + 2], 16) {
-            decoded_len += 1;
-            if b.is_ascii_graphic() {
-                printable += 1;
-            }
+    for b in hex_pairs(s) {
+        decoded_len += 1;
+        if b.is_ascii_graphic() {
+            printable += 1;
         }
     }
 
@@ -269,14 +280,12 @@ pub(super) fn is_hex_encoded(s: &str) -> bool {
     let mut decoded_len = 0usize;
     let mut printable = 0usize;
     let mut distinct = [false; 256];
-    for i in (0..s.len()).step_by(2) {
-        if let Ok(b) = u8::from_str_radix(&s[i..i + 2], 16) {
-            decoded_len += 1;
-            if b.is_ascii_graphic() || b.is_ascii_whitespace() {
-                printable += 1;
-            }
-            distinct[b as usize] = true;
+    for b in hex_pairs(s) {
+        decoded_len += 1;
+        if b.is_ascii_graphic() || b.is_ascii_whitespace() {
+            printable += 1;
         }
+        distinct[usize::from(b)] = true;
     }
 
     if decoded_len == 0 {
@@ -350,7 +359,7 @@ pub fn decode_unicode_escapes(s: &str) -> Vec<u8> {
                     'x' => {
                         let hex: String = chars.by_ref().take(2).collect();
                         if hex.len() == 2
-                            && let Ok(byte) = u8::from_str_radix(&hex, 16)
+                            && let Some(byte) = hex_number(&hex).and_then(|n| u8::try_from(n).ok())
                         {
                             result.push(byte);
                             continue;
@@ -364,10 +373,10 @@ pub fn decode_unicode_escapes(s: &str) -> Vec<u8> {
                     'u' => {
                         let hex: String = chars.by_ref().take(4).collect();
                         if hex.len() == 4
-                            && let Ok(codepoint) = u16::from_str_radix(&hex, 16)
+                            && let Some(codepoint) = hex_number(&hex)
                         {
                             // Convert to UTF-8
-                            if let Some(ch) = char::from_u32(codepoint as u32) {
+                            if let Some(ch) = char::from_u32(codepoint) {
                                 let mut buf = [0u8; 4];
                                 let encoded = ch.encode_utf8(&mut buf);
                                 result.extend_from_slice(encoded.as_bytes());
@@ -498,7 +507,7 @@ pub fn decode_url_encoding(s: &str) -> Vec<u8> {
             // Try to read two hex digits
             let hex: String = chars.by_ref().take(2).collect();
             if hex.len() == 2
-                && let Ok(byte) = u8::from_str_radix(&hex, 16)
+                && let Some(byte) = hex_number(&hex).and_then(|n| u8::try_from(n).ok())
             {
                 result.push(byte);
                 continue;
@@ -699,7 +708,7 @@ pub(super) fn is_base85(s: &str) -> bool {
     for &b in bytes {
         if matches!(b, b'!'..=b'u' | b'z') {
             valid_count += 1;
-            let bit_pos = b as u32;
+            let bit_pos = u32::from(b);
             if bit_pos < 128 && (seen_chars & (1u128 << bit_pos)) == 0 {
                 seen_chars |= 1u128 << bit_pos;
                 unique_char_count += 1;
@@ -799,12 +808,12 @@ pub(super) fn is_base85(s: &str) -> bool {
 /// Validate base85 by attempting to decode and checking if result is higher quality.
 /// Returns true only if decoding produces better text than the original.
 fn validate_base85_by_decoding(s: &str) -> bool {
-    use crate::decoders::try_decode_ascii85;
+    use crate::decoders::decode_ascii85;
 
     let original_quality = string_quality_score(s);
 
     // Try to decode
-    if let Some(decoded_bytes) = try_decode_ascii85(s) {
+    if let Some(decoded_bytes) = decode_ascii85(s) {
         // Check if decoded is valid UTF-8 and higher quality
         if let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
             let decoded_quality = string_quality_score(&decoded_str);

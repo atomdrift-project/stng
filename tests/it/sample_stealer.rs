@@ -32,8 +32,7 @@ fn test_sample_stealer_short_strings() {
     for needle in required_short {
         assert!(
             values.contains(&needle),
-            "Missing short string {:?} — high-confidence extraction should find it",
-            needle,
+            "Missing short string {needle:?} — high-confidence extraction should find it",
         );
     }
 
@@ -58,8 +57,7 @@ fn test_sample_stealer_short_strings() {
     for needle in required_exact {
         assert!(
             values.iter().any(|v| v.contains(needle)),
-            "Missing expected string containing {:?}",
-            needle,
+            "Missing expected string containing {needle:?}",
         );
     }
 }

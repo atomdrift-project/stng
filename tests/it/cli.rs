@@ -186,9 +186,7 @@ fn test_cli_min_length() {
         // Higher min_length should result in fewer or equal strings
         assert!(
             count_long <= count_default,
-            "min_length 20 ({}) should have <= strings than default ({})",
-            count_long,
-            count_default
+            "min_length 20 ({count_long}) should have <= strings than default ({count_default})"
         );
     }
 }
@@ -360,8 +358,7 @@ fn test_cli_base64_decoding() {
     // With the new decoder pipeline, base64 strings are decoded and added as separate entries
     assert!(
         stdout.contains("This is a secret message"),
-        "Expected base64 decoded text, got: {}",
-        stdout
+        "Expected base64 decoded text, got: {stdout}"
     );
 
     std::fs::remove_file(&temp_file).ok();
@@ -398,8 +395,7 @@ fn test_cli_trailing_newlines_trimmed() {
     // Each string should be on its own line without extra blank lines
     assert!(
         !stdout.contains("\n\n\n"),
-        "Output should not have triple newlines from untrimmed strings: {}",
-        stdout
+        "Output should not have triple newlines from untrimmed strings: {stdout}"
     );
 
     // Verify the strings appear without their trailing control characters
@@ -411,8 +407,7 @@ fn test_cli_trailing_newlines_trimmed() {
             // The line should not end with control characters
             assert!(
                 !line.ends_with('\n') && !line.ends_with('\r'),
-                "Line should not end with control chars: {:?}",
-                line
+                "Line should not end with control chars: {line:?}"
             );
         }
     }
@@ -450,8 +445,7 @@ fn test_cli_simple_mode_trims_newlines() {
             // Should be exactly the string, not with trailing newline
             assert!(
                 !line.ends_with('\n'),
-                "Simple mode line should not end with newline: {:?}",
-                line
+                "Simple mode line should not end with newline: {line:?}"
             );
         }
     }

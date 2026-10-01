@@ -84,13 +84,11 @@ fn test_no_overlapping_xor_strings() {
     let values: Vec<_> = xor_strings.iter().map(|s| s.value.as_str()).collect();
     assert!(
         values.iter().any(|v| v.contains("osascript")),
-        "Should find real XOR string 'osascript'. Found: {:?}",
-        values
+        "Should find real XOR string 'osascript'. Found: {values:?}"
     );
     assert!(
         values.iter().any(|v| v.contains("desktopFolder")),
-        "Should find real XOR string 'desktopFolder'. Found: {:?}",
-        values
+        "Should find real XOR string 'desktopFolder'. Found: {values:?}"
     );
 }
 
@@ -135,7 +133,7 @@ fn test_brew_agent_no_overlaps() {
 
     // Skip if test file doesn't exist
     if !std::path::Path::new(path).exists() {
-        eprintln!("Skipping test - brew_agent not found at {}", path);
+        eprintln!("Skipping test - brew_agent not found at {path}");
         return;
     }
 

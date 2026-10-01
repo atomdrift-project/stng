@@ -258,19 +258,29 @@ fn xor_scan_surfaces_the_key() {
 }
 
 /// Recovery cost is fixed: a large non-PE input takes as long as a small one.
+///
+/// The two are compared rather than timed against a wall-clock limit, which a
+/// loaded machine, or the tests running beside this one, would break. The
+/// fastest of several rounds discounts preemption.
 #[test]
 fn cost_is_independent_of_size() {
-    let big = noise(91, 64 << 20);
-    let start = std::time::Instant::now();
-    for _ in 0..100 {
-        assert_eq!(recover_repeating_xor_pe(std::hint::black_box(&big)), None);
-    }
-    let per_call = start.elapsed() / 100;
-    eprintln!("recover_repeating_xor_pe on 64 MiB of noise: {per_call:?}/call");
-    assert!(
-        per_call < std::time::Duration::from_millis(5),
-        "{per_call:?}"
-    );
+    let fastest = |data: &[u8]| {
+        (0..5)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                for _ in 0..20 {
+                    assert_eq!(recover_repeating_xor_pe(std::hint::black_box(data)), None);
+                }
+                start.elapsed() / 20
+            })
+            .min()
+            .unwrap()
+    };
+    let small = fastest(&noise(91, 4 << 10));
+    let big = fastest(&noise(91, 64 << 20));
+    eprintln!("recover_repeating_xor_pe: {small:?}/call on 4 KiB, {big:?}/call on 64 MiB");
+    // Work proportional to the input would make 64 MiB 16384 times slower.
+    assert!(big < small * 4, "{small:?} on 4 KiB, {big:?} on 64 MiB");
 }
 
 /// The straightforward algorithm the library evaluates lazily: vote every

@@ -206,8 +206,8 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
         );
         candidates.sort_by_key(|s| {
             let priority = match s.kind {
-                Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort) => 0,
-                Some(StringKind::SuspiciousPath) | Some(StringKind::ShellCmd) => 1,
+                Some(StringKind::Url | StringKind::IP | StringKind::IPPort) => 0,
+                Some(StringKind::SuspiciousPath | StringKind::ShellCmd) => 1,
                 _ => 2,
             };
             (priority, std::cmp::Reverse(s.value.len()))
@@ -358,12 +358,14 @@ fn single_byte_xor_strings(
             // are valid targets even with 0% vowels.
             let is_encoded_format = matches!(
                 kind,
-                Some(StringKind::Base64)
-                    | Some(StringKind::UnicodeEscaped)
-                    | Some(StringKind::HexEncoded)
-                    | Some(StringKind::UrlEncoded)
-                    | Some(StringKind::SuspiciousPath)
-                    | Some(StringKind::ShellCmd)
+                Some(
+                    StringKind::Base64
+                        | StringKind::UnicodeEscaped
+                        | StringKind::HexEncoded
+                        | StringKind::UrlEncoded
+                        | StringKind::SuspiciousPath
+                        | StringKind::ShellCmd
+                )
             );
             if !is_encoded_format && alpha >= 3 {
                 let vowels = s
@@ -505,10 +507,8 @@ fn is_high_quality_string(s: &ExtractedString) -> bool {
     // High quality = shell commands, suspicious paths, URLs, crypto terms
     matches!(
         s.kind,
-        Some(StringKind::ShellCmd)
-            | Some(StringKind::SuspiciousPath)
-            | Some(StringKind::Url)
-            | Some(StringKind::IP)
+        Some(StringKind::ShellCmd | StringKind::SuspiciousPath | StringKind::Url |
+StringKind::IP)
     ) || s.value.len() >= 30 // Long strings are usually significant
         || {
             // Only the short, unclassified residual reaches the (allocating) lowercase scan.
@@ -886,7 +886,7 @@ fn finish_xor_candidate(
     // apply_filters, since vowel ratio is a reliable noise filter even in unfiltered mode.
     let is_network_ioc = matches!(
         kind,
-        Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort)
+        Some(StringKind::Url | StringKind::IP | StringKind::IPPort)
     );
     if !is_network_ioc && alpha >= 3 && !is_locale_string(&trimmed_s) {
         let has_non_ascii = !trimmed_s.is_ascii();

@@ -29,7 +29,7 @@ static EVAL_BUFFER_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// eval(String.fromCharCode(...)) or Function(String.fromCharCode(...))()
 #[allow(clippy::expect_used)]
 static EVAL_CHARCODE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?:eval|Function)\s*\(\s*String\.fromCharCode\s*\(([0-9xXa-fA-F,\s]+)\)"#)
+    Regex::new(r"(?:eval|Function)\s*\(\s*String\.fromCharCode\s*\(([0-9xXa-fA-F,\s]+)\)")
         .expect("static regex")
 });
 
@@ -115,7 +115,7 @@ fn try_eval_charcode(source: &str) -> Vec<DeobfuscationResult> {
                 .filter_map(|n| {
                     let n = n.trim();
                     if let Some(hex) = n.strip_prefix("0x").or_else(|| n.strip_prefix("0X")) {
-                        u32::from_str_radix(hex, 16).ok()
+                        crate::bytes::hex_number(hex)
                     } else {
                         n.parse::<u32>().ok()
                     }
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_eval_atob_single_quotes() {
-        let src = r#"eval(atob('YWxlcnQoMSk='))"#;
+        let src = r"eval(atob('YWxlcnQoMSk='))";
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].decoded, "alert(1)");
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn test_eval_charcode_decimal() {
         // "alert(1)" as char codes
-        let src = r#"eval(String.fromCharCode(97, 108, 101, 114, 116, 40, 49, 41))"#;
+        let src = r"eval(String.fromCharCode(97, 108, 101, 114, 116, 40, 49, 41))";
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].decoded, "alert(1)");
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_eval_charcode_hex() {
-        let src = r#"eval(String.fromCharCode(0x61, 0x6c, 0x65, 0x72, 0x74, 0x28, 0x31, 0x29))"#;
+        let src = r"eval(String.fromCharCode(0x61, 0x6c, 0x65, 0x72, 0x74, 0x28, 0x31, 0x29))";
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].decoded, "alert(1)");

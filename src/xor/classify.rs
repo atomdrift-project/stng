@@ -340,7 +340,7 @@ pub(crate) fn auto_detect_xor_key(
                 // URLs and network indicators - only count unique values
                 if matches!(
                     r.kind,
-                    Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort)
+                    Some(StringKind::Url | StringKind::IP | StringKind::IPPort)
                 ) && scored_values.insert(value_lower.clone())
                 {
                     score += 50;
@@ -1596,7 +1596,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
         {
             // Likely an IP address, allow through
             let kind = classify_string(s);
-            if matches!(kind, Some(StringKind::IP) | Some(StringKind::IPPort)) {
+            if matches!(kind, Some(StringKind::IP | StringKind::IPPort)) {
                 return Some(kind);
             }
         }
@@ -1613,11 +1613,13 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
         // NOTE: Path is intentionally excluded - paths must go through strict validation below
         if matches!(
             kind,
-            Some(StringKind::SuspiciousPath)
-                | Some(StringKind::ShellCmd)
-                | Some(StringKind::IP)
-                | Some(StringKind::IPPort)
-                | Some(StringKind::Url)
+            Some(
+                StringKind::SuspiciousPath
+                    | StringKind::ShellCmd
+                    | StringKind::IP
+                    | StringKind::IPPort
+                    | StringKind::Url
+            )
         ) {
             return Some(kind);
         }
@@ -1648,7 +1650,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
         let kind = classify_string(s);
         if matches!(
             kind,
-            Some(StringKind::Base64) | Some(StringKind::HexEncoded) | Some(StringKind::UrlEncoded)
+            Some(StringKind::Base64 | StringKind::HexEncoded | StringKind::UrlEncoded)
         ) {
             return Some(kind);
         }
@@ -1673,16 +1675,18 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     let kind = classify_string(s);
 
     match kind {
-        Some(StringKind::IP)
-        | Some(StringKind::IPPort)
-        | Some(StringKind::Url)
-        | Some(StringKind::SuspiciousPath)
-        | Some(StringKind::UnicodeEscaped)
-        | Some(StringKind::HexEncoded)
-        | Some(StringKind::UrlEncoded)
-        | Some(StringKind::Registry)
-        | Some(StringKind::Base64) => Some(kind),
-        Some(StringKind::ShellCmd) | Some(StringKind::AppleScript) => {
+        Some(
+            StringKind::IP
+            | StringKind::IPPort
+            | StringKind::Url
+            | StringKind::SuspiciousPath
+            | StringKind::UnicodeEscaped
+            | StringKind::HexEncoded
+            | StringKind::UrlEncoded
+            | StringKind::Registry
+            | StringKind::Base64,
+        ) => Some(kind),
+        Some(StringKind::ShellCmd | StringKind::AppleScript) => {
             // Reject obvious garbage that starts with backtick but no valid command
             if s.starts_with('`')
                 && !s[1..]

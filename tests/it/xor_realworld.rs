@@ -10,7 +10,7 @@ fn test_xor_brew_agent_malware() {
 
     // Skip if sample doesn't exist
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found at {}", sample_path);
+        eprintln!("Skipping - malware sample not found at {sample_path}");
         return;
     }
 
@@ -219,8 +219,7 @@ fn test_xor_shell_commands() {
     if let Some(s) = sleep_str {
         assert!(
             s.contains("rm -rf"),
-            "Sleep command should include 'rm -rf' part: {}",
-            s
+            "Sleep command should include 'rm -rf' part: {s}"
         );
     }
 
@@ -376,13 +375,11 @@ fn test_xor_crypto_wallets() {
 
     assert!(
         wallet_count >= 5,
-        "Should find at least 5 wallet-related strings, found {}",
-        wallet_count
+        "Should find at least 5 wallet-related strings, found {wallet_count}"
     );
 
     println!(
-        "✓ Cryptocurrency wallet extraction tests passed - found {} wallet references",
-        wallet_count
+        "✓ Cryptocurrency wallet extraction tests passed - found {wallet_count} wallet references"
     );
 }
 
@@ -393,7 +390,7 @@ fn test_xor_brew_agent_malware_full_sample() {
     let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found at {}", sample_path);
+        eprintln!("Skipping - malware sample not found at {sample_path}");
         return;
     }
 
@@ -519,8 +516,7 @@ fn test_xor_brew_agent_extraction_comparison() {
 
         assert!(
             found,
-            "Critical indicator '{}' should be found even with garbage filtering enabled",
-            name
+            "Critical indicator '{name}' should be found even with garbage filtering enabled"
         );
     }
 
@@ -612,10 +608,7 @@ fn test_xor_brew_agent_auto_detection() {
 
         let found_count = [has_c2, has_electrum].iter().filter(|&&b| b).count();
 
-        println!(
-            "✓ Auto-detection succeeded! Found {} critical indicators",
-            found_count
-        );
+        println!("✓ Auto-detection succeeded! Found {found_count} critical indicators");
         assert!(
             found_count > 0,
             "Should find indicators if auto-detection succeeded"

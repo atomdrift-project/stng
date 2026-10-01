@@ -9,7 +9,6 @@ use crate::decode_spaced_strings;
 use crate::deduplicate_by_offset;
 use crate::extract_raw_strings;
 use crate::extract_stack_strings;
-use crate::get_r2_strings;
 use crate::passes_garbage_filter;
 use crate::scan_binary_ips;
 use crate::{ExtractOptions, ExtractedString};
@@ -61,9 +60,7 @@ fn scan_other(data: &[u8], opts: &ExtractOptions) -> Scan {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
     // Unknown format - use r2 if available, plus raw scan
-    if let Some(r2_strings) = get_r2_strings(opts) {
-        strings.extend(r2_strings);
-    }
+    strings.extend(opts.r2_strings.iter().flatten().cloned());
     // Always do raw scan for unknown formats (r2 strings complement, not replace)
     if !data.is_empty() {
         strings.extend(extract_raw_strings(data, min_length, &[], &[]));

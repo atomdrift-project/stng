@@ -240,7 +240,7 @@ pub(super) fn pattern_scan(
             // apply_filters, since vowel ratio is a reliable noise filter even in unfiltered mode.
             let is_network_ioc = matches!(
                 kind,
-                Some(StringKind::Url) | Some(StringKind::IP) | Some(StringKind::IPPort)
+                Some(StringKind::Url | StringKind::IP | StringKind::IPPort)
             );
             if !is_network_ioc && alpha >= 3 && !is_locale_string(&trimmed_s) {
                 let has_non_ascii = !trimmed_s.is_ascii();

@@ -6,7 +6,7 @@ use stng::{ExtractOptions, StringKind};
 fn test_stack_strings_poolrat() {
     let sample_path = crate::common::path("testdata/malware/poolrat");
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found at {}", sample_path);
+        eprintln!("Skipping - malware sample not found at {sample_path}");
         return;
     }
 
@@ -23,7 +23,7 @@ fn test_stack_strings_poolrat() {
 
     println!("Found {} stack strings", stack_strings.len());
     for s in &stack_strings {
-        println!("  - {}", s);
+        println!("  - {s}");
     }
 
     // Verify User-Agent extraction (byte-by-byte stack construction)
@@ -41,8 +41,7 @@ fn test_stack_strings_poolrat() {
 
     assert!(
         found_count >= 2,
-        "Should find at least 2 parts of the User-Agent string. Found: {}",
-        found_count
+        "Should find at least 2 parts of the User-Agent string. Found: {found_count}"
     );
 
     // Verify C2 URL (movabs)

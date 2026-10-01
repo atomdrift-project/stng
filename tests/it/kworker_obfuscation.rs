@@ -6,10 +6,7 @@ use stng::{ExtractOptions, StringKind};
 fn test_kworker_character_assembly_detection() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!(
-            "Skipping - kworker malware sample not found at {}",
-            sample_path
-        );
+        eprintln!("Skipping - kworker malware sample not found at {sample_path}");
         return;
     }
 
@@ -46,7 +43,7 @@ fn test_kworker_character_assembly_detection() {
 
     println!("\nStack-constructed strings found: {}", stack_strings.len());
     for s in &stack_strings {
-        println!("  - {}", s);
+        println!("  - {s}");
     }
 
     // Test expectations:
@@ -68,7 +65,7 @@ fn test_kworker_character_assembly_detection() {
             || extracted.iter().any(|s| s.value.contains(keyword))
         {
             found_proc_parts += 1;
-            println!("\n✓ Found process name keyword: {}", keyword);
+            println!("\n✓ Found process name keyword: {keyword}");
         }
     }
 
@@ -80,7 +77,7 @@ fn test_kworker_character_assembly_detection() {
             || extracted.iter().any(|s| s.value.contains(keyword))
         {
             found_persistence += 1;
-            println!("✓ Found persistence keyword: {}", keyword);
+            println!("✓ Found persistence keyword: {keyword}");
         }
     }
 
@@ -92,7 +89,7 @@ fn test_kworker_character_assembly_detection() {
             || extracted.iter().any(|s| s.value.contains(keyword))
         {
             found_tmp += 1;
-            println!("✓ Found tmp file keyword: {}", keyword);
+            println!("✓ Found tmp file keyword: {keyword}");
         }
     }
 
@@ -102,15 +99,15 @@ fn test_kworker_character_assembly_detection() {
     for keyword in &c2_keywords {
         if extracted.iter().any(|s| s.value.contains(keyword)) {
             found_c2 += 1;
-            println!("✓ Found C2 keyword: {}", keyword);
+            println!("✓ Found C2 keyword: {keyword}");
         }
     }
 
     println!("\n=== Detection Summary ===");
-    println!("Process name components: {}/3", found_proc_parts);
-    println!("Persistence paths: {}/4", found_persistence);
-    println!("Temporary files: {}/3", found_tmp);
-    println!("C2 indicators: {}/4", found_c2);
+    println!("Process name components: {found_proc_parts}/3");
+    println!("Persistence paths: {found_persistence}/4");
+    println!("Temporary files: {found_tmp}/3");
+    println!("C2 indicators: {found_c2}/4");
 
     // Verify we find evidence of character-by-character construction
     // At minimum, we should detect some suspicious activity patterns
@@ -130,10 +127,7 @@ fn test_kworker_character_assembly_detection() {
 fn test_kworker_missing_strings_utf16_url() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!(
-            "Skipping - kworker malware sample not found at {}",
-            sample_path
-        );
+        eprintln!("Skipping - kworker malware sample not found at {sample_path}");
         return;
     }
 
@@ -150,7 +144,7 @@ fn test_kworker_missing_strings_utf16_url() {
         .any(|window| window == utf16le_marker);
 
     println!("\n=== UTF-16LE URL Detection ===");
-    println!("Found UTF-16LE 'htp' pattern: {}", found_utf16_htp);
+    println!("Found UTF-16LE 'htp' pattern: {found_utf16_htp}");
 
     // Note: The URL appears to be "htp://cunilos.aemrg" not "http://"
     // The second 't' is missing from the rodata section
@@ -164,10 +158,7 @@ fn test_kworker_missing_strings_utf16_url() {
 fn test_kworker_missing_persistence_strings() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!(
-            "Skipping - kworker malware sample not found at {}",
-            sample_path
-        );
+        eprintln!("Skipping - kworker malware sample not found at {sample_path}");
         return;
     }
 
@@ -180,7 +171,7 @@ fn test_kworker_missing_persistence_strings() {
 
     // Look for persistence-related strings that SHOULD be there but may not be extracted properly
     let all_values: Vec<String> = extracted.iter().map(|s| s.value.clone()).collect();
-    println!("\nAll extracted values: {:?}", all_values);
+    println!("\nAll extracted values: {all_values:?}");
 
     // These strings are expected to be found (either fully or as components):
     let expected_components = vec![
@@ -208,10 +199,7 @@ fn test_kworker_missing_persistence_strings() {
 fn test_kworker_stack_string_assembly_patterns() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!(
-            "Skipping - kworker malware sample not found at {}",
-            sample_path
-        );
+        eprintln!("Skipping - kworker malware sample not found at {sample_path}");
         return;
     }
 
@@ -258,17 +246,14 @@ fn test_kworker_stack_string_assembly_patterns() {
         .map(|s| s.value.as_str())
         .collect();
 
-    println!("\nShort extracted strings (2-4 chars): {:?}", short_strings);
+    println!("\nShort extracted strings (2-4 chars): {short_strings:?}");
 }
 
 #[test]
 fn test_kworker_utf16_url_content() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
     if !std::path::Path::new(sample_path).exists() {
-        eprintln!(
-            "Skipping - kworker malware sample not found at {}",
-            sample_path
-        );
+        eprintln!("Skipping - kworker malware sample not found at {sample_path}");
         return;
     }
 

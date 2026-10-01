@@ -45,8 +45,9 @@ pub(crate) fn extract_arm64_stack_xor_strings(
     profile: AdmissionProfile,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    if macho.header.cputype != CPU_TYPE_ARM64 || !imports_system(macho) || !should_extract(profile)
-    {
+    let imports_system = crate::binary::contain(|| macho.imports())
+        .is_some_and(|imports| imports.iter().any(|import| is_system_import(import.name)));
+    if macho.header.cputype != CPU_TYPE_ARM64 || !imports_system || !should_extract(profile) {
         return Vec::new();
     }
 
@@ -75,7 +76,6 @@ pub(crate) fn extract_arm64_stack_xor_strings(
             let section_name = section.name().ok().map(str::to_string);
             results.extend(extract_section(
                 code,
-                section.addr,
                 arch_base_offset + u64::from(section.offset),
                 section_name.as_deref(),
                 min_length,
@@ -83,12 +83,10 @@ pub(crate) fn extract_arm64_stack_xor_strings(
         }
     }
 
-    dedup_results(results)
-}
-
-fn imports_system(macho: &MachO<'_>) -> bool {
-    crate::binary::contain(|| macho.imports())
-        .is_some_and(|imports| imports.iter().any(|import| is_system_import(import.name)))
+    results.sort_by_key(|r| (r.data_offset, r.value.len()));
+    let mut seen = HashSet::new();
+    results.retain(|r| seen.insert(r.value.clone()));
+    results
 }
 
 fn is_system_import(name: &str) -> bool {
@@ -111,7 +109,6 @@ fn should_extract(profile: AdmissionProfile) -> bool {
 
 fn extract_section(
     code: &[u8],
-    section_addr: u64,
     section_file_offset: u64,
     section_name: Option<&str>,
     min_length: usize,
@@ -127,7 +124,6 @@ fn extract_section(
     for (idx, chunk) in code.as_chunks::<4>().0.iter().enumerate() {
         let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         let instr_off = (idx * 4) as u64;
-        let pc = section_addr + instr_off;
 
         if let Some((rd, value)) = decode_mov_wide(word, &regs) {
             regs.insert(rd, RegValue::Imm(value));
@@ -151,7 +147,8 @@ fn extract_section(
             continue;
         }
 
-        if decode_bl_target(word, pc).is_some() {
+        // BL: a call, whose x0 may point at a decoded string.
+        if word & 0xfc00_0000 == 0x9400_0000 {
             if let Some(RegValue::Ptr(arg0)) = regs.get(&0)
                 && decoded_arg_starts.insert(*arg0)
             {
@@ -183,7 +180,13 @@ fn extract_section(
                 } else {
                     regs.remove(&mem.rt);
                 }
-            } else if let Some(bytes) = reg_bytes(&regs, mem.rt, mem.size) {
+            } else if let Some(bytes) = match regs.get(&mem.rt) {
+                Some(RegValue::Imm(value)) => Some(value.to_le_bytes()[..mem.size].to_vec()),
+                Some(RegValue::Bytes(bytes)) if bytes.len() >= mem.size => {
+                    Some(bytes[..mem.size].to_vec())
+                }
+                _ => None,
+            } {
                 memory.insert(disp, bytes);
                 if !recovered_pads.is_empty() {
                     let decoded = decode_recent_stack_blobs_with_pads(
@@ -210,14 +213,6 @@ fn ptr_offset(regs: &HashMap<u8, RegValue>, rn: u8) -> Option<i64> {
     }
     match regs.get(&rn) {
         Some(RegValue::Ptr(offset)) => Some(*offset),
-        _ => None,
-    }
-}
-
-fn reg_bytes(regs: &HashMap<u8, RegValue>, rt: u8, size: usize) -> Option<Vec<u8>> {
-    match regs.get(&rt)? {
-        RegValue::Imm(value) => Some(value.to_le_bytes()[..size].to_vec()),
-        RegValue::Bytes(bytes) if bytes.len() >= size => Some(bytes[..size].to_vec()),
         _ => None,
     }
 }
@@ -264,15 +259,6 @@ fn decode_add_imm(word: u32) -> Option<(u8, u8, i64)> {
         imm <<= 12;
     }
     Some((rd, rn, imm))
-}
-
-fn decode_bl_target(word: u32, pc: u64) -> Option<u64> {
-    if (word & 0xfc00_0000) != 0x9400_0000 {
-        return None;
-    }
-    let imm26 = i64::from(word & 0x03ff_ffff);
-    let signed = (imm26 << 38) >> 36;
-    Some(pc.wrapping_add_signed(signed))
 }
 
 struct MemInsn {
@@ -431,7 +417,12 @@ fn decode_recent_stack_blobs_with_pads(
         if cipher.len() < min_length {
             continue;
         }
-        let cipher_hash = fast_hash(&cipher);
+        // FNV-1a
+        let cipher_hash = cipher
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+            });
         let (prev_len, prev_pad_count, prev_hash) =
             decoded_blob_state.get(&start).copied().unwrap_or((0, 0, 0));
         if prev_len >= cipher.len() && prev_pad_count >= pads.len() && prev_hash == cipher_hash {
@@ -511,15 +502,6 @@ fn might_contain_useful_decoded_marker(s: &str) -> bool {
     ]
     .iter()
     .any(|marker| lower.contains(marker))
-}
-
-fn fast_hash(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for &byte in bytes {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 fn printable_runs(decoded: &[u8], min_length: usize) -> Vec<String> {
@@ -730,15 +712,6 @@ fn append_unique_results(
             out.push(result);
         }
     }
-}
-
-fn dedup_results(mut results: Vec<ExtractedString>) -> Vec<ExtractedString> {
-    results.sort_by_key(|r| (r.data_offset, r.value.len()));
-    let mut seen = HashSet::new();
-    results
-        .into_iter()
-        .filter(|r| seen.insert(r.value.clone()))
-        .collect()
 }
 
 #[cfg(test)]

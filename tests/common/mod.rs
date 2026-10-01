@@ -29,6 +29,11 @@ pub(crate) fn path(rel: &str) -> &'static str {
     Box::leak(resolved.to_string_lossy().into_owned().into_boxed_str())
 }
 
+/// Bytes as lowercase hex, for comparing digests.
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Contents of the sample at `rel`, inflated in memory.
 pub(crate) fn bytes(rel: &str) -> Vec<u8> {
     let packed = Path::new(ROOT).join(format!("{rel}.gz"));

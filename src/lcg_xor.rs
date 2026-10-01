@@ -150,9 +150,9 @@ pub fn extract_macho_lcg_xor(
             continue;
         }
         if (0x1_0000..=0x10_0000).contains(&value) {
-            multipliers.push(value as u64);
+            multipliers.push(u64::from(value));
         } else if (0x1000..0x1_0000).contains(&value) {
-            moduli.push(value as u64);
+            moduli.push(u64::from(value));
         }
     }
     multipliers.sort_unstable();

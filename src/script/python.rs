@@ -69,18 +69,18 @@ static IMPORT_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// String literal assignment: varname = 'long_base64_string'
 #[allow(clippy::expect_used)]
 static STRING_ASSIGN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(\w+)\s*=\s*'([A-Za-z0-9+/=\s]{20,})'"#).expect("static regex"));
+    LazyLock::new(|| Regex::new(r"(\w+)\s*=\s*'([A-Za-z0-9+/=\s]{20,})'").expect("static regex"));
 
 /// Integer constant assignment: varname = 134
 #[allow(clippy::expect_used)]
 static INT_ASSIGN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(\w+)\s*=\s*(\d{1,3})\s*$"#).expect("static regex"));
+    LazyLock::new(|| Regex::new(r"(\w+)\s*=\s*(\d{1,3})\s*$").expect("static regex"));
 
 /// XOR lambda pattern: varname = lambda ...: bytes([x ^ key_var for x in ...])
 #[allow(clippy::expect_used)]
 static XOR_LAMBDA_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"\w+\s*=\s*lambda\s+\w+(?:\s*,\s*\w+)*\s*:\s*bytes\s*\(\s*\[\s*\w+\s*\^\s*(\w+)\s+for"#,
+        r"\w+\s*=\s*lambda\s+\w+(?:\s*,\s*\w+)*\s*:\s*bytes\s*\(\s*\[\s*\w+\s*\^\s*(\w+)\s+for",
     )
     .expect("static regex")
 });
@@ -88,7 +88,7 @@ static XOR_LAMBDA_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// b64decode(varname) call — used to find the blob variable reference
 #[allow(clippy::expect_used)]
 static B64DECODE_VAR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\.b64decode\s*\(\s*(\w+)\s*\)"#).expect("static regex"));
+    LazyLock::new(|| Regex::new(r"\.b64decode\s*\(\s*(\w+)\s*\)").expect("static regex"));
 
 /// Extract all obfuscated payloads from a Python script.
 pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_exec_b64decode_single_quotes() {
-        let src = r#"exec(base64.b64decode('aW1wb3J0IG9z'))"#;
+        let src = r"exec(base64.b64decode('aW1wb3J0IG9z'))";
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].decoded, "import os");
@@ -390,7 +390,7 @@ print(data)
     #[test]
     fn test_aliased_import_chain_simple() {
         // Simplified tahmin-uygulamasi pattern
-        let src = r#"
+        let src = r"
 abc = __import__('base64')
 xyz = __import__('zlib')
 key = 134
@@ -399,7 +399,7 @@ blob = 'eNrzSM3JyVcozy/KSQEADqUEhQ=='
 decoded = xyz.decompress(abc.b64decode(blob))
 result = xorfn(decoded, key)
 exec(compile(result, '<>', 'exec'))
-"#;
+";
         // The blob decodes (base64 → zlib → xor(134)) to "import os"
         // Let's verify by constructing it:
         // "import os" XOR 134 = [0xef, 0xeb, 0xf6, 0xe5, 0xf4, 0xf2, 0xa6, 0xe5, 0xf5]

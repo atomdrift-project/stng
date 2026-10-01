@@ -28,14 +28,14 @@ fn reject(b: &[u8]) {
 #[test]
 fn specimen_and_full_payload_match_independent_native_reconstruction() {
     assert_eq!(
-        hex::encode(Sha256::digest(*FILE)),
+        crate::common::hex(&Sha256::digest(*FILE)),
         "30c99015f9c432604d8a8206ce8dcb4fba7866b062e5bd1a8f0adb88fba8807c"
     );
     let got = decode_xor_fat_macho(&FILE[START..], 0x9c).unwrap();
     assert_eq!(got.len(), LEN);
     assert_eq!(got, plain());
     assert_eq!(
-        hex::encode(Sha256::digest(&got)),
+        crate::common::hex(&Sha256::digest(&got)),
         "5f522222dd8c3237058f7b7b00e717d1365f14aea6f45e41c9f982dd866cb8c0"
     );
 }

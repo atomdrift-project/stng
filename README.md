@@ -1,102 +1,48 @@
 # stng
 
-[![Latest release](https://img.shields.io/github/v/release/atomdrift-project/stng)](https://github.com/atomdrift-project/stng/releases/latest)
-[![License](https://img.shields.io/github/license/atomdrift-project/stng)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/atomdrift-project/stng)](https://github.com/atomdrift-project/stng/releases/latest) [![License](https://img.shields.io/github/license/atomdrift-project/stng)](LICENSE)
 
-stng is an open-source string extractor for malware analysis and reverse
-engineering. It finds ordinary, encoded, XOR-obfuscated, and language-specific
-strings while filtering the compiler noise that makes `strings(1)` output hard
-to use.
+`strings(1)` for malware analysis. stng finds plain, encoded and XOR-obfuscated
+strings, understands Go and Rust binaries, and flags URLs, IPs, commands and
+suspicious paths.
 
-Use it for quick triage, C2 and credential discovery, or preparing a focused
-set of strings for YARA and incident-response work. Analysis is local and does
-not require a network connection, account, or API key.
-
-<p align="center">
-  <img src="media/screenshot.png" alt="stng terminal output" width="760">
-</p>
-
-## Why stng?
-
-- **Useful output by default.** Filters low-value noise while keeping an
-  `--unfiltered` escape hatch.
-- **Understands compiled languages.** Recovers Go and Rust string layouts,
-  symbols, and x86/arm64 stack strings.
-- **Finds obfuscated text.** Detects common encodings, single-byte XOR, custom
-  keys, and optional deeper multi-byte XOR scans.
-- **Highlights security signals.** Classifies URLs, IPs, hostnames, commands,
-  suspicious paths, wallets, tokens, API keys, and ransom-note text.
-- **Easy to automate.** Human-readable, simple line-oriented, and JSON output
-  come from one small CLI.
+<p align="center"><img src="media/screenshot.png" alt="stng terminal output" width="760"></p>
 
 ## Install
 
-### Homebrew on macOS or Linux
-
 ```bash
 brew install atomdrift-project/tap/stng
-```
-
-### Build from source
-
-Source builds require Git, Make, a C/C++ toolchain, and Rust 1.94 or newer.
-
-```bash
-git clone https://github.com/atomdrift-project/stng.git
-cd stng
-make install
-```
-
-You can also install directly with Cargo:
-
-```bash
+# or, with Rust 1.94+ and a C compiler:
 cargo install --git https://github.com/atomdrift-project/stng
 ```
 
-[Rizin](https://rizin.re/) or [radare2](https://rada.re/n/) is optional. When
-present, stng can recover additional addresses and perform `--xorscan`; without
-either tool it skips those passes.
+Optional: [Rizin](https://rizin.re/) or [radare2](https://rada.re/n/) finds more strings and enables `--xorscan`.
 
-## Quick start
+## Use
 
 ```bash
-# Full analysis with automatic single-byte XOR detection.
-stng malware.bin
-
-# Keep the most useful structured and security-relevant strings.
-stng --interesting malware.bin
-
-# Emit machine-readable output.
-stng --json malware.bin
-
-# Decode with a known key.
-stng --xor 0xAB malware.bin
-stng --xor secretkey malware.bin
-
-# Run the slower multi-byte XOR pass (requires Rizin or radare2).
-stng --xorscan malware.bin
+stng malware.bin              # strings by section, XOR detection on
+stng -i malware.bin           # skip raw-scan noise
+stng --json malware.bin       # machine-readable output
+stng --xor 0xAB malware.bin   # decode with a known key (hex or text)
+stng --xorscan malware.bin    # slow multi-byte XOR search
 ```
 
-Run `stng --help` for filtering, grouping, cache, and output controls.
+## As a library
 
-## What it extracts
+```toml
+stng = { git = "https://github.com/atomdrift-project/stng", default-features = false }
+```
 
-- ASCII and UTF-16LE strings with file offsets
-- Base64, Base32, Base85, hexadecimal, URL, and Unicode-escape payloads
-- Go and Rust runtime string layouts and Go `pclntab` symbols
-- x86 and arm64 stack strings
-- decoded Python, JavaScript, PHP, and PowerShell payload text
-- Mach-O code-signing, entitlement, and universal-binary context
+```rust
+let opts = stng::ExtractOptions::new(4).with_garbage_filter(true).with_xor(None);
+for s in stng::extract_strings_with_options(&bytes, &opts) {
+    println!("{:#x} {:?} {}", s.data_offset, s.kind, s.value);
+}
+```
 
-The CLI caches Rizin/radare2 results by file content to speed up repeat
-analysis, keeping up to 4,096 files and dropping entries unused for 30 days;
-`--no-cache` and `--flush-cache` control it. The library itself runs no
-subprocesses and keeps no caches: it is a pure function of the bytes it is
-given, and accepts Rizin results from callers that run Rizin themselves.
-
-Issues and pull requests are welcome in the
-[GitHub repository](https://github.com/atomdrift-project/stng).
+`default-features = false` leaves out the CLI's dependencies.
 
 ## License
 
-stng is available under the [Apache License 2.0](LICENSE).
+[Apache 2.0](LICENSE)

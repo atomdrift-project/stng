@@ -33,12 +33,15 @@ fn code() -> (u64, &'static [u8], usize) {
 }
 fn check(value: &str) {
     assert_eq!(value.len(), 302);
-    assert_eq!(hex::encode(Sha256::digest(value.as_bytes())), HASH);
+    assert_eq!(
+        crate::bytes::to_hex(&Sha256::digest(value.as_bytes())),
+        HASH
+    );
 }
 #[test]
 fn original_specimen_prompt_and_provenance_match_independent_reconstruction() {
     assert_eq!(
-        hex::encode(Sha256::digest(*FILE)),
+        crate::bytes::to_hex(&Sha256::digest(*FILE)),
         "78371a85a51dee581823243272525e119ce88255e2ad75bc5980870681999970"
     );
     let (addr, bytes, start) = code();

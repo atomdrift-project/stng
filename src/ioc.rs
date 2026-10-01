@@ -127,12 +127,19 @@ fn is_external_ipv6(ip: &Ipv6Addr, evidence: IpEvidence) -> bool {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum KeyAlgorithm {
+    /// Repeating-key XOR.
     Xor,
+    /// DES.
     Des,
+    /// Triple DES.
     TripleDes,
+    /// Fernet (AES-128-CBC with HMAC-SHA256).
     Fernet,
+    /// AES.
     Aes,
+    /// RC4.
     Rc4,
+    /// ChaCha20.
     ChaCha20,
 }
 
@@ -167,6 +174,7 @@ pub struct IocOccurrence {
 /// A canonical IOC with bounded occurrence evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ioc {
+    /// What sort of indicator this is.
     pub kind: IocKind,
     /// Canonical address/hostname/path, or `base64url:<material>` for `Key`.
     pub value: String,
@@ -691,12 +699,11 @@ fn is_common_system_path(path: &str) -> bool {
         || path.starts_with("/sys/kernel/mm/")
         || path.contains("/.cargo/registry/src/")
         || path.contains("/lib/rustlib/src/")
-        || (path.starts_with("/usr/lib/") && path.rsplit('/').next().is_some_and(is_system_library))
-}
-
-fn is_system_library(leaf: &str) -> bool {
-    (leaf.starts_with("lib") && (leaf.contains(".so") || leaf.ends_with(".dylib")))
-        || leaf == "dyld"
+        || (path.starts_with("/usr/lib/")
+            && path.rsplit('/').next().is_some_and(|leaf| {
+                (leaf.starts_with("lib") && (leaf.contains(".so") || leaf.ends_with(".dylib")))
+                    || leaf == "dyld"
+            }))
 }
 
 fn is_common_metadata_hostname(hostname: &str) -> bool {
@@ -761,7 +768,7 @@ fn xor_key_material(extracted: &ExtractedString) -> Option<Vec<u8>> {
         if encoded.is_empty() || encoded.len() % 2 != 0 {
             return None;
         }
-        return hex::decode(encoded).ok().filter(|key| !key.is_empty());
+        return crate::bytes::from_hex(encoded.as_bytes()).filter(|key| !key.is_empty());
     }
 
     Some(extracted.value.as_bytes().to_vec())
