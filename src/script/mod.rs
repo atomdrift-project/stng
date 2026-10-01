@@ -168,7 +168,7 @@ eval(atob("YWxlcnQoMSk="))
 
     #[test]
     fn test_deobfuscate_vbscript_encode_sample() {
-        let src = include_bytes!("../../testdata/script/vbscript-encode.asp");
+        let src = crate::test_fixture("testdata/script/vbscript-encode.asp");
         let results = deobfuscate_script(src);
         let decoded = results.iter().find(|r| r.language == "vbscript").unwrap();
         assert!(
@@ -181,7 +181,7 @@ eval(atob("YWxlcnQoMSk="))
 
     #[test]
     fn test_deobfuscate_vbscript_encode_with_legacy_bytes_outside_block() {
-        let mut src = include_bytes!("../../testdata/script/vbscript-encode.asp").to_vec();
+        let mut src = crate::test_fixture("testdata/script/vbscript-encode.asp").to_vec();
         src.push(0xff);
         let results = deobfuscate_script(&src);
         let decoded = results.iter().find(|r| r.language == "vbscript").unwrap();

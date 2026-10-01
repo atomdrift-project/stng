@@ -9,9 +9,11 @@ use goblin::{
     },
 };
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
 use stng::{ExtractOptions, StringMethod, extract_macho_lcg_xor, extract_strings_with_options};
 
-const FILE: &[u8] = include_bytes!("../../testdata/macho/charge0x_installer_universal.macho");
+static FILE: LazyLock<Vec<u8>> =
+    LazyLock::new(|| crate::common::bytes("testdata/macho/charge0x_installer_universal.macho"));
 const HASH: &str = "a2499abd63ef02c20ef6f558e2699bab2beeb5bdbef9677726b83fa4b21c0acc";
 
 fn thin(bytes: &[u8], cpu: u32) -> (Vec<u8>, usize) {
@@ -40,11 +42,11 @@ fn direct(bytes: &[u8], cpu: u32) -> Vec<stng::ExtractedString> {
 #[test]
 fn both_slices_decode_the_same_command_and_keep_file_offsets() {
     assert_eq!(
-        crate::common::hex(&Sha256::digest(FILE)),
+        crate::common::hex(&Sha256::digest(FILE.as_slice())),
         "8202c3887b75b107f76385fe36e7949860b7931cebd2c65899649556c37e30bc"
     );
     for (cpu, offset) in [(CPU_TYPE_X86_64, 0x4c90), (CPU_TYPE_ARM64, 0x14de0)] {
-        let found = direct(FILE, cpu);
+        let found = direct(&FILE, cpu);
         assert_eq!(found.len(), 1);
         assert_eq!(
             crate::common::hex(&Sha256::digest(found[0].value.as_bytes())),
@@ -64,7 +66,7 @@ fn both_slices_decode_the_same_command_and_keep_file_offsets() {
         filter_garbage: true,
         ..Default::default()
     };
-    let all = extract_strings_with_options(FILE, &options);
+    let all = extract_strings_with_options(&FILE, &options);
     for offset in [0x4c90, 0x14de0] {
         let found: Vec<_> = all
             .iter()
@@ -85,7 +87,7 @@ fn both_slices_decode_the_same_command_and_keep_file_offsets() {
 #[test]
 fn rejects_mutated_seed_clock_and_encoded_command_prefix() {
     for cpu in [CPU_TYPE_X86_64, CPU_TYPE_ARM64] {
-        let (_, base) = thin(FILE, cpu);
+        let (_, base) = thin(&FILE, cpu);
         let const_offset = if cpu == CPU_TYPE_X86_64 {
             0x0c8c
         } else {

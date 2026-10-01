@@ -52,7 +52,7 @@ fn test_hex_then_xor_decodes_nsis_system_calls() {
     // The NSIS bytecode in this sample hex-decodes the file, XORs it with
     // 0xEC, then feeds the result to System.dll::Call. The encoded file is
     // kept intact here so this regression covers the public extraction path.
-    let encoded = include_bytes!("../../testdata/nsis/57527_Hokerer118.hex");
+    let encoded = &crate::common::bytes("testdata/nsis/57527_Hokerer118.hex");
     let opts = ExtractOptions::new(4);
     let strings = stng::extract_strings_with_options(encoded, &opts);
     let call = strings
@@ -80,7 +80,7 @@ fn test_hex_then_xor_decodes_nsis_system_calls() {
 fn test_hex_then_xor_decodes_nsis_self_read_loader() {
     // This sibling installer stores the decoded call stream in hex and XORs
     // each byte with 0x23. The stream then reads and executes a file range.
-    let encoded = include_bytes!("../../testdata/nsis/4d49_Constraining.Opm");
+    let encoded = &crate::common::bytes("testdata/nsis/4d49_Constraining.Opm");
     let opts = ExtractOptions::new(4);
     let strings = stng::extract_strings_with_options(encoded, &opts);
 

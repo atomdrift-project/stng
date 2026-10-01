@@ -38,8 +38,8 @@ fn num(row: &serde_json::Value, key: &str) -> u64 {
 }
 #[test]
 fn every_reviewed_extension_id_and_key_helper_matches_independent_reconstruction() {
-    let rows: Vec<serde_json::Value> = serde_json::from_str(include_str!(
-        "../../testdata/macho/rust_pointer_xor_expected.json"
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(crate::test_fixture(
+        "testdata/macho/rust_pointer_xor_expected.json",
     ))
     .unwrap();
     assert_eq!(rows.len(), 298);

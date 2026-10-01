@@ -56,9 +56,8 @@ jobs:
           persist-credentials: false
 
       - name: Reject local path overrides
-        # Same regex as scripts/pre-commit, including the `[^#]` guard that
-        # keeps commented-out patches (Cargo.toml keeps a running log of them)
-        # from tripping it. Keep the two in sync.
+        # Same regex as scripts/pre-commit; the `[^#]` lets commented-out
+        # patches through. Keep the two in sync.
         run: |
           if grep -nE '^[[:space:]]*[^#].*path[[:space:]]*=[[:space:]]*"\.\.' Cargo.toml; then
             echo "::error file=Cargo.toml::local path override committed - push the dep and pin a git rev instead"
@@ -68,12 +67,11 @@ jobs:
       - name: Cache cargo home
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          # Registry + git checkouts only, never target/: target/ dirs run to
-          # tens of GB and would blow the 10 GB per-repo cache budget.
+          # Registry only, never target/: per-target build dirs would quickly
+          # exhaust the 10 GB per-repo cache budget.
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            ~/.cargo/git/db
           key: cargo-home-guard-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-home-guard-${{ runner.os }}-
 
@@ -95,8 +93,8 @@ jobs:
       - name: Cargo.lock unchanged
         run: git diff --exit-code Cargo.lock
 
-  # Not gated on `guard`: a cold build is ~25-45 min per target and serializing
-  # them behind clippy would double the wall clock for no safety gain.
+  # Not gated on `guard`: serializing the builds behind clippy would only add
+  # wall clock.
   build:
     name: build
     uses: ./.github/workflows/build.yml

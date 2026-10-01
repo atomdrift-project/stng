@@ -5,6 +5,7 @@ use super::{Scan, parallel};
 use crate::GoStringExtractor;
 use crate::RustStringExtractor;
 use crate::StringKind;
+use crate::StringMethod;
 use crate::binary;
 use crate::collect_pe_section_info;
 use crate::dotnet;
@@ -123,6 +124,8 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         Vec::new()
     };
 
+    let wide_skip: &[std::ops::Range<usize>] = if is_rust { &[] } else { &pe_skip };
+
     // Only executable sections are disassembled for stack strings. Go PE
     // binaries need this too: dynamically resolved Win32 API names are
     // written by successive `mov reg, imm64; mov [rsp+N], reg` and only
@@ -138,7 +141,10 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     ] = parallel([
         &|| dotnet::extract_us_heap_strings(pe, data, min_length),
         &|| opts.r2_strings.clone().unwrap_or_default(),
-        &|| extract_wide_strings(data, min_length, &segments, &pe_skip),
+        // UTF-16 literals are NUL-terminated, never packed like `&str`
+        // data, so the wide scan covers Rust's `.rdata` too. Go's skipped
+        // sections hold pclntab tables that only decode to UTF-16 noise.
+        &|| extract_wide_strings(data, min_length, &segments, wide_skip),
         &|| {
             scan_binary_ips(
                 data,
@@ -168,6 +174,8 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         merge_imports(&mut strings, extract_pe_imports(pe, min_length));
     }
 
+    strings.extend(pdb_path(pe, min_length));
+
     // Extract overlay/appended data (common malware technique)
     strings.extend(extract_overlay_strings(data, min_length));
     Scan {
@@ -175,6 +183,28 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         sections: section_info,
         is_go: is_go_binary,
     }
+}
+
+/// The PDB path from the CodeView (RSDS) debug record. It sits in `.rdata`,
+/// which is skip-scanned for Go and Rust binaries, and names the build
+/// machine's project — often the most attributable string in a sample.
+fn pdb_path(pe: &PE<'_>, min_length: usize) -> Option<ExtractedString> {
+    let debug = pe.debug_data.as_ref()?;
+    let info = debug.codeview_pdb70_debug_info.as_ref()?;
+    let dir = debug.find_type(goblin::pe::debug::IMAGE_DEBUG_TYPE_CODEVIEW)?;
+    let name = info.filename.split(|&b| b == 0).next()?;
+    let value = std::str::from_utf8(name).ok()?;
+    if value.len() < min_length {
+        return None;
+    }
+    // RSDS record: 4-byte signature, 16-byte GUID, 4-byte age, then the path.
+    Some(ExtractedString {
+        value: value.to_owned(),
+        data_offset: u64::from(dir.pointer_to_raw_data) + 24,
+        method: StringMethod::Structure,
+        kind: crate::classifier::classify_string(value),
+        ..Default::default()
+    })
 }
 
 /// Clear IP/host classifications for strings that are VS_VERSION_INFO values.

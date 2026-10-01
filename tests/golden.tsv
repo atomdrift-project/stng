@@ -86,15 +86,15 @@ filefacts	testdata/macho/xor_fat_dropper.md	25	b11abd614e59418b	RawScan=25
 filefacts	testdata/malware/brew_agent	766	5bfb3fdb2885a3d7	CodeSignature=1 RawScan=489 StackString=3 XorDecode=271 XorStackPair=2
 filefacts	testdata/malware/brickstorm_linux_amd64	11797	73b935a7eaf2fdf7	Base64Decode=6 InstructionPattern=2083 PclntabSymbol=7593 RawScan=491 Structure=1095 WideString=15 XorStackPair=514
 filefacts	testdata/malware/dynamichub/DynamicHub	709	64eb6bd3900b9d1b	CodeSignature=12 RawScan=429 XorStackPair=268
-filefacts	testdata/malware/goodboy-stage-01.exe	306	023be02bf5c35d60	RawScan=154 StackString=2 Structure=133 WideString=17
+filefacts	testdata/malware/goodboy-stage-01.exe	375	7fc2cd43805bf42e	RawScan=154 StackString=2 Structure=134 WideString=85
 filefacts	testdata/malware/kimwolf_installer	7	4ff5718ea951e095	RawScan=7
 filefacts	testdata/malware/poolrat	13396	c62a51db17e06a01	Base64Decode=3 HexDecode=2 RawScan=13335 SpacedAscii=1 StackString=35 UrlDecode=13 WideString=1 XorStackPair=6
 filefacts	testdata/malware/sample-stealer	23749	ca2a95637273cc9f	Base64Decode=15 InstructionPattern=2159 PclntabSymbol=8949 RawScan=11186 SpacedAscii=1 Structure=1409 UrlDecode=10 WideString=20
-filefacts	testdata/malware/sorry_ransomware.exe	752	a58413420f5b804e	RawScan=95 StackString=2 Structure=655
+filefacts	testdata/malware/sorry_ransomware.exe	755	b6e20792737eda1a	RawScan=95 StackString=2 Structure=656 WideString=2
 filefacts	testdata/malware/themeforestrat	13489	70864f7fcbbfce8c	Base64Decode=3 HexDecode=2 RawScan=13434 SpacedAscii=1 StackString=30 UrlDecode=13 WideString=1 XorStackPair=5
-filefacts	testdata/malware/threadracer.exe	726	b02730e4afbbf319	RawScan=532 WideString=194
+filefacts	testdata/malware/threadracer.exe	726	31f442e2ffd27dc6	RawScan=531 Structure=1 WideString=194
 filefacts	testdata/malware/vget_sample	1608	c7ecf6a2f60f69c2	Base64Decode=1 HexDecode=2 InstructionPattern=98 RawScan=893 SpacedAscii=1 StackString=9 Structure=588 WideString=15 XorDecode=1
-filefacts	testdata/malware/wizardnet_downloader.dll	3297	8725a2eae84f2d40	RawScan=2298 UrlDecode=1 WideString=998
+filefacts	testdata/malware/wizardnet_downloader.dll	3297	e6cc1829e1554f3d	RawScan=2297 Structure=1 UrlDecode=1 WideString=998
 filefacts	testdata/malware/zyravpn_tun2socks.exe	24138	0bb2a6ed48925a10	Base64Decode=7 InstructionPattern=3747 PclntabSymbol=18218 RawScan=183 StackString=45 Structure=1922 UrlDecode=1 WideString=15
 filefacts	testdata/nsis/4d49_Constraining.Opm	5	c524f223250ba7cd	RawScan=1 StackString=2 XorDecode=2
 filefacts	testdata/nsis/57527_Hokerer118.hex	20	bbfe109af10cdaee	RawScan=1 XorDecode=19
@@ -102,7 +102,7 @@ filefacts	testdata/pe/does-nothing-windows-amd64.exe	7993	4b31b3c4b710d47d	Base6
 filefacts	testdata/pe/dotnet_unsigned_x86.dll	31	cebbfcc1ae12e70d	RawScan=19 WideString=12
 filefacts	testdata/pe/gobump_windows_amd64.exe	26022	70c65d03167739a2	Base64Decode=3 Heuristic=2 InstructionPattern=2162 PclntabSymbol=11701 RawScan=10472 Structure=1675 WideString=7
 filefacts	testdata/pe/hello_windows.exe	8726	80925b94f1a00c47	Base64Decode=1 InstructionPattern=932 PclntabSymbol=3976 RawScan=3004 Structure=809 WideString=4
-filefacts	testdata/pe/msvc_console_amd64.exe	83	05c125e4838bcb57	Base64Decode=1 RawScan=79 StackString=2 UnicodeEscapeDecode=1
+filefacts	testdata/pe/msvc_console_amd64.exe	83	18bd8592acb112dc	Base64Decode=1 RawScan=79 StackString=2 Structure=1
 filefacts	testdata/pe/rtc.dll	83	85441efeaa4883a3	RawScan=48 WideString=25 XorDecode=10
 filefacts	testdata/rust_elf/README.md	8	23e54d34a63c9ab4	RawScan=8
 filefacts	testdata/rust_elf/linux_amd64	344	40f864420f0343c6	Base64Decode=1 InstructionPattern=35 RawScan=241 StackString=8 Structure=59
@@ -208,15 +208,15 @@ default	testdata/macho/xor_fat_dropper.md	26	2a451dc070522c08	RawScan=26
 default	testdata/malware/brew_agent	1912	8edce6eb2ea4852d	CodeSignature=1 RawScan=1888 StackString=8 XorStackPair=15
 default	testdata/malware/brickstorm_linux_amd64	17664	2c0a9c03e0dfbcf0	Base64Decode=6 InstructionPattern=2497 PclntabSymbol=7596 RawScan=5766 SpacedAscii=3 Structure=1095 WideString=73 XorStackPair=628
 default	testdata/malware/dynamichub/DynamicHub	1017	326abfff2ec2cd10	CodeSignature=12 RawScan=735 XorStackPair=270
-default	testdata/malware/goodboy-stage-01.exe	1205	5406ff850fbf668d	RawScan=953 StackString=2 Structure=229 WideString=21
+default	testdata/malware/goodboy-stage-01.exe	1577	824c8bd6dfefb4be	RawScan=953 StackString=2 Structure=230 WideString=392
 default	testdata/malware/kimwolf_installer	7	4ff5718ea951e095	RawScan=7
 default	testdata/malware/poolrat	17988	05f0db6b3abaf6a7	Base64Decode=3 HexDecode=2 RawScan=17888 SpacedAscii=1 StackString=59 Structure=1 UrlDecode=13 WideString=9 XorStackPair=12
 default	testdata/malware/sample-stealer	55423	ca16c0f2fe48a8ba	Base64Decode=15 InstructionPattern=2559 PclntabSymbol=8952 RawScan=42393 SpacedAscii=5 Structure=1409 UrlDecode=10 WideString=80
-default	testdata/malware/sorry_ransomware.exe	2467	fa9568b03463aed5	RawScan=1670 StackString=7 Structure=787 WideString=3
+default	testdata/malware/sorry_ransomware.exe	2473	202f775462123024	RawScan=1670 StackString=7 Structure=788 WideString=8
 default	testdata/malware/themeforestrat	18092	3af58571a207de6f	Base64Decode=3 HexDecode=2 RawScan=18004 SpacedAscii=1 StackString=48 Structure=1 UrlDecode=13 WideString=9 XorStackPair=11
-default	testdata/malware/threadracer.exe	2396	14a3e9fb6b1cd851	RawScan=1872 Structure=1 WideString=522 XorStackPair=1
+default	testdata/malware/threadracer.exe	2396	6e34ebb37ce9b257	RawScan=1871 Structure=2 WideString=522 XorStackPair=1
 default	testdata/malware/vget_sample	7537	6ae4f3716e52e3b5	Base64Decode=1 HexDecode=2 InstructionPattern=119 RawScan=6752 SpacedAscii=3 StackString=15 Structure=588 WideString=56 XorStackPair=1
-default	testdata/malware/wizardnet_downloader.dll	8010	7cbac890fcf44b73	RawScan=6561 Structure=9 UrlDecode=1 WideString=1439
+default	testdata/malware/wizardnet_downloader.dll	8010	942c89a0731e086b	RawScan=6560 Structure=10 UrlDecode=1 WideString=1439
 default	testdata/malware/zyravpn_tun2socks.exe	25773	40e578cd64fa761a	Base64Decode=7 InstructionPattern=4230 PclntabSymbol=18622 RawScan=863 SpacedAscii=3 StackString=54 Structure=1921 WideString=73
 default	testdata/nsis/4d49_Constraining.Opm	5	c524f223250ba7cd	RawScan=1 StackString=2 XorDecode=2
 default	testdata/nsis/57527_Hokerer118.hex	20	bbfe109af10cdaee	RawScan=1 XorDecode=19
@@ -224,7 +224,7 @@ default	testdata/pe/does-nothing-windows-amd64.exe	8673	8891213ffa105003	Base64D
 default	testdata/pe/dotnet_unsigned_x86.dll	40	6442fa0d97134257	RawScan=26 WideString=14
 default	testdata/pe/gobump_windows_amd64.exe	49556	267abd76e721d9b0	Base64Decode=3 Heuristic=2 InstructionPattern=2658 PclntabSymbol=11989 RawScan=33202 SpacedAscii=2 Structure=1675 WideString=25
 default	testdata/pe/hello_windows.exe	16256	628b0e2699876b2e	Base64Decode=1 InstructionPattern=1202 PclntabSymbol=4152 RawScan=10082 SpacedAscii=1 Structure=809 WideString=9
-default	testdata/pe/msvc_console_amd64.exe	141	0796a2ea50b64b12	Base64Decode=1 RawScan=137 StackString=2 UnicodeEscapeDecode=1
+default	testdata/pe/msvc_console_amd64.exe	141	c36a3de4d5263fcb	Base64Decode=1 RawScan=137 StackString=2 Structure=1
 default	testdata/pe/rtc.dll	133	bc865de31d6bf600	RawScan=105 WideString=28
 default	testdata/rust_elf/README.md	9	40f49e6d64d4c1c1	RawScan=9
 default	testdata/rust_elf/linux_amd64	973	a7e888ce51f424c2	Base64Decode=1 InstructionPattern=44 RawScan=855 SpacedAscii=1 StackString=8 Structure=59 WideString=5

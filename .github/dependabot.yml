@@ -1,0 +1,11 @@
+# Keeps the SHA-pinned actions current. One grouped PR a week instead of one
+# per action; the `# vX.Y.Z` comment beside each pin is updated with it.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/", "/.github/actions/*"]
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

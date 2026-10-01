@@ -37,8 +37,8 @@ pub(super) fn code() -> Region<'static> {
     panic!("arm text")
 }
 pub(super) fn rows() -> Vec<serde_json::Value> {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../testdata/macho/rust_pointer_xor_arm64_expected.json"
+    let fixture: serde_json::Value = serde_json::from_slice(crate::test_fixture(
+        "testdata/macho/rust_pointer_xor_arm64_expected.json",
     ))
     .unwrap();
     fixture["rows"].as_array().unwrap().clone()

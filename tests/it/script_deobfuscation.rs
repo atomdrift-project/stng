@@ -694,7 +694,7 @@ fn test_binary_files_not_affected() {
 
 #[test]
 fn vbscript_encode_in_binary_classified_asp_is_deobfuscated() {
-    let sample = include_bytes!("../../testdata/script/vbscript-encoded-malformed-asp.asp");
+    let sample = &crate::common::bytes("testdata/script/vbscript-encoded-malformed-asp.asp");
     assert!(
         !stng::is_text_file(sample),
         "fixture must exercise the encoded ASP binary-classification path"

@@ -51,8 +51,8 @@ fn original_68_names_match_independent_oracle() {
     assert_eq!(count, 68);
 }
 fn traces() -> Vec<serde_json::Value> {
-    serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../../../testdata/macho/rust_arm64_short_tail_expected.json"
+    serde_json::from_slice::<serde_json::Value>(crate::test_fixture(
+        "testdata/macho/rust_arm64_short_tail_expected.json",
     ))
     .unwrap()["rows"]
         .as_array()

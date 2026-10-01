@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn expands_chcp_remap_sample_into_hidden_python_launch() {
-        let src = include_bytes!("../../testdata/script/batch-remap-sample.unknown");
+        let src = crate::test_fixture("testdata/script/batch-remap-sample.unknown");
         let out = expand_batch_variables(src)
             .map(|r| r.decoded)
             .unwrap_or_default();
@@ -568,13 +568,11 @@ mod tests {
     fn decodes_cp708_hidden_download_and_invoke_samples() {
         for (src, ip) in [
             (
-                include_bytes!("../../testdata/script/batch-cp708-powershell-dropper-db9.bat")
-                    .as_slice(),
+                crate::test_fixture("testdata/script/batch-cp708-powershell-dropper-db9.bat"),
                 "20.91.202.137",
             ),
             (
-                include_bytes!("../../testdata/script/batch-cp708-powershell-dropper-e289.bat")
-                    .as_slice(),
+                crate::test_fixture("testdata/script/batch-cp708-powershell-dropper-e289.bat"),
                 "20.91.206.86",
             ),
         ] {
@@ -596,7 +594,7 @@ mod tests {
     #[test]
     fn rejects_malformed_cp708_remap_tables() {
         let mut src =
-            include_bytes!("../../testdata/script/batch-cp708-powershell-dropper-db9.bat").to_vec();
+            crate::test_fixture("testdata/script/batch-cp708-powershell-dropper-db9.bat").to_vec();
         let table = src
             .windows(b"@jasa@=".len())
             .position(|w| w.eq_ignore_ascii_case(b"@jasa@="))

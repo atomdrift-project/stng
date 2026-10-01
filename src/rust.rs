@@ -1120,8 +1120,10 @@ mod tests {
             if let Ok(data) = std::fs::read(path)
                 && let Ok(elf) = goblin::elf::Elf::parse(&data)
             {
+                // The host's /bin/true is C, so this Rust extractor may find
+                // nothing in it (it finds nothing on the BSDs or illumos).
+                // Whatever it does find must still be well formed.
                 let strings = extractor.extract_elf(&elf, &data);
-                assert!(!strings.is_empty(), "Should find strings in {path}");
                 for s in &strings {
                     assert!(s.value.len() >= 4, "String too short: '{}'", s.value);
                 }
@@ -1133,7 +1135,10 @@ mod tests {
                             | crate::StringMethod::RawScan
                     )
                 });
-                assert!(has_any_method, "Should use at least one extraction method");
+                assert!(
+                    strings.is_empty() || has_any_method,
+                    "Should use at least one extraction method"
+                );
                 break;
             }
         }
@@ -1174,7 +1179,7 @@ mod tests {
                 }
             }
             assert!(
-                duplicates.len() < strings.len() / 10,
+                duplicates.len() * 10 <= strings.len(),
                 "Too many duplicates: {} out of {}",
                 duplicates.len(),
                 strings.len()

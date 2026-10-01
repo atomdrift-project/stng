@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn decodes_real_encoded_asp_without_running_it() {
-        let sample = include_bytes!("../../testdata/script/vbscript-encode.asp");
+        let sample = crate::test_fixture("testdata/script/vbscript-encode.asp");
         let decoded = decode_blocks(sample);
         assert_eq!(decoded.len(), 1);
         assert_eq!(sample[decoded[0].0..].get(..4), Some(b"#@~^".as_slice()));
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn decodes_multiple_blocks_and_preserves_offsets() {
-        let sample = include_bytes!("../../testdata/script/vbscript-encode.asp");
+        let sample = crate::test_fixture("testdata/script/vbscript-encode.asp");
         let mut input = sample.to_vec();
         input.extend_from_slice(sample);
         let decoded = decode_blocks(&input);
