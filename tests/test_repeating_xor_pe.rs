@@ -67,6 +67,19 @@ fn recovers_keys_of_every_tested_length() {
 
 /// The 32-byte key of the `hvnc.enc` payload shipped inside a malicious jar.
 #[test]
+fn recovers_a_pe_after_a_short_clear_prefix() {
+    let key = key_of_len(4, 23);
+    let mut plain = vec![0x90; 8];
+    plain.extend_from_slice(*PE);
+    let enc = xor(&plain, &key);
+    let found = recover_repeating_xor_pe(&enc).unwrap();
+    assert_eq!(found.bytes(), key.as_slice());
+    assert_eq!(found.period(), key.len());
+    assert_eq!(found.pe_offset(), 8);
+    assert_eq!(found.decode(&enc), plain);
+}
+
+#[test]
 fn recovers_the_hvnc_sample_key() {
     let key = hex("5564ee586f83b8022fcd6064d450a4c0981ffb2d8dedf7ffad4560962406e943");
     let enc = xor(*PE, &key);

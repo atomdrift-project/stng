@@ -39,6 +39,9 @@ const MAX_KEY_LEN: usize = 64;
 /// every recovered key.
 const KEY_SOURCE_LEN: u32 = 0x80;
 const TEMPLATE_LEN: usize = KEY_SOURCE_LEN as usize;
+/// Maximum clear prefix before an XOR-encoded image. Small NOP sleds and
+/// decoder prologues often precede the image; the search remains bounded.
+const MAX_PE_PREFIX: usize = 16;
 
 /// Smallest `e_lfanew` accepted: the DOS header itself is 0x40 bytes, and the
 /// vote assumes the reserved region below it is zero.
@@ -98,6 +101,8 @@ pub struct RepeatingXorKey {
     /// Bytes past `period` are zero.
     key: [u8; MAX_KEY_LEN],
     period: u8,
+    /// Offset where the decoded image begins in the encoded file.
+    pe_offset: u8,
 }
 
 impl RepeatingXorKey {
@@ -113,13 +118,19 @@ impl RepeatingXorKey {
         usize::from(self.period)
     }
 
+    /// Offset of the decoded PE within the source file.
+    #[must_use]
+    pub fn pe_offset(&self) -> usize {
+        usize::from(self.pe_offset)
+    }
+
     /// The key as an `XorKey` string: arbitrary bytes rendered `0x<hex>`, as
     /// ARM64 stack-XOR recovery renders them, located at the header extent
     /// it was recovered from.
     pub(crate) fn to_key_string(self) -> ExtractedString {
         ExtractedString {
             value: format!("0x{}", hex::encode(self.bytes())),
-            data_offset: 0,
+            data_offset: u64::from(self.pe_offset),
             data_len: KEY_SOURCE_LEN,
             method: StringMethod::XorRepeatingKey,
             kind: Some(StringKind::XorKey),
@@ -137,7 +148,8 @@ impl RepeatingXorKey {
     }
 }
 
-/// Recover the repeating XOR key (period 1 to 64) that turns `data` into a PE,
+/// Recover the repeating XOR key (period 1 to 64) that turns a PE at the
+/// start of `data` or after a prefix of at most 16 bytes into a valid image,
 /// returning the smallest period that validates.
 ///
 /// Returns `None` for a plaintext PE (an all-zero key is not an encoding), and
@@ -145,21 +157,30 @@ impl RepeatingXorKey {
 /// machine and a PE32/PE32+ optional-header magic.
 #[must_use]
 pub fn recover_repeating_xor_pe(data: &[u8]) -> Option<RepeatingXorKey> {
-    let head: &[u8; TEMPLATE_LEN] = data.first_chunk()?;
+    // Keep the common case at offset zero as cheap as before. A short prefix
+    // is tried only after a normal whole-file candidate fails.
+    recover_at(data, 0).or_else(|| (1..=MAX_PE_PREFIX).find_map(|offset| recover_at(data, offset)))
+}
+
+fn recover_at(data: &[u8], pe_offset: usize) -> Option<RepeatingXorKey> {
+    let image = data.get(pe_offset..)?;
+    let head: &[u8; TEMPLATE_LEN] = image.first_chunk()?;
     // A plaintext PE is not an encoding. Checking it up front also keeps a
     // header that strays from the template from reading as a near-zero key.
-    if is_pe_under(data, |_| 0) {
+    if is_pe_under(data, pe_offset, |_| 0) {
         return None;
     }
     // Each header byte's key candidate: what it XORs with to give the template.
+    // The key stream is aligned to file offset zero even when the PE is
+    // preceded by a clear stub or NOP prefix.
     let mut candidates = [0u8; TEMPLATE_LEN];
     for ((c, byte), (plain, _)) in candidates.iter_mut().zip(head).zip(&TEMPLATE) {
         *c = byte ^ plain;
     }
     let mut tally = [0u16; 256];
     for period in 1..=MAX_KEY_LEN {
-        let mut key = LazyKey::new(&candidates, period);
-        if !is_pe_under(data, |offset| key.at(offset, &mut tally)) {
+        let mut key = LazyKey::new(&candidates, pe_offset, period);
+        if !is_pe_under(data, pe_offset, |offset| key.at(offset, &mut tally)) {
             continue;
         }
         let key = key.complete(&mut tally);
@@ -175,6 +196,7 @@ pub fn recover_repeating_xor_pe(data: &[u8]) -> Option<RepeatingXorKey> {
 /// The key of one candidate period, each byte voted on first use.
 struct LazyKey<'a> {
     candidates: &'a [u8; TEMPLATE_LEN],
+    pe_offset: usize,
     /// `1..=MAX_KEY_LEN`.
     period: usize,
     key: [u8; MAX_KEY_LEN],
@@ -183,9 +205,10 @@ struct LazyKey<'a> {
 }
 
 impl<'a> LazyKey<'a> {
-    fn new(candidates: &'a [u8; TEMPLATE_LEN], period: usize) -> Self {
+    fn new(candidates: &'a [u8; TEMPLATE_LEN], pe_offset: usize, period: usize) -> Self {
         Self {
             candidates,
+            pe_offset,
             period,
             key: [0; MAX_KEY_LEN],
             voted: 0,
@@ -196,7 +219,8 @@ impl<'a> LazyKey<'a> {
     fn at(&mut self, offset: usize, tally: &mut [u16; 256]) -> u8 {
         let residue = offset % self.period;
         if self.voted & (1 << residue) == 0 {
-            self.key[residue] = vote(self.candidates, residue, self.period, tally);
+            self.key[residue] =
+                vote_at(self.candidates, self.pe_offset, residue, self.period, tally);
             self.voted |= 1 << residue;
         }
         self.key[residue]
@@ -210,6 +234,7 @@ impl<'a> LazyKey<'a> {
             key: self.key,
             // `period <= MAX_KEY_LEN`, which fits.
             period: u8::try_from(self.period).unwrap_or(u8::MAX),
+            pe_offset: u8::try_from(self.pe_offset).unwrap_or(u8::MAX),
         }
     }
 }
@@ -222,18 +247,29 @@ impl<'a> LazyKey<'a> {
 ///
 /// `tally` is all zero on entry and on return: only the entries this vote
 /// touched are reset, so one table serves a whole recovery.
+#[cfg(test)]
 fn vote(
     candidates: &[u8; TEMPLATE_LEN],
     residue: usize,
     period: usize,
     tally: &mut [u16; 256],
 ) -> u8 {
+    vote_at(candidates, 0, residue, period, tally)
+}
+
+fn vote_at(
+    candidates: &[u8; TEMPLATE_LEN],
+    pe_offset: usize,
+    residue: usize,
+    period: usize,
+    tally: &mut [u16; 256],
+) -> u8 {
     // The weight-0 `e_lfanew` bytes carry no evidence and must not decide
-    // which candidate counts as seen first.
+    // which candidate counts as seen first. Residues are file-relative because
+    // the repeating key is aligned to the start of the encoded file.
     let positions = || {
-        (residue..TEMPLATE_LEN)
-            .step_by(period)
-            .filter(|&pos| TEMPLATE[pos].1 > 0)
+        (0..TEMPLATE_LEN)
+            .filter(|&pos| (pe_offset + pos) % period == residue && TEMPLATE[pos].1 > 0)
     };
     for pos in positions() {
         tally[usize::from(candidates[pos])] += u16::from(TEMPLATE[pos].1);
@@ -272,25 +308,37 @@ fn decoded<const N: usize>(
 ///
 /// The `e_lfanew` range is checked first: it rejects almost all opaque data
 /// and needs the fewest key bytes.
-fn is_pe_under(data: &[u8], mut key: impl FnMut(usize) -> u8) -> bool {
-    let Some(lfanew) = decoded(data, 0x3c, &mut key)
+fn is_pe_under(data: &[u8], pe_offset: usize, mut key: impl FnMut(usize) -> u8) -> bool {
+    let Some(header_offset) = pe_offset.checked_add(0x3c) else {
+        return false;
+    };
+    let Some(lfanew) = decoded(data, header_offset, &mut key)
         .map(u32::from_le_bytes)
         .and_then(|v| usize::try_from(v).ok())
     else {
         return false;
     };
+    let Some(pe_header) = pe_offset.checked_add(lfanew) else {
+        return false;
+    };
     // The optional-header magic at `lfanew + 24` is the last byte read.
-    if lfanew < MIN_LFANEW || lfanew.checked_add(26).is_none_or(|end| end > data.len()) {
+    if lfanew < MIN_LFANEW || pe_header.checked_add(26).is_none_or(|end| end > data.len()) {
         return false;
     }
-    if decoded(data, 0, &mut key) != Some(*b"MZ")
-        || decoded(data, lfanew, &mut key) != Some(*b"PE\0\0")
+    if decoded(data, pe_offset, &mut key) != Some(*b"MZ")
+        || decoded(data, pe_header, &mut key) != Some(*b"PE\0\0")
     {
         return false;
     }
     let mut word = |offset: usize| decoded(data, offset, &mut key).map(u16::from_le_bytes);
-    word(lfanew + 4).is_some_and(|m| KNOWN_MACHINES.contains(&m))
-        && word(lfanew + 24).is_some_and(|m| OPTIONAL_MAGICS.contains(&m))
+    pe_header
+        .checked_add(4)
+        .and_then(&mut word)
+        .is_some_and(|m| KNOWN_MACHINES.contains(&m))
+        && pe_header
+            .checked_add(24)
+            .and_then(&mut word)
+            .is_some_and(|m| OPTIONAL_MAGICS.contains(&m))
 }
 
 #[cfg(test)]

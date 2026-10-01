@@ -138,6 +138,18 @@ mod tests {
     }
 
     #[test]
+    fn test_xor_callwindowproc_anchor() {
+        let key = 0x23;
+        let plaintext = b"user32.dll::CallWindowProcA";
+        let data = make_xor_test_data(plaintext, key, 20);
+        let results = extract_xor_strings(&data, 10, false);
+        assert!(
+            results.iter().any(|r| r.value.contains("CallWindowProcA")),
+            "XOR scan should recover a CallWindowProc execution anchor: {results:?}"
+        );
+    }
+
+    #[test]
     fn test_xor_ip_detection() {
         let plaintext = b"192.168.1.100";
         let key: u8 = 0x5A;

@@ -4,13 +4,16 @@
 //! This module targets common malware obfuscation patterns found in PyPI/npm packages,
 //! PHP webshells, and PowerShell droppers.
 
+mod batch;
 pub mod decode_chain;
 pub mod detect;
 mod javascript;
 mod php;
 mod powershell;
 mod python;
+mod vbscript;
 
+pub use batch::expand_batch_variables;
 use detect::ScriptLanguage;
 
 /// Result of successfully deobfuscating a script payload.
@@ -36,12 +39,25 @@ pub struct DeobfuscationResult {
 /// detection up to `MAX_DECODE_DEPTH` times.
 #[must_use]
 pub fn deobfuscate_script(data: &[u8]) -> Vec<DeobfuscationResult> {
+    let vbe_results: Vec<_> = vbscript::decode_blocks(data)
+        .into_iter()
+        .map(|(offset, decoded)| DeobfuscationResult {
+            decoded,
+            offset,
+            chain_description: "vbscript-encode".to_string(),
+            language: "vbscript",
+        })
+        .collect();
     let Ok(text) = std::str::from_utf8(data) else {
-        return Vec::new();
+        return vbe_results;
     };
 
     let mut all_results = Vec::new();
     let mut current_text = text.to_string();
+
+    // VBScript.Encode blocks are self-identifying and can occur inside ASP or
+    // HTML, so decode them before language detection. The output is inert text.
+    all_results.extend(vbe_results);
 
     for depth in 0..decode_chain::MAX_DECODE_DEPTH {
         let Some(language) = detect::detect_script_language(current_text.as_bytes()) else {
@@ -148,5 +164,31 @@ eval(atob("YWxlcnQoMSk="))
         let data = vec![0x7f, b'E', b'L', b'F', 0, 0, 0, 0];
         let results = deobfuscate_script(&data);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_deobfuscate_vbscript_encode_sample() {
+        let src = include_bytes!("../../testdata/script/vbscript-encode.asp");
+        let results = deobfuscate_script(src);
+        let decoded = results.iter().find(|r| r.language == "vbscript").unwrap();
+        assert!(
+            decoded
+                .decoded
+                .contains("ExecuteGlobal request(\"LandGrey\")")
+        );
+        assert_eq!(decoded.chain_description, "vbscript-encode");
+    }
+
+    #[test]
+    fn test_deobfuscate_vbscript_encode_with_legacy_bytes_outside_block() {
+        let mut src = include_bytes!("../../testdata/script/vbscript-encode.asp").to_vec();
+        src.push(0xff);
+        let results = deobfuscate_script(&src);
+        let decoded = results.iter().find(|r| r.language == "vbscript").unwrap();
+        assert!(
+            decoded
+                .decoded
+                .contains("ExecuteGlobal request(\"LandGrey\")")
+        );
     }
 }

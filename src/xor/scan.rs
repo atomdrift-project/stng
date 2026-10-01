@@ -37,6 +37,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// - `ld.so` catches LD_PRELOAD rootkit injection (ld.so.preload)
 /// - `BCrypt` catches Windows crypto API names (BCryptOpenAlgorithmProvider, etc.)
 /// - `CreateProcess` catches process injection API names
+/// - `VirtualAlloc` and `CallWindowProc` catch executable-memory dispatch chains
 pub(super) const XOR_PATTERNS: &[&[u8]] = &[
     b"://",
     b"/bin",
@@ -52,6 +53,8 @@ pub(super) const XOR_PATTERNS: &[&[u8]] = &[
     b"ld.so",
     b"BCrypt",
     b"CreateProcess",
+    b"VirtualAlloc",
+    b"CallWindowProc",
 ];
 
 /// Metadata for a pattern in the Aho-Corasick automaton.

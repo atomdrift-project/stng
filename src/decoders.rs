@@ -443,37 +443,84 @@ pub(crate) fn decode_hex_strings(strings: &[ExtractedString]) -> Vec<ExtractedSt
     strings
         .par_iter()
         .filter(|s| s.kind == Some(StringKind::HexEncoded) || is_likely_hex(&s.value))
-        .filter_map(decode_hex_string)
+        .flat_map_iter(decode_hex_variants)
         .collect()
 }
 
-/// Attempt to decode a single hex-encoded string.
-fn decode_hex_string(s: &ExtractedString) -> Option<ExtractedString> {
+/// Decode whole-string hex values, and scan the decoded bytes for embedded
+/// single-byte-XOR strings. Some carriers apply XOR after hex encoding, so the
+/// ordinary text-only hex decoder rejects the intermediate binary and hides
+/// the plaintext from the XOR scanner. Keep this second pass bounded: encoded
+/// inputs over 1 MiB would exceed the existing 512 KiB XOR key-detection
+/// budget once decoded and are unlikely to be useful as string carriers.
+fn decode_hex_variants(s: &ExtractedString) -> Vec<ExtractedString> {
+    const MAX_DECODED_XOR_BYTES: usize = crate::xor::MAX_AUTO_DETECT_SIZE;
+
     if s.value.len() < MIN_HEX_LENGTH || !s.value.len().is_multiple_of(2) {
-        return None;
+        return Vec::new();
+    }
+    let Ok(decoded) = hex::decode(s.value.trim()) else {
+        return Vec::new();
+    };
+
+    let mut xor_results = Vec::new();
+    if decoded.len() <= MAX_DECODED_XOR_BYTES {
+        let xor_hits = crate::xor::extract_xor_strings(&decoded, 10, false);
+        let mut key_counts = [0usize; 256];
+        for hit in &xor_hits {
+            if let Ok(offset) = usize::try_from(hit.data_offset)
+                && let (Some(encoded), Some(decoded_byte)) =
+                    (decoded.get(offset), hit.value.as_bytes().first())
+            {
+                key_counts[usize::from(encoded ^ decoded_byte)] += 1;
+            }
+        }
+        xor_results = xor_hits;
+
+        // Pattern hits identify the likely key cheaply. Expand only keys with
+        // an independent trigger so strings such as CallWindowProcA,
+        // which may lack their own trigger (for example mixed-case `.Dll`),
+        // are recovered without trying all 255 keys.
+        for (key, count) in key_counts.into_iter().enumerate() {
+            if count == 0 || crate::xor::SKIP_XOR_KEYS.contains(&(key as u8)) {
+                continue;
+            }
+            xor_results.extend(crate::xor::extract_custom_xor_strings_with_hints(
+                &decoded,
+                &[key as u8],
+                10,
+                None,
+                true,
+                false,
+            ));
+        }
     }
 
-    // Decode hex
-    let decoded = hex::decode(s.value.trim()).ok()?;
-
-    let decoded_str = decoded_to_text(decoded)?;
-
-    // Reject if too short
-    let trimmed = decoded_str.trim();
-    if trimmed.len() < 4 {
-        return None;
+    let mut results = Vec::new();
+    if let Some(decoded_text) = decoded_to_text(decoded) {
+        if decoded_text.trim().len() >= 4 {
+            results.push(ExtractedString {
+                data_offset: s.data_offset,
+                data_len: u32::try_from(s.value.len()).unwrap_or(u32::MAX),
+                kind: crate::classify_string(&decoded_text),
+                value: decoded_text,
+                method: StringMethod::HexDecode,
+                ..Default::default()
+            });
+        }
     }
 
-    // Classify before moving
-    let kind = crate::classify_string(&decoded_str);
+    for found in &mut xor_results {
+        // XOR offsets refer to the hex-decoded byte stream. Each such byte
+        // occupies two source characters in the original file.
+        found.data_offset = s
+            .data_offset
+            .saturating_add(found.data_offset.saturating_mul(2));
+        found.data_len = found.data_len.saturating_mul(2);
+    }
+    results.extend(xor_results);
 
-    Some(ExtractedString {
-        value: decoded_str,
-        data_offset: s.data_offset,
-        method: StringMethod::HexDecode,
-        kind,
-        ..Default::default()
-    })
+    results
 }
 
 /// Decode URL-encoded strings from a list of extracted strings.
@@ -1255,7 +1302,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result = decode_hex_string(&input).unwrap();
+        let result = decode_hex_variants(&input)
+            .into_iter()
+            .find(|decoded| decoded.method == StringMethod::HexDecode)
+            .unwrap();
         assert_eq!(result.value, "Hello World!");
         assert_eq!(result.method, StringMethod::HexDecode);
     }
@@ -1552,6 +1602,28 @@ mod tests {
         assert_eq!(results[0].value, "Hello World!");
         assert_eq!(results[0].method, StringMethod::HexDecode);
         assert_eq!(results[1].value, "Test Data!");
+        assert!(
+            results
+                .iter()
+                .all(|result| result.method == StringMethod::HexDecode)
+        );
+    }
+
+    #[test]
+    fn test_hex_xor_scan_respects_auto_detect_size_limit() {
+        let key = 0x42;
+        let mut decoded = vec![0x01 ^ key; crate::xor::MAX_AUTO_DETECT_SIZE + 1];
+        for (index, byte) in b"http://example.test".iter().enumerate() {
+            decoded[index] = byte ^ key;
+        }
+        let encoded = hex::encode(decoded);
+        let results = decode_hex_variants(&make_string(&encoded, Some(StringKind::HexEncoded)));
+        assert!(
+            results
+                .iter()
+                .all(|result| result.method != StringMethod::XorDecode),
+            "oversized hex blobs must not trigger XOR scanning"
+        );
     }
 
     #[test]
