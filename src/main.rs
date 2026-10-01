@@ -246,9 +246,28 @@ fn get_binary_format(data: &[u8]) -> String {
     }
 }
 
+/// One file's extraction stops getting faster at about 16 threads. Past that,
+/// idle workers only burn CPU: on a 128-core machine the default pool was
+/// 15–40% slower than 16 threads and used 4–8× the CPU.
+const MAX_THREADS: usize = 16;
+
+/// Size rayon's global pool to the machine, up to [`MAX_THREADS`], unless
+/// `RAYON_NUM_THREADS` says otherwise.
+fn init_thread_pool() {
+    if std::env::var_os("RAYON_NUM_THREADS").is_some() {
+        return;
+    }
+    let n = std::thread::available_parallelism().map_or(1, |n| n.get().min(MAX_THREADS));
+    // Fails only if a pool already exists, which then stays as it is.
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(n)
+        .build_global();
+}
+
 fn main() -> Result<()> {
     let t_total = std::time::Instant::now();
     let cli = Cli::parse();
+    init_thread_pool();
 
     // Detecting rizin/radare2 spawns `rizin -v` (~50–100 ms). Warm that
     // one-time probe on a background thread so it overlaps reading the

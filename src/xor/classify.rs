@@ -10,7 +10,8 @@ use super::validate::{
     is_valid_port, is_valid_xor_string, looks_like_text,
 };
 use super::{MAX_AUTO_DETECT_SIZE, MAX_XOR_SCAN_SIZE, SKIP_XOR_KEYS};
-use crate::{ExtractedString, StringKind, StringMethod, classifier::classify_string};
+use crate::classifier::{classify_string, names_targeted_location};
+use crate::{ExtractedString, StringKind, StringMethod};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -1256,54 +1257,6 @@ const CREDENTIAL_KEYWORDS: &[&str] = &[
     "root",
 ];
 
-/// Well-known suspicious paths that indicate malicious activity.
-const SUSPICIOUS_PATHS: &[&str] = &[
-    // Linux rootkit indicators
-    "/proc/net/",
-    "ld.so.preload",
-    // Credential/key theft targets
-    "/Library/Ethereum/keystore",
-    "/Library/Application Support/Ethereum",
-    "/.ssh/",
-    "/.aws/",
-    "/.gnupg/",
-    "/Library/Keychains/",
-    "/Keychain",
-    "/wallet.dat",
-    "/Library/Cookies",
-    // Crypto wallet directories commonly targeted by malware
-    "Wallets/Guarda",
-    "Wallets/atomic",
-    "Wallets/BitPay",
-    "Wallets/Ethereum",
-    "Wallets/Electrum",
-    "Wallets/Electrum-LTC",
-    "Wallets/ElectronCash",
-    "Wallets/Sparrow",
-    "Wallets/Monero",
-    "Wallets/Jaxx",
-    "Wallets/MyMonero",
-    "Wallets/Coinomi",
-    "Wallets/Daedalus",
-    "Wallets/Wasabi",
-    "Wallets/Blockstream",
-    "Wallets/",
-    "Exodus/exodus.wallet",
-    "Exodus/exodus.conf",
-    ".electrum/wallets",
-    ".electrum-ltc/wallets",
-    ".electron-cash/wallets",
-    ".sparrow/wallets",
-    "Monero/wallets",
-    ".walletwasabi/",
-    "Neon/storage/userWallet",
-    "Daedalus Mainnet/wallets",
-    "Blockstream/Green/Wallets",
-    "com.bitpay.wallet",
-    "/trezor.txt",
-    "/specter.txt",
-];
-
 /// Trim trailing garbage from extracted strings.
 /// This removes characters at the end that don't look like legitimate content.
 pub(crate) fn trim_trailing_garbage(s: &str) -> &str {
@@ -1494,8 +1447,30 @@ pub(crate) fn has_multiple_locales(s: &str) -> bool {
     false
 }
 
-/// Classify an XOR-decoded string. The nested `Option` is three-state:
-/// `None` = reject; `Some(None)` = keep, no specific kind; `Some(Some(k))` = keep as `k`.
+/// Give strings the XOR scan produced the classifier's kinds, as for any other
+/// string, once the scan is done with its evidence. Only `SuspiciousPath` and
+/// `ShellCmd` can come from [`classify_xor_string`]'s own indicator lists;
+/// every other kind already is the classifier's, or the scan's own `XorKey`.
+pub(crate) fn report_kinds(strings: &mut [ExtractedString]) {
+    for s in strings {
+        if matches!(
+            s.kind,
+            Some(StringKind::SuspiciousPath | StringKind::ShellCmd)
+        ) {
+            s.kind = classify_string(&s.value);
+        }
+    }
+}
+
+/// Judge a speculative XOR decode. The nested `Option` is three-state:
+/// `None` = reject; `Some(None)` = keep, no specific evidence; `Some(Some(k))`
+/// = keep on evidence `k`.
+///
+/// Evidence is usually the classifier's kind, but a known indicator the
+/// classifier has no kind for (a Windows API or DLL name, a locale list, a
+/// credential or browser word) counts as `SuspiciousPath` or `ShellCmd`. The
+/// scan's own trimming, overlap and English-shape checks key on evidence;
+/// [`report_kinds`] gives the strings it keeps their reported kinds.
 pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     // FIRST: Check for high-value IOCs that should bypass strict filtering.
     // These checks must come BEFORE is_partial_xor_decode to avoid false rejections
@@ -1507,11 +1482,9 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
         return Some(Some(StringKind::SuspiciousPath));
     }
 
-    // Check for well-known suspicious paths (even with garbage around them)
-    for sus_path in SUSPICIOUS_PATHS {
-        if s.contains(sus_path) {
-            return Some(Some(StringKind::SuspiciousPath));
-        }
+    // Locations stealers go after (even with garbage around them)
+    if names_targeted_location(s) {
+        return Some(Some(StringKind::SuspiciousPath));
     }
 
     // Check for Windows DLL names - covert dynamic loading is a strong malware indicator.

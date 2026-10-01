@@ -288,6 +288,8 @@ fn apply_xor_scan(
     if data.is_empty() || opts.is_cancelled() {
         return;
     }
+    // Every return below precedes the first string this scan adds.
+    let first_added = strings.len();
 
     // Text / script input: XOR obfuscation in source code is vanishingly rare,
     // and the scanner produces noise on long runs of printable bytes.  Only
@@ -441,6 +443,7 @@ fn apply_xor_scan(
         ));
     }
 
+    xor::report_kinds(&mut strings[first_added..]);
     tracing::debug!("TIME: XOR key scanning took {:?}", t_xor.elapsed());
 }
 

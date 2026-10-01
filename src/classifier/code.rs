@@ -175,6 +175,8 @@ const SHELL_CMD_PREFIXES: &[&str] = &[
     "nohup ",
     "setsid ",
     "eval ",
+    // macOS: stealers screenshot the desktop
+    "screencapture ",
 ];
 
 /// Gate for the [`is_shell_command`] prefix probe. A command match needs one of

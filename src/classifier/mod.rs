@@ -7,6 +7,8 @@ mod code;
 pub mod encoding;
 mod network;
 
+pub(crate) use network::names_targeted_location;
+
 use crate::types::StringKind;
 use aho_corasick::AhoCorasick;
 use std::sync::LazyLock;
@@ -313,6 +315,10 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
     // passed alongside a separate hKey arg to Reg* APIs).
     if is_registry_path(s) {
         return Some(StringKind::Registry);
+    }
+
+    if network::names_targeted_location(s) {
+        return Some(StringKind::SuspiciousPath);
     }
 
     // Well-known config/system files (even without path prefix)

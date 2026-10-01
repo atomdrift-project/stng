@@ -60,7 +60,7 @@ filefacts	testdata/kworker_samples/kworker_obfuscated_1	70	3895c211a916dc01	RawS
 filefacts	testdata/macho/arm64_lcg_xor_universal.macho	89	95fee40e2c3a33c8	RawScan=88 XorDecode=1
 filefacts	testdata/macho/arm64_lcg_xor_universal.md	11	73b9d08d52497305	RawScan=11
 filefacts	testdata/macho/charge0x_installer_universal.macho	87	020c5785106368ab	RawScan=85 XorDecode=2
-filefacts	testdata/macho/fmix_xor_stealer_universal.macho	2782	7033a386c1c99ca0	RawScan=1996 Structure=3 XorDecode=783
+filefacts	testdata/macho/fmix_xor_stealer_universal.macho	2782	9c65afb86a728f34	RawScan=1996 Structure=3 XorDecode=783
 filefacts	testdata/macho/fmix_xor_stealer_universal.md	12	604f6ffc8415d348	RawScan=12
 filefacts	testdata/macho/go_reflection_tags_minirat.macho	13777	8b3306fc005f2149	Base64Decode=7 Heuristic=3 InstructionPattern=2167 PclntabSymbol=9584 RawScan=745 SpacedAscii=1 Structure=1270
 filefacts	testdata/macho/go_reflection_tags_minirat.md	8	b4028b457ee9cb75	RawScan=8
@@ -74,18 +74,18 @@ filefacts	testdata/macho/rust_arm64_register_writes.bin	0	e3b0c44298fc1c14
 filefacts	testdata/macho/rust_arm64_register_writes.md	20	67358005967771d1	RawScan=20
 filefacts	testdata/macho/rust_arm64_short_tail_expected.json	371	5a218a45df4453f4	RawScan=371
 filefacts	testdata/macho/rust_arm64_short_tail_expected.md	15	abffa90b400d87a7	RawScan=15
-filefacts	testdata/macho/rust_heap_xor_installer_universal.macho	16317	e73379ef6653c6b5	Base64Decode=7 Heuristic=6744 HexDecode=1 InstructionPattern=480 RawScan=2942 Structure=5437 UnicodeEscapeDecode=1 UrlDecode=1 XorDecode=704
+filefacts	testdata/macho/rust_heap_xor_installer_universal.macho	16317	1ed2200c26423a29	Base64Decode=7 Heuristic=6744 HexDecode=1 InstructionPattern=480 RawScan=2942 Structure=5437 UnicodeEscapeDecode=1 UrlDecode=1 XorDecode=704
 filefacts	testdata/macho/rust_heap_xor_installer_universal.md	388	a9c3a5fccf3357f8	RawScan=388
-filefacts	testdata/macho/rust_pointer_xor_arm64_expected.json	5906	4ca926fbfb22e4e0	HexDecode=379 RawScan=5519 UnicodeEscapeDecode=6 XorDecode=2
+filefacts	testdata/macho/rust_pointer_xor_arm64_expected.json	5906	0d3a87217ea69a71	HexDecode=379 RawScan=5519 UnicodeEscapeDecode=6 XorDecode=2
 filefacts	testdata/macho/rust_pointer_xor_expected.json	1556	15fb5f070c3b9c63	HexDecode=277 RawScan=1278 StackString=1
 filefacts	testdata/macho/swift_small_strings_webview.macho	641	ceb97b9316b68f05	CodeSignature=1 Heuristic=9 InstructionPattern=1 RawScan=625 Structure=5
 filefacts	testdata/macho/swift_small_strings_webview.md	27	8f30f4319450f250	RawScan=27
 filefacts	testdata/macho/wallet_report_objc	70	f99b20a72d9f1e19	RawScan=70
 filefacts	testdata/macho/xor_fat_dropper.macho	452	5b038e9a1f07be91	Heuristic=60 RawScan=197 StackString=2 XorDecode=193
 filefacts	testdata/macho/xor_fat_dropper.md	25	b11abd614e59418b	RawScan=25
-filefacts	testdata/malware/brew_agent	764	32a66833862a5463	CodeSignature=1 RawScan=489 StackString=3 XorDecode=269 XorStackPair=2
+filefacts	testdata/malware/brew_agent	766	5bfb3fdb2885a3d7	CodeSignature=1 RawScan=489 StackString=3 XorDecode=271 XorStackPair=2
 filefacts	testdata/malware/brickstorm_linux_amd64	11797	73b935a7eaf2fdf7	Base64Decode=6 InstructionPattern=2083 PclntabSymbol=7593 RawScan=491 Structure=1095 WideString=15 XorStackPair=514
-filefacts	testdata/malware/dynamichub/DynamicHub	709	447805656cbe3504	CodeSignature=12 RawScan=429 XorStackPair=268
+filefacts	testdata/malware/dynamichub/DynamicHub	709	64eb6bd3900b9d1b	CodeSignature=12 RawScan=429 XorStackPair=268
 filefacts	testdata/malware/goodboy-stage-01.exe	306	023be02bf5c35d60	RawScan=154 StackString=2 Structure=133 WideString=17
 filefacts	testdata/malware/kimwolf_installer	7	4ff5718ea951e095	RawScan=7
 filefacts	testdata/malware/poolrat	13396	c62a51db17e06a01	Base64Decode=3 HexDecode=2 RawScan=13335 SpacedAscii=1 StackString=35 UrlDecode=13 WideString=1 XorStackPair=6
@@ -103,7 +103,7 @@ filefacts	testdata/pe/dotnet_unsigned_x86.dll	31	cebbfcc1ae12e70d	RawScan=19 Wid
 filefacts	testdata/pe/gobump_windows_amd64.exe	26022	70c65d03167739a2	Base64Decode=3 Heuristic=2 InstructionPattern=2162 PclntabSymbol=11701 RawScan=10472 Structure=1675 WideString=7
 filefacts	testdata/pe/hello_windows.exe	8726	80925b94f1a00c47	Base64Decode=1 InstructionPattern=932 PclntabSymbol=3976 RawScan=3004 Structure=809 WideString=4
 filefacts	testdata/pe/msvc_console_amd64.exe	83	05c125e4838bcb57	Base64Decode=1 RawScan=79 StackString=2 UnicodeEscapeDecode=1
-filefacts	testdata/pe/rtc.dll	83	eaba7a40bd6ba111	RawScan=48 WideString=25 XorDecode=10
+filefacts	testdata/pe/rtc.dll	83	85441efeaa4883a3	RawScan=48 WideString=25 XorDecode=10
 filefacts	testdata/rust_elf/README.md	8	23e54d34a63c9ab4	RawScan=8
 filefacts	testdata/rust_elf/linux_amd64	344	40f864420f0343c6	Base64Decode=1 InstructionPattern=35 RawScan=241 StackString=8 Structure=59
 filefacts	testdata/rust_elf/src/Cargo.lock	6	d89f21d2c339c9d2	RawScan=6
@@ -116,10 +116,10 @@ filefacts	testdata/script/npm-charcode-rot-packer.js	5	206e67d414694ac0	RawScan=
 filefacts	testdata/script/npm-charcode-rot-packer.md	14	5412b99ae26f17d7	RawScan=13 SpacedAscii=1
 filefacts	testdata/script/vbscript-encode.asp	3	6e339038a82f4e43	RawScan=2 ScriptDecode=1
 filefacts	testdata/script/vbscript-encoded-malformed-asp.asp	1887	ddac148097475ea9	RawScan=378 ScriptDecode=1509
-filefacts	testdata/xor/brew_agent_xor_region.bin	666	faedef923cde0edd	RawScan=397 XorDecode=269
+filefacts	testdata/xor/brew_agent_xor_region.bin	668	927f5013e27b48f7	RawScan=397 XorDecode=271
 filefacts	testdata/xor/brew_agent_xor_region.md	32	c9f9cc364a848190	RawScan=32
-filefacts	testdata/xor/brew_agent_xor_sample	764	32a66833862a5463	CodeSignature=1 RawScan=489 StackString=3 XorDecode=269 XorStackPair=2
-filefacts	testdata/xor/libffmpeg_3cx_x64_xor	7226	43771b2111c21899	Base64Decode=2 CodeSignature=27 Heuristic=655 InstructionPattern=30 RawScan=5500 Structure=770 UrlDecode=9 XorDecode=233
+filefacts	testdata/xor/brew_agent_xor_sample	766	5bfb3fdb2885a3d7	CodeSignature=1 RawScan=489 StackString=3 XorDecode=271 XorStackPair=2
+filefacts	testdata/xor/libffmpeg_3cx_x64_xor	7226	a930ffdbcab8f412	Base64Decode=2 CodeSignature=27 Heuristic=655 InstructionPattern=30 RawScan=5500 Structure=770 UrlDecode=9 XorDecode=233
 default	testdata/elf/hello_linux_amd64	16329	ffe3b2b239c42292	Base64Decode=1 InstructionPattern=1199 PclntabSymbol=2751 RawScan=11723 SpacedAscii=1 Structure=650 WideString=4
 default	testdata/garble/build/trim.txt	1	aa60946b98098493	RawScan=1
 default	testdata/garble/garble_fresh_linux_amd64	18184	c6a4a8c732ba39c6	Base64Decode=3 InstructionPattern=1249 PclntabSymbol=8797 RawScan=7628 SpacedAscii=1 Structure=461 WideString=7 XorStackPair=38
@@ -182,7 +182,7 @@ default	testdata/kworker_samples/kworker_obfuscated_1	84	f258c7bb2a0d2663	RawSca
 default	testdata/macho/arm64_lcg_xor_universal.macho	548	23b07ede789a1e22	RawScan=547 XorDecode=1
 default	testdata/macho/arm64_lcg_xor_universal.md	11	73b9d08d52497305	RawScan=11
 default	testdata/macho/charge0x_installer_universal.macho	542	13028e23d86ee7bf	RawScan=540 XorDecode=2
-default	testdata/macho/fmix_xor_stealer_universal.macho	4128	dfb8030cb52956a3	RawScan=3342 Structure=3 XorDecode=783
+default	testdata/macho/fmix_xor_stealer_universal.macho	4128	1457a490ee26888c	RawScan=3342 Structure=3 XorDecode=783
 default	testdata/macho/fmix_xor_stealer_universal.md	12	604f6ffc8415d348	RawScan=12
 default	testdata/macho/go_reflection_tags_minirat.macho	21136	017133b2465bc8b9	Base64Decode=7 Heuristic=3 InstructionPattern=2560 PclntabSymbol=9588 RawScan=7703 SpacedAscii=5 Structure=1270
 default	testdata/macho/go_reflection_tags_minirat.md	8	b4028b457ee9cb75	RawScan=8
@@ -196,7 +196,7 @@ default	testdata/macho/rust_arm64_register_writes.bin	114	f1291f05bacb3aa6	RawSc
 default	testdata/macho/rust_arm64_register_writes.md	20	67358005967771d1	RawScan=20
 default	testdata/macho/rust_arm64_short_tail_expected.json	1602	39b14408049e0b49	RawScan=1602
 default	testdata/macho/rust_arm64_short_tail_expected.md	15	abffa90b400d87a7	RawScan=15
-default	testdata/macho/rust_heap_xor_installer_universal.macho	29079	fc9bee5d74b63b33	Base64Decode=7 Heuristic=8466 HexDecode=1 InstructionPattern=540 RawScan=13907 SpacedAscii=1 Structure=5451 UnicodeEscapeDecode=1 UrlDecode=1 XorDecode=704
+default	testdata/macho/rust_heap_xor_installer_universal.macho	29079	a58e7c9dad238307	Base64Decode=7 Heuristic=8466 HexDecode=1 InstructionPattern=540 RawScan=13907 SpacedAscii=1 Structure=5451 UnicodeEscapeDecode=1 UrlDecode=1 XorDecode=704
 default	testdata/macho/rust_heap_xor_installer_universal.md	391	093e8fa336ee5292	RawScan=391
 default	testdata/macho/rust_pointer_xor_arm64_expected.json	9150	81fda79c9a32c40b	HexDecode=379 RawScan=8765 UnicodeEscapeDecode=6
 default	testdata/macho/rust_pointer_xor_expected.json	2325	787a201830cba259	HexDecode=277 RawScan=2045 StackString=3
@@ -207,7 +207,7 @@ default	testdata/macho/xor_fat_dropper.macho	642	22eed4d1e6621939	Heuristic=92 R
 default	testdata/macho/xor_fat_dropper.md	26	2a451dc070522c08	RawScan=26
 default	testdata/malware/brew_agent	1912	8edce6eb2ea4852d	CodeSignature=1 RawScan=1888 StackString=8 XorStackPair=15
 default	testdata/malware/brickstorm_linux_amd64	17664	2c0a9c03e0dfbcf0	Base64Decode=6 InstructionPattern=2497 PclntabSymbol=7596 RawScan=5766 SpacedAscii=3 Structure=1095 WideString=73 XorStackPair=628
-default	testdata/malware/dynamichub/DynamicHub	1017	f7e01fd809716420	CodeSignature=12 RawScan=735 XorStackPair=270
+default	testdata/malware/dynamichub/DynamicHub	1017	326abfff2ec2cd10	CodeSignature=12 RawScan=735 XorStackPair=270
 default	testdata/malware/goodboy-stage-01.exe	1205	5406ff850fbf668d	RawScan=953 StackString=2 Structure=229 WideString=21
 default	testdata/malware/kimwolf_installer	7	4ff5718ea951e095	RawScan=7
 default	testdata/malware/poolrat	17988	05f0db6b3abaf6a7	Base64Decode=3 HexDecode=2 RawScan=17888 SpacedAscii=1 StackString=59 Structure=1 UrlDecode=13 WideString=9 XorStackPair=12

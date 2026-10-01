@@ -654,3 +654,46 @@ fn test_brew_agent_comprehensive_extraction() {
 
     println!("\n✓ All critical brew_agent IOCs successfully extracted!");
 }
+
+/// An XOR-decoded string reports the kind the classifier gives the same text
+/// unencoded. The XOR scan's own indicator lists decide what to keep, not what
+/// a string is: an API name is not a path, and a stolen browser database is a
+/// suspicious path whether or not it was obfuscated.
+#[test]
+fn xor_decoded_strings_report_the_classifiers_kind() {
+    let key = 0x5A;
+    let plain = [
+        "BCryptDecrypt",
+        "%s/Library/Application Support/discord/Local Storage",
+        "/Library/Keychains/login.keychain-db",
+        "screencapture -x -t jpg %s",
+    ];
+    let mut data = vec![0u8; 64];
+    for p in plain {
+        data.extend(p.bytes().map(|b| b ^ key));
+        data.extend([key; 16]); // NUL terminator and padding, encoded
+    }
+    let opts = ExtractOptions::new(4).with_xor_key(vec![key]);
+    let strings = stng::extract_strings_with_options(&data, &opts);
+    for p in plain {
+        let found = strings
+            .iter()
+            .find(|s| s.method == StringMethod::XorDecode && s.value == p)
+            .unwrap_or_else(|| panic!("{p:?} not decoded: {strings:#?}"));
+        assert_eq!(found.kind, stng::classify_string(p), "{p:?}");
+    }
+    let kind_of = |p: &str| strings.iter().find(|s| s.value == p).and_then(|s| s.kind);
+    assert_eq!(kind_of("BCryptDecrypt"), None);
+    assert_eq!(
+        kind_of("%s/Library/Application Support/discord/Local Storage"),
+        Some(StringKind::SuspiciousPath)
+    );
+    assert_eq!(
+        kind_of("/Library/Keychains/login.keychain-db"),
+        Some(StringKind::SuspiciousPath)
+    );
+    assert_eq!(
+        kind_of("screencapture -x -t jpg %s"),
+        Some(StringKind::ShellCmd)
+    );
+}

@@ -3,6 +3,70 @@
 //! Detects IP addresses, file paths, crypto wallet addresses, and API keys.
 
 use crate::types::StringKind;
+use aho_corasick::AhoCorasick;
+use std::sync::LazyLock;
+
+/// Locations stealers and rootkits go after: credential stores, keychains,
+/// wallets, browser and messenger data, the loader's preload hook. Naming one makes a
+/// string a suspicious path wherever it appears in it, `%s/` prefix and all.
+#[allow(clippy::expect_used)]
+static TARGETED_LOCATIONS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        // Linux rootkits
+        "/proc/net/",
+        "ld.so.preload",
+        // Credentials and keys
+        "/Library/Ethereum/keystore",
+        "/Library/Application Support/Ethereum",
+        "/.ssh/",
+        "/.aws/",
+        "/.gnupg/",
+        "/Keychain",
+        "/wallet.dat",
+        "/Library/Cookies",
+        // Wallet directories
+        "Wallets/",
+        "Exodus/exodus.wallet",
+        "Exodus/exodus.conf",
+        ".electrum/wallets",
+        ".electrum-ltc/wallets",
+        ".electron-cash/wallets",
+        ".sparrow/wallets",
+        "Monero/wallets",
+        ".walletwasabi/",
+        "Neon/storage/userWallet",
+        "Daedalus Mainnet/wallets",
+        "Blockstream/Green/Wallets",
+        "com.bitpay.wallet",
+        "/trezor.txt",
+        "/specter.txt",
+        // Browser and messenger data
+        "/Local Storage",
+        "Login Data",
+        "Web Data",
+        "Cookies.binarycookies",
+        "cookies.sqlite",
+        "formhistory.sqlite",
+        "key4.db",
+        "logins.json",
+        "History.db",
+        "Bookmarks.plist",
+        "/tdata",
+        "Telegram Desktop",
+        "org.telegram.desktop",
+        "keepcoder.Telegram",
+        // Shell history and game-store sessions
+        "zsh_history",
+        "bash_history",
+        "loginusers.vdf",
+    ])
+    .expect("valid locations")
+});
+
+/// Whether `s` names a location in [`TARGETED_LOCATIONS`].
+pub(crate) fn names_targeted_location(s: &str) -> bool {
+    TARGETED_LOCATIONS.is_match(s)
+}
 
 /// Check if a string is a suspicious/security-relevant path
 pub(super) fn is_suspicious_path(s: &str) -> bool {
@@ -312,4 +376,27 @@ pub(super) fn classify_api_key(s: &str) -> Option<StringKind> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::names_targeted_location;
+
+    /// Specific stores count wherever they appear; the generic words the XOR
+    /// scan also accepts decodes on ("key", "history", "cookies") do not.
+    #[test]
+    fn targeted_locations_are_specific_names() {
+        for s in [
+            "%s/Library/Application Support/discord/Local Storage",
+            "Wallets/Exodus",
+            "/Users/a/Library/Keychains/login.keychain-db",
+            "Default/Login Data",
+            "Telegram Desktop/tdata/",
+        ] {
+            assert!(names_targeted_location(s), "{s}");
+        }
+        for s in ["monkey", "history", "cookies", "Local Storage", "user_key"] {
+            assert!(!names_targeted_location(s), "{s}");
+        }
+    }
 }
