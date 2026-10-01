@@ -367,7 +367,11 @@ fn scan_macho_sections(
 ) -> Vec<ExtractedString> {
     let mut out = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for info in section_info.values() {
+    // The first section to yield a value claims it, so walk sections in file
+    // order: hash order would make the surviving offset vary run to run.
+    let mut sections: Vec<&binary::SectionInfo> = section_info.values().collect();
+    sections.sort_by(|a, b| (a.file_offset, &a.name).cmp(&(b.file_offset, &b.name)));
+    for info in sections {
         if info.is_executable || info.size == 0 {
             continue;
         }
@@ -1390,7 +1394,9 @@ fn unclaimed_raw_strings(
 /// The sort key is `(offset asc, priority desc, length desc)` so the first
 /// entry at each offset is the best candidate and `dedup_by_key(data_offset)`
 /// keeps it.  Best candidate = highest `StringMethod::dedup_priority`, tied
-/// with longer `value`.
+/// with longer `value`. Remaining ties prefer a classified kind and a recorded
+/// (larger) extent, then break on method, value and fragments, so the survivor
+/// never depends on the order passes produced candidates in.
 fn deduplicate_by_offset(mut strings: Vec<ExtractedString>) -> Vec<ExtractedString> {
     if strings.len() < 2 {
         return strings;
@@ -1407,6 +1413,11 @@ fn deduplicate_by_offset(mut strings: Vec<ExtractedString>) -> Vec<ExtractedStri
                 // Descending length: longer first.
                 b.value.len().cmp(&a.value.len())
             })
+            .then_with(|| b.kind.cmp(&a.kind))
+            .then_with(|| b.data_len.cmp(&a.data_len))
+            .then_with(|| a.method.cmp(&b.method))
+            .then_with(|| a.value.cmp(&b.value))
+            .then_with(|| a.fragments.cmp(&b.fragments))
     });
 
     // Every offset is file-relative (Mach-O section/VA offsets are rebased at the

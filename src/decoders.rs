@@ -481,13 +481,13 @@ fn decode_hex_variants(s: &ExtractedString) -> Vec<ExtractedString> {
         // an independent trigger so strings such as CallWindowProcA,
         // which may lack their own trigger (for example mixed-case `.Dll`),
         // are recovered without trying all 255 keys.
-        for (key, count) in key_counts.into_iter().enumerate() {
-            if count == 0 || crate::xor::SKIP_XOR_KEYS.contains(&(key as u8)) {
+        for (key, count) in (0..=u8::MAX).zip(key_counts) {
+            if count == 0 || crate::xor::SKIP_XOR_KEYS.contains(&key) {
                 continue;
             }
             xor_results.extend(crate::xor::extract_custom_xor_strings_with_hints(
                 &decoded,
-                &[key as u8],
+                &[key],
                 10,
                 None,
                 true,
@@ -497,17 +497,17 @@ fn decode_hex_variants(s: &ExtractedString) -> Vec<ExtractedString> {
     }
 
     let mut results = Vec::new();
-    if let Some(decoded_text) = decoded_to_text(decoded) {
-        if decoded_text.trim().len() >= 4 {
-            results.push(ExtractedString {
-                data_offset: s.data_offset,
-                data_len: u32::try_from(s.value.len()).unwrap_or(u32::MAX),
-                kind: crate::classify_string(&decoded_text),
-                value: decoded_text,
-                method: StringMethod::HexDecode,
-                ..Default::default()
-            });
-        }
+    if let Some(decoded_text) = decoded_to_text(decoded)
+        && decoded_text.trim().len() >= 4
+    {
+        results.push(ExtractedString {
+            data_offset: s.data_offset,
+            data_len: u32::try_from(s.value.len()).unwrap_or(u32::MAX),
+            kind: crate::classify_string(&decoded_text),
+            value: decoded_text,
+            method: StringMethod::HexDecode,
+            ..Default::default()
+        });
     }
 
     for found in &mut xor_results {

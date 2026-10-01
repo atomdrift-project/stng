@@ -198,13 +198,14 @@ impl Expander {
                 continue;
             }
             // `set "name=value"`: the quotes wrap the whole assignment.
-            let assignment =
-                if rest.starts_with('"') && rest.trim_end().ends_with('"') && rest.len() > 2 {
-                    let inner = &rest[1..rest.trim_end().len() - 1];
-                    if inner.contains('=') { inner } else { rest }
-                } else {
-                    rest
-                };
+            let quoted = rest
+                .trim_end()
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'));
+            let assignment = match quoted {
+                Some(inner) if inner.contains('=') => inner,
+                _ => rest,
+            };
             let Some((name, value)) = assignment.split_once('=') else {
                 continue;
             };
@@ -250,13 +251,24 @@ fn substring(value: &str, spec: &str) -> String {
         None => (spec.trim().parse::<i64>().ok(), None),
     };
     let Some(s) = s else { return String::new() };
-    let start = if s < 0 { (n + s).max(0) } else { s.min(n) };
+    // Offsets come from the script, so saturate: `%v:~1,9223372036854775807%`
+    // must clamp, not overflow.
+    let start = if s < 0 {
+        n.saturating_add(s).max(0)
+    } else {
+        s.min(n)
+    };
     let end = match l {
         None => n,
-        Some(l) if l < 0 => (n + l).max(start),
-        Some(l) => (start + l).min(n),
+        Some(l) if l < 0 => n.saturating_add(l).max(start),
+        Some(l) => start.saturating_add(l).min(n),
     };
-    chars[start as usize..end as usize].iter().collect()
+    let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {
+        return String::new();
+    };
+    chars
+        .get(start..end)
+        .map_or_else(String::new, |c| c.iter().collect())
 }
 
 fn replace_ci(value: &str, old: &str, new: &str) -> String {
@@ -305,9 +317,8 @@ fn unescape_carets(line: &str) -> String {
 fn worth_simulating(text: &str) -> (bool, bool) {
     let lower = text.to_ascii_lowercase();
     let worth = lower.contains("set ") && text.matches('%').count() >= 4;
-    let has_remap_markers = lower.contains("chcp 708")
-        && lower.contains("@manezao@=")
-        && lower.contains("@jasa@=");
+    let has_remap_markers =
+        lower.contains("chcp 708") && lower.contains("@manezao@=") && lower.contains("@jasa@=");
     (worth, has_remap_markers)
 }
 
@@ -463,6 +474,18 @@ mod tests {
     }
 
     #[test]
+    fn hostile_set_and_substring_do_not_panic() {
+        // A lone quote after `set` once sliced `rest[1..0]`.
+        expand("@echo off\nset \"  \nset \"\necho %a% %b%\n");
+        // A huge substring length once overflowed `start + len`.
+        let out = expand(
+            "@echo off\nset a=hello\nset b=world\nset c=x\n\
+             echo %a:~1,9223372036854775807% %b:~-9223372036854775808% %c%\n",
+        );
+        assert!(out.contains("ello world"), "{out}");
+    }
+
+    #[test]
     fn splices_punctuation_named_variables() {
         let src = "@echo off\nset ;{=ove /y\nset :D=\\*.* \\*.LaM\nm%;{% %wInDiR%%:D%\nm%;{% x%:D%\nM%;{% y%:D%\n";
         let out = expand(src);
@@ -509,36 +532,53 @@ mod tests {
     #[test]
     fn expands_chcp_remap_sample_into_hidden_python_launch() {
         let src = include_bytes!("../../testdata/script/batch-remap-sample.unknown");
-        let out = expand_batch_variables(src).map(|r| r.decoded).unwrap_or_default();
+        let out = expand_batch_variables(src)
+            .map(|r| r.decoded)
+            .unwrap_or_default();
         let lower = out.to_ascii_lowercase();
-        assert!(lower.contains("powershell.exe -windowstyle hidden"), "{out}");
-        assert!(lower.contains("c:\\\\users\\\\public\\\\document\\\\lib\\\\sim.py"), "{out}");
+        assert!(
+            lower.contains("powershell.exe -windowstyle hidden"),
+            "{out}"
+        );
+        assert!(
+            lower.contains("c:\\\\users\\\\public\\\\document\\\\lib\\\\sim.py"),
+            "{out}"
+        );
     }
 
     #[test]
     fn decodes_cp708_hidden_download_and_invoke_samples() {
         for (src, ip) in [
             (
-                include_bytes!("../../testdata/script/batch-cp708-powershell-dropper-db9.bat").as_slice(),
+                include_bytes!("../../testdata/script/batch-cp708-powershell-dropper-db9.bat")
+                    .as_slice(),
                 "20.91.202.137",
             ),
             (
-                include_bytes!("../../testdata/script/batch-cp708-powershell-dropper-e289.bat").as_slice(),
+                include_bytes!("../../testdata/script/batch-cp708-powershell-dropper-e289.bat")
+                    .as_slice(),
                 "20.91.206.86",
             ),
         ] {
             let result = expand_batch_variables(src).expect("CP708 payload should decode");
             let lower = result.decoded.to_ascii_lowercase();
-            assert!(lower.contains("powershell.exe -ep bypass -nop -noexit -windowstyle hidden"), "{lower}");
+            assert!(
+                lower.contains("powershell.exe -ep bypass -nop -noexit -windowstyle hidden"),
+                "{lower}"
+            );
             assert!(lower.contains(&format!("downloadstring('http://{ip}//?a=")));
             assert!(lower.contains("| iex"));
-            assert_eq!(result.chain_description, "batch:codepage-remap+set-expansion");
+            assert_eq!(
+                result.chain_description,
+                "batch:codepage-remap+set-expansion"
+            );
         }
     }
 
     #[test]
     fn rejects_malformed_cp708_remap_tables() {
-        let mut src = include_bytes!("../../testdata/script/batch-cp708-powershell-dropper-db9.bat").to_vec();
+        let mut src =
+            include_bytes!("../../testdata/script/batch-cp708-powershell-dropper-db9.bat").to_vec();
         let table = src
             .windows(b"@jasa@=".len())
             .position(|w| w.eq_ignore_ascii_case(b"@jasa@="))

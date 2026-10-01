@@ -2768,7 +2768,6 @@ mod string_kind_tests {
 
         // XOR the plaintext
         let xored: Vec<u8> = plaintext.iter().map(|&b| b ^ xor_key).collect();
-        let xored_str = String::from_utf8_lossy(&xored).to_string();
 
         // Hex-encode the XOR'd data (simulating malware obfuscation)
         let hex_encoded = xored
@@ -2780,61 +2779,28 @@ mod string_kind_tests {
         let data = minimal_elf_with_string(&hex_encoded);
         let strings = extract_strings(&data, 4);
 
-        // The implementation automatically decodes hex strings and replaces them
-        // with the decoded version (due to method priority in deduplication).
-        // So we should find the decoded (XOR'd) version, not the hex-encoded original.
-        let decoded_version: Vec<_> = strings.iter().filter(|s| s.value == xored_str).collect();
-
-        // Verify the hex layer was automatically decoded
+        // Both layers decode at the hex string's offset: the hex layer (XOR'd
+        // bytes) and, from the XOR pass run on hex output, the plaintext. They
+        // tie on length, so the classified plaintext wins the offset.
+        let hex_offset = strings
+            .iter()
+            .map(|s| s.data_offset)
+            .min()
+            .expect("hex string should yield output");
+        let at_hex: Vec<_> = strings
+            .iter()
+            .filter(|s| s.data_offset == hex_offset)
+            .collect();
         assert!(
-            !decoded_version.is_empty(),
-            "Should automatically decode hex to reveal XOR'd data. Found {} strings: {:?}",
-            strings.len(),
+            at_hex
+                .iter()
+                .any(|s| s.value.as_bytes() == plaintext && s.method == StringMethod::XorDecode),
+            "hex then XOR layers should decode to the plaintext; found {:?}",
             strings
                 .iter()
-                .map(|s| format!(
-                    "{:?} at 0x{:x}: {}",
-                    s.method,
-                    s.data_offset,
-                    &s.value[..s.value.len().min(30)]
-                ))
+                .map(|s| format!("{:?} at 0x{:x}: {}", s.method, s.data_offset, s.value))
                 .collect::<Vec<_>>()
         );
-
-        // Verify the decoded string was extracted with HexDecode method
-        assert_eq!(
-            decoded_version[0].method,
-            StringMethod::HexDecode,
-            "Decoded string should have HexDecode method"
-        );
-
-        // Verify we can manually decode the hex layer to confirm correctness
-        let decoded_hex: Vec<u8> = (0..hex_encoded.len())
-            .step_by(2)
-            .filter_map(|i| u8::from_str_radix(&hex_encoded[i..i + 2], 16).ok())
-            .collect();
-        assert_eq!(decoded_hex, xored, "Hex decoding should produce XOR'd data");
-
-        // Verify we can manually decode XOR to get original plaintext
-        let decoded_xor: Vec<u8> = decoded_hex.iter().map(|&b| b ^ xor_key).collect();
-        assert_eq!(
-            decoded_xor, plaintext,
-            "XOR decoding should recover plaintext"
-        );
-
-        // Summary of what this test demonstrates:
-        // ✓ The tool automatically decodes hex-encoded strings
-        // ✓ This reveals the first layer of double-obfuscation (XOR + Hex)
-        // ✓ The hex-decoded output (XOR'd data) is presented to the analyst
-        // ✗ The tool does NOT automatically detect/decode the XOR layer
-        //
-        // To fully decode double-obfuscation, an analyst would need to:
-        // 1. See the decoded hex output (automated by tool)
-        // 2. Manually recognize it as XOR'd data
-        // 3. Apply XOR decoding with the correct key
-        //
-        // Future enhancement: Run XOR detection on decoded hex/base64 output
-        // to automatically handle multi-layer obfuscation.
     }
 }
 

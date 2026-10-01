@@ -17,7 +17,7 @@ pub struct StringStruct {
 }
 
 /// Represents a fragment of a multi-part string (e.g., stack strings from multiple instructions)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct StringFragment {
     /// File offset where this fragment's data is located
     pub offset: u64,
@@ -294,7 +294,7 @@ impl StringContext {
 /// Method used to extract the string.
 ///
 /// Indicates the extraction technique, which affects confidence and context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StringMethod {
     /// Found via language string layout (pointer+length or tagged inline bytes)
@@ -434,7 +434,7 @@ impl StringMethod {
 ///
 /// Classifies strings by their purpose and security relevance.
 /// None means the string has no specific classification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StringKind {
     /// Function or method name

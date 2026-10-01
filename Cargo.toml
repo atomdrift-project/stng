@@ -132,14 +132,17 @@ strip = "debuginfo"
 # string validation) are ~5x slower at opt-level=0 and dominate test runtime,
 # so `cargo test` at -O0 takes ~95s versus ~17s with opt-level=2.
 #
-# debug-assertions/overflow-checks are disabled: the crate forbids unsafe and
-# uses no debug_assert!, so std's debug-only precondition checks (firing in the
-# tight binary-parsing loops) catch nothing here yet dominate test-profile time
-# — disabling them cuts binary-parsing tests ~40% with no loss of coverage.
+# debug-assertions are disabled: the crate forbids unsafe and uses no
+# debug_assert!, so std's debug-only precondition checks (firing in the tight
+# binary-parsing loops) catch nothing here yet dominate test-profile time.
+#
+# overflow-checks stay on. Offsets and sizes come from hostile headers, and an
+# unchecked `off + len` that wraps in release is exactly the bug class tests
+# must catch; intentional wrapping arithmetic says so with `wrapping_*`.
 [profile.test]
 opt-level = 2
 debug-assertions = false
-overflow-checks = false
+overflow-checks = true
 
 [profile.profiling]
 inherits = "release"
@@ -227,4 +230,8 @@ harness = false
 
 [[bench]]
 name = "extract"
+harness = false
+
+[[bench]]
+name = "corpus"
 harness = false
