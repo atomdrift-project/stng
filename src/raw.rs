@@ -3,7 +3,6 @@
 use crate::classifier;
 use crate::types::{ExtractedString, StringKind, StringMethod};
 use memchr::memchr_iter;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ops::Range;
 
@@ -21,11 +20,7 @@ fn in_skip_range(offset: usize, skip_ranges: &[Range<usize>]) -> bool {
 pub(crate) fn extract_raw_strings(
     data: &[u8],
     min_length: usize,
-    // Section name and metadata are no longer stored per-string; retained for
-    // call-site compatibility.
-    _section: Option<&str>,
     segment_names: &[String],
-    _section_info: &HashMap<String, crate::binary::SectionInfo>,
     skip_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
     // Build a set of known segment/section names for quick lookup
@@ -222,9 +217,7 @@ fn classify_runs(
 pub(crate) fn extract_wide_strings(
     data: &[u8],
     min_length: usize,
-    _section: Option<&str>,
     segment_names: &[String],
-    _section_info: &HashMap<String, crate::binary::SectionInfo>,
     skip_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
     let segment_names_set: HashSet<&str> = segment_names.iter().map(String::as_str).collect();
@@ -366,7 +359,7 @@ mod tests {
     fn wide_string_data_len_is_source_extent() {
         // "Hello" UTF-16LE followed by a NUL terminator.
         let data = b"H\0e\0l\0l\0o\0\0\0";
-        let out = extract_wide_strings(data, 4, None, &[], &HashMap::new(), &[]);
+        let out = extract_wide_strings(data, 4, &[], &[]);
 
         assert_eq!(out.len(), 1, "expected exactly one wide string");
         let s = &out[0];

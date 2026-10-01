@@ -134,14 +134,7 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
             }
 
             // Extract wide strings
-            let wide_strings = extract_wide_strings(
-                overlay_data,
-                min_length,
-                Some("overlay"),
-                &[],
-                &std::collections::HashMap::new(),
-                &[],
-            );
+            let wide_strings = extract_wide_strings(overlay_data, min_length, &[], &[]);
             for mut s in wide_strings {
                 // Classify wide overlay strings - keep highly specific classifications
                 let classified_kind = classify_string(&s.value);

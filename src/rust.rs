@@ -122,15 +122,8 @@ impl RustStringExtractor {
         // This is the primary method for Rust - it stores &str slices here
         for (data_const_addr, data_const_data) in data_const_sections.into_iter().flatten() {
             // Target sections to look for pointers to
-            let targets: Vec<(u64, &[u8], &str)> = [
-                cstring_info.map(|(a, d)| (a, d, "__cstring")),
-                text_const_info.map(|(a, d)| (a, d, "__TEXT,__const")),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-
-            for (target_addr, target_data, section_name) in targets {
+            for (target_addr, target_data) in [cstring_info, text_const_info].into_iter().flatten()
+            {
                 let structs = find_string_structures(
                     data_const_data,
                     data_const_addr,
@@ -139,13 +132,8 @@ impl RustStringExtractor {
                     &info,
                 );
 
-                let structured = extract_from_structures(
-                    target_data,
-                    target_addr,
-                    &structs,
-                    Some(section_name),
-                    classify_string,
-                );
+                let structured =
+                    extract_from_structures(target_data, target_addr, &structs, classify_string);
 
                 // Use lower floor for structure-based strings (high confidence)
                 let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
@@ -396,13 +384,8 @@ impl RustStringExtractor {
             })
             .collect();
 
-        let mut structured = extract_from_structures(
-            rdata_bytes,
-            rdata_va,
-            &all_structs,
-            Some(".rdata"),
-            classify_string,
-        );
+        let mut structured =
+            extract_from_structures(rdata_bytes, rdata_va, &all_structs, classify_string);
 
         // Convert the VA stored in `data_offset` back to a file offset so the
         // result lines up with the raw scanner's reporting convention.
@@ -485,13 +468,8 @@ impl RustStringExtractor {
         }
 
         // Extract strings using structure boundaries
-        let mut extracted = extract_from_structures(
-            section_data,
-            section_addr,
-            &all_structs,
-            Some(target_section),
-            classify_string,
-        );
+        let mut extracted =
+            extract_from_structures(section_data, section_addr, &all_structs, classify_string);
 
         // Use lower floor for structure-based strings (high confidence)
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);

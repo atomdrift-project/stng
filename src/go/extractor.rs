@@ -99,13 +99,8 @@ impl GoStringExtractor {
             .collect();
 
         // Extract strings using structure boundaries
-        let structured = extract_from_structures(
-            rodata_data,
-            rodata_addr,
-            &all_structs,
-            Some("__rodata"),
-            classify_string,
-        );
+        let structured =
+            extract_from_structures(rodata_data, rodata_addr, &all_structs, classify_string);
 
         // Filter by minimum length — use lower floor for structure-based strings
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
@@ -239,13 +234,8 @@ impl GoStringExtractor {
             .collect();
 
         // Extract strings using structure boundaries
-        let structured = extract_from_structures(
-            rodata_data,
-            rodata_addr,
-            &all_structs,
-            Some(".rodata"),
-            classify_string,
-        );
+        let structured =
+            extract_from_structures(rodata_data, rodata_addr, &all_structs, classify_string);
 
         // Filter by minimum length — use lower floor for structure-based strings
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
@@ -348,13 +338,8 @@ impl GoStringExtractor {
             .collect();
 
         // Extract strings
-        let structured = extract_from_structures(
-            rodata_data,
-            rodata_va,
-            &all_structs,
-            Some(".rodata"),
-            classify_string,
-        );
+        let structured =
+            extract_from_structures(rodata_data, rodata_va, &all_structs, classify_string);
 
         // Filter by minimum length — use lower floor for structure-based strings
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);

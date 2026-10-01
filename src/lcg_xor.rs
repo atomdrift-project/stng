@@ -9,7 +9,6 @@
 use crate::{ExtractedString, StringMethod, classify_string};
 use goblin::Object;
 use goblin::mach::MachO;
-use std::collections::HashMap;
 
 /// Decode one explicitly identified LCG-XOR byte range into a string fact.
 ///
@@ -93,11 +92,14 @@ pub fn extract_macho_lcg_xor(
     const MIN_ENTROPY: f64 = 6.5;
     const PREVIEW_SIZE: usize = 96;
 
+    // The last section of each name, which is what a name-keyed lookup
+    // returned: `__DATA_CONST,__const` over `__TEXT,__const` when both exist.
     let sections = crate::binary::collect_macho_section_info(macho);
-    let Some(constant) = sections.get("__const") else {
+    let last = |name: &str| sections.iter().rev().find(|s| s.name == name);
+    let Some(constant) = last("__const") else {
         return Vec::new();
     };
-    let Some(text) = sections.get("__text") else {
+    let Some(text) = last("__text") else {
         return Vec::new();
     };
     let Ok(constant_start) = usize::try_from(slice_base.saturating_add(constant.file_offset))
@@ -460,14 +462,8 @@ pub fn extract_macho_xor_macho_strings(
                 }
 
                 if let Some((key, decoded)) = found {
-                    let mut strings = crate::raw::extract_raw_strings(
-                        &decoded,
-                        min_length,
-                        None,
-                        &[],
-                        &HashMap::new(),
-                        &[],
-                    );
+                    let mut strings =
+                        crate::raw::extract_raw_strings(&decoded, min_length, &[], &[]);
                     let payload_offset = start.saturating_add(cursor);
                     for string in &mut strings {
                         string.data_offset =

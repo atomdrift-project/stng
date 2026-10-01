@@ -2,18 +2,16 @@
 
 use goblin::mach::MachO;
 
-/// Executable-section byte ranges from a `SectionInfo` map.
+/// Executable-section byte ranges.
 ///
 /// XOR-obfuscated strings never live in `.text`/`__TEXT.__text` — that's
 /// machine code. Skipping these ranges during XOR scanning typically drops
 /// the scanned-byte count by 60-80% on normal binaries with near-zero risk
 /// of missing legitimate hits.
 #[must_use]
-pub fn code_ranges_from_sections(
-    section_info: &std::collections::HashMap<String, SectionInfo>,
-) -> Vec<(usize, usize)> {
-    let mut ranges: Vec<(usize, usize)> = section_info
-        .values()
+pub fn code_ranges_from_sections(sections: &[SectionInfo]) -> Vec<(usize, usize)> {
+    let mut ranges: Vec<(usize, usize)> = sections
+        .iter()
         .filter(|s| s.is_executable && s.size > 0)
         .map(SectionInfo::range)
         .filter(|&(start, end)| end > start)
@@ -206,13 +204,13 @@ pub(crate) fn collect_macho_segments(macho: &MachO<'_>) -> Vec<String> {
     segments
 }
 
-/// Collect section metadata from a Mach-O binary.
+/// Section metadata of a Mach-O binary, in load-command order. Names repeat
+/// across segments (`__TEXT,__const` and `__DATA_CONST,__const`), so this is a
+/// list, not a map keyed by name.
 #[must_use]
-pub fn collect_macho_section_info(
-    macho: &MachO<'_>,
-) -> std::collections::HashMap<String, SectionInfo> {
+pub fn collect_macho_section_info(macho: &MachO<'_>) -> Vec<SectionInfo> {
     use goblin::mach::constants::S_ATTR_SOME_INSTRUCTIONS;
-    let mut sections = std::collections::HashMap::new();
+    let mut sections = Vec::new();
 
     for seg in &macho.segments {
         if let Ok(secs) = seg.sections() {
@@ -221,16 +219,13 @@ pub fn collect_macho_section_info(
                     let is_executable = (sec.flags & S_ATTR_SOME_INSTRUCTIONS) != 0;
                     let is_writable = seg.initprot & 0x2 != 0; // VM_PROT_WRITE
 
-                    sections.insert(
-                        name.to_string(),
-                        SectionInfo {
-                            name: name.to_string(),
-                            file_offset: u64::from(sec.offset),
-                            size: sec.size,
-                            is_executable,
-                            is_writable,
-                        },
-                    );
+                    sections.push(SectionInfo {
+                        name: name.to_string(),
+                        file_offset: u64::from(sec.offset),
+                        size: sec.size,
+                        is_executable,
+                        is_writable,
+                    });
                 }
             }
         }
@@ -251,41 +246,34 @@ pub(crate) fn collect_elf_segments(elf: &goblin::elf::Elf<'_>) -> Vec<String> {
         .collect()
 }
 
-/// Collect section metadata from an ELF binary.
+/// Section metadata of an ELF binary, in section-header order.
 #[must_use]
-pub fn collect_elf_section_info(
-    elf: &goblin::elf::Elf<'_>,
-) -> std::collections::HashMap<String, SectionInfo> {
+pub fn collect_elf_section_info(elf: &goblin::elf::Elf<'_>) -> Vec<SectionInfo> {
     use goblin::elf::section_header::{SHF_EXECINSTR, SHF_WRITE};
-    let mut sections = std::collections::HashMap::new();
+    let mut sections = Vec::new();
 
     for sh in &elf.section_headers {
         if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
             let is_executable = (sh.sh_flags & u64::from(SHF_EXECINSTR)) != 0;
             let is_writable = (sh.sh_flags & u64::from(SHF_WRITE)) != 0;
 
-            sections.insert(
-                name.to_string(),
-                SectionInfo {
-                    name: name.to_string(),
-                    file_offset: sh.sh_offset,
-                    size: sh.sh_size,
-                    is_executable,
-                    is_writable,
-                },
-            );
+            sections.push(SectionInfo {
+                name: name.to_string(),
+                file_offset: sh.sh_offset,
+                size: sh.sh_size,
+                is_executable,
+                is_writable,
+            });
         }
     }
     sections
 }
 
-/// Collect section metadata from a PE binary.
+/// Section metadata of a PE binary, in section-table order.
 #[must_use]
-pub fn collect_pe_section_info(
-    pe: &goblin::pe::PE<'_>,
-) -> std::collections::HashMap<String, SectionInfo> {
+pub fn collect_pe_section_info(pe: &goblin::pe::PE<'_>) -> Vec<SectionInfo> {
     use goblin::pe::section_table::{IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE};
-    let mut sections = std::collections::HashMap::new();
+    let mut sections = Vec::new();
 
     for sec in &pe.sections {
         let name = pe_section_name(&sec.name);
@@ -293,16 +281,13 @@ pub fn collect_pe_section_info(
         let is_executable = (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
         let is_writable = (sec.characteristics & IMAGE_SCN_MEM_WRITE) != 0;
 
-        sections.insert(
-            name.clone(),
-            SectionInfo {
-                name,
-                file_offset: u64::from(sec.pointer_to_raw_data),
-                size: u64::from(sec.size_of_raw_data),
-                is_executable,
-                is_writable,
-            },
-        );
+        sections.push(SectionInfo {
+            name,
+            file_offset: u64::from(sec.pointer_to_raw_data),
+            size: u64::from(sec.size_of_raw_data),
+            is_executable,
+            is_writable,
+        });
     }
     sections
 }

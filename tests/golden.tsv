@@ -209,7 +209,7 @@ default	testdata/script/batch-cp708-powershell-dropper-e289.bat	8	23a1b873cee42d
 default	testdata/script/batch-remap-sample.unknown	43	37dc6c72e83a959c	RawScan=43
 default	testdata/script/vbscript-encode.asp	5	55d8533c6b016d8f	RawScan=4 ScriptDecode=1
 default	testdata/xor/brew_agent_xor_sample	1912	8edce6eb2ea4852d	CodeSignature=1 RawScan=1888 StackString=8 XorStackPair=15
-default	testdata/xor/libffmpeg_3cx_x64_xor	14685	ecdbbfab7ca15884	Base64Decode=2 CodeSignature=31 Heuristic=937 InstructionPattern=46 RawScan=12875 SpacedAscii=15 Structure=774 UrlDecode=5
+default	testdata/xor/libffmpeg_3cx_x64_xor	14685	6d0a784ad83bcea7	Base64Decode=2 CodeSignature=31 Heuristic=937 InstructionPattern=46 RawScan=12875 SpacedAscii=15 Structure=774 UrlDecode=5
 default	tests/testdata/brickstorm_linux_amd64	17664	2c0a9c03e0dfbcf0	Base64Decode=6 InstructionPattern=2497 PclntabSymbol=7596 RawScan=5766 SpacedAscii=3 Structure=1095 WideString=73 XorStackPair=628
 default	tests/testdata/does-nothing-windows-amd64.exe	8673	8891213ffa105003	Base64Decode=1 InstructionPattern=1379 PclntabSymbol=5907 RawScan=266 SpacedAscii=1 Structure=1105 WideString=14
 default	tests/testdata/go_pclntab/README.md	20	aefe84b9d4058e4e	RawScan=20
