@@ -234,7 +234,6 @@ fn rejects_unknown_registers_wrong_merges_and_incomplete_output() {
 fn public_arm_only_pipeline_and_changed_key_bytes() {
     let (bytes, _) = arm_slice();
     let options = crate::ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()
@@ -271,7 +270,6 @@ fn original_nine_small_names_and_public_pipeline() {
     let constants = constants();
     let (bytes, base) = arm_slice();
     let options = crate::ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

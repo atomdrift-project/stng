@@ -133,7 +133,7 @@ pub(crate) fn extract_custom_xor_strings_with_hints(
     data: &[u8],
     key: &[u8],
     min_length: usize,
-    r2_hints: Option<&[crate::r2::StringBoundary]>,
+    r2_hints: Option<&[crate::StringBoundary]>,
     apply_filters: bool,
     enable_early_termination: bool,
 ) -> Vec<ExtractedString> {
@@ -427,7 +427,7 @@ fn extract_xor_strings_from_hints(
     data: &[u8],
     key: &[u8],
     min_length: usize,
-    hints: &[crate::r2::StringBoundary],
+    hints: &[crate::StringBoundary],
     apply_filters: bool,
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();

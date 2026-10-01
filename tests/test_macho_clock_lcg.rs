@@ -57,7 +57,6 @@ fn both_slices_decode_the_same_command_and_keep_file_offsets() {
     }
 
     let options = ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

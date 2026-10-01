@@ -30,6 +30,8 @@ use std::io::{self, IsTerminal};
 use std::path::Path;
 use stng::{Severity, StringKind};
 
+mod cli;
+
 #[derive(Parser, Debug)]
 #[command(name = "stng")]
 #[command(
@@ -253,7 +255,7 @@ fn main() -> Result<()> {
     // target file; the later `is_available()` call then returns instantly.
     if !cli.no_r2 {
         std::thread::spawn(|| {
-            let _ = stng::r2::is_available();
+            let _ = cli::rizin::is_available();
         });
     }
 
@@ -269,11 +271,6 @@ fn main() -> Result<()> {
             .with_target(false)
             .init();
     }
-
-    // Reclaim stale/oversized cache entries on a detached thread. Best-effort
-    // and self-gated to once a day, so it overlaps the real work and never
-    // slows it down; if this process exits first, the next run resumes.
-    stng::spawn(vec![stng::stng_budget()]);
 
     let root = Path::new(&cli.target);
     if !root.exists() {
@@ -329,7 +326,7 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     // Handle cache flushing if requested
     if cli.flush_cache {
         let target = path.to_string_lossy();
-        if let Err(e) = stng::r2::flush_cache(target.as_ref()) {
+        if let Err(e) = cli::rizin::flush_cache(target.as_ref()) {
             eprintln!("Warning: failed to flush cache: {}", e);
         }
     }
@@ -423,19 +420,12 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     } else if cli.r2 {
         true
     } else {
-        stng::r2::is_available()
+        cli::rizin::is_available()
     };
     tracing::debug!("use_r2: {}", use_r2);
 
     // Extract strings with options
-    let mut opts = stng::ExtractOptions::new(cli.min_length)
-        .with_garbage_filter(!cli.unfiltered)
-        .with_cache(!cli.no_cache);
-
-    if use_r2 {
-        opts = opts.with_r2(path.to_string_lossy().as_ref());
-    }
-    tracing::debug!("opts.path: {:?}", opts.path);
+    let mut opts = stng::ExtractOptions::new(cli.min_length).with_garbage_filter(!cli.unfiltered);
 
     // Handle custom XOR key if provided
     let custom_xor_key: Option<Vec<u8>> = if let Some(ref xor_key_str) = cli.xor {
@@ -445,15 +435,20 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     } else if !cli.no_xor {
         // Auto-detection mode
         opts = opts.with_xor(Some(cli.xor_min_length));
-        if cli.xorscan {
-            opts = opts.with_xorscan(true);
-            opts.xor_scan = true; // Ensure base XOR scan is enabled for this to run
-            tracing::debug!("Enabled xorscan (xor_scan_multi)");
-        }
         None
     } else {
         None
     };
+    // --xorscan: decode with XOR keys rizin finds loaded by code.
+    let xorscan = cli.xorscan && cli.xor.is_none() && !cli.no_xor;
+    if use_r2 {
+        let xor = opts.xor_scan || opts.xor_key.is_some() || xorscan;
+        let target = path.to_string_lossy();
+        opts = cli::rizin::attach(opts, &target, &data, xor, xorscan, !cli.no_cache);
+    } else if xorscan {
+        // No disassembler, so no key locations; still an explicit XOR scan.
+        opts = opts.with_xor_key_offsets(Vec::new());
+    }
 
     // Show brief status message only if we'll actually scan (file is within size limits)
     if !cli.no_xor

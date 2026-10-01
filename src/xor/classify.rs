@@ -487,33 +487,27 @@ pub(crate) fn extract_xor_strings(
 /// * `min_length` - Minimum string length
 pub(crate) fn extract_multikey_xor_strings(
     data: &[u8],
-    keys: &[crate::r2::XorKeyInfo],
+    key_offsets: &[u64],
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    use crate::r2::XorConfidence;
     let mut results = Vec::new();
     let mut seen: HashSet<(u64, String)> = HashSet::new();
 
-    // Only use top high-confidence keys for decryption attempts
-    for key_info in keys
+    // The key's length is unknown, so try the common ones at each offset; the
+    // first 100 (offset, length) pairs bound the work.
+    let keys = key_offsets
         .iter()
-        .filter(|k| matches!(k.confidence, XorConfidence::High))
-        .take(100)
-    // Increased to catch targeted binary keys that might be further down the list
-    {
-        let key_bytes_owned = if let Some(ref k) = key_info.key {
-            k.clone()
-        } else {
-            let Ok(start) = usize::try_from(key_info.offset) else {
-                continue;
-            };
-            let end = start.saturating_add(key_info.length).min(data.len());
-            if start >= end {
-                continue;
-            }
-            data[start..end].to_vec()
+        .flat_map(|&offset| [16, 32, 8].map(|length| (offset, length)))
+        .take(100);
+    for (offset, length) in keys {
+        let Ok(start) = usize::try_from(offset) else {
+            continue;
         };
-        let key_bytes = &key_bytes_owned;
+        let end = start.saturating_add(length).min(data.len());
+        if start >= end {
+            continue;
+        }
+        let key_bytes = &data[start..end];
 
         if key_bytes.is_empty() {
             continue;

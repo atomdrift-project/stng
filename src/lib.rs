@@ -69,15 +69,10 @@ pub mod script;
 // String classifier
 pub mod classifier;
 
-// Best-effort background reclamation of stng's on-disk caches
-pub mod cache_sweep;
-
 // Language-specific extractors
 mod go;
 pub(crate) mod instr;
-pub mod r2;
 mod rust;
-pub mod string_cache;
 pub(crate) mod xor;
 
 // Decoders for encoded strings
@@ -86,8 +81,8 @@ mod fuzzy_base64;
 
 // Public API
 pub use binary::{is_go_binary, is_rust_binary};
-pub use cache_sweep::{Budget, Root, spawn, spawn_periodic, stng_budget};
 pub use classifier::classify_string;
+pub use decoders::decode_spaced_ascii;
 pub use detect::{detect_language, is_text_file};
 pub use ioc::{
     Ioc, IocKind, IocOccurrence, IpEvidence, KeyAlgorithm, KeyMetadata, MAX_IOC_OCCURRENCES,
@@ -98,12 +93,9 @@ pub use lcg_xor::{
     decode_lcg_xor, decode_xor_fat_macho, extract_macho_lcg_xor, extract_macho_xor_macho_strings,
 };
 pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
-pub use string_cache::{
-    cache_key_for, cached_strings_by_key, cached_strings_from_object, cached_strings_with_options,
-};
 pub use types::{
-    Arch, BinaryInfo, ExtractedString, OverlayInfo, Severity, StringContext, StringFragment,
-    StringKind, StringMethod, StringStruct,
+    Arch, BinaryInfo, ExtractedString, OverlayInfo, Severity, StringBoundary, StringContext,
+    StringFragment, StringKind, StringMethod, StringStruct,
 };
 
 pub use xor::{
@@ -438,9 +430,9 @@ fn apply_xor_scan(
     excluded_ranges: &[(usize, usize)],
 ) {
     tracing::debug!(
-        "apply_xor_scan: called (xor_scan: {}, xor_scan_multi: {})",
+        "apply_xor_scan: called (xor_scan: {}, key offsets: {})",
         opts.xor_scan,
-        opts.xor_scan_multi
+        opts.xor_key_offsets.is_some()
     );
     if data.is_empty() || opts.is_cancelled() {
         return;
@@ -463,7 +455,8 @@ fn apply_xor_scan(
     // throughput win for typical system-binary corpora. Third-party
     // Developer ID signatures are NOT matched — those CAN be signed malware.
     // Users who passed an explicit xor_key or requested xorscan bypass this.
-    if opts.xor_key.is_none() && !opts.xor_scan_multi && binary::is_platform_signed(data) {
+    if opts.xor_key.is_none() && opts.xor_key_offsets.is_none() && binary::is_platform_signed(data)
+    {
         tracing::debug!("Skipping XOR scan: platform-signed binary");
         return;
     }
@@ -481,21 +474,7 @@ fn apply_xor_scan(
         strings.extend(rolling_results);
     }
 
-    // Rizin string boundaries. Two sources, in preference order:
-    //   1. Caller pre-populated via `ExtractOptions::with_rizin_boundaries`
-    //      — set by expose when it ran rizin upstream. Skip the spawn.
-    //   2. Standalone stng with `use_r2` on and an available path —
-    //      spawn rizin in-process. This keeps stng usable as an
-    //      independent CLI tool.
-    let r2_boundaries = opts.rizin_boundaries.clone().or_else(|| {
-        if opts.use_r2 {
-            opts.path
-                .as_deref()
-                .and_then(|p| r2::extract_string_boundaries(p, opts.use_cache))
-        } else {
-            None
-        }
-    });
+    let r2_boundaries = opts.rizin_boundaries.as_deref();
 
     if let Some(ref key) = opts.xor_key {
         let key_str = String::from_utf8_lossy(key);
@@ -506,7 +485,7 @@ fn apply_xor_scan(
             data,
             key,
             opts.xor_min_length,
-            r2_boundaries.as_deref(),
+            r2_boundaries,
             opts.filter_garbage,
             false, // User-provided key: disable early termination for complete extraction
         ));
@@ -544,7 +523,7 @@ fn apply_xor_scan(
                 data,
                 &key,
                 opts.xor_min_length,
-                r2_boundaries.as_deref(),
+                r2_boundaries,
                 opts.filter_garbage,
                 false, // Even for auto-detected keys, extract completely for final results
             ));
@@ -578,7 +557,7 @@ fn apply_xor_scan(
                         data,
                         &[key],
                         opts.xor_min_length,
-                        r2_boundaries.as_deref(),
+                        r2_boundaries,
                         opts.filter_garbage,
                         false,
                     );
@@ -601,43 +580,14 @@ fn apply_xor_scan(
         strings.extend(inc_results);
     }
 
-    if opts.xor_scan_multi {
-        // Multikey XOR candidate harvesting. Caller-pre-populated
-        // candidates (from expose's upstream rizin pass) win;
-        // otherwise stng spawns rizin itself when `use_r2` is set
-        // and a path is available — standalone CLI behaviour.
-        let (candidates, path_for_verify) = if let Some(ref pre) = opts.rizin_xor_candidates {
-            if pre.is_empty() {
-                (None, opts.path.as_deref())
-            } else {
-                let mut c = strings.clone();
-                c.extend(pre.clone());
-                (Some(c), opts.path.as_deref())
-            }
-        } else if opts.use_r2 {
-            if let Some(path) = opts.path.as_deref() {
-                let mut c = strings.clone();
-                c.extend(r2::extract_binary_xor_candidates(
-                    path,
-                    data,
-                    opts.use_cache,
-                ));
-                (Some(c), Some(path))
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
-        if let Some(candidates) = candidates {
-            let verify_path = path_for_verify.unwrap_or("");
-            let xor_keys = r2::verify_xor_keys(verify_path, data, &candidates, opts.use_cache);
-            if !xor_keys.is_empty() {
-                let decoded =
-                    xor::extract_multikey_xor_strings(data, &xor_keys, opts.xor_min_length);
-                strings.extend(decoded);
-            }
-        }
+    // Code an external disassembler found loading an XOR key: decode the
+    // file with the key at each such offset.
+    if let Some(offsets) = &opts.xor_key_offsets {
+        strings.extend(xor::extract_multikey_xor_strings(
+            data,
+            offsets,
+            opts.xor_min_length,
+        ));
     }
 
     tracing::debug!("TIME: XOR key scanning took {:?}", t_xor.elapsed());
@@ -934,9 +884,12 @@ fn macho_linkedit_ranges(object: &Object<'_>) -> Vec<(u64, u64)> {
     match object {
         Object::Mach(goblin::mach::Mach::Binary(macho)) => ranges.extend(from_macho(macho, 0)),
         Object::Mach(goblin::mach::Mach::Fat(fat)) => {
+            // `iter_arches` runs to the header's `nfat_arch` (up to u32::MAX)
+            // without checking it against the buffer; entries are contiguous,
+            // so the first unreadable one ends the table.
             let offsets: Vec<u64> = fat
                 .iter_arches()
-                .filter_map(std::result::Result::ok)
+                .map_while(std::result::Result::ok)
                 .map(|a| u64::from(a.offset))
                 .collect();
             for (arch, base) in fat.into_iter().zip(offsets) {
@@ -1001,12 +954,6 @@ pub enum FormatHint {
 pub struct ExtractOptions {
     /// Minimum string length to extract
     pub min_length: usize,
-    /// Use radare2 for extraction (if available). Default: false for library use.
-    pub use_r2: bool,
-    /// Path to the binary file (required if `use_r2` is true)
-    pub path: Option<String>,
-    /// Pre-extracted strings from radare2 (allows clients to run r2 themselves)
-    pub r2_strings: Option<Vec<ExtractedString>>,
     /// Filter out garbage strings (default: false for library, true for CLI)
     pub filter_garbage: bool,
     /// Enable XOR strings (single-byte scanning and bounded x86 PE decoder recovery). Default: false.
@@ -1015,20 +962,12 @@ pub struct ExtractOptions {
     pub xor_key: Option<Vec<u8>>,
     /// Minimum length for XOR-decoded strings (default: 10).
     pub xor_min_length: usize,
-    /// Enable advanced multi-byte XOR scanning with radare2/rizin (slow). Default: false.
-    pub xor_scan_multi: bool,
-    /// Use r2 result caching (default: true). Disable with --no-cache flag.
-    pub use_cache: bool,
     /// Skip stng's native import/export/symbol extraction. Default: false.
     ///
     /// Set this when the caller already parses the binary's symbol tables
     /// itself (e.g. filefacts' `extract_symbols`) so the work isn't done
-    /// twice. stng emits no value back here because it only *produces*
-    /// symbol names — it doesn't consume them for string extraction — so the
-    /// efficient hint is suppression, not a data feed (unlike the rizin
-    /// fields below, whose data stng actually uses). Symbol names still
-    /// surface as raw `__LINKEDIT` / `.rdata` scan hits; only the structured,
-    /// typed import/export pass is skipped.
+    /// twice. Symbol names still surface as raw `__LINKEDIT` / `.rdata` scan
+    /// hits; only the structured, typed import/export pass is skipped.
     pub caller_provides_symbols: bool,
     /// Cancellation flag checked at phase boundaries (start of extraction,
     /// before XOR scan, between decoder passes).  When the flag becomes
@@ -1037,21 +976,19 @@ pub struct ExtractOptions {
     /// Hint about the input so stng can skip analyses that will produce
     /// nothing on that shape of input.  See `FormatHint` for the semantics.
     pub format_hint: FormatHint,
-    /// Pre-extracted rizin string boundaries. When set, stng uses these
-    /// to constrain the XOR scan instead of spawning rizin to run
-    /// `izj`. Part of the Wave A cleave→expose rizin migration: lets
-    /// the caller (expose) own the rizin invocation and feed the
-    /// resulting metadata down into stng without a second subprocess.
-    pub rizin_boundaries: Option<Vec<r2::StringBoundary>>,
-    /// Pre-extracted connect-address strings (sockaddr_in literals
-    /// resolved through rizin's disassembly walker). When set, stng
-    /// merges these into the output instead of spawning rizin to
-    /// reproduce the walk.
+    /// Strings an external disassembler (rizin/radare2) found, merged into
+    /// the output. stng runs no subprocesses; the stng CLI runs rizin and
+    /// passes its results through these `rizin_*` / `r2_*` fields.
+    pub r2_strings: Option<Vec<ExtractedString>>,
+    /// String extents from an external disassembler, used to aim XOR
+    /// decoding.
+    pub rizin_boundaries: Option<Vec<StringBoundary>>,
+    /// `sockaddr_in` addresses an external disassembler recovered from
+    /// `connect()` call sites, merged into the output.
     pub rizin_connect_addrs: Option<Vec<ExtractedString>>,
-    /// Pre-extracted XOR key candidates from rizin's instruction-
-    /// pattern walker. When set, stng skips the
-    /// `extract_binary_xor_candidates` spawn.
-    pub rizin_xor_candidates: Option<Vec<ExtractedString>>,
+    /// File offsets where an external disassembler found code loading an XOR
+    /// key. Each is tried as a 16-, 32- and 8-byte repeating key.
+    pub xor_key_offsets: Option<Vec<u64>>,
 }
 
 impl Default for ExtractOptions {
@@ -1065,67 +1002,45 @@ impl ExtractOptions {
     pub fn new(min_length: usize) -> Self {
         Self {
             min_length,
-            use_r2: false,
-            path: None,
-            r2_strings: None,
             filter_garbage: false,
             xor_scan: false,
             xor_key: None,
             xor_min_length: xor::DEFAULT_XOR_MIN_LENGTH,
-            xor_scan_multi: false,
-            use_cache: true,
             caller_provides_symbols: false,
             cancel: None,
             format_hint: FormatHint::Auto,
+            r2_strings: None,
             rizin_boundaries: None,
             rizin_connect_addrs: None,
-            rizin_xor_candidates: None,
+            xor_key_offsets: None,
         }
     }
 
-    /// Supply pre-extracted rizin string boundaries. Wave A of the
-    /// cleave→expose rizin migration: callers (notably expose) run
-    /// rizin once and feed the resulting metadata down into stng so
-    /// stng doesn't have to re-spawn for the same binary. Setting
-    /// this disables stng's internal `extract_string_boundaries`
-    /// spawn.
+    /// Supply strings an external rizin/radare2 run found.
     #[must_use]
-    pub fn with_rizin_boundaries(mut self, b: Vec<r2::StringBoundary>) -> Self {
+    pub fn with_r2_strings(mut self, strings: Vec<ExtractedString>) -> Self {
+        self.r2_strings = Some(strings);
+        self
+    }
+
+    /// Supply string extents from an external rizin run (`izzj`).
+    #[must_use]
+    pub fn with_rizin_boundaries(mut self, b: Vec<StringBoundary>) -> Self {
         self.rizin_boundaries = Some(b);
         self
     }
 
-    /// Supply pre-extracted connect-address strings (sockaddr_in
-    /// literals recovered from rizin's disassembly walker). Replaces
-    /// stng's internal `extract_connect_addrs` spawn.
+    /// Supply connect-address strings from an external rizin run.
     #[must_use]
     pub fn with_rizin_connect_addrs(mut self, c: Vec<ExtractedString>) -> Self {
         self.rizin_connect_addrs = Some(c);
         self
     }
 
-    /// Supply pre-extracted XOR key candidates from rizin's
-    /// instruction-pattern walker. Replaces stng's internal
-    /// `extract_binary_xor_candidates` spawn.
+    /// Supply file offsets of XOR keys found by an external disassembler.
     #[must_use]
-    pub fn with_rizin_xor_candidates(mut self, x: Vec<ExtractedString>) -> Self {
-        self.rizin_xor_candidates = Some(x);
-        self
-    }
-
-    /// Set the binary path and enable radare2-assisted extraction.
-    #[must_use]
-    pub fn with_r2(mut self, path: &str) -> Self {
-        self.use_r2 = true;
-        self.path = Some(path.to_string());
-        self
-    }
-
-    /// Provide pre-extracted r2 strings instead of running r2 internally.
-    /// This allows library clients to run r2 themselves and pass the results.
-    #[must_use]
-    pub fn with_r2_strings(mut self, strings: Vec<ExtractedString>) -> Self {
-        self.r2_strings = Some(strings);
+    pub fn with_xor_key_offsets(mut self, offsets: Vec<u64>) -> Self {
+        self.xor_key_offsets = Some(offsets);
         self
     }
 
@@ -1156,23 +1071,6 @@ impl ExtractOptions {
     #[must_use]
     pub fn with_xor_key(mut self, key: Vec<u8>) -> Self {
         self.xor_key = Some(key);
-        self
-    }
-
-    /// Enable advanced multi-byte XOR scanning with radare2/rizin.
-    /// This is slower but can detect complex multi-byte XOR obfuscation.
-    /// Requires radare2 or rizin to be installed.
-    #[must_use]
-    pub fn with_xorscan(mut self, enable: bool) -> Self {
-        self.xor_scan_multi = enable;
-        self
-    }
-
-    /// Control r2/rizin result caching.
-    /// Default is true. Disable with --no-cache flag.
-    #[must_use]
-    pub fn with_cache(mut self, use_cache: bool) -> Self {
-        self.use_cache = use_cache;
         self
     }
 
@@ -1291,7 +1189,7 @@ fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_length: usize) 
         }
 
         // Try to decode as spaced ASCII
-        if let Some(decoded) = r2::decode_spaced_ascii(&s.value)
+        if let Some(decoded) = decoders::decode_spaced_ascii(&s.value)
             && decoded.len() >= min_length
             && !seen.contains(&decoded)
         {
@@ -1722,7 +1620,7 @@ fn extract_strings_inner(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedStr
         strings.extend(extract_stack_strings(data, opts.min_length));
 
         // Trigger XOR scan even for unknown formats if requested
-        if opts.xor_scan || opts.xor_scan_multi || opts.xor_key.is_some() {
+        if opts.xor_scan || opts.xor_key.is_some() || opts.xor_key_offsets.is_some() {
             apply_xor_scan(&mut strings, data, opts, is_pe, &[]);
         }
 
@@ -1847,7 +1745,7 @@ fn extract_java_class_strings(data: &[u8], opts: &ExtractOptions) -> Vec<Extract
         index += 1;
     }
 
-    if opts.xor_scan || opts.xor_scan_multi || opts.xor_key.is_some() {
+    if opts.xor_scan || opts.xor_key.is_some() || opts.xor_key_offsets.is_some() {
         apply_xor_scan(&mut strings, data, opts, false, &[]);
     }
     let decoded = decode_encoded_strings(&strings);
@@ -1896,42 +1794,6 @@ pub fn extract_strings_from_object(
     deduplicate_by_offset(strings)
 }
 
-/// Whether `object` could be an ARM binary (32- or 64-bit), including
-/// formats whose architecture we can't positively identify.
-///
-/// The connect()-address disassembly pass only understands ARM patterns:
-/// its entry-point scan greps for the ARM EABI connect syscall number (283)
-/// or a direct connect call, and its parser matches `strb`/`str` stores to
-/// `sp`-relative sockaddr offsets. On a positively-identified non-ARM
-/// binary that pass cannot produce a true detection, so spending a full
-/// rizin `aaa` analysis on it buys nothing.
-fn arm_arch_possible(object: &Object<'_>) -> bool {
-    use goblin::mach::constants::cputype::{CPU_TYPE_ARM, CPU_TYPE_ARM64, CPU_TYPE_ARM64_32};
-    match object {
-        Object::Elf(elf) => matches!(
-            elf.header.e_machine,
-            goblin::elf::header::EM_ARM | goblin::elf::header::EM_AARCH64
-        ),
-        Object::PE(pe) => matches!(
-            pe.header.coff_header.machine,
-            goblin::pe::header::COFF_MACHINE_ARM
-                | goblin::pe::header::COFF_MACHINE_ARMNT
-                | goblin::pe::header::COFF_MACHINE_ARM64
-                | goblin::pe::header::COFF_MACHINE_THUMB
-        ),
-        Object::Mach(goblin::mach::Mach::Binary(macho)) => matches!(
-            macho.header.cputype,
-            CPU_TYPE_ARM | CPU_TYPE_ARM64 | CPU_TYPE_ARM64_32
-        ),
-        Object::Mach(goblin::mach::Mach::Fat(fat)) => fat.arches().map_or(true, |arches| {
-            arches
-                .iter()
-                .any(|a| matches!(a.cputype, CPU_TYPE_ARM | CPU_TYPE_ARM64 | CPU_TYPE_ARM64_32))
-        }),
-        _ => true,
-    }
-}
-
 /// Extract strings from a pre-parsed binary object.
 ///
 /// Dispatches to the appropriate language-aware extractor based on the binary format
@@ -1943,31 +1805,13 @@ fn extract_from_object(
     data: &[u8],
     opts: &ExtractOptions,
 ) -> Vec<ExtractedString> {
-    // The connect()-address pass shells out to rizin for a full `aaa`
-    // analysis — by far the most expensive subprocess in the pipeline
-    // (seconds, versus milliseconds for native extraction). Start it first
-    // on its own thread so its wall time overlaps everything below, and
-    // skip it outright where it cannot detect anything (`arm_arch_possible`).
-    std::thread::scope(|scope| {
-        let connect_scan = if opts.rizin_connect_addrs.is_none()
-            && opts.use_r2
-            && data.len() <= 10 * 1024 * 1024
-            && arm_arch_possible(object)
-            && let Some(path) = opts.path.as_deref()
-        {
-            Some(scope.spawn(move || r2::extract_connect_addrs(path, data, opts.use_cache)))
-        } else {
-            None
-        };
-        extract_from_object_inner(object, data, opts, connect_scan)
-    })
+    extract_from_object_inner(object, data, opts)
 }
 
 fn extract_from_object_inner(
     object: &Object<'_>,
     data: &[u8],
     opts: &ExtractOptions,
-    connect_scan: Option<std::thread::ScopedJoinHandle<'_, Vec<ExtractedString>>>,
 ) -> Vec<ExtractedString> {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
@@ -2697,27 +2541,13 @@ fn extract_from_object_inner(
     let is_pe = matches!(object, Object::PE(_));
     let excluded_ranges = binary::code_ranges_from_sections(&section_info);
 
-    if !is_go_binary || opts.xor_scan_multi || opts.xor_key.is_some() {
+    if !is_go_binary || opts.xor_key_offsets.is_some() || opts.xor_key.is_some() {
         apply_xor_scan(&mut strings, data, opts, is_pe, &excluded_ranges);
     }
 
-    // IPs recovered from `connect()` syscalls. Pre-populated wins
-    // (expose's upstream rizin pass already harvested them); otherwise
-    // `extract_from_object` spawned the rizin scan before extraction
-    // started — standalone CLI behaviour — and it is joined here.
-    if let Some(ref pre) = opts.rizin_connect_addrs {
-        if !pre.is_empty() {
-            strings.extend(pre.clone());
-        }
-    } else if let Some(handle) = connect_scan {
-        match handle.join() {
-            Ok(connect_addrs) => {
-                if !connect_addrs.is_empty() {
-                    strings.extend(connect_addrs);
-                }
-            }
-            Err(_) => tracing::warn!("connect-addr scan thread panicked"),
-        }
+    // IPs an external disassembler recovered from `connect()` call sites.
+    if let Some(addrs) = &opts.rizin_connect_addrs {
+        strings.extend(addrs.iter().cloned());
     }
 
     // Section names are no longer stored per-string (callers derive them from
@@ -2866,22 +2696,9 @@ fn arm64_stack_xor_profile(
     }
 }
 
-/// Rizin string set. Two sources, in preference order:
-///   1. Caller-provided via `ExtractOptions::with_r2_strings` — set
-///      by expose when it ran rizin upstream.
-///   2. Standalone stng with `use_r2` on and an available path —
-///      spawn rizin in-process. Keeps stng usable as an independent
-///      CLI tool.
+/// Strings an external rizin run found, when the caller supplied them.
 fn get_r2_strings(opts: &ExtractOptions) -> Option<Vec<ExtractedString>> {
-    if let Some(ref pre) = opts.r2_strings {
-        return Some(pre.clone());
-    }
-    if opts.use_r2
-        && let Some(ref path) = opts.path
-    {
-        return r2::extract_strings(path, opts.min_length, opts.use_cache);
-    }
-    None
+    opts.r2_strings.clone()
 }
 
 /// Reads the sample at `path` (relative to the crate root) at run time.
@@ -2902,6 +2719,17 @@ pub(crate) fn test_fixture(path: &str) -> &'static [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fat_linkedit_walk_is_bounded_by_the_buffer() {
+        // nfat_arch = u32::MAX over 1 KiB: a walk that trusts the count
+        // visits about four billion entries.
+        let mut data = vec![0xCA, 0xFE, 0xBA, 0xBE, 0xFF, 0xFF, 0xFF, 0xFF];
+        data.resize(1024, 0);
+        let fat = goblin::mach::MultiArch::new(&data).expect("fat header parses");
+        let object = Object::Mach(goblin::mach::Mach::Fat(fat));
+        assert!(macho_linkedit_ranges(&object).is_empty());
+    }
 
     #[test]
     fn stack_string_spans_are_file_offsets() {

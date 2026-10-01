@@ -136,16 +136,7 @@ fn test_is_rust_binary_invalid() {
 fn test_extract_options_new() {
     let opts = ExtractOptions::new(4);
     assert_eq!(opts.min_length, 4);
-    assert!(!opts.use_r2);
-    assert!(opts.path.is_none());
-}
-
-#[test]
-fn test_extract_options_with_r2() {
-    let opts = ExtractOptions::new(4).with_r2("/path/to/binary");
-    assert_eq!(opts.min_length, 4);
-    assert!(opts.use_r2);
-    assert_eq!(opts.path, Some("/path/to/binary".to_string()));
+    assert!(opts.r2_strings.is_none());
 }
 
 #[test]
@@ -713,16 +704,6 @@ mod extraction_scenario_tests {
     use super::*;
 
     #[test]
-    fn test_extract_with_r2_option_no_r2_installed() {
-        let data = minimal_elf_header();
-        // Test with r2 option but no path
-        let opts = ExtractOptions::new(4).with_r2("/nonexistent/path");
-        let strings = extract_strings_with_options(&data, &opts);
-        // Should still work, just without r2 results
-        let _ = strings;
-    }
-
-    #[test]
     fn test_extract_unknown_binary_format() {
         // Random data that isn't ELF, Mach-O, or PE
         let data = b"RANDOMDATANOTABINARYFORMAT123456789";
@@ -848,108 +829,6 @@ mod fat_binary_tests {
         // System binaries should have imports
         let has_imports = strings.iter().any(|s| s.kind == Some(StringKind::Import));
         assert!(has_imports, "Fat binary should have imports");
-    }
-}
-
-// Tests for r2 integration (only run if r2 is installed)
-mod r2_tests {
-    use super::*;
-    use std::path::Path;
-    use std::process::Command;
-
-    fn r2_available() -> bool {
-        Command::new("r2")
-            .arg("-v")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    #[test]
-    fn test_r2_extract_strings() {
-        if !r2_available() {
-            eprintln!("Skipping: r2 not installed");
-            return;
-        }
-
-        let path = "/bin/ls";
-        if !Path::new(path).exists() {
-            return;
-        }
-
-        let result = stng::r2::extract_strings(path, 4, true);
-        assert!(result.is_some(), "r2 should extract strings from /bin/ls");
-
-        let strings = result.unwrap();
-        assert!(!strings.is_empty(), "r2 should find strings");
-    }
-
-    #[test]
-    fn test_r2_is_available() {
-        // Just verify the function works
-        let available = stng::r2::is_available();
-        if available {
-            eprintln!("r2 is available");
-        } else {
-            eprintln!("r2 is not available");
-        }
-    }
-
-    #[test]
-    fn test_r2_nonexistent_file() {
-        if !r2_available() {
-            return;
-        }
-
-        let result = stng::r2::extract_strings("/nonexistent/path/to/binary", 4, true);
-        assert!(
-            result.is_none(),
-            "r2 should return None for nonexistent file"
-        );
-    }
-
-    #[test]
-    fn test_extract_with_r2_option() {
-        if !r2_available() {
-            return;
-        }
-
-        let path = "/bin/ls";
-        if !Path::new(path).exists() {
-            return;
-        }
-
-        let data = std::fs::read(path).unwrap();
-        let opts = ExtractOptions::new(4).with_r2(path);
-        let strings = extract_strings_with_options(&data, &opts);
-
-        assert!(
-            !strings.is_empty(),
-            "Extraction with r2 should find strings"
-        );
-    }
-
-    #[test]
-    fn test_r2_strings_have_method() {
-        if !r2_available() {
-            return;
-        }
-
-        let path = "/bin/ls";
-        if !Path::new(path).exists() {
-            return;
-        }
-
-        let result = stng::r2::extract_strings(path, 4, true);
-        if let Some(strings) = result {
-            // r2 strings should have R2String or R2Symbol method
-            for s in &strings {
-                assert!(
-                    s.method == StringMethod::R2String || s.method == StringMethod::R2Symbol,
-                    "r2 extracted string should have r2 method"
-                );
-            }
-        }
     }
 }
 
@@ -1260,13 +1139,9 @@ mod api_tests {
             ..Default::default()
         }];
 
-        let opts = ExtractOptions::new(8)
-            .with_r2("/path/to/binary")
-            .with_r2_strings(fake_strings);
+        let opts = ExtractOptions::new(8).with_r2_strings(fake_strings);
 
         assert_eq!(opts.min_length, 8);
-        assert!(opts.use_r2);
-        assert!(opts.path.is_some());
         assert!(opts.r2_strings.is_some());
     }
 
@@ -1409,10 +1284,13 @@ mod edge_case_tests {
 
     #[test]
     fn test_extract_options_builder_pattern() {
-        let opts = ExtractOptions::new(5).with_r2("/some/path");
+        let opts = ExtractOptions::new(5)
+            .with_garbage_filter(true)
+            .with_xor(Some(12));
         assert_eq!(opts.min_length, 5);
-        assert!(opts.use_r2);
-        assert_eq!(opts.path, Some("/some/path".to_string()));
+        assert!(opts.filter_garbage);
+        assert!(opts.xor_scan);
+        assert_eq!(opts.xor_min_length, 12);
     }
 
     #[test]
@@ -3128,56 +3006,10 @@ mod xor_detection_tests {
 #[cfg(test)]
 mod sockaddr_extraction_tests {
     use std::fs;
-    use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
+    use stng::{ExtractOptions, extract_strings_with_options};
 
-    #[test]
-    fn test_kimwolf_installer_ip_extraction() {
-        // Test IP extraction from ARM32 sockaddr_in structures
-        let path = crate::common::path("testdata/malware/kimwolf_installer");
-        let data = fs::read(path).expect("Failed to read kimwolf_installer test sample");
-
-        let opts = ExtractOptions::new(4)
-            .with_r2(path)
-            .with_garbage_filter(true);
-
-        let strings = extract_strings_with_options(&data, &opts);
-
-        // Should find the hardcoded C2 IP: 45.139.197.87
-        let ip_strings: Vec<_> = strings
-            .iter()
-            .filter(|s| matches!(s.kind, Some(StringKind::IP) | Some(StringKind::IPPort)))
-            .collect();
-
-        assert!(
-            !ip_strings.is_empty(),
-            "Should find at least one IP address in kimwolf_installer"
-        );
-
-        assert!(
-            ip_strings.iter().any(|s| s.value == "45.139.197.87"),
-            "Should find C2 IP 45.139.197.87. Found IPs: {:?}",
-            ip_strings.iter().map(|s| &s.value).collect::<Vec<_>>()
-        );
-
-        // Verify it's from the connect() syscall walker (instruction pattern).
-        let connect_ip = ip_strings
-            .iter()
-            .find(|s| s.value == "45.139.197.87")
-            .expect("Should find the target IP");
-
-        assert_eq!(
-            connect_ip.method,
-            StringMethod::InstructionPattern,
-            "IP should be extracted via instruction pattern matching"
-        );
-
-        // Verify the offset is around 0xc0 where the IP construction starts
-        assert!(
-            connect_ip.data_offset >= 0xc0 && connect_ip.data_offset <= 0xd0,
-            "IP should be at offset ~0xc0, found: 0x{:x}",
-            connect_ip.data_offset
-        );
-    }
+    // The C2 address comes from rizin's connect() scan, which the CLI runs:
+    // see `rizin_recovers_kimwolf_connect_address` in cli_tests.rs.
 
     #[test]
     fn test_kimwolf_installer_string_deduplication() {
@@ -3185,9 +3017,7 @@ mod sockaddr_extraction_tests {
         let path = crate::common::path("testdata/malware/kimwolf_installer");
         let data = fs::read(path).expect("Failed to read kimwolf_installer test sample");
 
-        let opts = ExtractOptions::new(4)
-            .with_r2(path)
-            .with_garbage_filter(true);
+        let opts = ExtractOptions::new(4).with_garbage_filter(true);
 
         let strings = extract_strings_with_options(&data, &opts);
 

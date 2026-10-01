@@ -176,7 +176,6 @@ fn output_cap_is_exact_and_instruction_prefixes_do_not_panic() {
 #[test]
 fn public_filtered_pipeline_preserves_specimen_small_strings() {
     let opts = crate::ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

@@ -88,9 +88,11 @@ Run `stng --help` for filtering, grouping, cache, and output controls.
 - decoded Python, JavaScript, PHP, and PowerShell payload text
 - Mach-O code-signing, entitlement, and universal-binary context
 
-Rizin/radare2 results and extracted strings are cached by content to accelerate
-repeat analysis. The cache defaults to a 30-day TTL and a 2 GiB ceiling; see the
-`STNG_CACHE_*` environment variables and `stng --help` for controls.
+The CLI caches Rizin/radare2 results by file content to speed up repeat
+analysis, keeping up to 4,096 files and dropping entries unused for 30 days;
+`--no-cache` and `--flush-cache` control it. The library itself runs no
+subprocesses and keeps no caches: it is a pure function of the bytes it is
+given, and accepts Rizin results from callers that run Rizin themselves.
 
 Issues and pull requests are welcome in the
 [GitHub repository](https://github.com/atomdrift-project/stng).

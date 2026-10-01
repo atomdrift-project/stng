@@ -48,7 +48,6 @@ fn slice_headers_in_both_data_segment_names_preserve_exact_string_and_offset() {
 #[test]
 fn public_pipeline_recovers_all_six_reviewed_sql_literal_boundaries() {
     let opts = crate::ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

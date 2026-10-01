@@ -68,7 +68,6 @@ fn original_salt_and_full_pipeline_thin_fat_spans() {
         );
     }
     let opts = crate::ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

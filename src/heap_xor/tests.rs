@@ -134,7 +134,6 @@ fn output_truncation_and_unsupported_cpu_are_rejected() {
 #[test]
 fn public_pipeline_preserves_full_prompt_in_universal_specimen() {
     let opts = crate::ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

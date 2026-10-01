@@ -20,7 +20,6 @@ fn extract(caller_provides_symbols: bool) -> Vec<stng::ExtractedString> {
     let opts = ExtractOptions {
         min_length: 4,
         filter_garbage: false,
-        use_cache: false,
         caller_provides_symbols,
         ..Default::default()
     };

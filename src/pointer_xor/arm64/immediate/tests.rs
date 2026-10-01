@@ -187,7 +187,6 @@ fn changed_immediates_and_key_bytes_are_decoded_without_plaintext_assumptions() 
 fn public_arm_only_pipeline_recovers_all_reviewed_qword_names() {
     let (bytes, _) = arm_slice();
     let options = crate::ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

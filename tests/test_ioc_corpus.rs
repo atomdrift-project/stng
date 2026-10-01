@@ -265,20 +265,8 @@ fn existing_testdata_ioc_manifest_is_exact() {
         ],
     );
 
-    assert_exact(
-        "Kimwolf sockaddr C2",
-        crate::common::path("testdata/malware/kimwolf_installer"),
-        &ExtractOptions::new(4)
-            .with_r2(crate::common::path("testdata/malware/kimwolf_installer"))
-            .with_garbage_filter(true),
-        &[expected(
-            IocKind::Ip,
-            "45.139.197.87",
-            &[],
-            1,
-            &[StringMethod::InstructionPattern],
-        )],
-    );
+    // Kimwolf's sockaddr C2 comes from rizin's connect() scan, which the
+    // CLI runs: see `rizin_recovers_kimwolf_connect_address` in cli_tests.rs.
     assert_exact(
         "vget",
         crate::common::path("testdata/malware/vget_sample"),

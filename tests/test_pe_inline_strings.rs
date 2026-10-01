@@ -23,12 +23,7 @@ static SAMPLE: std::sync::LazyLock<&str> =
 
 fn load_strings() -> Vec<stng::ExtractedString> {
     let data = std::fs::read(*SAMPLE).expect("Failed to read gobump PE sample");
-    // Disable r2 so the assertions exercise stng's own extraction, not rizin.
-    let opts = ExtractOptions {
-        min_length: 4,
-        use_r2: false,
-        ..Default::default()
-    };
+    let opts = ExtractOptions::new(4);
     extract_strings_with_options(&data, &opts)
 }
 

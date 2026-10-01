@@ -31,7 +31,6 @@ fn native_strings() -> Vec<stng::ExtractedString> {
     let opts = ExtractOptions {
         min_length: 4,
         filter_garbage: false,
-        use_cache: false,
         ..Default::default()
     };
     extract_strings_with_options(&fixture_bytes(), &opts)
@@ -110,7 +109,6 @@ fn caller_provides_symbols_skips_typing_but_keeps_strings() {
     let opts = ExtractOptions {
         min_length: 4,
         filter_garbage: false,
-        use_cache: false,
         caller_provides_symbols: true,
         ..Default::default()
     };
@@ -139,7 +137,6 @@ fn from_object_matches_full_parse() {
     let opts = ExtractOptions {
         min_length: 4,
         filter_garbage: false,
-        use_cache: false,
         ..Default::default()
     };
 

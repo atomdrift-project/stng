@@ -198,7 +198,6 @@ fn public_arm_only_pipeline_recovers_prompt_and_benign_control_stays_clean() {
         .unwrap();
     let bytes = &FILE[arch.offset as usize..(arch.offset + arch.size) as usize];
     let opts = crate::ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

@@ -1,11 +1,15 @@
-//! Optional rizin/radare2 integration for smarter string extraction.
-pub mod cache;
-use crate::classifier::classify_string;
-use crate::{ExtractedString, StringKind, StringMethod};
+//! rizin/radare2 integration for the stng CLI. The library runs no
+//! subprocesses: this module runs rizin, caches its output (see [`cache`]) and
+//! hands the results to extraction through [`stng::ExtractOptions`].
+pub(crate) mod cache;
 use cache::R2Cache;
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use stng::goblin::Object;
+use stng::{
+    ExtractOptions, ExtractedString, StringBoundary, StringKind, StringMethod, classify_string,
+};
 
 static TOOL: OnceLock<Option<&'static str>> = OnceLock::new();
 
@@ -22,10 +26,10 @@ static MEMO: LazyLock<Mutex<HashMap<MemoKey, MemoCell>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const MEMO_MAX_ENTRIES: usize = 16;
 #[must_use]
-pub fn is_available() -> bool {
+pub(crate) fn is_available() -> bool {
     get_tool().is_some()
 }
-pub fn flush_cache(file_path: &str) -> Result<(), std::io::Error> {
+pub(crate) fn flush_cache(file_path: &str) -> Result<(), std::io::Error> {
     R2Cache::new()?.clear(file_path)
 }
 fn get_tool() -> Option<&'static str> {
@@ -49,7 +53,10 @@ fn get_tool() -> Option<&'static str> {
 }
 
 #[must_use]
-pub fn extract_string_boundaries(path: &str, use_cache: bool) -> Option<Vec<StringBoundary>> {
+pub(crate) fn extract_string_boundaries(
+    path: &str,
+    use_cache: bool,
+) -> Option<Vec<StringBoundary>> {
     let tool = get_tool()?;
     let file_size = std::fs::metadata(path).ok()?.len();
     if file_size > 10 * 1024 * 1024 {
@@ -79,11 +86,6 @@ struct R2String {
     #[serde(default)]
     length: usize,
 }
-#[derive(Debug, Clone)]
-pub struct StringBoundary {
-    pub offset: u64,
-    pub length: usize,
-}
 #[derive(serde::Deserialize)]
 struct R2Symbol {
     paddr: u64,
@@ -93,7 +95,7 @@ struct R2Symbol {
 }
 
 #[must_use]
-pub fn extract_strings(
+pub(crate) fn extract_strings(
     path: &str,
     min_length: usize,
     use_cache: bool,
@@ -124,7 +126,7 @@ pub fn extract_strings(
                 continue;
             }
             if s.string.len() >= min_length && seen.insert(s.string.clone()) {
-                if let Some(decoded) = decode_spaced_ascii(&s.string) {
+                if let Some(decoded) = stng::decode_spaced_ascii(&s.string) {
                     if decoded.len() >= min_length && seen.insert(decoded.clone()) {
                         let kind = classify_string(&decoded);
                         strings.push(ExtractedString {
@@ -229,81 +231,6 @@ fn spawn_tool_command(tool: &str, path: &str, cmd: &str, use_cache: bool) -> Opt
     }
 }
 
-#[must_use]
-pub fn decode_spaced_ascii(s: &str) -> Option<String> {
-    let bytes = s.as_bytes();
-    if bytes.len() < 6 {
-        return None;
-    }
-    let mut wide_pairs = 0;
-    let mut total_pairs = 0;
-    for i in (0..bytes.len() - 1).step_by(2) {
-        total_pairs += 1;
-        if (bytes[i].is_ascii_graphic() || bytes[i] == b' ')
-            && (bytes[i + 1] == 0 || bytes[i + 1] == b' ')
-        {
-            wide_pairs += 1;
-        }
-    }
-    if total_pairs < 4 || wide_pairs * 100 / total_pairs < 70 {
-        return None;
-    }
-    let mut decoded = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_graphic() || bytes[i] == b' ' {
-            decoded.push(bytes[i]);
-            if i + 1 < bytes.len() && (bytes[i + 1] == 0 || bytes[i + 1] == b' ') {
-                i += 2;
-                continue;
-            }
-            i += 1;
-        } else {
-            i += 1;
-        }
-    }
-    let result = String::from_utf8(decoded).ok()?;
-    if result.trim().len() >= 4 {
-        Some(result.trim().to_string())
-    } else {
-        None
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum XorConfidence {
-    High,
-    Medium,
-    Low,
-}
-#[derive(Debug, Clone)]
-pub struct XorKeyInfo {
-    pub key: Option<Vec<u8>>,
-    pub length: usize,
-    pub confidence: XorConfidence,
-    pub reference_count: usize,
-    pub offset: u64,
-}
-
-fn calculate_entropy(data: &[u8]) -> f64 {
-    if data.is_empty() {
-        return 0.0;
-    }
-    let mut counts = [0usize; 256];
-    for &b in data {
-        counts[b as usize] += 1;
-    }
-    let mut entropy = 0.0;
-    let len = data.len() as f64;
-    for &count in &counts {
-        if count > 0 {
-            let p = count as f64 / len;
-            entropy -= p * p.log2();
-        }
-    }
-    entropy
-}
-
 #[derive(serde::Deserialize, Default)]
 struct R2Section {
     #[serde(default)]
@@ -312,10 +239,6 @@ struct R2Section {
     vaddr: u64,
     #[serde(default)]
     vsize: u64,
-    #[serde(default)]
-    size: u64,
-    #[serde(default)]
-    perm: String,
 }
 fn get_sections(tool: &str, path: &str, use_cache: bool) -> Vec<R2Section> {
     if let Some(output) = run_tool_command_with_cache(tool, path, "iSj", use_cache) {
@@ -337,72 +260,14 @@ fn vaddr_to_paddr(vaddr: u64, sections: &[R2Section]) -> Option<u64> {
     }
 }
 
-#[must_use]
-pub fn extract_binary_xor_candidates(
-    path: &str,
-    data: &[u8],
-    use_cache: bool,
-) -> Vec<ExtractedString> {
-    let tool = get_tool().unwrap_or("rizin");
-    let sections = get_sections(tool, path, use_cache);
-    let mut candidates = Vec::new();
-    let mut seen = HashSet::new();
-    for section in sections {
-        if section.perm.contains('x') || section.size == 0 {
-            continue;
-        }
-        let Ok(start) = usize::try_from(section.paddr) else {
-            continue;
-        };
-        let Ok(size) = usize::try_from(section.size) else {
-            continue;
-        };
-        let end = start.saturating_add(size).min(data.len());
-        if start >= end {
-            continue;
-        }
-        let section_data = &data[start..end];
-        for window in [16, 32, 64, 8] {
-            if section_data.len() < window {
-                continue;
-            }
-            for i in 0..=section_data.len() - window {
-                let offset = (start + i) as u64;
-                if seen.contains(&offset) {
-                    continue;
-                }
-                let chunk = &section_data[i..i + window];
-                if calculate_entropy(chunk) > 3.5 {
-                    candidates.push(ExtractedString {
-                        value: String::from_utf8_lossy(chunk).to_string(),
-                        data_offset: offset,
-                        method: StringMethod::Heuristic,
-                        kind: Some(StringKind::XorKey),
-                        ..Default::default()
-                    });
-                    seen.insert(offset);
-                    if candidates.len() > 1000 {
-                        return candidates;
-                    }
-                }
-            }
-        }
-    }
-    candidates
-}
-
-#[must_use]
-pub fn verify_xor_keys(
-    path: &str,
-    _data: &[u8],
-    candidates: &[ExtractedString],
-    use_cache: bool,
-) -> Vec<XorKeyInfo> {
+/// File offsets of XOR keys: the operand of each `lea` within 256 bytes of a
+/// `xor` instruction, mapped from its virtual address to the file.
+fn xor_key_offsets(path: &str, use_cache: bool) -> Vec<u64> {
     let Some(tool) = get_tool() else {
         return Vec::new();
     };
     let sections = get_sections(tool, path, use_cache);
-    let mut instr_results = Vec::new();
+    let mut offsets = Vec::new();
     let mut seen_keys = HashSet::new();
     let mut xor_instrs = Vec::new();
     // Run both instruction searches in one rizin session: `aaa` is by far the
@@ -476,46 +341,20 @@ pub fn verify_xor_keys(
                 && let Some(paddr) = vaddr_to_paddr(vaddr, &sections)
                 && !seen_keys.contains(&paddr)
             {
-                for len in [16, 32, 8] {
-                    instr_results.push(XorKeyInfo {
-                        offset: paddr,
-                        key: None,
-                        length: len,
-                        confidence: XorConfidence::High,
-                        reference_count: 1,
-                    });
-                }
+                offsets.push(paddr);
                 seen_keys.insert(paddr);
             }
         }
     }
-    let mut results = Vec::new();
-    for c in candidates
-        .iter()
-        .filter(|candidate| (8..=64).contains(&candidate.value.len()))
-        .take(100)
-    {
-        results.push(XorKeyInfo {
-            key: Some(c.value.as_bytes().to_vec()),
-            length: c.value.len(),
-            confidence: XorConfidence::Low,
-            reference_count: 1,
-            offset: c.data_offset,
-        });
-    }
-    for ir in instr_results {
-        if !results
-            .iter()
-            .any(|r| r.offset == ir.offset && r.length == ir.length)
-        {
-            results.push(ir);
-        }
-    }
-    results
+    offsets
 }
 
 #[must_use]
-pub fn extract_connect_addrs(path: &str, data: &[u8], use_cache: bool) -> Vec<ExtractedString> {
+pub(crate) fn extract_connect_addrs(
+    path: &str,
+    data: &[u8],
+    use_cache: bool,
+) -> Vec<ExtractedString> {
     let Some(tool) = get_tool() else {
         return Vec::new();
     };
@@ -686,7 +525,97 @@ fn find_sockaddr_in_binary(data: &[u8]) -> Vec<SockaddrIn> {
     res
 }
 
+/// Files above this size get no rizin analysis: `aaa` on them takes minutes.
+const MAX_ANALYSIS_SIZE: usize = 10 * 1024 * 1024;
+
+/// Run the rizin analyses extraction can use on the file at `path` (whose
+/// bytes are `data`) and attach the results to `opts`. They run concurrently;
+/// `izzj` is shared through the memo, and each `aaa` is the expensive part.
+///
+/// - strings and symbols, except for Go binaries, whose strings come from
+///   their own structures;
+/// - string extents, when `xor` scanning will use them to aim decoding;
+/// - `connect()` addresses, for files that may be ARM, the only architecture
+///   that pass understands;
+/// - XOR key locations, when `xorscan` asks for them.
+pub(crate) fn attach(
+    mut opts: ExtractOptions,
+    path: &str,
+    data: &[u8],
+    xor: bool,
+    xorscan: bool,
+    use_cache: bool,
+) -> ExtractOptions {
+    let min_length = opts.min_length;
+    let strings = !stng::is_go_binary(data);
+    let connect = data.len() <= MAX_ANALYSIS_SIZE
+        && Object::parse(data)
+            .is_ok_and(|o| !matches!(o, Object::Unknown(_)) && arm_arch_possible(&o));
+    let (strings, boundaries, connect, keys) = std::thread::scope(|scope| {
+        let strings = strings.then(|| scope.spawn(|| extract_strings(path, min_length, use_cache)));
+        let boundaries = xor.then(|| scope.spawn(|| extract_string_boundaries(path, use_cache)));
+        let connect = connect.then(|| scope.spawn(|| extract_connect_addrs(path, data, use_cache)));
+        let keys = xorscan.then(|| scope.spawn(|| xor_key_offsets(path, use_cache)));
+        (
+            strings.and_then(|h| h.join().ok()).flatten(),
+            boundaries.and_then(|h| h.join().ok()).flatten(),
+            connect.and_then(|h| h.join().ok()),
+            keys.and_then(|h| h.join().ok()),
+        )
+    });
+    if let Some(strings) = strings {
+        opts = opts.with_r2_strings(strings);
+    }
+    if let Some(boundaries) = boundaries {
+        opts = opts.with_rizin_boundaries(boundaries);
+    }
+    if let Some(connect) = connect {
+        opts = opts.with_rizin_connect_addrs(connect);
+    }
+    if let Some(keys) = keys {
+        opts = opts.with_xor_key_offsets(keys);
+    }
+    opts
+}
+
+/// Whether `object` could be an ARM binary (32- or 64-bit), including
+/// formats whose architecture we can't positively identify.
+///
+/// The connect()-address disassembly pass only understands ARM patterns:
+/// its entry-point scan greps for the ARM EABI connect syscall number (283)
+/// or a direct connect call, and its parser matches `strb`/`str` stores to
+/// `sp`-relative sockaddr offsets. On a positively-identified non-ARM
+/// binary that pass cannot produce a true detection, so spending a full
+/// rizin `aaa` analysis on it buys nothing.
+fn arm_arch_possible(object: &Object<'_>) -> bool {
+    use stng::goblin::mach::constants::cputype::{CPU_TYPE_ARM, CPU_TYPE_ARM64, CPU_TYPE_ARM64_32};
+    match object {
+        Object::Elf(elf) => matches!(
+            elf.header.e_machine,
+            stng::goblin::elf::header::EM_ARM | stng::goblin::elf::header::EM_AARCH64
+        ),
+        Object::PE(pe) => matches!(
+            pe.header.coff_header.machine,
+            stng::goblin::pe::header::COFF_MACHINE_ARM
+                | stng::goblin::pe::header::COFF_MACHINE_ARMNT
+                | stng::goblin::pe::header::COFF_MACHINE_ARM64
+                | stng::goblin::pe::header::COFF_MACHINE_THUMB
+        ),
+        Object::Mach(stng::goblin::mach::Mach::Binary(macho)) => matches!(
+            macho.header.cputype,
+            CPU_TYPE_ARM | CPU_TYPE_ARM64 | CPU_TYPE_ARM64_32
+        ),
+        Object::Mach(stng::goblin::mach::Mach::Fat(fat)) => fat.arches().map_or(true, |arches| {
+            arches
+                .iter()
+                .any(|a| matches!(a.cputype, CPU_TYPE_ARM | CPU_TYPE_ARM64 | CPU_TYPE_ARM64_32))
+        }),
+        _ => true,
+    }
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -708,5 +637,221 @@ mod tests {
     #[test]
     fn extract_stack_off_sp_offset() {
         assert_eq!(extract_stack_off("str w8, [sp, #0x4]"), Some(4));
+    }
+}
+
+/// Moved from `tests/` when this module moved from the library to the CLI.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod helper_tests {
+    /// Additional tests for r2 module helper functions
+    /// Covers src/r2.rs helper functions and edge cases
+    use std::fs;
+    use std::path::PathBuf;
+
+    // Helper to create a unique temporary file path
+    fn temp_file_path(prefix: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "{}_{}_{}.bin",
+            prefix,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        path
+    }
+
+    // Helper to create a temporary file with content
+    fn create_temp_file(prefix: &str, content: &[u8]) -> PathBuf {
+        let path = temp_file_path(prefix);
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    /// Test flush_cache with non-existent file
+    #[test]
+    fn test_flush_cache_nonexistent_file() {
+        let fake_path = "/tmp/nonexistent_file_for_r2_test_12345.bin";
+
+        // Should fail gracefully (cache module handles this)
+        let result = super::flush_cache(fake_path);
+
+        // Error is acceptable for non-existent file
+        let _ = result;
+    }
+
+    /// Test flush_cache with real file
+    #[test]
+    fn test_flush_cache_real_file() {
+        let temp_path = create_temp_file("r2_flush", b"test content for flush");
+        let file_path = temp_path.to_str().unwrap();
+
+        // Should succeed even if cache doesn't exist
+        let result = super::flush_cache(file_path);
+        assert!(result.is_ok(), "Flush should succeed for valid file path");
+
+        let _ = fs::remove_file(temp_path);
+    }
+
+    /// Test extract_string_boundaries with large file (should skip)
+    #[test]
+    fn test_extract_string_boundaries_large_file() {
+        // Create a file > 10MB (will be skipped)
+        let temp_path = create_temp_file("r2_large", &vec![0u8; 11 * 1024 * 1024]);
+        let file_path = temp_path.to_str().unwrap();
+
+        let result = super::extract_string_boundaries(file_path, true);
+
+        // Should return None for files > 10MB
+        assert!(result.is_none(), "Should skip files larger than 10MB");
+
+        let _ = fs::remove_file(temp_path);
+    }
+
+    /// Test extract_string_boundaries with small file
+    #[test]
+    fn test_extract_string_boundaries_small_file() {
+        let temp_path = create_temp_file("r2_small", b"small test file");
+        let file_path = temp_path.to_str().unwrap();
+
+        let result = super::extract_string_boundaries(file_path, true);
+
+        // May return None if r2/rizin not available, or Some if available
+        // Just verify it doesn't panic
+        if let Some(boundaries) = result {
+            // If r2 is available and found strings, verify structure
+            for boundary in &boundaries {
+                assert!(boundary.offset < 1024 * 1024, "Offset should be reasonable");
+                assert!(boundary.length > 0, "Length should be positive");
+            }
+        }
+
+        let _ = fs::remove_file(temp_path);
+    }
+
+    /// Test extract_string_boundaries with non-existent file
+    #[test]
+    fn test_extract_string_boundaries_nonexistent() {
+        let fake_path = "/tmp/nonexistent_file_boundaries_test.bin";
+
+        let result = super::extract_string_boundaries(fake_path, true);
+
+        // Should return None for non-existent file
+        assert!(result.is_none(), "Should return None for non-existent file");
+    }
+
+    /// Test extract_strings with non-existent file
+    #[test]
+    fn test_extract_strings_nonexistent_file() {
+        let result = super::extract_strings("/nonexistent/path/test.bin", 4, false);
+        assert!(result.is_none(), "Should return None for non-existent file");
+    }
+
+    /// Test extract_strings with large file (should use fast mode)
+    #[test]
+    fn test_extract_strings_large_file_fast_mode() {
+        // Create a file > 10MB
+        let temp_path = create_temp_file("r2_extract_large", &vec![0xAAu8; 11 * 1024 * 1024]);
+        let file_path = temp_path.to_str().unwrap();
+
+        let result = super::extract_strings(file_path, 4, false);
+
+        // May return None if r2/rizin not available
+        // If r2 is available, should use symbols-only mode (fast)
+        // Just verify it doesn't panic or hang
+        if let Some(strings) = result {
+            // Verify all strings have valid offsets
+            let file_size = 11_u64 * 1024 * 1024;
+            for s in &strings {
+                assert!(
+                    s.data_offset < file_size,
+                    "Offset should be within file bounds"
+                );
+            }
+        }
+
+        let _ = fs::remove_file(temp_path);
+    }
+
+    /// Test extract_strings with cache enabled vs disabled
+    #[test]
+    fn test_extract_strings_caching() {
+        let temp_path = create_temp_file("r2_cache_test", b"test content for caching");
+        let file_path = temp_path.to_str().unwrap();
+
+        // First call with cache enabled
+        let result1 = super::extract_strings(file_path, 4, true);
+
+        // Second call with cache enabled (should hit cache if r2 available)
+        let result2 = super::extract_strings(file_path, 4, true);
+
+        // Third call with cache disabled
+        let result3 = super::extract_strings(file_path, 4, false);
+
+        // All should return the same result (if r2 available)
+        // Just verify consistency
+        if let (Some(s1), Some(s2), Some(s3)) = (result1, result2, result3) {
+            assert_eq!(s1.len(), s2.len(), "Cached result should match");
+            assert_eq!(s1.len(), s3.len(), "Non-cached result should match");
+        }
+
+        // Clean up cache
+        let _ = super::flush_cache(file_path);
+        let _ = fs::remove_file(temp_path);
+    }
+
+    /// Test is_available doesn't panic
+    #[test]
+    fn test_is_available_no_panic() {
+        let available = super::is_available();
+        // Just verify it returns a boolean without panicking
+        let _ = available; // just verify it returns without panicking
+    }
+
+    /// Test extract_connect_addrs with non-existent file
+    #[test]
+    fn test_extract_connect_addrs_nonexistent() {
+        let fake_data = b"test data";
+
+        let result = super::extract_connect_addrs("/nonexistent/path.bin", fake_data, true);
+
+        // Should return empty for non-existent file
+        assert!(
+            result.is_empty(),
+            "Should return empty for non-existent file"
+        );
+    }
+
+    /// Test extract_connect_addrs with large file (should use fast scan)
+    #[test]
+    fn test_extract_connect_addrs_large_file() {
+        let large_data = vec![0u8; 11 * 1024 * 1024];
+        let temp_path = create_temp_file("r2_connect_large", &large_data);
+        let file_path = temp_path.to_str().unwrap();
+
+        let result = super::extract_connect_addrs(file_path, &large_data, true);
+
+        // Should use binary scan for large files (no r2 analysis)
+        // Result may be empty if no connect patterns found
+        assert!(result.len() < 1000, "Should not find excessive addresses");
+
+        let _ = fs::remove_file(temp_path);
+    }
+
+    /// Test extract_connect_addrs with empty data
+    #[test]
+    fn test_extract_connect_addrs_empty_data() {
+        let temp_path = create_temp_file("r2_connect_empty", b"");
+        let file_path = temp_path.to_str().unwrap();
+
+        let result = super::extract_connect_addrs(file_path, b"", true);
+
+        // Should return empty for empty data
+        assert!(result.is_empty(), "Should return empty for empty data");
+
+        let _ = fs::remove_file(temp_path);
     }
 }

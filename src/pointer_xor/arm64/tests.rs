@@ -829,7 +829,6 @@ fn runtime_rejects_missing_constants_and_bad_text_without_suppressing_other_lite
 fn public_pipeline_recovers_297_arm_ids_without_an_x86_slice() {
     let (bytes, _) = arm_slice();
     let opts = crate::ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

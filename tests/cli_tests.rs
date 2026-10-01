@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! CLI integration tests for stng.
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -546,4 +548,23 @@ fn test_cli_xor_min_length_respected() {
         output.status.success(),
         "--xor-min-length should not cause a failure"
     );
+}
+
+/// rizin's connect()-site scan recovers Kimwolf's C2 sockaddr, which stng's
+/// own passes do not; the CLI runs rizin and hands the result to extraction.
+#[test]
+fn rizin_recovers_kimwolf_connect_address() {
+    let rizin = Command::new("rizin").arg("-v").output();
+    if !rizin.is_ok_and(|o| o.status.success()) {
+        eprintln!("skipping: rizin is not installed");
+        return;
+    }
+    let output = stng_cmd()
+        .args(["--json", "--no-cache"])
+        .arg(common::path("testdata/malware/kimwolf_installer"))
+        .output()
+        .expect("Failed to execute stng");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"45.139.197.87\""), "C2 address missing");
 }

@@ -43,7 +43,6 @@ fn specimen_and_full_payload_match_independent_native_reconstruction() {
 #[test]
 fn public_string_pipeline_locates_key_with_exact_offset() {
     let opts = ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

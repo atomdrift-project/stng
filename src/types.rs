@@ -16,6 +16,16 @@ pub struct StringStruct {
     pub len: u64,
 }
 
+/// Where a string lies in the file, as reported by an external disassembler
+/// (rizin `izzj`): used to aim XOR decoding at known string extents.
+#[derive(Debug, Clone)]
+pub struct StringBoundary {
+    /// File offset of the string's first byte.
+    pub offset: u64,
+    /// Length in bytes.
+    pub length: usize,
+}
+
 /// Represents a fragment of a multi-part string (e.g., stack strings from multiple instructions)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct StringFragment {

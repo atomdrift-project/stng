@@ -21,8 +21,9 @@ program reaches it at runtime or that it is malicious.
 Recovered ASCII and ASCII-subset UTF-16LE strings use the existing `XorDecode`
 method. Their `data_offset` and `data_len` describe ciphertext, and
 `source_spans()` includes both the ciphertext extent and the key extent. They
-remain decoded content references, never PE imports or confirmed calls. The
-normal string cache owns these rows; its version is bumped for the new output.
+remain decoded content references, never PE imports or confirmed calls.
+Callers that cache stng's output (filefacts) key it on the stng commit, so new
+output never meets stale entries.
 No fields or allocations are added to the common `ExtractedString` layout.
 
 ## Per-file limits

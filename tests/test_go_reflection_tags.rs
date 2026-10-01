@@ -14,7 +14,6 @@ use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 #[test]
 fn both_native_go_architectures_keep_exact_tags_and_multiline_plist() {
     let opts = ExtractOptions {
-        use_cache: false,
         caller_provides_symbols: true,
         filter_garbage: true,
         ..Default::default()

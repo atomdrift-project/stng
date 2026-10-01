@@ -1202,6 +1202,50 @@ fn is_likely_base85(s: &str) -> bool {
     false
 }
 
+/// Decode "spaced" ASCII — text whose characters are each followed by a NUL
+/// or a space (`H e l l o`), as UTF-16LE text looks when read as bytes.
+/// `None` unless at least 70% of the byte pairs have that shape.
+#[must_use]
+pub fn decode_spaced_ascii(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 6 {
+        return None;
+    }
+    let mut wide_pairs = 0;
+    let mut total_pairs = 0;
+    for i in (0..bytes.len() - 1).step_by(2) {
+        total_pairs += 1;
+        if (bytes[i].is_ascii_graphic() || bytes[i] == b' ')
+            && (bytes[i + 1] == 0 || bytes[i + 1] == b' ')
+        {
+            wide_pairs += 1;
+        }
+    }
+    if total_pairs < 4 || wide_pairs * 100 / total_pairs < 70 {
+        return None;
+    }
+    let mut decoded = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_graphic() || bytes[i] == b' ' {
+            decoded.push(bytes[i]);
+            if i + 1 < bytes.len() && (bytes[i + 1] == 0 || bytes[i + 1] == b' ') {
+                i += 2;
+                continue;
+            }
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    let result = String::from_utf8(decoded).ok()?;
+    if result.trim().len() >= 4 {
+        Some(result.trim().to_string())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
