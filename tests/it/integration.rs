@@ -2762,16 +2762,6 @@ mod severity_tests {
 mod xor_detection_tests {
     use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
-    /// Helper to create XOR test data (same pattern as unit tests)
-    fn make_xor_test_data(plaintext: &[u8], key: u8, offset: usize) -> Vec<u8> {
-        let fill_byte = 0x01 ^ key;
-        let mut data = vec![fill_byte; 512];
-        for (i, b) in plaintext.iter().enumerate() {
-            data[offset + i] = b ^ key;
-        }
-        data
-    }
-
     /// Create a minimal ARM64 Linux ELF with XOR'd data
     fn minimal_arm64_elf_with_xor(plaintext: &[u8], key: u8) -> Vec<u8> {
         let fill_byte = 0x01 ^ key;
@@ -2953,10 +2943,11 @@ mod xor_detection_tests {
 
     #[test]
     fn test_xor_user_agent_pattern() {
-        // Test that Mozilla pattern detection works and extracts surrounding context
+        // Test that Mozilla pattern detection works and extracts surrounding
+        // context. The payload sits in a binary: text skips the XOR scanners.
         let plaintext = b"User-Agent: Mozilla/5.0 (Windows NT 10.0) Safari/537.36";
         let key: u8 = 0x42;
-        let data = make_xor_test_data(plaintext, key, 50);
+        let data = minimal_arm64_elf_with_xor(plaintext, key);
 
         let opts = ExtractOptions::new(10).with_xor(Some(10));
         let results = extract_strings_with_options(&data, &opts);

@@ -36,7 +36,8 @@ pub(crate) fn extract_raw_strings(
     // them concurrently. Each keeps its own dedup set; the merge below replays
     // the original shared-`seen` ordering — Strategy 1 wins ties, and Strategy 2
     // only contributes values Strategy 1 didn't already find.
-    let ((mut strings, seen1), strings2) = rayon::join(
+    let ((mut strings, seen1), strings2) = crate::par::join(
+        data.len(),
         || {
             // Strategy 1: Null-terminated strings
             let mut strings = Vec::new();
@@ -166,6 +167,7 @@ fn classify_runs(
     use rayon::prelude::*;
     let extracted: Vec<ExtractedString> = runs
         .par_drain(..)
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .filter_map(|(start, run)| {
             if let Ok(s) = std::str::from_utf8(run) {
                 let trimmed = s.trim();

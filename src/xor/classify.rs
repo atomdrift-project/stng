@@ -272,9 +272,12 @@ pub(crate) fn auto_detect_xor_key(
     };
 
     // OPTIMIZATION 2: Parallel candidate testing
-    // Test all promising candidates in parallel for 2-3x speedup on multi-core CPUs
+    // Each candidate scans the whole input, so test them in parallel once the
+    // input is large enough to repay it (see `crate::par`).
+    let job_len = crate::par::job_len(candidates_to_test.len(), data.len());
     let candidate_scores: Vec<(i32, u64, String, Vec<u8>)> = candidates_to_test
         .into_par_iter()
+        .with_min_len(job_len)
         .filter_map(|(offset, candidate): (u64, &str)| {
             let key = candidate.as_bytes().to_vec();
             // Enable early termination for auto-detection to speed up candidate testing

@@ -76,7 +76,7 @@ filefacts	testdata/macho/rust_arm64_short_tail_expected.json	371	5a218a45df4453f
 filefacts	testdata/macho/rust_arm64_short_tail_expected.md	15	abffa90b400d87a7	RawScan=15
 filefacts	testdata/macho/rust_heap_xor_installer_universal.macho	16317	1ed2200c26423a29	Base64Decode=7 Heuristic=6744 HexDecode=1 InstructionPattern=480 RawScan=2942 Structure=5437 UnicodeEscapeDecode=1 UrlDecode=1 XorDecode=704
 filefacts	testdata/macho/rust_heap_xor_installer_universal.md	388	a9c3a5fccf3357f8	RawScan=388
-filefacts	testdata/macho/rust_pointer_xor_arm64_expected.json	5906	0d3a87217ea69a71	HexDecode=379 RawScan=5519 UnicodeEscapeDecode=6 XorDecode=2
+filefacts	testdata/macho/rust_pointer_xor_arm64_expected.json	5905	e829be93e9da491c	HexDecode=379 RawScan=5520 UnicodeEscapeDecode=6
 filefacts	testdata/macho/rust_pointer_xor_expected.json	1556	15fb5f070c3b9c63	HexDecode=277 RawScan=1278 StackString=1
 filefacts	testdata/macho/swift_small_strings_webview.macho	641	ceb97b9316b68f05	CodeSignature=1 Heuristic=9 InstructionPattern=1 RawScan=625 Structure=5
 filefacts	testdata/macho/swift_small_strings_webview.md	27	8f30f4319450f250	RawScan=27

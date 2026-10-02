@@ -374,8 +374,10 @@ impl RustStringExtractor {
             })
             .collect();
 
+        let bytes = scan_sections.iter().map(|(_, data)| data.len()).sum();
         let all_structs: Vec<StringStruct> = scan_sections
             .par_iter()
+            .with_min_len(crate::par::job_len(scan_sections.len(), bytes))
             .flat_map(|(addr, bytes)| {
                 find_string_structures(bytes, *addr, rdata_va, rdata_bytes.len() as u64, &info)
             })
@@ -534,8 +536,10 @@ impl RustStringExtractor {
         }
 
         // Process segments in parallel
+        let bytes = segments.iter().map(|(segment, _)| segment.len()).sum();
         let all_strings: Vec<Vec<ExtractedString>> = segments
             .par_iter()
+            .with_min_len(crate::par::job_len(segments.len(), bytes))
             .map(|(segment, segment_base)| {
                 let mut strings = Vec::new();
                 let mut seen = HashSet::new();

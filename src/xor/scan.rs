@@ -571,9 +571,6 @@ fn is_xor_key_artifact(s: &str, key: &[u8]) -> bool {
 /// Testing shows this reduces scan time by 10-100x while preserving malware detection.
 const MAX_STRINGS_BEFORE_EARLY_TERMINATION: usize = 50;
 
-/// Candidates classified per ordered batch when terminating early.
-const EARLY_TERMINATION_BATCH: usize = 512;
-
 /// First window scanned when terminating early; each later one doubles.
 const EARLY_TERMINATION_WINDOW: usize = 4096;
 
@@ -624,20 +621,22 @@ fn extract_custom_xor_strings_pattern_based_simple(
         finish_xor_candidate(pos, decoded, min_length, apply_filters, &key_preview)
     };
     if !enable_early_termination {
-        return scan(data.len()).par_iter().filter_map(finish).collect();
+        return scan(data.len())
+            .par_iter()
+            .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
+            .filter_map(finish)
+            .collect();
     }
     // Keep the first strings by offset. Scanning windows that double in size,
-    // and classifying each in ordered batches, stops close to the cut and
-    // makes it independent of scheduling.
+    // and classifying their candidates in offset order, stops at the cut.
     let mut results = Vec::new();
     let (mut limit, mut window) = (0, EARLY_TERMINATION_WINDOW);
     while limit < data.len() {
         limit = limit.saturating_add(window).min(data.len());
         window = window.saturating_mul(2);
-        for batch in scan(limit).chunks(EARLY_TERMINATION_BATCH) {
-            results.extend(batch.par_iter().filter_map(finish).collect::<Vec<_>>());
-            if results.len() >= MAX_STRINGS_BEFORE_EARLY_TERMINATION {
-                results.truncate(MAX_STRINGS_BEFORE_EARLY_TERMINATION);
+        for candidate in &scan(limit) {
+            results.extend(finish(candidate));
+            if results.len() == MAX_STRINGS_BEFORE_EARLY_TERMINATION {
                 return results;
             }
         }
@@ -654,8 +653,10 @@ fn scan_alignments(
     excluded_ranges: &[(usize, usize)],
     limit: usize,
 ) -> Vec<(usize, usize)> {
+    let job_len = crate::par::job_len(alignments.len(), limit);
     let mut candidates: Vec<(usize, usize)> = alignments
         .par_iter_mut()
+        .with_min_len(job_len)
         .flat_map_iter(|a| a.scan(data, key, min_length, excluded_ranges, limit))
         .collect();
     candidates.sort_unstable();

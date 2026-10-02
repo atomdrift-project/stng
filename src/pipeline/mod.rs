@@ -22,10 +22,15 @@ mod pe;
 
 use pe::suppress_version_info_ips;
 
-/// Run independent passes on rayon's pool; their results, in task order.
+/// Run independent passes, on rayon's pool when `split` (see [`crate::par`]);
+/// their results, in task order.
 pub(crate) fn parallel<const N: usize>(
+    split: bool,
     tasks: [&(dyn Fn() -> Vec<ExtractedString> + Sync); N],
 ) -> [Vec<ExtractedString>; N] {
+    if !split {
+        return tasks.map(|task| task());
+    }
     let mut results: Vec<Vec<ExtractedString>> = tasks.par_iter().map(|task| task()).collect();
     std::array::from_fn(|i| std::mem::take(&mut results[i]))
 }
@@ -135,6 +140,7 @@ fn finish(
         let code_ranges = binary::code_ranges_from_sections(&section_info);
         strings = std::mem::take(&mut strings)
             .into_par_iter()
+            .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
             .filter(|s| passes_garbage_filter(s, &code_ranges))
             .collect();
     }

@@ -75,7 +75,8 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
             else {
                 continue;
             };
-            let (varints, nulls) = rayon::join(
+            let (varints, nulls) = crate::par::join(
+                section_bytes.len(),
                 || {
                     extract_varint_prefixed_strings(
                         section_bytes,
@@ -131,6 +132,7 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     // written by successive `mov reg, imm64; mov [rsp+N], reg` and only
     // emerge as full names when those writes are merged.
     let exec_ranges = binary::code_ranges_from_sections(&section_info);
+    let split = crate::par::splits(data.len());
     let [
         us_strings,
         r2_strings,
@@ -138,25 +140,28 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         net_strings,
         raw_strings,
         stack_strings,
-    ] = parallel([
-        &|| dotnet::extract_us_heap_strings(pe, data, min_length),
-        &|| opts.r2_strings.clone().unwrap_or_default(),
-        // UTF-16 literals are NUL-terminated, never packed like `&str`
-        // data, so the wide scan covers Rust's `.rdata` too. Go's skipped
-        // sections hold pclntab tables that only decode to UTF-16 noise.
-        &|| extract_wide_strings(data, min_length, &segments, wide_skip),
-        &|| {
-            scan_binary_ips(
-                data,
-                min_length,
-                pe.header.coff_header.machine,
-                None,
-                Some(pe),
-            )
-        },
-        &|| extract_raw_strings(data, min_length, &segments, &pe_skip),
-        &|| extract_stack_strings_from_ranges(data, min_length, &exec_ranges),
-    ]);
+    ] = parallel(
+        split,
+        [
+            &|| dotnet::extract_us_heap_strings(pe, data, min_length),
+            &|| opts.r2_strings.clone().unwrap_or_default(),
+            // UTF-16 literals are NUL-terminated, never packed like `&str`
+            // data, so the wide scan covers Rust's `.rdata` too. Go's skipped
+            // sections hold pclntab tables that only decode to UTF-16 noise.
+            &|| extract_wide_strings(data, min_length, &segments, wide_skip),
+            &|| {
+                scan_binary_ips(
+                    data,
+                    min_length,
+                    pe.header.coff_header.machine,
+                    None,
+                    Some(pe),
+                )
+            },
+            &|| extract_raw_strings(data, min_length, &segments, &pe_skip),
+            &|| extract_stack_strings_from_ranges(data, min_length, &exec_ranges),
+        ],
+    );
 
     strings.extend(us_strings);
     strings.extend(r2_strings);

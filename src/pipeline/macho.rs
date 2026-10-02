@@ -417,7 +417,8 @@ fn extract_macho_pclntab_strings(
     let t_pcln = std::time::Instant::now();
     // Same two encodings as the ELF pass: NUL-separated funcnametab and
     // varint-prefixed pkgnamestab.
-    let (varints, mut nulls) = rayon::join(
+    let (varints, mut nulls) = crate::par::join(
+        section_bytes.len(),
         || {
             extract_varint_prefixed_strings(
                 section_bytes,

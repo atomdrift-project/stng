@@ -44,6 +44,7 @@ pub(crate) fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<Extracted
     // across strings while preserving each string's strategy order.
     strings
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .flat_map_iter(|s| {
             let mut local = Vec::new();
 

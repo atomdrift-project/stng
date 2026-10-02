@@ -214,6 +214,7 @@ where
 {
     structs
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .filter_map(|s| {
             if s.ptr < blob_addr {
                 return None;

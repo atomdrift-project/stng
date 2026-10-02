@@ -571,6 +571,7 @@ pub(crate) fn extract_inline_strings_amd64(
     // empty headers for a few thousand real strings.
     let mut result: Vec<ExtractedString> = call_positions
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .flat_map_iter(|&i| {
             let mut strings = Vec::new();
             let mut seen = HashSet::new();

@@ -79,14 +79,18 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         // appended in the original sequential order, leaving downstream
         // deduplication unaffected.
         let skip = elf_go_skip_ranges(elf, scan_data.len());
-        let [go_strings, pcln_res, raw_all, wide_res, ip_res, stack_res] = parallel([
-            &|| GoStringExtractor::new(min_length).extract_elf(elf, scan_data),
-            &|| extract_elf_pclntab_strings(elf, scan_data, min_length),
-            &|| extract_raw_strings(scan_data, min_length, &segments, &skip),
-            &|| extract_wide_strings(scan_data, min_length, &segments, &skip),
-            &|| scan_binary_ips(scan_data, min_length, elf.header.e_machine, Some(elf), None),
-            &|| extract_go_text_xor_strings(elf, scan_data, min_length),
-        ]);
+        let split = crate::par::splits(scan_data.len());
+        let [go_strings, pcln_res, raw_all, wide_res, ip_res, stack_res] = parallel(
+            split,
+            [
+                &|| GoStringExtractor::new(min_length).extract_elf(elf, scan_data),
+                &|| extract_elf_pclntab_strings(elf, scan_data, min_length),
+                &|| extract_raw_strings(scan_data, min_length, &segments, &skip),
+                &|| extract_wide_strings(scan_data, min_length, &segments, &skip),
+                &|| scan_binary_ips(scan_data, min_length, elf.header.e_machine, Some(elf), None),
+                &|| extract_go_text_xor_strings(elf, scan_data, min_length),
+            ],
+        );
         let known: HashSet<&str> = go_strings.iter().map(|s| s.value.as_str()).collect();
         let fresh: Vec<ExtractedString> = raw_all
             .into_iter()
@@ -139,6 +143,10 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         let results: Vec<ExtractedString> = elf
             .section_headers
             .par_iter()
+            .with_min_len(crate::par::job_len(
+                elf.section_headers.len(),
+                scan_data.len(),
+            ))
             .filter(|sh| sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) != 0)
             .filter_map(|sh| {
                 // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only)
@@ -256,7 +264,8 @@ fn extract_elf_pclntab_strings(
     // funcnametab is NUL-separated; pkgnamestab is varint-length-prefixed.
     // Scan for both concurrently — the varint pass is fully hidden behind the
     // larger funcname pass and recovers package paths the latter can't.
-    let (varints, mut nulls) = rayon::join(
+    let (varints, mut nulls) = crate::par::join(
+        section_bytes.len(),
         || {
             extract_varint_prefixed_strings(
                 section_bytes,

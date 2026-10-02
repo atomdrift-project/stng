@@ -80,6 +80,7 @@ pub(crate) mod xor;
 // Decoders for encoded strings
 pub(crate) mod decoders;
 mod fuzzy_base64;
+mod par;
 mod pipeline;
 
 // Public API
@@ -151,6 +152,7 @@ fn extract_stack_strings_from_ranges(
     }
     exec_ranges
         .par_iter()
+        .with_min_len(par::job_len(exec_ranges.len(), data.len()))
         .filter_map(|&(start, end)| {
             let end = end.min(data.len());
             if start >= end {
@@ -265,6 +267,19 @@ fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, usize)]) ->
     !validation::is_garbage_with_context(&s.value, &ctx)
 }
 
+/// Whether the XOR scanners may run over `data`.
+///
+/// They hunt obfuscation in executable code and binary data. On text —
+/// source, documents, hex dumps — they find only noise: no real-world sample
+/// shows them recovering anything from text, and on source carrying a `^` they
+/// cost about a tenth of extraction. So text is skipped, unless the caller
+/// names the key and so knows better. Text carriers keep decoders shaped for
+/// them: hex-then-XOR over decoded hex strings ([`decoders`]), and script
+/// deobfuscation, which recovers the key from the code.
+fn scans_for_xor(data: &[u8], opts: &ExtractOptions) -> bool {
+    opts.xor_key.is_some() || (opts.format_hint != FormatHint::Text && detect::is_binary(data))
+}
+
 /// Run XOR scanning and extend `strings` with any decoded results.
 ///
 /// `excluded_ranges` is a sorted list of `[start, end)` byte ranges the
@@ -290,14 +305,8 @@ fn apply_xor_scan(
     // Every return below precedes the first string this scan adds.
     let first_added = strings.len();
 
-    // Text / script input: XOR obfuscation in source code is vanishingly rare,
-    // and the scanner produces noise on long runs of printable bytes.  Only
-    // skip on an *explicit* `FormatHint::Text` — auto-detection via
-    // `is_text_file` would false-positive on mostly-printable XOR payloads
-    // and regress test fixtures that use such shapes.  Callers with an
-    // explicit xor_key bypass this — they know better.
-    if opts.xor_key.is_none() && opts.format_hint == FormatHint::Text {
-        tracing::debug!("Skipping XOR scan: text/script input (explicit hint)");
+    if !scans_for_xor(data, opts) {
+        tracing::debug!("Skipping XOR scan: text input");
         return;
     }
 
@@ -687,21 +696,25 @@ enum Rot13 {
 
 /// Every decoder over `strings`, run concurrently; results in pass order.
 fn decode(strings: &[ExtractedString], rot13: Rot13) -> Vec<ExtractedString> {
-    pipeline::parallel([
-        &|| decoders::decode_base64_strings(strings),
-        &|| decoders::extract_embedded_base64(strings),
-        &|| fuzzy_base64::extract_fuzzy_base64(strings),
-        &|| decoders::decode_base32_strings(strings),
-        &|| decoders::decode_base85_strings(strings),
-        &|| match rot13 {
-            Rot13::Yes => decoders::decode_rot13_base64_strings(strings),
-            Rot13::No => Vec::new(),
-        },
-        &|| decoders::decode_hex_strings(strings),
-        &|| decoders::extract_embedded_hex(strings),
-        &|| decoders::decode_url_strings(strings),
-        &|| decoders::decode_unicode_escape_strings(strings),
-    ])
+    let split = strings.len() >= par::MIN_ITEMS_PER_JOB;
+    pipeline::parallel(
+        split,
+        [
+            &|| decoders::decode_base64_strings(strings),
+            &|| decoders::extract_embedded_base64(strings),
+            &|| fuzzy_base64::extract_fuzzy_base64(strings),
+            &|| decoders::decode_base32_strings(strings),
+            &|| decoders::decode_base85_strings(strings),
+            &|| match rot13 {
+                Rot13::Yes => decoders::decode_rot13_base64_strings(strings),
+                Rot13::No => Vec::new(),
+            },
+            &|| decoders::decode_hex_strings(strings),
+            &|| decoders::extract_embedded_hex(strings),
+            &|| decoders::decode_url_strings(strings),
+            &|| decoders::decode_unicode_escape_strings(strings),
+        ],
+    )
     .concat()
 }
 
@@ -1135,7 +1148,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         // as `apply_xor_scan` skips it. Only the key is surfaced; the decoded
         // image is binary, for callers of `recover_repeating_xor_pe`.
         if opts.xor_scan
-            && opts.format_hint != FormatHint::Text
+            && scans_for_xor(data, opts)
             && let Some(key) = xor::recover_repeating_xor_pe(data)
         {
             strings.push(key.to_key_string());

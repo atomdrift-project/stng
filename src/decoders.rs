@@ -187,6 +187,7 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
     // parallelises across strings while keeping each string's per-capture order.
     strings
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .flat_map_iter(|s| {
             let mut local = Vec::new();
             // A base64 *decode* command — GNU `base64 -d`/`--decode`, BSD and
@@ -267,6 +268,7 @@ pub(crate) fn extract_embedded_hex(strings: &[ExtractedString]) -> Vec<Extracted
     // parallelises across strings while keeping each string's per-capture order.
     strings
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .flat_map_iter(|s| {
             let mut local = Vec::new();
             for cap in EMBEDDED_HEX_RE.captures_iter(&s.value) {
@@ -320,6 +322,7 @@ pub(crate) fn extract_embedded_hex(strings: &[ExtractedString]) -> Vec<Extracted
 pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .filter_map(|s| {
             // Try normal base64 decoding first
             if (s.kind == Some(StringKind::Base64) || is_likely_base64(&s.value))
@@ -424,6 +427,7 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
 pub(crate) fn decode_hex_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .filter(|s| s.kind == Some(StringKind::HexEncoded) || is_likely_hex(&s.value))
         .flat_map_iter(decode_hex_variants)
         .collect()
@@ -511,6 +515,7 @@ fn decode_hex_variants(s: &ExtractedString) -> Vec<ExtractedString> {
 pub(crate) fn decode_url_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .filter(|s| s.kind == Some(StringKind::UrlEncoded) || is_likely_url_encoded(&s.value))
         .filter_map(decode_url_string)
         .collect()
@@ -606,6 +611,7 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
 pub(crate) fn decode_unicode_escape_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .filter(|s| {
             s.kind == Some(StringKind::UnicodeEscaped)
                 || s.value.contains("\\x")
@@ -809,6 +815,7 @@ fn is_likely_url_encoded(s: &str) -> bool {
 pub(crate) fn decode_base32_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .filter(|s| s.kind == Some(StringKind::Base32) || is_likely_base32(&s.value))
         .filter_map(decode_base32_string)
         .collect()
@@ -868,6 +875,7 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
 pub(crate) fn decode_rot13_base64_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .filter_map(decode_rot13_base64_string)
         .collect()
 }
@@ -959,6 +967,7 @@ fn decode_rot13_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
 pub(crate) fn decode_base85_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     strings
         .par_iter()
+        .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .filter(|s| s.kind == Some(StringKind::Base85) || is_likely_base85(&s.value))
         .filter_map(decode_base85_string)
         .collect()

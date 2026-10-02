@@ -85,8 +85,10 @@ impl GoStringExtractor {
             .collect();
 
         // Search all sections for string structures in parallel
+        let bytes = sections_info.iter().map(|(_, data)| data.len()).sum();
         let all_structs: Vec<StringStruct> = sections_info
             .par_iter()
+            .with_min_len(crate::par::job_len(sections_info.len(), bytes))
             .flat_map(|(section_addr, section_data)| {
                 find_string_structures(
                     section_data,
@@ -203,8 +205,10 @@ impl GoStringExtractor {
             })
             .collect();
 
+        let bytes = sections_info.iter().map(|(_, data)| data.len()).sum();
         let all_structs: Vec<StringStruct> = sections_info
             .par_iter()
+            .with_min_len(crate::par::job_len(sections_info.len(), bytes))
             .flat_map(|(section_addr, section_data)| {
                 find_string_structures(
                     section_data,
@@ -307,8 +311,10 @@ impl GoStringExtractor {
             })
             .collect();
 
+        let bytes = sections_info.iter().map(|(_, data)| data.len()).sum();
         let all_structs: Vec<StringStruct> = sections_info
             .par_iter()
+            .with_min_len(crate::par::job_len(sections_info.len(), bytes))
             .flat_map(|(section_addr, section_data)| {
                 find_string_structures(
                     section_data,
