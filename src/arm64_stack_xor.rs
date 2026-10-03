@@ -45,9 +45,12 @@ pub(crate) fn extract_arm64_stack_xor_strings(
     profile: AdmissionProfile,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    let imports_system = crate::binary::contain(|| macho.imports())
+    if macho.header.cputype != CPU_TYPE_ARM64 || !should_extract(profile) {
+        return Vec::new();
+    }
+    let imports_system = crate::binary::macho_imports(macho, arch_data)
         .is_some_and(|imports| imports.iter().any(|import| is_system_import(import.name)));
-    if macho.header.cputype != CPU_TYPE_ARM64 || !imports_system || !should_extract(profile) {
+    if !imports_system {
         return Vec::new();
     }
 

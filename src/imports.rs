@@ -5,12 +5,18 @@ use crate::types::{ExtractedString, StringKind, StringMethod};
 use goblin::mach::MachO;
 use std::collections::HashSet;
 
-pub(crate) fn extract_macho_imports(macho: &MachO<'_>, min_length: usize) -> Vec<ExtractedString> {
+/// `slice` is the bytes `macho` was parsed from: the whole file, or one
+/// architecture's slice of a universal binary.
+pub(crate) fn extract_macho_imports(
+    macho: &MachO<'_>,
+    slice: &[u8],
+    min_length: usize,
+) -> Vec<ExtractedString> {
     let mut strings = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
     // Extract imports with their source library
-    if let Some(imports) = crate::binary::contain(|| macho.imports()) {
+    if let Some(imports) = crate::binary::macho_imports(macho, slice) {
         for import in imports {
             if import.name.len() >= min_length && seen.insert(import.name.to_string()) {
                 // Convert virtual address to file offset

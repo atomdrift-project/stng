@@ -159,3 +159,84 @@ fn mutated_fixtures_never_panic() {
         sites.join("\n  ")
     );
 }
+
+/// A minimal 64-bit ARM64 Mach-O: one `__DATA` segment, one dylib, and a
+/// `LC_DYLD_INFO_ONLY` whose bind stream is `bind`.
+fn arm64_macho_with_bind_stream(bind: &[u8]) -> Vec<u8> {
+    const SEGMENT: u32 = 72;
+    const DYLIB: u32 = 40;
+    const DYLD_INFO: u32 = 48;
+    let bind_off = 32 + SEGMENT + DYLIB + DYLD_INFO;
+    let mut file = Vec::new();
+    let words = |file: &mut Vec<u8>, ws: &[u32]| {
+        for w in ws {
+            file.extend_from_slice(&w.to_le_bytes());
+        }
+    };
+    // MH_MAGIC_64, CPU_TYPE_ARM64, subtype, MH_EXECUTE, 3 commands.
+    words(
+        &mut file,
+        &[
+            0xfeed_facf,
+            0x0100_000c,
+            0,
+            2,
+            3,
+            SEGMENT + DYLIB + DYLD_INFO,
+            0,
+            0,
+        ],
+    );
+    words(&mut file, &[0x19, SEGMENT]);
+    file.extend_from_slice(b"__DATA\0\0\0\0\0\0\0\0\0\0");
+    for q in [0x1000_u64, 0x1000, 0, 0] {
+        file.extend_from_slice(&q.to_le_bytes());
+    }
+    words(&mut file, &[3, 3, 0, 0]);
+    words(&mut file, &[0x0c, DYLIB, 24, 0, 0, 0]);
+    file.extend_from_slice(b"libx.dylib\0\0\0\0\0\0");
+    let bind_len = u32::try_from(bind.len()).unwrap();
+    words(
+        &mut file,
+        &[
+            0x8000_0022,
+            DYLD_INFO,
+            0,
+            0,
+            bind_off,
+            bind_len,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ],
+    );
+    file.extend_from_slice(bind);
+    file
+}
+
+/// A bind stream repeating one import 2^32 - 1 times. goblin's `imports()`
+/// replays it into a multi-gigabyte list, which no panic guard stops; the
+/// ARM64 stack-XOR scan and the import pass both used to call it unchecked
+/// (found by fuzzing filefacts).
+#[test]
+fn forged_bind_repeat_count_is_not_replayed() {
+    // Symbol `_a`, ordinal 1, segment 0, then
+    // DO_BIND_ULEB_TIMES_SKIPPING_ULEB with count 2^32 - 1, skip 0.
+    let bind = [
+        0x11, 0x40, b'_', b'a', 0x00, 0x70, 0x00, 0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0x00, 0x00,
+    ];
+    let data = arm64_macho_with_bind_stream(&bind);
+    let started = std::time::Instant::now();
+    std::hint::black_box(stng::extract_strings_with_options(
+        &data,
+        &stng::ExtractOptions::new(4),
+    ));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
+}

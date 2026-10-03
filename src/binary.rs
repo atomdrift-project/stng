@@ -220,6 +220,116 @@ pub(crate) fn contain<T, E>(walk: impl FnOnce() -> Result<T, E>) -> Option<T> {
         .ok()
 }
 
+/// The most imports a Mach-O's bind streams may declare before
+/// [`macho_imports`] declines to hand them to goblin.
+const MAX_MACHO_BIND_IMPORTS: u64 = 256 * 1024;
+
+/// `macho.imports()`, contained like [`contain`] -- unless the bind streams
+/// in `slice`, the bytes `macho` was parsed from, would have goblin build more
+/// than [`MAX_MACHO_BIND_IMPORTS`] imports. goblin builds one `Import` per
+/// binding, and a single `DO_BIND_ULEB_TIMES_SKIPPING_ULEB` with a forged
+/// repeat count asks for billions: gigabytes in seconds, which no panic guard
+/// stops.
+pub(crate) fn macho_imports<'m>(
+    macho: &'m MachO<'_>,
+    slice: &[u8],
+) -> Option<Vec<goblin::mach::imports::Import<'m>>> {
+    if macho_bind_count(macho, slice) > MAX_MACHO_BIND_IMPORTS {
+        return None;
+    }
+    contain(|| macho.imports())
+}
+
+/// The bindings `macho`'s bind and lazy-bind streams declare, as goblin's
+/// interpreter would count them, up to just past [`MAX_MACHO_BIND_IMPORTS`].
+fn macho_bind_count(macho: &MachO<'_>, slice: &[u8]) -> u64 {
+    use goblin::mach::load_command::CommandVariant;
+
+    let mut count = 0u64;
+    for lc in &macho.load_commands {
+        let (CommandVariant::DyldInfo(info) | CommandVariant::DyldInfoOnly(info)) = &lc.command
+        else {
+            continue;
+        };
+        let streams = [
+            (info.bind_off, info.bind_size),
+            (info.lazy_bind_off, info.lazy_bind_size),
+        ];
+        for (off, size) in streams {
+            let stream = file_range_clamped(slice, off.into(), size.into()).unwrap_or_default();
+            count = bind_stream_count(stream, count);
+            if count > MAX_MACHO_BIND_IMPORTS {
+                return count;
+            }
+        }
+    }
+    count
+}
+
+/// `count` plus the bindings one bind-opcode `stream` declares, stopping
+/// once the total passes [`MAX_MACHO_BIND_IMPORTS`].
+fn bind_stream_count(stream: &[u8], mut count: u64) -> u64 {
+    use goblin::mach::bind_opcodes::{
+        BIND_OPCODE_ADD_ADDR_ULEB, BIND_OPCODE_DO_BIND, BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED,
+        BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB, BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB,
+        BIND_OPCODE_MASK, BIND_OPCODE_SET_ADDEND_SLEB, BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB,
+        BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB, BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM,
+    };
+    let mut at = 0;
+    while let Some(&opcode) = stream.get(at) {
+        at += 1;
+        let read = match opcode & BIND_OPCODE_MASK {
+            BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB
+            | BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB
+            | BIND_OPCODE_ADD_ADDR_ULEB
+            | BIND_OPCODE_SET_ADDEND_SLEB => leb128(stream, &mut at).map(|_| ()),
+            BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM => stream
+                .get(at..)
+                .and_then(|rest| rest.iter().position(|&b| b == 0))
+                .map(|len| at += len + 1),
+            BIND_OPCODE_DO_BIND | BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED => {
+                count += 1;
+                Some(())
+            }
+            BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB => {
+                count += 1;
+                leb128(stream, &mut at).map(|_| ())
+            }
+            BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB => {
+                leb128(stream, &mut at).and_then(|times| {
+                    leb128(stream, &mut at)?;
+                    count = count.saturating_add(times);
+                    Some(())
+                })
+            }
+            _ => Some(()),
+        };
+        // A truncated operand ends goblin's walk too.
+        if read.is_none() || count > MAX_MACHO_BIND_IMPORTS {
+            break;
+        }
+    }
+    count
+}
+
+/// A LEB128 value at `*at`, advancing past it. Signed and unsigned values
+/// share the framing; bits past 64 are dropped, as goblin's reader drops them.
+fn leb128(bytes: &[u8], at: &mut usize) -> Option<u64> {
+    let mut value = 0u64;
+    let mut shift = 0u32;
+    loop {
+        let byte = *bytes.get(*at)?;
+        *at += 1;
+        if shift < 64 {
+            value |= u64::from(byte & 0x7f) << shift;
+        }
+        shift = shift.saturating_add(7);
+        if byte & 0x80 == 0 {
+            return Some(value);
+        }
+    }
+}
+
 /// Collect segment and section names from a Mach-O binary.
 #[must_use]
 pub(crate) fn collect_macho_segments(macho: &MachO<'_>) -> Vec<String> {
@@ -635,6 +745,36 @@ pub(crate) fn macho_vaddr_to_file_offset(macho: &MachO<'_>, vaddr: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A forged repeat count is counted, not replayed: symbol `_a`, then
+    /// `DO_BIND_ULEB_TIMES_SKIPPING_ULEB` with a count of 2^32 - 1, which
+    /// goblin's interpreter would turn into that many `Import`s.
+    #[test]
+    fn a_forged_bind_repeat_count_passes_the_cap() {
+        let stream = [
+            0x11, 0x40, b'_', b'a', 0x00, 0x70, 0x00, 0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0x00,
+            0x00,
+        ];
+        assert!(bind_stream_count(&stream, 0) > MAX_MACHO_BIND_IMPORTS);
+    }
+
+    /// Ordinary binds are counted one by one, across operand-bearing opcodes.
+    #[test]
+    fn ordinary_binds_are_counted() {
+        let stream = [
+            0x11, // SET_DYLIB_ORDINAL_IMM 1
+            0x40, b'_', b'a', 0x00, // SET_SYMBOL_TRAILING_FLAGS_IMM "_a"
+            0x72, 0x10, // SET_SEGMENT_AND_OFFSET_ULEB seg 2, offset 16
+            0x90, // DO_BIND
+            0xA0, 0x08, // DO_BIND_ADD_ADDR_ULEB 8
+            0xB1, // DO_BIND_ADD_ADDR_IMM_SCALED
+            0xC0, 0x03, 0x08, // DO_BIND_ULEB_TIMES_SKIPPING_ULEB 3, skip 8
+            0x00, // DONE
+        ];
+        assert_eq!(bind_stream_count(&stream, 0), 6);
+        // A truncated operand ends the walk, as it ends goblin's.
+        assert_eq!(bind_stream_count(&stream[..9], 0), 2);
+    }
 
     const CA: &[u8] = b"Microsoft Windows Production PCA 2011";
 

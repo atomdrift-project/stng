@@ -149,7 +149,7 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
         strings.extend(xor_strings);
     }
     if !opts.caller_provides_symbols {
-        merge_imports(&mut strings, extract_macho_imports(macho, min_length));
+        merge_imports(&mut strings, extract_macho_imports(macho, data, min_length));
     }
     apply_entitlements(&mut strings, macho, data, min_length);
     Scan {
@@ -171,6 +171,8 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
     let mut is_rust = false;
     let mut segments = Vec::new();
     let mut first_macho: Option<MachO<'_>> = None;
+    // Where `first_macho`'s slice starts in the file.
+    let mut first_base = 0u64;
     // Fat-header offsets of each slice within the whole file, so a slice's
     // strings can be rebased onto the file (a slice's own load commands are
     // slice-relative). Indexed in lockstep with the iteration below.
@@ -238,6 +240,7 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
                 strings.extend(extractor.extract_macho(&macho, slice_base));
             }
             first_macho = Some(macho);
+            first_base = slice_base;
         }
     }
     // For non-Go fat binaries, use r2 if available + raw scan. Rust
@@ -299,7 +302,14 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
     }
     if let Some(ref macho) = first_macho {
         if !opts.caller_provides_symbols {
-            merge_imports(&mut strings, extract_macho_imports(macho, min_length));
+            let slice = usize::try_from(first_base)
+                .ok()
+                .and_then(|base| data.get(base..))
+                .unwrap_or_default();
+            merge_imports(
+                &mut strings,
+                extract_macho_imports(macho, slice, min_length),
+            );
         }
         apply_entitlements(&mut strings, macho, data, min_length);
     }
