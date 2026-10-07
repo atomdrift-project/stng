@@ -43,6 +43,12 @@ for s in stng::extract_strings_with_options(&bytes, &opts) {
 
 `default-features = false` leaves out the CLI's dependencies.
 
+Base64-encoded zlib text is decompressed automatically, including literals
+embedded in scripts or binary files. The decoder verifies the zlib checksum
+and limits both decoded input and inflated output to 10 MiB. UTF-8 and UTF-16LE
+text use `Base64Decode`; source offsets and lengths still identify the encoded
+token. No sample code is executed.
+
 ## License
 
 [Apache 2.0](LICENSE)

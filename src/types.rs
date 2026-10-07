@@ -346,7 +346,7 @@ pub enum StringMethod {
     SpacedAscii,
     /// Found via XOR decoding (single-byte or recovered repeating key)
     XorDecode,
-    /// Found via base64 decoding
+    /// Found via base64 decoding, including zlib-compressed text payloads
     Base64Decode,
     /// Found via obfuscated base64 decoding (string concatenation, char substitution)
     Base64ObfuscatedDecode,

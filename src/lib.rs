@@ -679,6 +679,8 @@ pub fn extract_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
 /// base64-over-UTF-16LE blob sitting in a plain `.txt` or `.json`. Both the
 /// internal extraction pipeline and the CLI's line-based text path funnel through
 /// here so coverage stays identical across inputs.
+/// Base64 wrapping a zlib stream is inflated with a 10 MiB output bound before
+/// text validation; decoded strings retain the encoded token's source extent.
 #[must_use]
 pub fn decode_encoded_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
     decode(strings, Rot13::Yes)

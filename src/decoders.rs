@@ -9,6 +9,10 @@ use rayon::prelude::*;
 use regex::Regex;
 use std::sync::LazyLock;
 
+#[cfg(test)]
+#[path = "decoders_zlib_test.rs"]
+mod zlib_tests;
+
 #[allow(clippy::expect_used)]
 static QUOTED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]"#).expect("static regex"));
@@ -228,8 +232,9 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
                             continue;
                         }
 
-                        // Validate it's printable text (UTF-8 or wide UTF-16LE).
-                        if let Some(decoded_str) = decoded_to_text(decoded) {
+                        // Base64 can wrap binary zlib data. Inflate before asking
+                        // for text, just as the sample's runtime decoder does.
+                        if let Some((decoded_str, _)) = base64_payload_to_text(decoded) {
                             let trimmed = decoded_str.trim();
 
                             // Must be meaningful (at least 4 chars after trim)
@@ -358,6 +363,10 @@ pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<Extracte
 /// Decode Base64 whose required terminal padding may be partly or wholly
 /// omitted. Reject excess padding, interior padding, and nonzero unused bits.
 fn decode_base64_bytes(value: &str) -> Option<Vec<u8>> {
+    // Bound allocation before handing an attacker-controlled token to Base64.
+    if value.len() > MAX_DECODED_SIZE.div_ceil(3) * 4 {
+        return None;
+    }
     base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value)
         .or_else(|_| {
             let unpadded = value.trim_end_matches('=');
@@ -368,6 +377,78 @@ fn decode_base64_bytes(value: &str) -> Option<Vec<u8>> {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD_NO_PAD, unpadded)
         })
         .ok()
+        .filter(|bytes| bytes.len() <= MAX_DECODED_SIZE)
+}
+
+/// Recover text from Base64 output, including the common Base64 → zlib chain.
+/// The bool marks a validated compression stream or wide-text signature, which
+/// is stronger evidence than the ASCII quality heuristic for plain Base64.
+fn base64_payload_to_text(decoded: Vec<u8>) -> Option<(String, bool)> {
+    if decoded.len() > MAX_DECODED_SIZE {
+        return None;
+    }
+    // RFC 1950: DEFLATE, a window no larger than 32 KiB, and valid FCHECK.
+    // Do not restrict this to 78 9c: fast/stored/best compression and smaller
+    // windows have different headers. Dictionary streams are rejected by the
+    // inflater because analysis must not load an external dictionary.
+    let has_zlib_header = decoded.get(..2).is_some_and(|header| {
+        header[0] & 0x0f == 8
+            && header[0] >> 4 <= 7
+            && u16::from_be_bytes([header[0], header[1]]).is_multiple_of(31)
+    });
+    // A header is only a candidate: ordinary text such as "x = answer" starts
+    // with the valid 78 20 dictionary header. If inflation fails, preserve the
+    // existing plain-text path, but never coerce compressed binary into text.
+    let inflated = has_zlib_header.then(|| inflate_zlib(&decoded)).flatten();
+    let is_zlib = inflated.is_some();
+    let bytes = inflated.unwrap_or(decoded);
+    let is_wide = looks_like_utf16le(&bytes);
+    let text = decoded_to_text(bytes)?;
+    // A valid compressed binary is not a string payload, even when its bytes
+    // happen to be legal UTF-8 (e.g. a NUL-filled image header).
+    if has_zlib_header
+        && text
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return None;
+    }
+    Some((text, is_zlib || is_wide))
+}
+
+/// Inflate the first complete zlib stream, verifying its checksum and trailer.
+/// Like Python's zlib.decompress, ignore bytes after that stream: appending junk
+/// must not hide code that the runtime would execute. Cap output while inflating;
+/// never accept text emitted before a bad checksum or a truncated trailer.
+fn inflate_zlib(input: &[u8]) -> Option<Vec<u8>> {
+    use flate2::{Decompress, FlushDecompress, Status};
+
+    let mut decoder = Decompress::new(true);
+    let mut output = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let before_in = decoder.total_in();
+        let before_out = decoder.total_out();
+        let offset = usize::try_from(before_in).ok()?;
+        // One extra byte distinguishes an exact-limit payload from a bomb.
+        let room = chunk.len().min(MAX_DECODED_SIZE + 1 - output.len());
+        let status = decoder
+            .decompress(&input[offset..], &mut chunk[..room], FlushDecompress::None)
+            .ok()?;
+        let produced = usize::try_from(decoder.total_out() - before_out).ok()?;
+        output.extend_from_slice(&chunk[..produced]);
+        if output.len() > MAX_DECODED_SIZE {
+            return None;
+        }
+        if status == Status::StreamEnd {
+            return (!output.is_empty()).then_some(output);
+        }
+        // This also rejects a truncated stream that already emitted readable
+        // text: exhausted input is not proof of a complete compressed stream.
+        if decoder.total_in() == before_in && decoder.total_out() == before_out {
+            return None;
+        }
+    }
 }
 
 /// Attempt to decode a single base64 string.
@@ -378,12 +459,7 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
 
     let decoded = decode_base64_bytes(s.value.trim())?;
 
-    // Wide (UTF-16LE) payloads are validated strictly during decoding, and their
-    // base64 is artificially 'A'-heavy (from interleaved NULs), which would fool
-    // the quality heuristic below — so note it before the bytes are consumed.
-    let is_wide = looks_like_utf16le(&decoded);
-
-    let decoded_str = decoded_to_text(decoded)?;
+    let (decoded_str, validated_payload) = base64_payload_to_text(decoded)?;
 
     // Reject if decoded string is too short or just whitespace
     let trimmed = decoded_str.trim();
@@ -393,11 +469,12 @@ fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
 
     // Reject if input is more text-like than output (false positive detection)
     // e.g., "IWorkItemQueriesExt2" decoding to binary garbage. Skipped for wide
-    // text, which the UTF-16LE decoder has already validated as clean. Score the
+    // text and checksum-verified zlib streams: their signatures already validate
+    // the encoding, and Unicode source would lose this ASCII comparison. Score the
     // trimmed decode: a trailing newline (routine in `base64 -d <<< …` and
     // `echo … | base64` payloads) is not a quality defect, and penalizing it
     // would sink genuine short commands like `/bin/rm\n` below their base64.
-    if !is_wide {
+    if !validated_payload {
         let input_quality = string_quality_score(&s.value);
         let output_quality = string_quality_score(trimmed);
         if input_quality > output_quality {

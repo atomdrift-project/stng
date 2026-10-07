@@ -379,20 +379,20 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         let mut byte_offset = 0u64;
         let mut strings: Vec<stng::ExtractedString> = Vec::new();
 
-        for line in content.lines() {
+        // Keep the original line terminators: lines() strips CRLF and made
+        // every later encoded token point one byte too early per CRLF line.
+        for line in content.split_inclusive('\n') {
             let trimmed = line.trim();
             if trimmed.len() >= cli.min_length {
                 strings.push(stng::ExtractedString {
                     value: trimmed.to_string(),
-                    data_offset: byte_offset,
+                    data_offset: byte_offset + (line.len() - line.trim_start().len()) as u64,
                     method: stng::StringMethod::RawScan,
                     kind: stng::classify_string(trimmed),
                     ..Default::default()
                 });
             }
-            // Advance byte offset: line length + newline character
-            // Note: lines() strips the newline, so we add +1 for it
-            byte_offset += line.len() as u64 + 1;
+            byte_offset += line.len() as u64;
         }
 
         // Apply the generic decoders so encoded payloads embedded in plain text

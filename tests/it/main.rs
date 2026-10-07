@@ -6,6 +6,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod base64_zlib;
 mod byte_offsets;
 mod classifier_security;
 mod clean_binaries;
