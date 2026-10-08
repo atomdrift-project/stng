@@ -63,6 +63,10 @@ psl = "2.1"
 # Zlib/gzip decompression (for script deobfuscation)
 flate2 = "1.1"
 
+# Syntax-only, bounded constant recovery for obfuscated Lua. No interpreter.
+tree-sitter = "0.28"
+tree-sitter-lua = "0.5"
+
 # Base32/Base85 encoding
 data-encoding = "2.11"
 
@@ -249,3 +253,8 @@ harness = false
 [[bench]]
 name = "corpus"
 harness = false
+
+# Keep the engine and its language ABI on the same fork as filefacts/cleave.
+[patch.crates-io]
+tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
+tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }

@@ -1,6 +1,6 @@
 //! Script deobfuscation module.
 //!
-//! Detects and decodes obfuscated payloads in Python, JavaScript, PHP, and PowerShell scripts.
+//! Detects and decodes obfuscated payloads in Lua, Python, JavaScript, PHP, and PowerShell scripts.
 //! This module targets common malware obfuscation patterns found in PyPI/npm packages,
 //! PHP webshells, and PowerShell droppers.
 
@@ -8,6 +8,7 @@ mod batch;
 pub mod decode_chain;
 pub mod detect;
 mod javascript;
+mod lua;
 mod php;
 mod powershell;
 mod python;
@@ -79,6 +80,7 @@ pub fn deobfuscate_script(data: &[u8]) -> Vec<DeobfuscationResult> {
             ScriptLanguage::JavaScript => javascript::extract_obfuscated_payloads(&current_text),
             ScriptLanguage::Php => php::extract_obfuscated_payloads(&current_text),
             ScriptLanguage::PowerShell => powershell::extract_obfuscated_payloads(&current_text),
+            ScriptLanguage::Lua => lua::extract_obfuscated_payloads(&current_text),
         };
 
         if results.is_empty() {

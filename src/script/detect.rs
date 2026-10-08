@@ -6,6 +6,8 @@
 /// Detected script language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptLanguage {
+    /// Lua.
+    Lua,
     /// Python.
     Python,
     /// JavaScript.
@@ -22,6 +24,7 @@ impl ScriptLanguage {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Lua => "lua",
             Self::Python => "python",
             Self::JavaScript => "javascript",
             Self::Php => "php",
@@ -42,6 +45,16 @@ pub fn detect_script_language(data: &[u8]) -> Option<ScriptLanguage> {
     // PHP is very distinctive — check first
     if text.contains("<?php") || text.contains("<?=") {
         return Some(ScriptLanguage::Php);
+    }
+
+    if (text.trim_start().starts_with("local ")
+        || text.trim_start().starts_with("return(function")
+        || text.trim_start().starts_with("--"))
+        && text.contains("local ")
+        && text.contains("function")
+        && (text.contains(" end") || text.contains("end return"))
+    {
+        return Some(ScriptLanguage::Lua);
     }
 
     // PowerShell has distinctive markers
