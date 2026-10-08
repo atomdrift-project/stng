@@ -195,7 +195,7 @@ impl Expander {
     /// Record every `set` statement in an already-expanded line.
     fn record_sets(&mut self, line: &str) {
         for stmt in split_statements(line) {
-            let stmt = stmt.trim_start_matches(|c: char| c == '@' || c.is_whitespace());
+            let stmt = command_head(stmt);
             let Some(head) = stmt.get(..4) else { continue };
             if !head.eq_ignore_ascii_case("set ") {
                 continue;
@@ -224,6 +224,12 @@ impl Expander {
             self.vars.insert(name.to_ascii_lowercase(), value);
         }
     }
+}
+
+/// CMD skips these separators before an unquoted command word. They are not
+/// statement separators; a semicolon inside a SET value stays in that value.
+fn command_head(line: &str) -> &str {
+    line.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '@' | ',' | ';' | '='))
 }
 
 /// Split on unquoted, unescaped `&` (also covers `&&`).
@@ -479,6 +485,16 @@ mod tests {
         expand_batch_variables(src.as_bytes())
             .map(|r| r.decoded)
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn command_separators_retain_assignments_and_value_punctuation() {
+        for prefix in [";", ",", "=", ";@", " \t;="] {
+            let src = format!(
+                "{prefix}set p=popup.exe\n{prefix}set \"m=click; OK\"\n{prefix}echo %p% %m% %p%\n"
+            );
+            assert!(expand(&src).contains("echo popup.exe click; OK popup.exe"));
+        }
     }
 
     #[test]
