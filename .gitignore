@@ -44,3 +44,4 @@ analyze_*.py
 *.rcgu.o
 test_api
 test_lib*
+out/
