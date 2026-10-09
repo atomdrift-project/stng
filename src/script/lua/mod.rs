@@ -3,6 +3,21 @@ mod constants;
 mod prometheus;
 use super::DeobfuscationResult;
 const MAX_SOURCE: usize = 1024 * 1024;
+/// `n` as an integer when it is whole and every integer up to it is exactly
+/// representable (|n| <= 2^53). NaN, infinities and fractions give `None`, so
+/// numbers from untrusted source never saturate into valid-looking values.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "checked whole and within +/-2^53"
+)]
+fn whole(n: f64) -> Option<i64> {
+    const EXACT: f64 = 9_007_199_254_740_992.;
+    if n.fract() == 0. && n.abs() <= EXACT {
+        Some(n as i64)
+    } else {
+        None
+    }
+}
 fn parse(source: &str) -> Option<tree_sitter::Tree> {
     if source.len() > MAX_SOURCE {
         return None;

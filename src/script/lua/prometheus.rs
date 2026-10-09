@@ -1,5 +1,6 @@
 //! Public Prometheus EncryptStrings arithmetic, parameterised by source facts.
 //! Algorithm constants are fixed; keys, seeds and multipliers are never fixed.
+use super::whole;
 use std::collections::BTreeSet;
 pub(super) const MOD45: f64 = 35184372088832.;
 #[derive(Clone, Copy, Debug)]
@@ -11,7 +12,7 @@ pub(super) struct Cipher {
 }
 #[derive(Default, Debug)]
 pub(super) struct Discovery {
-    lcg45: BTreeSet<(u64, u64)>,
+    lcg45: BTreeSet<(i64, i64)>,
     lcg8: BTreeSet<u16>,
     keys: BTreeSet<u8>,
     mod32: bool,
@@ -33,19 +34,20 @@ impl Discovery {
         self.variable_shift |= op == "^" && a == Some(2.) && symbolic_right;
     }
     pub(super) fn lcg45(&mut self, mul: f64, add: f64) {
-        if mul.fract() == 0.
-            && add.fract() == 0.
-            && (1. ..256.).contains(&mul)
-            && mul as u64 % 4 == 1
+        if let (Some(m), Some(a)) = (whole(mul), whole(add))
+            && (1..256).contains(&m)
+            && m % 4 == 1
             && (0. ..MOD45).contains(&add)
-            && add as u64 % 2 == 1
+            && a % 2 == 1
         {
-            self.lcg45.insert((mul as u64, add as u64));
+            self.lcg45.insert((m, a));
         }
     }
     pub(super) fn lcg8(&mut self, mul: f64) {
-        if mul.fract() == 0. && (2. ..257.).contains(&mul) {
-            self.lcg8.insert(mul as u16);
+        if let Some(m) = whole(mul).and_then(|m| u16::try_from(m).ok())
+            && (2..257).contains(&m)
+        {
+            self.lcg8.insert(m);
         }
     }
     pub(super) fn key(&mut self, key: u8) {
@@ -99,6 +101,11 @@ impl Cipher {
             let rnd = (modulo(n, 1.) * 4294967296.).floor() + n.floor();
             let low = modulo(rnd, 65536.);
             let high = (rnd - low) / 65536.;
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "modulo keeps each value in [0, 256); `as` floors it like the reference"
+            )]
             let bytes = [
                 modulo(high / 256., 256.) as u8,
                 modulo(high, 256.) as u8,

@@ -5,6 +5,7 @@ use std::rc::Rc;
 use tree_sitter::Node;
 
 use super::prometheus::{Cipher, Discovery};
+use super::whole;
 const MAX_STEPS: usize = 8_000_000;
 const MAX_DEPTH: usize = 96;
 const MAX_BYTES: usize = 1024 * 1024;
@@ -67,9 +68,7 @@ fn text<'s>(n: Node<'_>, s: &'s str) -> &'s str {
 }
 fn key(v: &Value<'_>) -> Option<Key> {
     match v {
-        Value::Number(n) if n.is_finite() && n.fract() == 0. && n.abs() < 1e15 => {
-            Some(Key::Number(*n as i64))
-        }
+        Value::Number(n) => whole(*n).map(Key::Number),
         Value::Bytes(b) => Some(Key::Bytes(b.clone())),
         _ => None,
     }
@@ -97,13 +96,13 @@ fn truth(v: &Value<'_>) -> Option<bool> {
 fn replace_aliases<'t>(
     env: &mut Env<'t>,
     old: &Rc<BTreeMap<Key, Value<'t>>>,
-    new: Rc<BTreeMap<Key, Value<'t>>>,
+    new: &Rc<BTreeMap<Key, Value<'t>>>,
 ) {
     for value in env.values_mut() {
         if matches!(value,Value::Table(t) if Rc::ptr_eq(t,old)) {
             *value = Value::Table(new.clone());
         } else if let Value::Function(_, captured) = value {
-            replace_aliases(Rc::make_mut(captured), old, new.clone());
+            replace_aliases(Rc::make_mut(captured), old, new);
         }
     }
 }
@@ -259,7 +258,7 @@ fn string(raw: &str) -> Option<Vec<u8>> {
                 out.push(u8::from_str_radix(raw.get(i..end)?, 16).ok()?);
                 i = end;
             }
-            b'n' => out.push(b'\n'),
+            b'n' | b'\n' => out.push(b'\n'),
             b'r' => out.push(b'\r'),
             b't' => out.push(b'\t'),
             b'a' => out.push(7),
@@ -271,7 +270,6 @@ fn string(raw: &str) -> Option<Vec<u8>> {
                     i += 1
                 }
             }
-            b'\n' => out.push(b'\n'),
             b'\r' => {
                 if b.get(i) == Some(&b'\n') {
                     i += 1
@@ -561,14 +559,14 @@ impl<'s> Folder<'s> {
                 _ => Value::Unknown,
             };
         }
-        if op == "and" || op == "or" {
-            if let Some(t) = truth(&a) {
-                return if (op == "and" && t) || (op == "or" && !t) {
-                    b
-                } else {
-                    a
-                };
-            }
+        if (op == "and" || op == "or")
+            && let Some(t) = truth(&a)
+        {
+            return if (op == "and" && t) || (op == "or" && !t) {
+                b
+            } else {
+                a
+            };
         }
         if matches!(a, Value::Nil) || matches!(b, Value::Nil) {
             if matches!(a, Value::Unknown | Value::Affine { .. })
@@ -641,31 +639,26 @@ impl<'s> Folder<'s> {
             ("string.char", _) => {
                 let mut b = Vec::new();
                 for v in a {
-                    let Some(n) = number(v) else {
+                    let Some(byte) = number(v).and_then(whole).and_then(|n| u8::try_from(n).ok())
+                    else {
                         return Value::Unknown;
                     };
-                    if !(0. ..=255.).contains(&n) || n.fract() != 0. {
-                        return Value::Unknown;
-                    }
-                    b.push(n as u8)
+                    b.push(byte)
                 }
                 Value::Bytes(b)
             }
             ("string.sub", [Value::Bytes(b), Value::Number(start), Value::Number(end)]) => {
+                // Negative indices count from the end; both ends clamp to
+                // 1..=len+1. Non-integer indices are not folded.
+                let len = b.len() as f64;
                 let norm = |x: f64| {
-                    if x < 0. {
-                        (b.len() as f64 + x + 1.).max(1.)
-                    } else {
-                        x.max(1.)
-                    }
+                    let x = if x < 0. { len + x + 1. } else { x };
+                    whole(x.clamp(1., len + 1.)).and_then(|n| usize::try_from(n).ok())
                 };
-                let l = norm(*start) as usize;
-                let r = (norm(*end) as usize).min(b.len());
-                Value::Bytes(if l <= r {
-                    b[l - 1..r].to_vec()
-                } else {
-                    Vec::new()
-                })
+                let (Some(l), Some(r)) = (norm(*start), norm(*end)) else {
+                    return Value::Unknown;
+                };
+                Value::Bytes(b.get(l - 1..r.min(b.len())).unwrap_or_default().to_vec())
             }
             ("type", [Value::Bytes(_)]) => Value::Bytes(b"string".to_vec()),
             ("type", [Value::Table(_)]) => Value::Bytes(b"table".to_vec()),
@@ -749,10 +742,10 @@ impl<'s> Folder<'s> {
                 return false;
             }
             if let Value::Number(n) = value
-                && n.fract() == 0.
-                && (3. ..255.).contains(&n)
+                && let Some(byte) = whole(n).and_then(|n| u8::try_from(n).ok())
+                && (3..255).contains(&byte)
             {
-                trace.bytes.insert(n as u8);
+                trace.bytes.insert(byte);
             }
             match v.kind() {
                 "identifier" => {
@@ -807,7 +800,7 @@ impl<'s> Folder<'s> {
                     } else {
                         updated.insert(k, value);
                     }
-                    replace_aliases(env, &t, Rc::new(updated));
+                    replace_aliases(env, &t, &Rc::new(updated));
                 }
                 _ => return false,
             }
@@ -848,7 +841,7 @@ impl<'s> Folder<'s> {
                 continue;
             }
             if let (Value::Table(old), Some(Value::Table(new))) = (old, local.get(name)) {
-                replace_aliases(env, old, new.clone());
+                replace_aliases(env, old, new);
             }
         }
         for name in before.keys() {
@@ -1092,7 +1085,7 @@ impl<'s> Folder<'s> {
                     let index =
                         (1..=MAX_TABLE).find(|i| !updated.contains_key(&Key::Number(*i as i64)))?;
                     updated.insert(Key::Number(index as i64), value.clone());
-                    replace_aliases(env, table, Rc::new(updated));
+                    replace_aliases(env, table, &Rc::new(updated));
                     Flow::Continue
                 }
                 _ => {
