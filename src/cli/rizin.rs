@@ -4,8 +4,10 @@
 pub(crate) mod cache;
 use cache::R2Cache;
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
+use std::time::Duration;
 use stng::goblin::Object;
 use stng::{
     ExtractOptions, ExtractedString, StringBoundary, StringKind, StringMethod, classify_string,
@@ -25,6 +27,12 @@ type MemoCell = Arc<OnceLock<Option<Arc<String>>>>;
 static MEMO: LazyLock<Mutex<HashMap<MemoKey, MemoCell>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const MEMO_MAX_ENTRIES: usize = 16;
+/// How long one rizin command may run. A crafted binary can keep `aaa` busy
+/// indefinitely; past this the pass is dropped, not the run.
+const TOOL_TIMEOUT: Duration = Duration::from_secs(300);
+/// Output past this is dropped with the pass. `izzj` on a 10 MB file is tens
+/// of MB; a binary built to inflate it should not take the host's memory.
+const MAX_TOOL_OUTPUT: u64 = 512 * 1024 * 1024;
 #[must_use]
 pub(crate) fn is_available() -> bool {
     get_tool().is_some()
@@ -216,19 +224,61 @@ fn spawn_tool_command(tool: &str, path: &str, cmd: &str, use_cache: bool) -> Opt
     {
         return Some(cached);
     }
-    let output = Command::new(tool)
-        .args(["-q", "-c", cmd, path])
-        .output()
-        .ok()?;
-    if output.status.success() {
-        let result = String::from_utf8(output.stdout).ok()?;
-        if use_cache && let Ok(cache) = R2Cache::new() {
-            let _ = cache.set(path, cmd, &result);
-        }
-        Some(result)
-    } else {
-        None
+    let result = run_tool(tool, path, cmd)?;
+    if use_cache && let Ok(cache) = R2Cache::new() {
+        let _ = cache.set(path, cmd, &result);
     }
+    Some(result)
+}
+
+/// Run `tool -q -c cmd path` and return its stdout, or `None` if it fails,
+/// outlives [`TOOL_TIMEOUT`] or prints more than [`MAX_TOOL_OUTPUT`].
+fn run_tool(tool: &str, path: &str, cmd: &str) -> Option<String> {
+    let mut child = Command::new(tool)
+        .args(["-q", "-c", cmd, path])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let stdout = child.stdout.take()?;
+    // Read on another thread so the deadline holds even while rizin prints
+    // nothing; it finishes at end of output or at the cap.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let read = stdout.take(MAX_TOOL_OUTPUT + 1).read_to_end(&mut out);
+        let _ = tx.send(read.map(|_| out));
+    });
+    let out = match rx.recv_timeout(TOOL_TIMEOUT) {
+        Ok(Ok(out)) if out.len() as u64 <= MAX_TOOL_OUTPUT => Some(out),
+        Ok(Ok(_)) => {
+            tracing::warn!(
+                cmd,
+                path,
+                "rizin output exceeds {MAX_TOOL_OUTPUT} bytes; dropped"
+            );
+            None
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(cmd, path, "reading rizin output: {e}");
+            None
+        }
+        Err(_) => {
+            tracing::warn!(cmd, path, "rizin ran past {TOOL_TIMEOUT:?}; killed");
+            None
+        }
+    };
+    if out.is_none() {
+        let _ = child.kill();
+    }
+    let status = child.wait().ok()?;
+    if !status.success() {
+        tracing::debug!(cmd, path, %status, "rizin failed");
+        return None;
+    }
+    // Lossy, so one invalid name in a crafted binary cannot void the pass.
+    out.map(|o| String::from_utf8_lossy(&o).into_owned())
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -241,9 +291,13 @@ struct R2Section {
     vsize: u64,
 }
 fn vaddr_to_paddr(vaddr: u64, sections: &[R2Section]) -> Option<u64> {
+    // Section fields echo the binary's headers, so no sum of them is trusted
+    // not to wrap.
     for s in sections {
-        if s.vsize > 0 && vaddr >= s.vaddr && vaddr < s.vaddr + s.vsize {
-            return Some(s.paddr + (vaddr - s.vaddr));
+        if let Some(delta) = vaddr.checked_sub(s.vaddr)
+            && delta < s.vsize
+        {
+            return s.paddr.checked_add(delta);
         }
     }
     if vaddr >= 0x140000000 {

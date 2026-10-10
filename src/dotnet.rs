@@ -162,7 +162,11 @@ fn find_us_stream(metadata: &[u8]) -> Option<(usize, usize)> {
         pos = (pos + 3) & !3;
 
         // Check if this is the #US stream
-        if name == "#US" && stream_offset + stream_size <= metadata.len() {
+        if name == "#US"
+            && stream_offset
+                .checked_add(stream_size)
+                .is_some_and(|end| end <= metadata.len())
+        {
             return Some((stream_offset, stream_size));
         }
     }

@@ -176,10 +176,11 @@ fn try_charcode_array(source: &str) -> Vec<DeobfuscationResult> {
             let whole = cap.get(0)?;
             // The regex stops at `.map(`; require the callback to actually be
             // the charcode conversion, within a short window after it.
+            // Bytes, not `str`: a window ending inside a character must not
+            // drop the payload.
             let tail_end = source.len().min(whole.end() + 160);
-            if !source.get(whole.end()..tail_end)?.contains("fromCharCode") {
-                return None;
-            }
+            let tail = &source.as_bytes()[whole.end()..tail_end];
+            memchr::memmem::find(tail, b"fromCharCode")?;
             let decoded: String = cap
                 .get(1)?
                 .as_str()

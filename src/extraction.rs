@@ -5,6 +5,72 @@
 
 use crate::types::{BinaryInfo, ExtractedString, StringKind, StringMethod, StringStruct};
 use rayon::prelude::*;
+use std::collections::BTreeMap;
+
+/// The parts of each section that a `{ptr, len}` scan has not already covered,
+/// in section order, as `(address, bytes)` ready for
+/// [`find_string_structures`]. Sections are `(address, file offset, bytes)`.
+///
+/// A pair is read at every pointer-size step from a section's start, and what
+/// it yields depends only on the bytes there, so two sections that cover one
+/// file position read the same pair. Headers can declare the same bytes
+/// thousands of times: scanning each copy again cost gigabytes of duplicate
+/// pairs. Positions are tracked per phase (offset modulo the step), so a
+/// section is never scanned at an alignment other than its own, and the first
+/// section to reach a position still reads it first.
+pub(crate) fn uncovered_pair_ranges<'a>(
+    sections: impl IntoIterator<Item = (u64, usize, &'a [u8])>,
+    info: &BinaryInfo,
+) -> Vec<(u64, &'a [u8])> {
+    let step = info.ptr_size.max(1);
+    let pair = 2 * step;
+    // Per phase: scanned pair positions as disjoint `first -> last` intervals.
+    let mut covered: Vec<BTreeMap<usize, usize>> = vec![BTreeMap::new(); step];
+    let mut out = Vec::new();
+    for (addr, start, bytes) in sections {
+        if bytes.len() < pair {
+            continue;
+        }
+        let first = start;
+        let Some(last) = start.checked_add((bytes.len() - pair) / step * step) else {
+            continue;
+        };
+        let map = &mut covered[start % step];
+        let before = map
+            .range(..first)
+            .next_back()
+            .filter(|&(_, &end)| end >= first)
+            .map(|(&s, &e)| (s, e));
+        let overlapping: Vec<(usize, usize)> = before
+            .into_iter()
+            .chain(map.range(first..=last).map(|(&s, &e)| (s, e)))
+            .collect();
+        let mut pos = first;
+        let mut gaps = Vec::new();
+        for &(s, e) in &overlapping {
+            if s > pos {
+                gaps.push((pos, s - step));
+            }
+            pos = pos.max(e.saturating_add(step));
+        }
+        if pos <= last {
+            gaps.push((pos, last));
+        }
+        for (g0, g1) in gaps {
+            out.push((
+                addr.wrapping_add((g0 - start) as u64),
+                &bytes[g0 - start..g1 - start + pair],
+            ));
+        }
+        let mut merged = (first, last);
+        for (s, e) in overlapping {
+            map.remove(&s);
+            merged = (merged.0.min(s), merged.1.max(e));
+        }
+        map.insert(merged.0, merged.1);
+    }
+    out
+}
 
 /// Find pointer+length structures that point into a data blob.
 ///
@@ -47,7 +113,7 @@ fn find_string_structures_64le(
     blob_size: u64,
 ) -> Vec<StringStruct> {
     let mut structs = Vec::new();
-    let blob_end = blob_addr + blob_size;
+    let blob_end = blob_addr.saturating_add(blob_size);
 
     if section_data.len() < 16 {
         return structs;
@@ -80,10 +146,10 @@ fn find_string_structures_64le(
             && ptr < blob_end
             && len > 0
             && len < 1024 * 1024
-            && ptr + len <= blob_end
+            && ptr.checked_add(len).is_some_and(|end| end <= blob_end)
         {
             structs.push(StringStruct {
-                struct_offset: section_addr + i as u64,
+                struct_offset: section_addr.wrapping_add(i as u64),
                 ptr,
                 len,
             });
@@ -167,13 +233,15 @@ fn find_string_structures_generic(
 
         // Check if this looks like a valid string structure
         if ptr >= blob_addr
-            && ptr < blob_addr + blob_size
+            && ptr < blob_addr.saturating_add(blob_size)
             && len > 0
             && len < 1024 * 1024 // Max 1MB string
-            && ptr + len <= blob_addr + blob_size
+            && ptr
+                .checked_add(len)
+                .is_some_and(|end| end <= blob_addr.saturating_add(blob_size))
         {
             structs.push(StringStruct {
-                struct_offset: section_addr + i as u64,
+                struct_offset: section_addr.wrapping_add(i as u64),
                 ptr,
                 len,
             });
@@ -221,7 +289,7 @@ where
             }
 
             let offset = usize::try_from(s.ptr - blob_addr).ok()?;
-            let end = offset + usize::try_from(s.len).ok()?;
+            let end = offset.checked_add(usize::try_from(s.len).ok()?)?;
 
             if end > blob.len() {
                 return None;
@@ -460,5 +528,28 @@ mod tests {
 
         assert_eq!(strings.len(), 1);
         assert_eq!(strings[0].kind, Some(StringKind::Path));
+    }
+
+    #[test]
+    fn test_uncovered_pair_ranges_scans_each_position_once() {
+        let info = BinaryInfo::from_elf(true, true);
+        let data = vec![0u8; 256];
+        let section =
+            |start: usize, len: usize| (0x1000 + start as u64, start, &data[start..start + len]);
+
+        // A repeated header adds nothing; a shifted one adds only its tail.
+        let out = uncovered_pair_ranges([section(0, 64), section(0, 64), section(8, 64)], &info);
+        let spans: Vec<(u64, usize)> = out.iter().map(|(a, b)| (*a, b.len())).collect();
+        assert_eq!(spans, [(0x1000, 64), (0x1000 + 56, 16)]);
+
+        // Another phase is never merged into this one's scan.
+        let out = uncovered_pair_ranges([section(0, 64), section(4, 64)], &info);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1].1.len(), 64);
+
+        // A section spanning earlier ones reads only the gaps between them.
+        let out = uncovered_pair_ranges([section(16, 32), section(96, 32), section(0, 160)], &info);
+        let spans: Vec<(u64, usize)> = out.iter().map(|(a, b)| (*a - 0x1000, b.len())).collect();
+        assert_eq!(spans, [(16, 32), (96, 32), (0, 24), (40, 64), (120, 40)]);
     }
 }

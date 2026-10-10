@@ -32,7 +32,7 @@ pub(crate) fn extract_inline_strings_arm64(
     let mut strings = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    let rodata_end = rodata_addr + rodata_data.len() as u64;
+    let rodata_end = rodata_addr.saturating_add(rodata_data.len() as u64);
     let mut preserved = arm64_preserved::Context::new(text_data, text_addr);
 
     // ARM64 instructions are a fixed 4 bytes.
@@ -147,7 +147,7 @@ fn extract_arm64_stored_strings(
         at: u32,
     }
 
-    let rodata_end = rodata_addr + rodata_data.len() as u64;
+    let rodata_end = rodata_addr.saturating_add(rodata_data.len() as u64);
     let mut slots = [Slot {
         reg: Reg::Unknown,
         epoch: 0,
@@ -554,7 +554,7 @@ pub(crate) fn extract_inline_strings_amd64(
 ) -> Vec<ExtractedString> {
     use rayon::prelude::*;
 
-    let rodata_end = rodata_addr + rodata_data.len() as u64;
+    let rodata_end = rodata_addr.saturating_add(rodata_data.len() as u64);
 
     // Find all CALL instruction positions first
     let call_positions: Vec<usize> = text_data
@@ -886,7 +886,9 @@ fn extract_backward_strings(
             text_data[pos + 5],
             text_data[pos + 6],
         ]);
-        let str_addr = (text_addr + (pos + 7) as u64).wrapping_add_signed(i64::from(offset));
+        let str_addr = text_addr
+            .wrapping_add((pos + 7) as u64)
+            .wrapping_add_signed(i64::from(offset));
 
         if str_addr >= rodata_addr && str_addr < rodata_end {
             // LEA destination (reg field + REX.R): a length MOV into this same
@@ -1159,7 +1161,7 @@ fn extract_amd64_value_string(
             } else {
                 continue;
             };
-            let rip_addr = text_addr + (call_pos + offset + 7) as u64;
+            let rip_addr = text_addr.wrapping_add((call_pos + offset + 7) as u64);
             // Use wrapping_add_signed for RIP-relative address calculation (x86-64 semantics)
             let str_addr = rip_addr.wrapping_add_signed(i64::from(rip_offset));
 

@@ -76,13 +76,17 @@ impl GoStringExtractor {
         };
 
         // Collect all sections first for parallel processing
-        let sections_info: Vec<(u64, &[u8])> = macho
-            .segments
-            .iter()
-            .filter_map(|seg| seg.sections().ok())
-            .flatten()
-            .map(|(section, section_data)| (section.addr, section_data))
-            .collect();
+        let sections_info = crate::extraction::uncovered_pair_ranges(
+            macho
+                .segments
+                .iter()
+                .filter_map(|seg| seg.sections().ok())
+                .flatten()
+                .map(|(section, section_data)| {
+                    (section.addr, section.offset as usize, section_data)
+                }),
+            &info,
+        );
 
         // Search all sections for string structures in parallel
         let bytes = sections_info.iter().map(|(_, data)| data.len()).sum();
@@ -173,8 +177,10 @@ impl GoStringExtractor {
 
         // Every phase recorded a virtual address; resolve each to a file offset.
         for s in &mut strings {
-            s.data_offset =
-                file_base + crate::binary::macho_vaddr_to_file_offset(macho, s.data_offset);
+            s.data_offset = file_base.saturating_add(crate::binary::macho_vaddr_to_file_offset(
+                macho,
+                s.data_offset,
+            ));
         }
 
         strings
@@ -196,14 +202,13 @@ impl GoStringExtractor {
         let text_info = crate::binary::elf_section(elf, data, ".text");
 
         // Search all data sections for string structures in parallel
-        let sections_info: Vec<_> = elf
-            .section_headers
-            .iter()
-            .filter_map(|sh| {
+        let sections_info = crate::extraction::uncovered_pair_ranges(
+            elf.section_headers.iter().filter_map(|sh| {
                 let bytes = crate::binary::file_range(data, sh.sh_offset, sh.sh_size)?;
-                (!bytes.is_empty()).then_some((sh.sh_addr, bytes))
-            })
-            .collect();
+                Some((sh.sh_addr, usize::try_from(sh.sh_offset).ok()?, bytes))
+            }),
+            &info,
+        );
 
         let bytes = sections_info.iter().map(|(_, data)| data.len()).sum();
         let all_structs: Vec<StringStruct> = sections_info
@@ -290,26 +295,24 @@ impl GoStringExtractor {
         let Some((rodata_addr, rodata_data)) = rodata_info else {
             return strings;
         };
-        let rodata_va = rodata_addr + image_base;
+        let rodata_va = rodata_addr.wrapping_add(image_base);
 
         // Search all sections for string structures
-        let sections_info: Vec<_> = pe
-            .sections
-            .iter()
-            .filter_map(|section| {
+        let sections_info = crate::extraction::uncovered_pair_ranges(
+            pe.sections.iter().filter_map(|section| {
                 let start = section.pointer_to_raw_data as usize;
                 let size = section.size_of_raw_data as usize;
                 let end = start.saturating_add(size);
-                if end <= data.len() && size > 0 {
-                    Some((
-                        u64::from(section.virtual_address) + image_base,
+                (end <= data.len() && size > 0).then(|| {
+                    (
+                        u64::from(section.virtual_address).wrapping_add(image_base),
+                        start,
                         &data[start..end],
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
+                    )
+                })
+            }),
+            &info,
+        );
 
         let bytes = sections_info.iter().map(|(_, data)| data.len()).sum();
         let all_structs: Vec<StringStruct> = sections_info
@@ -350,7 +353,10 @@ impl GoStringExtractor {
             let start = section.pointer_to_raw_data as usize;
             let end = start.checked_add(section.size_of_raw_data as usize)?;
             let text = data.get(start..end)?;
-            Some((u64::from(section.virtual_address) + image_base, text))
+            Some((
+                u64::from(section.virtual_address).wrapping_add(image_base),
+                text,
+            ))
         });
         if let Some((text_va, text_data)) = text_info {
             let inline_strings = match pe.header.coff_header.machine {
@@ -492,7 +498,7 @@ impl PackedLiteralSink {
 
         self.results.push(ExtractedString {
             value: value.to_string(),
-            data_offset: self.section_data_offset + start as u64,
+            data_offset: self.section_data_offset.saturating_add(start as u64),
             method: StringMethod::Heuristic,
             kind: classify_string(value),
             ..Default::default()
@@ -870,6 +876,11 @@ pub(crate) fn extract_null_separated_strings(
                 });
             }
             i = cursor.max(i + 1);
+        } else if let Some((_, first)) = entries.first() {
+            // A start inside the first entry reads a suffix of it followed by
+            // these same entries, so it cannot reach three either. Stepping
+            // one byte re-read up to 2 KiB per byte.
+            i += first.len() + 1;
         } else {
             i += 1;
         }

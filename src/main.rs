@@ -24,6 +24,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::Parser;
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, IsTerminal};
@@ -303,7 +304,7 @@ fn main() -> Result<()> {
 
     let root = Path::new(&cli.target);
     if !root.exists() {
-        anyhow::bail!("Path does not exist: {}", cli.target);
+        anyhow::bail!("Path does not exist: {}", terminal_safe(&cli.target));
     }
 
     if root.is_dir() {
@@ -312,7 +313,7 @@ fn main() -> Result<()> {
             let entries = match fs::read_dir(&dir) {
                 Ok(e) => e,
                 Err(e) => {
-                    eprintln!("warning: {}: {}", dir.display(), e);
+                    eprintln!("warning: {}: {}", safe_path(&dir), e);
                     continue;
                 }
             };
@@ -322,7 +323,7 @@ fn main() -> Result<()> {
                     Ok(ft) if ft.is_dir() => stack.push(p),
                     Ok(ft) if ft.is_file() => {
                         if let Err(e) = analyze_one(&cli, &p) {
-                            eprintln!("warning: {}: {}", p.display(), e);
+                            eprintln!("warning: {}: {}", safe_path(&p), e);
                         }
                     }
                     _ => {}
@@ -420,7 +421,7 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         // Jump to output section
         if strings.is_empty() {
             if !cli.json {
-                eprintln!("No strings found in {}", path.display());
+                eprintln!("No strings found in {}", safe_path(path));
             }
             return Ok(());
         }
@@ -470,9 +471,16 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     };
     // --xorscan: decode with XOR keys rizin finds loaded by code.
     let xorscan = cli.xorscan && cli.xor.is_none() && !cli.no_xor;
-    if use_r2 {
+    // rizin reads its last argument as a target, not only a file: a leading
+    // `-` is an option and a `dbg://`-style prefix an I/O URI (`dbg://` runs
+    // the file under a debugger). Archive member names are the attacker's, so
+    // rizin gets an absolute path, which is only ever a file. A path that is
+    // not UTF-8 would reach it as a different, lossily converted path.
+    let rizin_target = std::path::absolute(path)
+        .ok()
+        .and_then(|p| p.into_os_string().into_string().ok());
+    if use_r2 && let Some(target) = rizin_target {
         let xor = opts.xor_scan || opts.xor_key.is_some() || xorscan;
-        let target = path.to_string_lossy();
         opts = cli::rizin::attach(opts, &target, &data, xor, xorscan, !cli.no_cache);
     } else if xorscan {
         // No disassembler, so no key locations; still an explicit XOR scan.
@@ -553,17 +561,21 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         print_json(&strings)?;
     } else if cli.simple {
         for s in &strings {
-            println!("{}", s.value.trim_end_matches(|c: char| c.is_control()));
+            println!(
+                "{}",
+                terminal_safe(s.value.trim_end_matches(|c: char| c.is_control()))
+            );
         }
         eprintln!("\n{} strings extracted", strings.len());
     } else {
         if strings.is_empty() {
-            println!("No strings found in {}", path.display());
+            println!("No strings found in {}", safe_path(path));
             return Ok(());
         }
 
         // Print header with format info
-        let filename = path.file_name().unwrap_or_default().to_string_lossy();
+        let filename =
+            terminal_safe(&path.file_name().unwrap_or_default().to_string_lossy()).into_owned();
         let format = get_binary_format(&data);
         let size = data.len();
         let mut hasher = Sha256::new();
@@ -574,12 +586,12 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         // Check for XOR key (custom or auto-detected)
         let xor_key_display = if let Some(ref key) = custom_xor_key {
             // Custom XOR key from --xor flag
-            format!(" · xor:{}", String::from_utf8_lossy(key))
+            format!(" · xor:{}", terminal_safe(&String::from_utf8_lossy(key)))
         } else if let Some(xor_key_str) =
             strings.iter().find(|s| s.kind == Some(StringKind::XorKey))
         {
             // Auto-detected XOR key
-            format!(" · xor:{}", xor_key_str.value)
+            format!(" · xor:{}", terminal_safe(&xor_key_str.value))
         } else {
             String::new()
         };
@@ -722,32 +734,54 @@ fn wrap_string_lines(text: &str, start_offset: u64, max_width: usize) -> Vec<(u6
         return vec![(start_offset, text.to_string())];
     }
 
+    // One pass: a line ends every `max_width` characters. Recounting what
+    // remains for each line made a multi-megabyte string quadratic.
     let mut result = Vec::new();
-    let mut current_offset = start_offset;
-    let mut remaining = text;
-
-    while !remaining.is_empty() {
-        // Find a good break point within max_width characters
-        let break_point = if remaining.chars().count() <= max_width {
-            // Entire remaining string fits
-            remaining.len()
-        } else {
-            // Find byte position for character boundary at max_width
-            // Take the first max_width characters and find the byte position after the last one
-            remaining
-                .char_indices()
-                .nth(max_width)
-                .map_or(remaining.len(), |(pos, _)| pos)
-        };
-
-        let line = &remaining[..break_point];
-        result.push((current_offset, line.to_string()));
-
-        current_offset += break_point as u64;
-        remaining = &remaining[break_point..];
+    let mut start = 0;
+    for (count, (pos, _)) in text.char_indices().enumerate() {
+        if count > 0 && count % max_width == 0 {
+            result.push((start_offset + start as u64, text[start..pos].to_string()));
+            start = pos;
+        }
+    }
+    if start < text.len() {
+        result.push((start_offset + start as u64, text[start..].to_string()));
     }
 
     result
+}
+
+/// `text` with every character a terminal would act on, rather than print,
+/// replaced by its Rust escape (`\u{1b}`, `\r`). Extracted strings are the
+/// attacker's: an ESC opens sequences that retitle the window, write the
+/// clipboard (OSC 52), or move the cursor to hide or forge earlier lines; a
+/// bare CR or newline overwrites or fakes a row; bidirectional overrides
+/// reorder what is shown. Tab is harmless and stays.
+fn terminal_safe(text: &str) -> Cow<'_, str> {
+    let unsafe_char = |c: char| {
+        (c.is_control() && c != '\t')
+            || matches!(
+                c,
+                '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            )
+    };
+    if !text.chars().any(unsafe_char) {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        if unsafe_char(c) {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// A path for a terminal message; file names are as hostile as contents.
+fn safe_path(path: &Path) -> String {
+    terminal_safe(&path.display().to_string()).into_owned()
 }
 
 /// Get terminal width, defaulting to 120 if unavailable
@@ -764,11 +798,12 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         let mut byte_offset = s.data_offset;
 
         // Print each line with its calculated offset
-        for line in s.value.lines() {
+        for raw_line in s.value.lines() {
             let offset = format!("{byte_offset:>8x}");
+            let line = terminal_safe(raw_line);
 
             if use_color {
-                let colorized = colorize_xml_line(line);
+                let colorized = colorize_xml_line(&line);
                 println!(
                     "  {}{}{} {}{:<12}{} {}",
                     DIM, offset, RESET, kind_color, "entitlement", RESET, colorized
@@ -778,7 +813,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
             }
 
             // Update offset for next line (line length + newline)
-            byte_offset += line.len() as u64 + 1;
+            byte_offset += raw_line.len() as u64 + 1;
         }
         return;
     }
@@ -808,7 +843,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
         // Print each line with its calculated offset
         for line in s.value.lines() {
             let offset = format!("{byte_offset:>8x}");
-            let clean_line = line.trim_end_matches(|c: char| c.is_control());
+            let clean_line = terminal_safe(line.trim_end_matches(|c: char| c.is_control()));
 
             if use_color {
                 println!(
@@ -886,7 +921,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
 
     // Format the value, trimming control characters
     let clean_value = s.value.trim_end_matches(|c: char| c.is_control());
-    let mut value = clean_value.to_string();
+    let mut value = terminal_safe(clean_value).into_owned();
 
     // For encoded strings that haven't been decoded separately, show preview inline
     // Skip inline preview if this is a decoded string (to avoid duplication)
@@ -913,7 +948,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
             if printable > decoded.len() / 2 {
                 // Mostly printable - show as text
                 if let Ok(text) = String::from_utf8(decoded) {
-                    let text = text.trim();
+                    let text = terminal_safe(text.trim());
                     if !text.is_empty() {
                         if use_color {
                             value = format!("{value} {DIM}→ {text}{RESET}");
@@ -960,7 +995,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
             if !decoded.is_empty()
                 && let Ok(text) = String::from_utf8(decoded)
             {
-                let text = text.trim();
+                let text = terminal_safe(text.trim());
                 if !text.is_empty() {
                     if use_color {
                         value = format!("{value} {DIM}→ {text}{RESET}");
@@ -977,7 +1012,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
             if !decoded.is_empty()
                 && let Ok(text) = String::from_utf8(decoded)
             {
-                let text = text.trim();
+                let text = terminal_safe(text.trim());
                 if !text.is_empty() {
                     if use_color {
                         value = format!("{value} {DIM}→ {text}{RESET}");
@@ -994,7 +1029,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
             if !decoded.is_empty()
                 && let Ok(text) = String::from_utf8(decoded)
             {
-                let text = text.trim();
+                let text = terminal_safe(text.trim());
                 if !text.is_empty() {
                     if use_color {
                         value = format!("{value} {DIM}→ {text}{RESET}");
@@ -1175,6 +1210,37 @@ mod tests {
         for (i, item) in result.iter().enumerate().take(6) {
             assert_eq!(item.0, i as u64);
         }
+    }
+
+    #[test]
+    fn test_terminal_safe_escapes_control_sequences() {
+        // OSC 52 (clipboard write), CSI conceal, CR overwrite, and a
+        // right-to-left override: all shown, none acted on.
+        assert_eq!(
+            terminal_safe("a\x1b]52;c;Zm9v\x07b"),
+            "a\\u{1b}]52;c;Zm9v\\u{7}b"
+        );
+        assert_eq!(terminal_safe("x\x1b[8my"), "x\\u{1b}[8my");
+        assert_eq!(terminal_safe("good\rbad"), "good\\rbad");
+        assert_eq!(terminal_safe("one\ntwo"), "one\\ntwo");
+        assert_eq!(terminal_safe("abc\u{202e}gpj.exe"), "abc\\u{202e}gpj.exe");
+        assert_eq!(terminal_safe("c1\u{9b}31m"), "c1\\u{9b}31m");
+    }
+
+    #[test]
+    fn test_terminal_safe_borrows_clean_text() {
+        for text in ["plain", "tab\tseparated", "ünïcødé 🔥", ""] {
+            assert!(matches!(terminal_safe(text), Cow::Borrowed(t) if t == text));
+        }
+    }
+
+    #[test]
+    fn test_wrap_string_lines_long_input_is_linear() {
+        // Quadratic wrapping took minutes on a string this size.
+        let text = "a".repeat(4 * 1024 * 1024);
+        let result = wrap_string_lines(&text, 0, 80);
+        assert_eq!(result.len(), text.len().div_ceil(80));
+        assert_eq!(result.last().map(|(o, _)| *o), Some(4 * 1024 * 1024 - 64));
     }
 
     #[test]

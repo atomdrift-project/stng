@@ -404,6 +404,10 @@ pub fn extract_macho_xor_macho_strings(
 ) -> Vec<ExtractedString> {
     const MAX_SECTION_SIZE: usize = 32 * 1024 * 1024;
     const MAX_PAYLOADS: usize = 8;
+    /// Bytes one section may spend decoding candidates in full. A header
+    /// planted every 28 bytes, each claiming the rest of the section, made
+    /// the scan quadratic: a few megabytes cost hours.
+    const MAX_DECODE_WORK: usize = 8 * MAX_SECTION_SIZE;
     const FAT_MAGICS: [[u8; 4]; 4] = [
         [0xca, 0xfe, 0xba, 0xbe], // FAT_MAGIC
         [0xbe, 0xba, 0xfe, 0xca], // FAT_CIGAM
@@ -439,10 +443,12 @@ pub fn extract_macho_xor_macho_strings(
             };
 
             let mut cursor = 0usize;
+            let mut work = 0usize;
             while cursor
                 .checked_add(8)
                 .is_some_and(|n| n <= encoded_section.len())
                 && payload_count < MAX_PAYLOADS
+                && work <= MAX_DECODE_WORK
             {
                 let mut found = None;
                 for magic in FAT_MAGICS {
@@ -452,6 +458,9 @@ pub fn extract_macho_xor_macho_strings(
                         .zip(magic)
                         .all(|(&encoded, plain)| encoded ^ key == plain)
                     {
+                        work = work.saturating_add(
+                            decode_fat_length(&encoded_section[cursor..], key).unwrap_or(0),
+                        );
                         let Some(decoded) = decode_xor_fat_macho(&encoded_section[cursor..], key)
                         else {
                             continue;
@@ -557,6 +566,14 @@ fn decode_fat_length(encoded: &[u8], key: u8) -> Option<usize> {
             }
         };
         if offset == 0 || size == 0 {
+            return None;
+        }
+        // Every slice must be Mach-O, so check its magic here, before a
+        // caller decodes the whole claimed extent to find out.
+        let slice = usize::try_from(offset).ok()?;
+        let magic: [u8; 4] = encoded.get(slice..slice.checked_add(4)?)?.try_into().ok()?;
+        let magic = u32::from_le_bytes(magic.map(|b| b ^ key));
+        if !matches!(magic, 0xfeedface | 0xfeedfacf | 0xcefaedfe | 0xcffaedfe) {
             return None;
         }
         let arch_end = usize::try_from(offset.checked_add(size)?).ok()?;

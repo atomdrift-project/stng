@@ -39,8 +39,16 @@ impl ScriptLanguage {
 /// for plain text, config files, data files, etc.
 #[must_use]
 pub fn detect_script_language(data: &[u8]) -> Option<ScriptLanguage> {
-    let sample_size = data.len().min(8192);
-    let text = std::str::from_utf8(&data[..sample_size]).ok()?;
+    let sample = &data[..data.len().min(8192)];
+    // The cut can split a character; judge the text before it rather than
+    // give up, which let one multibyte character at byte 8191 hide a script.
+    let text = match std::str::from_utf8(sample) {
+        Ok(text) => text,
+        Err(e) if e.error_len().is_none() => {
+            std::str::from_utf8(&sample[..e.valid_up_to()]).ok()?
+        }
+        Err(_) => return None,
+    };
 
     // PHP is very distinctive — check first
     if text.contains("<?php") || text.contains("<?=") {

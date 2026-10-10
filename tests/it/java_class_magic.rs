@@ -70,3 +70,27 @@ fn java_class_preserves_constant_pool_boundaries() {
     );
     assert!(strings.iter().all(|s| !s.value.starts_with('&')));
 }
+
+#[test]
+fn fat_macho_with_many_slices_still_yields_strings() {
+    // More than 16 architectures sends CAFEBABE down the class path, where the
+    // first slice's CPU type reads as an empty constant pool. XNU runs such a
+    // file, so its strings must not disappear with the pool.
+    let mut data = vec![0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0x00, 0x00, 0x11];
+    for _ in 0..17 {
+        data.extend_from_slice(&[
+            0, 0, 0, 0x12, 0, 0, 0, 0, 0, 0, 0x10, 0, 0, 0, 0, 0x40, 0, 0, 0, 0x0C,
+        ]);
+    }
+    data.extend_from_slice(b"\0\0https://fat-macho-hidden-c2.ru/beacon\0");
+    let strings = extract_strings_with_options(&data, &ExtractOptions::new(4));
+    let hit = strings
+        .iter()
+        .find(|s| s.value == "https://fat-macho-hidden-c2.ru/beacon");
+    let at = hit.and_then(|s| usize::try_from(s.data_offset).ok());
+    assert!(
+        at.and_then(|at| data.get(at..))
+            .is_some_and(|rest| rest.starts_with(b"https://")),
+        "{strings:?}"
+    );
+}

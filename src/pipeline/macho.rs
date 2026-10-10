@@ -463,8 +463,8 @@ pub(crate) fn macho_linkedit_ranges(object: &Object<'_>) -> Vec<(u64, u64)> {
     fn from_macho(macho: &MachO<'_>, base: u64) -> Option<(u64, u64)> {
         macho.segments.iter().find_map(|seg| {
             (seg.name().ok() == Some("__LINKEDIT")).then(|| {
-                let start = base + seg.fileoff;
-                (start, start + seg.filesize)
+                let start = base.saturating_add(seg.fileoff);
+                (start, start.saturating_add(seg.filesize))
             })
         })
     }

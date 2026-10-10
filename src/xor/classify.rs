@@ -412,11 +412,9 @@ pub(crate) fn auto_detect_xor_key(
 
     if best_score >= min_xor_confidence_threshold {
         if let Some((ref _key, ref key_str, _)) = best_key {
-            tracing::info!(
-                "Auto-detected XOR key: '{}' (score: {})",
-                key_str,
-                best_score
-            );
+            // A `?` field, not interpolation: the key is the sample's bytes,
+            // and Debug escapes the CR or newline that would forge a log line.
+            tracing::info!(key = ?key_str, score = best_score, "Auto-detected XOR key");
         }
     } else {
         return None;
@@ -494,6 +492,13 @@ pub(crate) fn extract_multikey_xor_strings(
     key_offsets: &[u64],
     min_length: usize,
 ) -> Vec<ExtractedString> {
+    // Blind decoding reads the whole file once per key rotation, up to 56
+    // per key offset, and the disassembler reports as many offsets as the
+    // binary shows it loads: bound it as the other full-file XOR passes are,
+    // in input size and in strings kept.
+    const MAX_BLIND_RESULTS: usize = 5000;
+    let blind = data.len() <= MAX_XOR_SCAN_SIZE;
+    let mut decoded_full = Vec::new();
     let mut results = Vec::new();
     let mut seen: HashSet<(u64, String)> = HashSet::new();
 
@@ -520,11 +525,15 @@ pub(crate) fn extract_multikey_xor_strings(
         // Blind Decode Fallback: For HIGH confidence keys, try all shifts of the key
         // to find short or split strings (which won't match Aho-Corasick patterns).
         for shift in 0..key_bytes.len() {
-            let decoded_full: Vec<u8> = data
-                .iter()
-                .enumerate()
-                .map(|(i, &b)| b ^ key_bytes[(i + shift) % key_bytes.len()])
-                .collect();
+            if !blind || results.len() >= MAX_BLIND_RESULTS {
+                break;
+            }
+            decoded_full.clear();
+            decoded_full.extend(
+                data.iter()
+                    .enumerate()
+                    .map(|(i, &b)| b ^ key_bytes[(i + shift) % key_bytes.len()]),
+            );
 
             // Use a much lower min_length for high-confidence blind decodes
             let blind_min_len = 6.min(min_length);

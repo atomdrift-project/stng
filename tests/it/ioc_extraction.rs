@@ -194,3 +194,66 @@ fn clean_system_binary_iocs_have_structural_evidence() {
         }
     }
 }
+
+/// URL hosts are read as the runtime reads them: a stricter parse let a C2
+/// hide behind an empty port, a backslash, percent-escapes, or IPv4 written
+/// in hex, octal, or fewer than four parts.
+#[test]
+fn url_hosts_are_read_as_browsers_read_them() {
+    let cases = [
+        ("https://c2-evil.ru:/gate", IocKind::Hostname, "c2-evil.ru"),
+        (
+            "http://c2-evil.ru\\@github.com/gate",
+            IocKind::Hostname,
+            "c2-evil.ru",
+        ),
+        ("http://c2-evil%2Eru/", IocKind::Hostname, "c2-evil.ru"),
+        ("http://0x2d.0x21.0x20.0x9c/x", IocKind::Ip, "45.33.32.156"),
+        ("http://45.33.8348/x", IocKind::Ip, "45.33.32.156"),
+        ("http://055.041.040.0234/x", IocKind::Ip, "45.33.32.156"),
+        ("http://757145756/x", IocKind::Ip, "45.33.32.156"),
+    ];
+    for (value, kind, host) in cases {
+        let iocs = extract_iocs(&[extracted(value, None, 0)]);
+        assert!(
+            iocs.iter().any(|ioc| ioc.kind == kind && ioc.value == host),
+            "{value}: {iocs:#?}"
+        );
+    }
+    // Not addresses: too many parts, an octal digit out of range.
+    for value in ["http://1.2.3.4.5/", "http://08.1.1.1/"] {
+        let iocs = extract_iocs(&[extracted(value, None, 0)]);
+        assert!(
+            iocs.iter().all(|ioc| ioc.kind != IocKind::Ip),
+            "{value}: {iocs:#?}"
+        );
+    }
+}
+
+/// A stealer config naming a browser store is typed as a suspicious path; its
+/// C2 URL must still be reported.
+#[test]
+fn url_in_suspicious_path_string_is_reported() {
+    let value = r#"{"grab":"Login Data","c2":"https://c2-evil-domain.ru/gate.php"}"#;
+    let iocs = extract_iocs(&[extracted(value, Some(StringKind::SuspiciousPath), 0)]);
+    assert!(
+        iocs.iter()
+            .any(|ioc| ioc.kind == IocKind::Hostname && ioc.value == "c2-evil-domain.ru"),
+        "{iocs:#?}"
+    );
+}
+
+/// The garbage filter must not discard a short string because of what sits
+/// beside its URL.
+#[test]
+fn garbage_filter_keeps_short_strings_with_urls() {
+    let mut data = vec![0u8; 64];
+    data.extend_from_slice(br#"{"id":"","host":"https://evil-c2-json.ru/gate"}"#);
+    data.extend_from_slice(&[0u8; 64]);
+    let strings =
+        extract_strings_with_options(&data, &ExtractOptions::new(4).with_garbage_filter(true));
+    assert!(
+        strings.iter().any(|s| s.value.contains("evil-c2-json.ru")),
+        "{strings:#?}"
+    );
+}

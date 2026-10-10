@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 /// Global cache for file hashes to avoid redundant hashing of large binaries.
@@ -73,7 +74,7 @@ impl R2Cache {
     ) -> Result<Self, std::io::Error> {
         let cache_dir = cache_dir.as_ref().to_path_buf();
         if enabled {
-            fs::create_dir_all(&cache_dir)?;
+            create_private_dir(&cache_dir)?;
         }
 
         Ok(Self { cache_dir, enabled })
@@ -117,13 +118,13 @@ impl R2Cache {
             // walk of the cache to bound it costs nothing noticeable.
             self.prune();
         }
-        fs::create_dir_all(&cache_dir)?;
+        create_private_dir(&cache_dir)?;
 
         // Write command output
         let filename = sanitize_command_for_filename(command);
         let output_path = cache_dir.join(format!("{filename}.json"));
 
-        fs::write(output_path, output)?;
+        write_atomic(&output_path, output.as_bytes())?;
 
         // Write/update metadata
         self.write_meta(file_path, &hash)?;
@@ -202,9 +203,39 @@ impl R2Cache {
         };
 
         let meta_path = self.cache_dir.join(hash).join("meta.json");
-        fs::write(meta_path, serde_json::to_string(&meta)?)?;
-        Ok(())
+        write_atomic(&meta_path, serde_json::to_string(&meta)?.as_bytes())
     }
+}
+
+/// Create `dir` and its missing parents, readable only by this user on Unix:
+/// cached rizin output holds the analysed files' strings and symbols.
+fn create_private_dir(dir: &Path) -> Result<(), std::io::Error> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
+}
+
+/// Write `data` to `path` through a sibling temporary file and a rename, so a
+/// concurrent stng never reads a half-written entry: a truncated `/at`
+/// listing still parses, just with keys missing.
+fn write_atomic(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
+    // Unique per process and call: rizin passes run on parallel threads and
+    // each writes `meta.json`.
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let tmp = PathBuf::from(tmp);
+    if let Err(e) = fs::write(&tmp, data).and_then(|()| fs::rename(&tmp, path)) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Compute SHA256 hash of file contents with memoization.

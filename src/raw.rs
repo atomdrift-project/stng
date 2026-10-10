@@ -12,9 +12,28 @@ use std::ops::Range;
 /// higher-fidelity method (Go's structure-based + inline-pattern extractors
 /// cover .rodata; raw scanning that region produces merged garbage because
 /// Go packs strings back-to-back without null terminators).
+///
+/// `skip_ranges` must be sorted and disjoint, as [`sorted_skip_ranges`]
+/// leaves them: a binary can declare tens of thousands of sections, and a
+/// linear check per run made the scan quadratic.
 #[inline]
 fn in_skip_range(offset: usize, skip_ranges: &[Range<usize>]) -> bool {
-    skip_ranges.iter().any(|r| r.contains(&offset))
+    let i = skip_ranges.partition_point(|r| r.start <= offset);
+    i > 0 && offset < skip_ranges[i - 1].end
+}
+
+/// `ranges` sorted, with overlapping and touching ranges merged.
+fn sorted_skip_ranges(ranges: &[Range<usize>]) -> Vec<Range<usize>> {
+    let mut sorted: Vec<Range<usize>> = ranges.iter().filter(|r| !r.is_empty()).cloned().collect();
+    sorted.sort_unstable_by_key(|r| (r.start, r.end));
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(sorted.len());
+    for range in sorted {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
 }
 
 pub(crate) fn extract_raw_strings(
@@ -25,6 +44,7 @@ pub(crate) fn extract_raw_strings(
 ) -> Vec<ExtractedString> {
     // Build a set of known segment/section names for quick lookup
     let segment_names_set: HashSet<&str> = segment_names.iter().map(String::as_str).collect();
+    let skip_ranges = &sorted_skip_ranges(skip_ranges);
 
     let context = PrintableRunContext {
         min_length,
@@ -105,6 +125,7 @@ pub(crate) fn extract_raw_strings(
 pub(crate) struct PrintableRunContext<'a> {
     pub(crate) min_length: usize,
     pub(crate) segment_names_set: &'a HashSet<&'a str>,
+    /// Sorted and disjoint; see [`in_skip_range`].
     pub(crate) skip_ranges: &'a [Range<usize>],
 }
 
@@ -223,6 +244,7 @@ pub(crate) fn extract_wide_strings(
     skip_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
     let segment_names_set: HashSet<&str> = segment_names.iter().map(String::as_str).collect();
+    let skip_ranges = &sorted_skip_ranges(skip_ranges);
     let mut strings = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 

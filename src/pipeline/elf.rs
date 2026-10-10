@@ -91,6 +91,18 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
                 &|| extract_go_text_xor_strings(elf, scan_data, min_length),
             ],
         );
+        // A section name is only the file's claim. Without Go structures
+        // behind it, scan as an unknown ELF below: the skipped `.rodata` and
+        // the XOR and IP passes Go turns off would otherwise hide a non-Go
+        // binary's strings behind one Go-named section.
+        if go_strings.is_empty() {
+            tracing::warn!(
+                "ELF has Go section names but no Go string structures; scanning as non-Go"
+            );
+            is_go_binary = false;
+            strings.extend(opts.r2_strings.iter().flatten().cloned());
+            strings.extend(extract_raw_strings(scan_data, min_length, &segments, &[]));
+        }
         let known: HashSet<&str> = go_strings.iter().map(|s| s.value.as_str()).collect();
         let fresh: Vec<ExtractedString> = raw_all
             .into_iter()
@@ -140,29 +152,32 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
 
         // Only scan executable sections for stack strings to avoid wasting time on data
         // Parallelize section scanning using Rayon
-        let results: Vec<ExtractedString> = elf
-            .section_headers
-            .par_iter()
-            .with_min_len(crate::par::job_len(
-                elf.section_headers.len(),
-                scan_data.len(),
-            ))
-            .filter(|sh| sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) != 0)
-            .filter_map(|sh| {
-                // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only)
-                #[allow(clippy::cast_possible_truncation)]
-                let start = sh.sh_offset as usize;
-                #[allow(clippy::cast_possible_truncation)]
-                let end = start.saturating_add(sh.sh_size as usize);
-                scan_data.get(start..end).map(|text| {
-                    let mut results = extract_stack_strings(text, min_length);
-                    for r in &mut results {
-                        r.rebase(start as u64);
-                    }
-                    results
+        let code = crate::binary::merge_overlapping(
+            elf.section_headers
+                .iter()
+                .filter(|sh| {
+                    sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) != 0
                 })
+                .filter_map(|sh| {
+                    // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only)
+                    #[allow(clippy::cast_possible_truncation)]
+                    let start = sh.sh_offset as usize;
+                    #[allow(clippy::cast_possible_truncation)]
+                    let end = start.saturating_add(sh.sh_size as usize);
+                    scan_data.get(start..end).map(|_| (start, end))
+                })
+                .collect(),
+        );
+        let results: Vec<ExtractedString> = code
+            .par_iter()
+            .with_min_len(crate::par::job_len(code.len(), scan_data.len()))
+            .flat_map_iter(|&(start, end)| {
+                let mut results = extract_stack_strings(&scan_data[start..end], min_length);
+                for r in &mut results {
+                    r.rebase(start as u64);
+                }
+                results
             })
-            .flatten()
             .collect();
 
         strings.extend(results);

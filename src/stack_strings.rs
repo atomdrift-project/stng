@@ -146,7 +146,7 @@ impl<'a> StackStringExtractor<'a> {
                 break;
             }
 
-            let instr_off = instr.ip() - self.section_vma;
+            let instr_off = instr.ip().wrapping_sub(self.section_vma);
 
             match instr.mnemonic() {
                 // --- 1. MOV ---

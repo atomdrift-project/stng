@@ -4,9 +4,44 @@
 //! Steps are applied in sequence to recover the original payload.
 
 use base64::Engine;
+use std::cell::Cell;
 
 /// Maximum decoded output size to prevent memory exhaustion (10 MB).
 pub(crate) const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024;
+
+/// Bytes that expanding steps (inflation, string replacement) may produce in
+/// one [`super::deobfuscate_script`] call. Each payload is capped at
+/// [`MAX_DECODED_SIZE`], but a 14 KB line inflates to that, so without a
+/// shared total forty such lines held 400 MB.
+const MAX_EXPANDED_PER_SCRIPT: usize = 4 * MAX_DECODED_SIZE;
+
+thread_local! {
+    /// What is left of this thread's expansion budget. Unlimited outside
+    /// [`with_expansion_budget`], so direct callers keep the per-payload cap.
+    static EXPANSION_BUDGET: Cell<usize> = const { Cell::new(usize::MAX) };
+}
+
+/// Run `f` with [`MAX_EXPANDED_PER_SCRIPT`] bytes of expansion to spend.
+/// Script extraction is sequential, so a thread-local budget covers it.
+pub(crate) fn with_expansion_budget<T>(f: impl FnOnce() -> T) -> T {
+    let outer = EXPANSION_BUDGET.replace(MAX_EXPANDED_PER_SCRIPT);
+    let result = f();
+    EXPANSION_BUDGET.set(outer);
+    result
+}
+
+/// Charge `n` expanded bytes to the budget; false once it cannot cover them.
+pub(crate) fn spend_expansion(n: usize) -> bool {
+    let left = EXPANSION_BUDGET.get();
+    let ok = n <= left;
+    EXPANSION_BUDGET.set(if ok { left - n } else { 0 });
+    if !ok {
+        tracing::warn!(
+            "script expansion budget of {MAX_EXPANDED_PER_SCRIPT} bytes spent; payload skipped"
+        );
+    }
+    ok
+}
 
 /// Maximum recursion depth for nested obfuscation.
 pub const MAX_DECODE_DEPTH: usize = 3;
@@ -110,7 +145,7 @@ pub(crate) fn inflate(decoder: impl std::io::Read) -> Option<Vec<u8>> {
         .take(MAX_DECODED_SIZE as u64 + 1)
         .read_to_end(&mut out)
         .ok()?;
-    (!out.is_empty() && out.len() <= MAX_DECODED_SIZE).then_some(out)
+    (!out.is_empty() && out.len() <= MAX_DECODED_SIZE && spend_expansion(out.len())).then_some(out)
 }
 
 /// Apply a single decode step to a byte buffer.
@@ -163,11 +198,16 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
             let s = String::from_utf16(&code_units).ok()?;
             Some(s.into_bytes())
         }
-        DecodeStep::Reverse => {
-            let mut reversed = input.to_vec();
-            reversed.reverse();
-            Some(reversed)
-        }
+        // Characters, not bytes: reversed bytes of any non-ASCII character
+        // are invalid UTF-8, and the whole payload was lost with them.
+        DecodeStep::Reverse => match std::str::from_utf8(input) {
+            Ok(text) => Some(text.chars().rev().collect::<String>().into_bytes()),
+            Err(_) => {
+                let mut reversed = input.to_vec();
+                reversed.reverse();
+                Some(reversed)
+            }
+        },
         DecodeStep::CharCodes(codes) => {
             // Already pre-parsed to bytes
             Some(codes.clone())

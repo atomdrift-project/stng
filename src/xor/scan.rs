@@ -221,6 +221,54 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
     kept
 }
 
+/// Bytes on each side of a validated key that its region decodes.
+const REGION_RADIUS: usize = 4096;
+
+/// Byte ranges a scan must not inspect again: caller exclusions, then each
+/// region already decoded. A list checked in full for every candidate was
+/// quadratic: a file of repeated encoded anchors adds a region every 4 KiB,
+/// and a binary can declare tens of thousands of code sections.
+struct Covered {
+    /// Exclusions, sorted and merged so one binary search answers.
+    excluded: Vec<(usize, usize)>,
+    /// Decoded regions, `start -> end`. Each spans at most
+    /// `2 * REGION_RADIUS`, so only those starting that close before an
+    /// offset can contain it.
+    regions: BTreeMap<usize, usize>,
+}
+
+impl Covered {
+    fn new(excluded: &[(usize, usize)]) -> Self {
+        let mut sorted: Vec<_> = excluded.iter().copied().filter(|&(s, e)| s < e).collect();
+        sorted.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(sorted.len());
+        for (start, end) in sorted {
+            match merged.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        Self {
+            excluded: merged,
+            regions: BTreeMap::new(),
+        }
+    }
+
+    fn contains(&self, offset: usize) -> bool {
+        let i = self.excluded.partition_point(|&(s, _)| s <= offset);
+        (i > 0 && offset < self.excluded[i - 1].1)
+            || self
+                .regions
+                .range(offset.saturating_sub(2 * REGION_RADIUS)..=offset)
+                .any(|(_, &end)| offset < end)
+    }
+
+    fn insert(&mut self, start: usize, end: usize) {
+        let kept = self.regions.entry(start).or_insert(end);
+        *kept = (*kept).max(end);
+    }
+}
+
 /// Strings whose byte ranges do not overlap, kept first come, first served.
 #[derive(Default)]
 struct Disjoint {
@@ -1025,7 +1073,7 @@ pub(crate) fn extract_rolling_xor_with_known_plaintext(
     let mut results = Vec::new();
     // Offsets inside these are never inspected: code sections up front, then
     // each region already extracted.
-    let mut covered_ranges: Vec<(usize, usize)> = excluded_ranges.to_vec();
+    let mut covered = Covered::new(excluded_ranges);
 
     for key_len in 1..=MAX_ROLLING_KEY {
         let Some(stream_len) = data.len().checked_sub(key_len) else {
@@ -1055,10 +1103,7 @@ pub(crate) fn extract_rolling_xor_with_known_plaintext(
 
         for p in 0..ROLLING_XOR_PATTERNS.len() {
             for &(offset, _, candidate_key) in hits.iter().filter(|h| h.1 == p) {
-                if covered_ranges
-                    .iter()
-                    .any(|&(start, end)| offset >= start && offset < end)
-                {
+                if covered.contains(offset) {
                     continue;
                 }
                 let key = &candidate_key[..key_len];
@@ -1076,10 +1121,10 @@ pub(crate) fn extract_rolling_xor_with_known_plaintext(
                 }
 
                 // Valid key found — extract strings from an 8KB region around the match
-                let region_start = offset.saturating_sub(4096);
-                let region_end = (offset + 4096).min(data.len());
+                let region_start = offset.saturating_sub(REGION_RADIUS);
+                let region_end = (offset + REGION_RADIUS).min(data.len());
                 let region = &data[region_start..region_end];
-                covered_ranges.push((region_start, region_end));
+                covered.insert(region_start, region_end);
 
                 // The key is aligned to `offset`, where the pattern decoded.
                 let skew = key_len - (offset - region_start) % key_len;
@@ -1197,33 +1242,29 @@ pub fn extract_incremental_xor_strings(
     excluded_ranges: &[(usize, usize)],
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();
-    // Pre-seed covered_ranges with excluded_ranges (code sections). The
-    // per-offset loop below skips offsets inside any covered range, so code
-    // segments are never inspected.
-    let mut covered_ranges: Vec<(usize, usize)> = excluded_ranges.to_vec();
+    // Pre-seed with excluded_ranges (code sections). The per-offset loop
+    // below skips offsets inside any covered range, so code segments are
+    // never inspected.
+    let mut covered = Covered::new(excluded_ranges);
 
     // Anchors, in the order the pattern-major/offset-ascending scan this
-    // replaces would have found them — `covered_ranges` suppression depends on
+    // replaces would have found them — covered-range suppression depends on
     // that order, so the sort reproduces it exactly.
     let mut anchors = find_incremental_anchors(data);
     anchors.sort_unstable();
 
     for (_pattern_idx, offset, seed) in anchors {
         // Seed found! Extract strings from the surrounding 8KB region
-        let region_start = offset.saturating_sub(4096);
-        let region_end = (offset + 4096).min(data.len());
+        let region_start = offset.saturating_sub(REGION_RADIUS);
+        let region_end = (offset + REGION_RADIUS).min(data.len());
 
         // Sole covered-range guard: skip offsets inside a caller
         // exclusion (e.g. a `.text` code section) or an already-extracted
-        // region. Only reached on a validated seed, so this O(ranges)
-        // scan runs rarely instead of once per byte.
-        if covered_ranges
-            .iter()
-            .any(|&(s, e)| offset >= s && offset < e)
-        {
+        // region.
+        if covered.contains(offset) {
             continue;
         }
-        covered_ranges.push((region_start, region_end));
+        covered.insert(region_start, region_end);
 
         let mut pos = region_start;
         while pos < region_end {

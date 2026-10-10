@@ -24,6 +24,11 @@ const MAX_VALUE: usize = 32 * 1024;
 /// Longest `%...%` body treated as a variable reference. Longer spans are
 /// almost always two unrelated percent signs in prose.
 const MAX_REF: usize = 64;
+/// Variable bytes all references together may read. Each reference costs its
+/// variable's length, while emitting as little as one character, so
+/// [`MAX_OUTPUT`] alone let `%a:~0,1%` lines over a 32 KiB value run for
+/// most of a minute.
+const MAX_WORK: usize = 64 * MAX_OUTPUT;
 
 /// Environment variables cmd inherits. Undefined references to these keep
 /// their literal spelling (the host fills them in); any other undefined
@@ -75,6 +80,8 @@ struct Expander {
     defined_hits: usize,
     /// References to undefined, non-inherited variables (expanded to empty).
     noise_hits: usize,
+    /// Variable bytes read so far, against [`MAX_WORK`].
+    work: usize,
 }
 
 impl Expander {
@@ -85,7 +92,7 @@ impl Expander {
             _ => (body, None),
         };
         let key = name.to_ascii_lowercase();
-        let Some(value) = self.vars.get(&key).cloned() else {
+        let Some(value) = self.vars.get(&key) else {
             // Inherited variables keep their spelling for the host to fill;
             // an edit (`:~`, `:a=b`) on an unknown name is left as written.
             if INHERITED.contains(&key.as_str()) || op.is_some() {
@@ -94,16 +101,21 @@ impl Expander {
             self.noise_hits += 1;
             return Some(String::new());
         };
+        // Past the budget, references stay as written.
+        self.work = self.work.saturating_add(value.len());
+        if self.work > MAX_WORK {
+            return None;
+        }
         self.defined_hits += 1;
         let Some(op) = op else {
-            return Some(value);
+            return Some(value.clone());
         };
         if let Some(spec) = op.strip_prefix(":~") {
-            return Some(substring(&value, spec));
+            return Some(substring(value, spec));
         }
         let spec = &op[1..];
         let (old, new) = spec.split_once('=')?;
-        Some(replace_ci(&value, old, new))
+        Some(replace_ci(value, old, new))
     }
 
     fn expand_percent(&mut self, line: &str) -> String {
@@ -258,8 +270,7 @@ fn split_statements(line: &str) -> Vec<&str> {
 }
 
 fn substring(value: &str, spec: &str) -> String {
-    let chars: Vec<char> = value.chars().collect();
-    let n = chars.len() as i64;
+    let n = value.chars().count() as i64;
     let (s, l) = match spec.split_once(',') {
         Some((s, l)) => (s.trim().parse::<i64>().ok(), l.trim().parse::<i64>().ok()),
         None => (spec.trim().parse::<i64>().ok(), None),
@@ -280,9 +291,11 @@ fn substring(value: &str, spec: &str) -> String {
     let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {
         return String::new();
     };
-    chars
-        .get(start..end)
-        .map_or_else(String::new, |c| c.iter().collect())
+    value
+        .chars()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect()
 }
 
 fn replace_ci(value: &str, old: &str, new: &str) -> String {

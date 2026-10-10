@@ -74,15 +74,18 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
 
     // iex_encoding_b64 is a superset of convert_b64, so track covered offsets
     let iex_results = try_iex_encoding_b64(source);
-    let covered_offsets: std::collections::HashSet<usize> =
+    let covered_offsets: std::collections::BTreeSet<usize> =
         iex_results.iter().map(|r| r.offset).collect();
     results.extend(iex_results);
 
-    // Only add convert_b64 results that don't overlap with iex_encoding_b64
+    // Only add convert_b64 results that don't overlap with iex_encoding_b64:
+    // none starting in the 200 bytes before. A range query, since a scan of
+    // every covered offset per result was quadratic in the repetitions.
     results.extend(try_convert_b64(source).into_iter().filter(|r| {
-        !covered_offsets
-            .iter()
-            .any(|&o| r.offset >= o && r.offset < o + 200)
+        covered_offsets
+            .range(r.offset.saturating_sub(199)..=r.offset)
+            .next()
+            .is_none()
     }));
 
     results.extend(try_char_array(source));
@@ -216,10 +219,17 @@ fn try_iex_replace(source: &str) -> Vec<DeobfuscationResult> {
                 if from.is_empty() {
                     return None;
                 }
-                result = result.replace(from, to);
-                if result.len() > super::decode_chain::MAX_DECODED_SIZE {
+                // Size the result before building it: checked afterwards,
+                // three short replaces had already allocated gigabytes.
+                let hits = result.matches(from).count();
+                let len = (result.len() - hits * from.len())
+                    .saturating_add(hits.saturating_mul(to.len()));
+                if len > super::decode_chain::MAX_DECODED_SIZE
+                    || !super::decode_chain::spend_expansion(len)
+                {
                     return None;
                 }
+                result = result.replace(from, to);
             }
 
             if result.is_empty() {

@@ -1,6 +1,7 @@
 //! Bounded syntax-only Lua constants. Only data operations are modelled.
 //! Unknown calls, mutable captures and unknown branch outcomes are not executed.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write as _;
 use std::rc::Rc;
 use tree_sitter::Node;
 
@@ -11,6 +12,12 @@ const MAX_DEPTH: usize = 96;
 const MAX_BYTES: usize = 1024 * 1024;
 const MAX_LOOP: usize = 100_000;
 const MAX_TABLE: usize = 10_000;
+/// Rendered replacements kept before recovery gives up. Edits nest, so their
+/// sum may exceed the output cap; without a bound, every reference to a
+/// megabyte string queued another rendered copy of it.
+const MAX_EDIT_BYTES: usize = 16 * MAX_BYTES;
+/// Bytes a value may hold per budget step it is charged when copied.
+const BYTES_PER_STEP: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Key {
@@ -48,6 +55,7 @@ struct Folder<'s> {
     source: &'s str,
     steps: usize,
     edits: BTreeMap<(usize, usize), String>,
+    edit_bytes: usize,
     discovery: Discovery,
     cipher: Option<Cipher>,
     decoded_strings: usize,
@@ -206,7 +214,9 @@ fn quote(bytes: &[u8]) -> String {
                 s.push(char::from(*b));
             }
             32..=126 => s.push(char::from(*b)),
-            _ => s.push_str(&format!("\\{b:03}")),
+            _ => {
+                let _ = write!(s, "\\{b:03}");
+            }
         }
     }
     s.push('"');
@@ -283,11 +293,22 @@ fn string(raw: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 impl<'s> Folder<'s> {
+    /// Whether evaluation may go on. Once any limit trips, recovery returns
+    /// the source unchanged, so all remaining work is skipped.
     fn budget(&mut self, depth: usize) -> bool {
         self.steps += 1;
-        let ok = self.steps <= MAX_STEPS && depth <= MAX_DEPTH;
+        let ok = !self.exhausted && self.steps <= MAX_STEPS && depth <= MAX_DEPTH;
         self.exhausted |= !ok;
         ok
+    }
+    fn edit(&mut self, n: Node<'_>, replacement: String) {
+        self.edit_bytes += replacement.len();
+        if self.edit_bytes > MAX_EDIT_BYTES {
+            self.exhausted = true;
+            return;
+        }
+        self.edits
+            .insert((n.start_byte(), n.end_byte()), replacement);
     }
     fn patch(&mut self, n: Node<'_>, v: &Value<'_>, pure: bool) {
         if pure {
@@ -302,7 +323,7 @@ impl<'s> Folder<'s> {
             _ => None,
         };
         if let Some(s) = rendered {
-            self.edits.insert((n.start_byte(), n.end_byte()), s);
+            self.edit(n, s);
         }
     }
     fn eval<'t>(
@@ -401,7 +422,7 @@ impl<'s> Folder<'s> {
                                 b.is_ascii_graphic() || matches!(**b, b' ' | b'\r' | b'\n' | b'\t')
                             })
                             .count();
-                        self.edits.insert((n.start_byte(), n.end_byte()), quote(&b));
+                        self.edit(n, quote(&b));
                         Value::Bytes(b)
                     }
                     (Value::Table(t), f) => {
@@ -510,6 +531,12 @@ impl<'s> Folder<'s> {
             && (!x.is_finite() || x.abs() > 1e20)
         {
             v = Value::Unknown
+        }
+        // A string costs in proportion to its size: each identifier that
+        // names one copies it, and one step per reference let a few hundred
+        // references to a megabyte string run for minutes.
+        if let Value::Bytes(b) = &v {
+            self.steps += b.len() / BYTES_PER_STEP;
         }
         if matches!(
             n.kind(),
@@ -1317,6 +1344,7 @@ pub(super) fn recover(tree: &tree_sitter::Tree, source: &str, cipher: Option<Cip
         source,
         steps: 0,
         edits: BTreeMap::new(),
+        edit_bytes: 0,
         discovery: Discovery::default(),
         cipher,
         decoded_strings: 0,

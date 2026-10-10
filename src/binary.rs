@@ -2,7 +2,7 @@
 
 use goblin::mach::MachO;
 
-/// Executable-section byte ranges.
+/// Executable-section byte ranges, sorted, with overlapping ranges merged.
 ///
 /// XOR-obfuscated strings never live in `.text`/`__TEXT.__text` — that's
 /// machine code. Skipping these ranges during XOR scanning typically drops
@@ -10,14 +10,29 @@ use goblin::mach::MachO;
 /// of missing legitimate hits.
 #[must_use]
 pub fn code_ranges_from_sections(sections: &[SectionInfo]) -> Vec<(usize, usize)> {
-    let mut ranges: Vec<(usize, usize)> = sections
-        .iter()
-        .filter(|s| s.is_executable && s.size > 0)
-        .map(SectionInfo::range)
-        .filter(|&(start, end)| end > start)
-        .collect();
-    ranges.sort_unstable_by_key(|&(s, _)| s);
-    ranges
+    merge_overlapping(
+        sections
+            .iter()
+            .filter(|s| s.is_executable && s.size > 0)
+            .map(SectionInfo::range)
+            .collect(),
+    )
+}
+
+/// `ranges` sorted, with any that overlap merged into one; adjacent ranges
+/// stay apart. Section headers can declare the same code thousands of times,
+/// and each scan of a copy decoded it all again.
+pub(crate) fn merge_overlapping(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    ranges.retain(|&(start, end)| end > start);
+    ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        match merged.last_mut() {
+            Some(last) if start < last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
 }
 
 /// `data[offset..offset + size]` when that range lies wholly in `data`.
@@ -722,19 +737,20 @@ pub(crate) fn elf_vaddr_to_file_offset(elf: &goblin::elf::Elf<'_>, vaddr: u64) -
         .iter()
         .filter(|ph| ph.p_type == goblin::elf::program_header::PT_LOAD)
         .find(|ph| vaddr >= ph.p_vaddr && vaddr - ph.p_vaddr < ph.p_filesz)
-        .map_or(vaddr, |ph| vaddr - ph.p_vaddr + ph.p_offset)
+        .map_or(vaddr, |ph| (vaddr - ph.p_vaddr).saturating_add(ph.p_offset))
 }
 
 /// Convert virtual address to file offset for Mach-O binaries.
 #[must_use]
 pub(crate) fn macho_vaddr_to_file_offset(macho: &MachO<'_>, vaddr: u64) -> u64 {
+    // Segment fields are the file's to choose, so no sum of them is trusted
+    // not to wrap.
     for seg in &macho.segments {
-        let vm_start = seg.vmaddr;
-        let vm_end = vm_start + seg.vmsize;
-
-        if vaddr >= vm_start && vaddr < vm_end {
+        if let Some(delta) = vaddr.checked_sub(seg.vmaddr)
+            && delta < seg.vmsize
+        {
             // file_offset = (virtual_address - segment_vmaddr) + segment_fileoff
-            return (vaddr - vm_start) + seg.fileoff;
+            return delta.saturating_add(seg.fileoff);
         }
     }
 

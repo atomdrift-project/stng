@@ -188,7 +188,7 @@ impl RustStringExtractor {
                     })
                     .map(|s| ExtractedString {
                         value: s.value,
-                        data_offset: text_const_addr + s.data_offset,
+                        data_offset: text_const_addr.saturating_add(s.data_offset),
                         method: StringMethod::Heuristic,
                         kind: s.kind,
                         ..Default::default()
@@ -243,8 +243,10 @@ impl RustStringExtractor {
         // `macho_vaddr_to_file_offset` walks the slice's own load commands, and
         // `file_base` rebases a fat slice's result onto the whole file (0 thin).
         for s in &mut strings {
-            s.data_offset =
-                file_base + crate::binary::macho_vaddr_to_file_offset(macho, s.data_offset);
+            s.data_offset = file_base.saturating_add(crate::binary::macho_vaddr_to_file_offset(
+                macho,
+                s.data_offset,
+            ));
         }
 
         strings
@@ -350,17 +352,15 @@ impl RustStringExtractor {
             return Vec::new();
         };
         let rdata_file_start = rdata.pointer_to_raw_data as usize;
-        let rdata_va = image_base + u64::from(rdata.virtual_address);
+        let rdata_va = image_base.wrapping_add(u64::from(rdata.virtual_address));
 
         // Scan candidate sections for `(ptr, len)` pairs whose pointer falls
         // inside `.rdata`. `.rdata` itself is the dominant location; `.data`
         // also holds Rust slice tables for items that the linker chose not to
         // place in read-only memory.
         let candidate_names: &[&str] = &[".rdata", ".rodata", ".data"];
-        let scan_sections: Vec<(u64, &[u8])> = pe
-            .sections
-            .iter()
-            .filter_map(|sec| {
+        let scan_sections = crate::extraction::uncovered_pair_ranges(
+            pe.sections.iter().filter_map(|sec| {
                 let name = crate::binary::pe_section_name(&sec.name);
                 if !candidate_names.contains(&name.as_str()) {
                     return None;
@@ -370,9 +370,14 @@ impl RustStringExtractor {
                     u64::from(sec.pointer_to_raw_data),
                     u64::from(sec.size_of_raw_data),
                 )?;
-                Some((image_base + u64::from(sec.virtual_address), bytes))
-            })
-            .collect();
+                Some((
+                    image_base.wrapping_add(u64::from(sec.virtual_address)),
+                    sec.pointer_to_raw_data as usize,
+                    bytes,
+                ))
+            }),
+            &info,
+        );
 
         let bytes = scan_sections.iter().map(|(_, data)| data.len()).sum();
         let all_structs: Vec<StringStruct> = scan_sections
@@ -414,29 +419,20 @@ impl RustStringExtractor {
         // Search all sections for string structures pointing into this section
         let mut all_structs = Vec::new();
 
-        for sh in &elf.section_headers {
-            if sh.sh_type == goblin::elf::section_header::SHT_NOBITS || sh.sh_size == 0 {
-                continue;
-            }
-
-            let offset = sh.sh_offset as usize;
-            let size = sh.sh_size as usize;
-            let Some(end) = offset.checked_add(size) else {
-                continue;
-            };
-
-            if end > data.len() {
-                continue;
-            }
-
-            let search_data = &data[offset..end];
-            let structs = find_string_structures(
-                search_data,
-                sh.sh_addr,
-                section_addr,
-                section_size as u64,
-                info,
-            );
+        let sections = crate::extraction::uncovered_pair_ranges(
+            elf.section_headers.iter().filter_map(|sh| {
+                if sh.sh_type == goblin::elf::section_header::SHT_NOBITS || sh.sh_size == 0 {
+                    return None;
+                }
+                let offset = sh.sh_offset as usize;
+                let end = offset.checked_add(sh.sh_size as usize)?;
+                Some((sh.sh_addr, offset, data.get(offset..end)?))
+            }),
+            info,
+        );
+        for (addr, search_data) in sections {
+            let structs =
+                find_string_structures(search_data, addr, section_addr, section_size as u64, info);
             all_structs.extend(structs);
         }
 
@@ -738,7 +734,7 @@ fn relative_reloc_strings(
     if !elf.is_64 || !elf.little_endian {
         return Vec::new();
     }
-    let rodata_end = rodata_addr + rodata.len() as u64;
+    let rodata_end = rodata_addr.saturating_add(rodata.len() as u64);
     let mut seen: HashSet<(u64, u64)> = HashSet::new();
     let mut out = Vec::new();
     for rel in &elf.dynrelas {
@@ -753,12 +749,12 @@ fn relative_reloc_strings(
         }
         let Ok(len_at) = usize::try_from(crate::binary::elf_vaddr_to_file_offset(
             elf,
-            rel.r_offset + 8,
+            rel.r_offset.wrapping_add(8),
         )) else {
             continue;
         };
         let Some(len) = data
-            .get(len_at..len_at + 8)
+            .get(len_at..len_at.saturating_add(8))
             .and_then(|b| <[u8; 8]>::try_from(b).ok())
             .map(u64::from_le_bytes)
         else {

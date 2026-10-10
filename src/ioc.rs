@@ -8,6 +8,7 @@
 //! authority in a URL. This trades recall for the precision required by bulk
 //! corpus analysis.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -291,31 +292,37 @@ pub fn extract_iocs(strings: &[ExtractedString]) -> Vec<Ioc> {
             continue;
         }
 
-        if matches!(
+        let is_path = matches!(
             extracted.kind,
             Some(StringKind::Path | StringKind::SuspiciousPath)
-        ) {
-            if extracted.method != StringMethod::PclntabSymbol
-                && let Some(path) = canonicalize_ioc_path(value)
-            {
-                record_match(
-                    &mut out,
-                    &mut by_identity,
-                    extracted,
-                    NetworkMatch {
-                        kind: IocKind::Path,
-                        len: value.len(),
-                        value: path,
-                        port: None,
-                        start: 0,
-                    },
-                );
-            }
+        );
+        if is_path
+            && extracted.method != StringMethod::PclntabSymbol
+            && let Some(path) = canonicalize_ioc_path(value)
+        {
+            record_match(
+                &mut out,
+                &mut by_identity,
+                extracted,
+                NetworkMatch {
+                    kind: IocKind::Path,
+                    len: value.len(),
+                    value: path,
+                    port: None,
+                    start: 0,
+                },
+            );
+        }
+
+        if is_path && extracted.kind != Some(StringKind::SuspiciousPath) {
             continue;
         }
 
         // URL authorities are strong structural evidence even when a broader
         // classifier called the whole string a shell command or source code.
+        // A suspicious path is scanned too: a stealer config naming
+        // `Login Data` beside its C2 URL is typed as one, and the URL must
+        // not go unreported. Plain paths keep their old handling.
         scan_url_authorities(value, |m| {
             let external_ip = m.kind != IocKind::Ip
                 || m.value
@@ -328,6 +335,9 @@ pub fn extract_iocs(strings: &[ExtractedString]) -> Vec<Ioc> {
                 record_match(&mut out, &mut by_identity, extracted, m);
             }
         });
+        if is_path {
+            continue;
+        }
 
         let typed_host = extracted.kind == Some(StringKind::Hostname);
         let typed_ip = matches!(extracted.kind, Some(StringKind::IP | StringKind::IPPort));
@@ -781,7 +791,7 @@ fn parse_exact_network(value: &str, typed_host: bool, typed_ip: bool) -> Option<
         return None;
     }
 
-    if let Some((kind, canonical, port, host_len)) = parse_authority(trimmed) {
+    if let Some((kind, canonical, port, host_len)) = parse_authority(trimmed, false) {
         let is_endpoint = port.is_some();
         if is_endpoint
             || (kind == IocKind::Ip && typed_ip)
@@ -799,10 +809,16 @@ fn parse_exact_network(value: &str, typed_host: bool, typed_ip: bool) -> Option<
     None
 }
 
-/// Parse a URL authority or an exact network token.
+/// Parse a URL authority (`url`) or an exact network token.
+///
+/// A URL's host is read as a browser reads it, since that is where the
+/// sample connects: percent-escapes decoded, IPv4 in any form `inet_aton`
+/// takes (`0x2d.0x21.0x20.0x9c`, `45.33.8348`, `2130706436`), and an empty
+/// port (`host:`) meaning the default. Reading these more strictly than the
+/// runtime does hid the C2 behind them.
 ///
 /// Returns `(kind, canonical host, port, host length in the input)`.
-fn parse_authority(authority: &str) -> Option<(IocKind, String, Option<u16>, usize)> {
+fn parse_authority(authority: &str, url: bool) -> Option<(IocKind, String, Option<u16>, usize)> {
     let authority = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
@@ -818,10 +834,10 @@ fn parse_authority(authority: &str) -> Option<(IocKind, String, Option<u16>, usi
             return None;
         }
         let tail = &rest[close + 1..];
-        let port = if tail.is_empty() {
-            None
-        } else {
-            Some(parse_port(tail.strip_prefix(':')?)?)
+        let port = match tail.strip_prefix(':') {
+            _ if tail.is_empty() => None,
+            Some("") if url => None,
+            port => Some(parse_port(port?)?),
         };
         return Some((IocKind::Ip, ip.to_string(), port, host.len()));
     }
@@ -831,14 +847,93 @@ fn parse_authority(authority: &str) -> Option<(IocKind, String, Option<u16>, usi
     }
 
     let (host, port) = match authority.rsplit_once(':') {
+        Some((host, "")) if url && !host.contains(':') => (host, None),
         Some((host, port)) if !host.contains(':') => (host, Some(parse_port(port)?)),
         _ => (authority, None),
     };
     if let Ok(ip) = host.parse::<IpAddr>() {
         return Some((IocKind::Ip, ip.to_string(), port, host.len()));
     }
-    let hostname = canonicalize_hostname(host)?;
+    let decoded = if url {
+        percent_decode(host)?
+    } else {
+        Cow::Borrowed(host)
+    };
+    if url && let Some(ip) = url_ipv4(&decoded) {
+        return Some((IocKind::Ip, ip.to_string(), port, host.len()));
+    }
+    let hostname = canonicalize_hostname(&decoded)?;
     Some((IocKind::Hostname, hostname, port, host.len()))
+}
+
+/// `%XX` escapes in `host` decoded; other bytes, and malformed escapes, kept.
+fn percent_decode(host: &str) -> Option<Cow<'_, str>> {
+    if !host.contains('%') {
+        return Some(Cow::Borrowed(host));
+    }
+    let bytes = host.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escape = bytes
+            .get(i + 1..i + 3)
+            .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok());
+        match (bytes[i], escape) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok().map(Cow::Owned)
+}
+
+/// The IPv4 address a URL host names under the WHATWG host parser: one to
+/// four dot-separated numbers, each decimal, `0x` hex, or `0`-prefixed
+/// octal, the last filling the remaining bytes.
+fn url_ipv4(host: &str) -> Option<Ipv4Addr> {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    let parts = host
+        .split('.')
+        .map(|part| {
+            let (digits, radix) =
+                if let Some(hex) = part.strip_prefix("0x").or_else(|| part.strip_prefix("0X")) {
+                    (hex, 16)
+                } else if part.len() > 1 && part.starts_with('0') {
+                    (&part[1..], 8)
+                } else {
+                    (part, 10)
+                };
+            if part.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+                return None;
+            }
+            if digits.is_empty() {
+                return Some(0);
+            }
+            u64::from_str_radix(digits, radix).ok()
+        })
+        .collect::<Option<Vec<u64>>>()?;
+    let (&last, init) = parts.split_last()?;
+    if init.len() > 3 || init.iter().any(|&n| n > 255) || last >> (8 * (4 - init.len())) != 0 {
+        return None;
+    }
+    let value = init
+        .iter()
+        .enumerate()
+        .fold(last, |acc, (i, &n)| acc | (n << (8 * (3 - i))));
+    Some(Ipv4Addr::from(u32::try_from(value).ok()?))
+}
+
+/// Whether `value` holds a URL whose authority parses as a host or IP.
+pub(crate) fn has_url_authority(value: &str) -> bool {
+    let mut found = false;
+    scan_url_authorities(value, |_| found = true);
+    found
 }
 
 fn parse_port(port: &str) -> Option<u16> {
@@ -881,12 +976,14 @@ fn scan_url_authorities(value: &str, mut emit: impl FnMut(NetworkMatch)) {
         let authority_end = bytes[authority_start..]
             .iter()
             .position(|b| {
+                // Browsers end a URL's authority at `\` too, so
+                // `http://c2.ru\@decoy.com/` connects to `c2.ru`.
                 b.is_ascii_whitespace()
-                    || matches!(*b, b'/' | b'?' | b'#' | b'"' | b'\'' | b'<' | b'>')
+                    || matches!(*b, b'/' | b'\\' | b'?' | b'#' | b'"' | b'\'' | b'<' | b'>')
             })
             .map_or(bytes.len(), |end| authority_start + end);
         let authority = &value[authority_start..authority_end];
-        if let Some((kind, canonical, port, host_len)) = parse_authority(authority) {
+        if let Some((kind, canonical, port, host_len)) = parse_authority(authority, true) {
             let userinfo_len = authority.rfind('@').map_or(0, |at| at.saturating_add(1));
             let bracket_len = usize::from(authority[userinfo_len..].starts_with('['));
             emit(NetworkMatch {

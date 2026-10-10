@@ -56,7 +56,12 @@ pub(crate) fn extract_macho_imports(
     // surfaces but those two views miss. Without this they appear only as
     // untyped raw-scan hits in the __LINKEDIT string table; classifying them by
     // nlist type lets `merge_imports` retag those hits with a proper kind.
-    for (name, nlist) in macho.symbols().flatten() {
+    //
+    // goblin trusts the header's `nsyms`, and past the end of the file its
+    // iterator stops advancing while `flatten` drops each error: a forged
+    // count spun four billion times. No entry is under 12 bytes (32-bit
+    // nlist), so a real table has at most `slice.len() / 12` of them.
+    for (name, nlist) in macho.symbols().take(slice.len() / 12).flatten() {
         // Skip debug (STABS) entries — source paths and line info, not symbols.
         if name.len() < min_length || nlist.is_stab() || !seen.insert(name.to_string()) {
             continue;

@@ -22,7 +22,10 @@ fn source(value: &str) -> ExtractedString {
 }
 
 fn decode(bytes: &[u8]) -> Option<ExtractedString> {
-    decode_base64_string(&source(&STANDARD.encode(bytes)))
+    decode_base64_string(
+        &source(&STANDARD.encode(bytes)),
+        &AtomicUsize::new(usize::MAX),
+    )
 }
 
 #[test]
@@ -32,7 +35,8 @@ fn base64_zlib_all_compression_levels_and_headers() {
         let compressed = compress(text.as_bytes(), level);
         assert!(std::str::from_utf8(&compressed).is_err());
         let encoded = STANDARD.encode(&compressed);
-        let decoded = decode_base64_string(&source(&encoded)).unwrap();
+        let decoded =
+            decode_base64_string(&source(&encoded), &AtomicUsize::new(usize::MAX)).unwrap();
         assert_eq!(decoded.value, text, "compression level {level}");
         assert_eq!(decoded.method, StringMethod::Base64Decode);
         assert_eq!(decoded.data_offset, 37);
@@ -64,7 +68,12 @@ fn base64_zlib_omitted_and_partial_terminal_padding() {
         let encoded = STANDARD.encode(compress(text.as_bytes(), 9));
         for removed in 0..=encoded.bytes().rev().take_while(|b| *b == b'=').count() {
             let unpadded = &encoded[..encoded.len() - removed];
-            assert_eq!(decode_base64_string(&source(unpadded)).unwrap().value, text);
+            assert_eq!(
+                decode_base64_string(&source(unpadded), &AtomicUsize::new(usize::MAX))
+                    .unwrap()
+                    .value,
+                text
+            );
         }
     }
 }
@@ -262,12 +271,21 @@ fn base64_zlib_rejects_a_high_ratio_decompression_bomb() {
 
 #[test]
 fn base64_zlib_does_not_weaken_plain_base64_false_positive_checks() {
-    assert!(decode_base64_string(&source("IWorkItemQueriesExt2")).is_none());
+    assert!(
+        decode_base64_string(
+            &source("IWorkItemQueriesExt2"),
+            &AtomicUsize::new(usize::MAX)
+        )
+        .is_none()
+    );
     let text = "Hello World!";
     assert_eq!(
-        decode_base64_string(&source(&STANDARD.encode(text)))
-            .unwrap()
-            .value,
+        decode_base64_string(
+            &source(&STANDARD.encode(text)),
+            &AtomicUsize::new(usize::MAX)
+        )
+        .unwrap()
+        .value,
         text
     );
     assert!(decode(&[0xff, 0x00, 0x8b, 0x01, 0xfe, 0x98, 0xab, 0xcd]).is_none());
@@ -284,7 +302,12 @@ fn base64_zlib_header_collision_does_not_hide_ordinary_base64_text() {
             0
         );
         let encoded = STANDARD.encode(text);
-        assert_eq!(decode_base64_string(&source(&encoded)).unwrap().value, text);
+        assert_eq!(
+            decode_base64_string(&source(&encoded), &AtomicUsize::new(usize::MAX))
+                .unwrap()
+                .value,
+            text
+        );
         let wrapper = format!("text='{encoded}'");
         let found = extract_embedded_base64(&[source(&wrapper)]);
         assert!(found.iter().any(|s| s.value == text));

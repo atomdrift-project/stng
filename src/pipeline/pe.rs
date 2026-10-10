@@ -49,11 +49,21 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         name.contains("go.buildinfo") || name.contains("gopclntab") || name == ".symtab"
     });
 
-    if has_go {
+    // A section name is only the file's claim. Go handling skips raw and XOR
+    // scanning of `.rdata`, so it needs Go structures behind it: a non-Go
+    // binary carrying one Go-named section otherwise hid every string there.
+    let t_struct = std::time::Instant::now();
+    let go_strings = if has_go {
+        GoStringExtractor::new(min_length).extract_pe(pe, data)
+    } else {
+        Vec::new()
+    };
+    if has_go && go_strings.is_empty() {
+        tracing::warn!("PE has Go section names but no Go string structures; scanning as non-Go");
+    }
+    if !go_strings.is_empty() {
         is_go_binary = true;
-        let t_struct = std::time::Instant::now();
-        let extractor = GoStringExtractor::new(min_length);
-        strings.extend(extractor.extract_pe(pe, data));
+        strings.extend(go_strings);
         tracing::debug!(
             "TIME: Go PE structure extraction took {:?}",
             t_struct.elapsed()
@@ -240,7 +250,7 @@ pub(crate) fn suppress_version_info_ips(strings: &mut [ExtractedString], pe: &go
         if matches!(s.kind, Some(StringKind::IP | StringKind::IPPort))
             && version_strings.iter().any(|v| v == &s.value)
         {
-            tracing::debug!("Suppressing version-info false positive IP: {}", s.value);
+            tracing::debug!(ip = ?s.value, "Suppressing version-info false positive IP");
             s.kind = None;
         }
     }

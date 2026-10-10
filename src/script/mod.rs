@@ -40,6 +40,10 @@ pub struct DeobfuscationResult {
 /// detection up to `MAX_DECODE_DEPTH` times.
 #[must_use]
 pub fn deobfuscate_script(data: &[u8]) -> Vec<DeobfuscationResult> {
+    decode_chain::with_expansion_budget(|| deobfuscate(data))
+}
+
+fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
     let vbe_results: Vec<_> = vbscript::decode_blocks(data)
         .into_iter()
         .map(|(offset, decoded)| DeobfuscationResult {

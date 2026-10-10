@@ -1466,6 +1466,14 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
         return true;
     }
 
+    // A URL with a real host is an IOC however odd its surroundings: an
+    // empty JSON value (`""`) or a non-ASCII hostname beside it must not get
+    // a config string discarded as garbage. Long strings are left to the
+    // filter: those are documents (XMP packets, schemas) citing namespaces.
+    if len <= 256 && crate::ioc::has_url_authority(s) {
+        return true;
+    }
+
     // Authentication and tokens
     if is_ctf_or_guid(s, len) {
         return true;

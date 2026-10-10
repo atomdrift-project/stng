@@ -121,9 +121,10 @@ impl ExtractedString {
     /// every fragment. Extractors report offsets relative to the bytes they
     /// were given; callers lift them into the file with this.
     pub(crate) fn rebase(&mut self, delta: u64) {
-        self.data_offset += delta;
+        // Saturating: offsets derive from hostile headers.
+        self.data_offset = self.data_offset.saturating_add(delta);
         for fragment in self.fragments.iter_mut().flat_map(|f| f.iter_mut()) {
-            fragment.offset += delta;
+            fragment.offset = fragment.offset.saturating_add(delta);
         }
     }
 

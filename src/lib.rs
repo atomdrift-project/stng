@@ -368,8 +368,8 @@ fn apply_xor_scan(
             }
             if !marked {
                 tracing::warn!(
-                    "XOR key '{}' not found in extracted strings — injecting",
-                    key_str
+                    key = ?key_str,
+                    "XOR key not found in extracted strings — injecting"
                 );
                 strings.push(ExtractedString {
                     value: key_str.clone(),
@@ -943,25 +943,21 @@ fn extract_from_utf16_file(
     deduplicate_by_offset(strings)
 }
 
-/// Recover a text file whose UTF-16 BOM was prepended to ordinary UTF-8 bytes.
+/// Recover a text file whose UTF-16 BOM was prepended to ordinary bytes.
 ///
 /// Some malware builders use this malformed wrapper to confuse tools that
-/// select a decoder solely from the first two bytes.  A genuine UTF-16 source
-/// containing ASCII necessarily has NUL bytes between its code units, whereas
-/// this form is valid UTF-8 with no embedded NULs after the BOM. Keep the check
-/// narrow: a trailing NUL is tolerated as a text terminator; any embedded NUL
-/// (or invalid UTF-8) remains on the normal UTF-16 path.
+/// select a decoder solely from the first two bytes. A genuine UTF-16 source
+/// containing ASCII necessarily has NUL bytes between its code units, so NULs
+/// in at most one byte of eight mark the bytes as 8-bit text. The count is a
+/// density, not "none at all": one planted NUL or invalid UTF-8 byte must not
+/// turn an ASCII script into CJK and hide every string in it. The text then
+/// gets the decoders and script deobfuscation any other text file gets.
 fn extract_from_malformed_utf16_bom_file(
     data: &[u8],
     opts: &ExtractOptions,
 ) -> Option<Vec<ExtractedString>> {
     let payload = data.get(2..)?;
-    let text_end = payload
-        .iter()
-        .rposition(|&byte| byte != 0)
-        .map_or(0, |i| i + 1);
-    let text = &payload[..text_end];
-    if text.contains(&0) || std::str::from_utf8(text).is_err() {
+    if memchr::memchr_iter(0, payload).count().saturating_mul(8) > payload.len() {
         return None;
     }
 
@@ -970,6 +966,11 @@ fn extract_from_malformed_utf16_bom_file(
         // `payload` omits the BOM, but consumers expect file-relative offsets.
         string.data_offset = string.data_offset.saturating_add(2);
     }
+    let decoded = decode_encoded_strings(&strings);
+    strings.extend(decoded);
+    // Not gated on `is_text_file`: the BOM already claims text, and one
+    // planted byte must not switch deobfuscation off.
+    append_script_deobfuscation(&mut strings, payload, opts);
     Some(strings)
 }
 
@@ -1236,6 +1237,17 @@ fn extract_java_class_strings(data: &[u8], opts: &ExtractOptions) -> Vec<Extract
         pos = next;
         index += 1;
     }
+
+    // Everything past the pool is scanned raw. The magic is shared with fat
+    // Mach-O, so the header alone cannot prove this is a class: a fat binary
+    // with more than 16 slices (XNU runs one) reads as a class with an empty
+    // pool, and without this its every string would vanish. The same goes for
+    // a payload appended to a genuine class.
+    let mut rest = extract_raw_strings(&data[pos..], opts.min_length, &[], &[]);
+    for string in &mut rest {
+        string.data_offset = string.data_offset.saturating_add(pos as u64);
+    }
+    strings.extend(rest);
 
     if opts.xor_scan || opts.xor_key.is_some() || opts.xor_key_offsets.is_some() {
         apply_xor_scan(&mut strings, data, opts, false, &[]);

