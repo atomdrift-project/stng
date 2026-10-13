@@ -471,17 +471,9 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     };
     // --xorscan: decode with XOR keys rizin finds loaded by code.
     let xorscan = cli.xorscan && cli.xor.is_none() && !cli.no_xor;
-    // rizin reads its last argument as a target, not only a file: a leading
-    // `-` is an option and a `dbg://`-style prefix an I/O URI (`dbg://` runs
-    // the file under a debugger). Archive member names are the attacker's, so
-    // rizin gets an absolute path, which is only ever a file. A path that is
-    // not UTF-8 would reach it as a different, lossily converted path.
-    let rizin_target = std::path::absolute(path)
-        .ok()
-        .and_then(|p| p.into_os_string().into_string().ok());
-    if use_r2 && let Some(target) = rizin_target {
+    if use_r2 {
         let xor = opts.xor_scan || opts.xor_key.is_some() || xorscan;
-        opts = cli::rizin::attach(opts, &target, &data, xor, xorscan, !cli.no_cache);
+        opts = cli::rizin::attach(opts, &data, xor, xorscan, !cli.no_cache);
     } else if xorscan {
         // No disassembler, so no key locations; still an explicit XOR scan.
         opts = opts.with_xor_key_offsets(Vec::new());

@@ -4,8 +4,10 @@
 pub(crate) mod cache;
 use cache::R2Cache;
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::time::Duration;
 use stng::goblin::Object;
@@ -13,7 +15,7 @@ use stng::{
     ExtractOptions, ExtractedString, StringBoundary, StringKind, StringMethod, classify_string,
 };
 
-static TOOL: OnceLock<Option<&'static str>> = OnceLock::new();
+static TOOL: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 /// In-process memoization of tool command outputs, keyed by
 /// `(path, command, file size, mtime)`. Several extraction passes ask for the
@@ -40,24 +42,78 @@ pub(crate) fn is_available() -> bool {
 pub(crate) fn flush_cache(file_path: &str) -> Result<(), std::io::Error> {
     R2Cache::new()?.clear(file_path)
 }
-fn get_tool() -> Option<&'static str> {
-    *TOOL.get_or_init(|| {
-        if Command::new("rizin")
-            .arg("-v")
-            .output()
-            .is_ok_and(|o| o.status.success())
-        {
-            Some("rizin")
-        } else if Command::new("r2")
-            .arg("-v")
-            .output()
-            .is_ok_and(|o| o.status.success())
-        {
-            Some("r2")
-        } else {
-            None
+fn get_tool() -> Option<&'static Path> {
+    TOOL.get_or_init(|| resolve_tool("rizin").or_else(|| resolve_tool("r2")))
+        .as_deref()
+}
+
+/// Resolve a tool through absolute PATH entries only. An empty or relative
+/// entry searches the working directory, which may be the sample tree.
+fn resolve_tool(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let names = candidate_names(name);
+    std::env::split_paths(&path)
+        .filter(|dir| dir.is_absolute())
+        .find_map(|dir| {
+            names
+                .iter()
+                .map(|candidate| dir.join(candidate))
+                .find(|candidate| is_executable(candidate))
+        })
+}
+
+#[cfg(windows)]
+fn candidate_names(name: &str) -> Vec<String> {
+    vec![
+        name.to_string(),
+        format!("{name}.exe"),
+        format!("{name}.cmd"),
+        format!("{name}.bat"),
+    ]
+}
+
+#[cfg(not(windows))]
+fn candidate_names(name: &str) -> Vec<String> {
+    vec![name.to_string()]
+}
+
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
+/// Environment variables a native parser needs to start and locate its own
+/// runtime resources. Secrets from the scanner process are deliberately not
+/// inherited by a tool that consumes hostile bytes.
+const TOOL_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+];
+
+fn scrub_env(cmd: &mut Command) {
+    cmd.env_clear();
+    for key in TOOL_ENV_ALLOWLIST {
+        if let Some(value) = std::env::var_os(key) {
+            cmd.env(key, value);
         }
-    })
+    }
 }
 
 #[must_use]
@@ -189,7 +245,7 @@ pub(crate) fn extract_strings(
 }
 
 fn run_tool_command_with_cache(
-    tool: &str,
+    tool: &Path,
     path: &str,
     cmd: &str,
     use_cache: bool,
@@ -217,7 +273,7 @@ fn run_tool_command_with_cache(
         .clone()
 }
 
-fn spawn_tool_command(tool: &str, path: &str, cmd: &str, use_cache: bool) -> Option<String> {
+fn spawn_tool_command(tool: &Path, path: &str, cmd: &str, use_cache: bool) -> Option<String> {
     if use_cache
         && let Ok(cache) = R2Cache::new()
         && let Some(cached) = cache.get(path, cmd)
@@ -231,16 +287,18 @@ fn spawn_tool_command(tool: &str, path: &str, cmd: &str, use_cache: bool) -> Opt
     Some(result)
 }
 
-/// Run `tool -q -c cmd path` and return its stdout, or `None` if it fails,
-/// outlives [`TOOL_TIMEOUT`] or prints more than [`MAX_TOOL_OUTPUT`].
-fn run_tool(tool: &str, path: &str, cmd: &str) -> Option<String> {
-    let mut child = Command::new(tool)
-        .args(["-q", "-c", cmd, path])
+/// Run `tool -NN -q -c cmd path` and return its stdout, or `None` if it
+/// fails, outlives [`TOOL_TIMEOUT`] or prints more than [`MAX_TOOL_OUTPUT`].
+fn run_tool(tool: &Path, path: &str, cmd: &str) -> Option<String> {
+    let mut command = Command::new(tool);
+    command
+        .args(["-NN", "-q", "-c", cmd])
+        .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    scrub_env(&mut command);
+    let mut child = command.spawn().ok()?;
     let stdout = child.stdout.take()?;
     // Read on another thread so the deadline holds even while rizin prints
     // nothing; it finishes at end of output or at the cap.
@@ -574,12 +632,57 @@ fn find_sockaddr_in_binary(data: &[u8]) -> Vec<SockaddrIn> {
     res
 }
 
+/// An immutable copy of the bytes handed to the disassembler. The CLI reads
+/// the input before analysis; passing its original path would let a rename or
+/// symlink swap make rizin parse different bytes from the Rust extractors.
+struct TempInput(PathBuf);
+
+impl TempInput {
+    fn write(data: &[u8]) -> std::io::Result<Self> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::path::absolute(std::env::temp_dir())?;
+        for _ in 0..128 {
+            let id = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path = dir.join(format!("stng-rizin-{}-{id}.bin", std::process::id()));
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            match options.open(&path) {
+                Ok(mut file) => {
+                    if let Err(error) = file.write_all(data).and_then(|()| file.flush()) {
+                        let _ = std::fs::remove_file(&path);
+                        return Err(error);
+                    }
+                    return Ok(Self(path));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not allocate a unique rizin input",
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempInput {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Files above this size get no rizin analysis: `aaa` on them takes minutes.
 const MAX_ANALYSIS_SIZE: usize = 10 * 1024 * 1024;
 
-/// Run the rizin analyses extraction can use on the file at `path` (whose
-/// bytes are `data`) and attach the results to `opts`. They run concurrently;
-/// `izzj` is shared through the memo, and each `aaa` is the expensive part.
+/// Run the rizin analyses extraction can use on an immutable snapshot of
+/// `data` and attach the results to `opts`. They run concurrently; `izzj` is
+/// shared through the memo, and each `aaa` is the expensive part.
 ///
 /// - strings and symbols, except for Go binaries, whose strings come from
 ///   their own structures;
@@ -589,12 +692,17 @@ const MAX_ANALYSIS_SIZE: usize = 10 * 1024 * 1024;
 /// - XOR key locations, when `xorscan` asks for them.
 pub(crate) fn attach(
     mut opts: ExtractOptions,
-    path: &str,
     data: &[u8],
     xor: bool,
     xorscan: bool,
     use_cache: bool,
 ) -> ExtractOptions {
+    let Ok(input) = TempInput::write(data) else {
+        return opts;
+    };
+    let Some(path) = input.path().to_str() else {
+        return opts;
+    };
     let min_length = opts.min_length;
     let strings = !stng::is_go_binary(data);
     let connect = data.len() <= MAX_ANALYSIS_SIZE
@@ -667,6 +775,39 @@ fn arm_arch_possible(object: &Object<'_>) -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrubbed_tool_environment_omits_secrets() {
+        let mut command = Command::new("rizin");
+        command.env("AWS_SECRET_ACCESS_KEY", "secret");
+        scrub_env(&mut command);
+        assert!(
+            command
+                .get_envs()
+                .all(|(key, _)| key != "AWS_SECRET_ACCESS_KEY")
+        );
+    }
+
+    #[test]
+    fn temp_input_is_a_private_snapshot() {
+        let input = TempInput::write(b"original").unwrap();
+        assert_eq!(std::fs::read(input.path()).unwrap(), b"original");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(input.path())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        let path = input.path().to_path_buf();
+        drop(input);
+        assert!(!path.exists());
+    }
 
     #[test]
     fn extract_stack_off_multibyte_does_not_panic() {
