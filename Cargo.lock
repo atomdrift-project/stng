@@ -1101,12 +1101,20 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "stng-process",
  "terminal_size",
  "tikv-jemallocator",
  "tracing",
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-lua",
+]
+
+[[package]]
+name = "stng-process"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

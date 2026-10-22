@@ -35,6 +35,10 @@
 //! }
 //! ```
 
+/// Explicit native-tool lifetime protection; extraction itself starts no processes.
+#[cfg(unix)]
+pub use stng_process as subprocess;
+
 // Core modules
 mod extraction;
 mod ioc;

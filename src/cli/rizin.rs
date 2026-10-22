@@ -287,9 +287,55 @@ fn spawn_tool_command(tool: &Path, path: &str, cmd: &str, use_cache: bool) -> Op
     Some(result)
 }
 
-/// Run `tool -NN -q -c cmd path` and return its stdout, or `None` if it
-/// fails, outlives [`TOOL_TIMEOUT`] or prints more than [`MAX_TOOL_OUTPUT`].
+/// Own the child through every early return and panic. Group cleanup runs
+/// before reaping the leader, while its process-group ID is still reserved.
+struct ToolChild {
+    child: std::process::Child,
+    #[cfg(unix)]
+    _watchdog: stng::subprocess::Watchdog,
+}
+
+impl ToolChild {
+    fn spawn(command: &mut Command, timeout: Duration) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        let watchdog = stng::subprocess::Watchdog::arm(command, timeout)?;
+        Ok(Self {
+            child: command.spawn()?,
+            #[cfg(unix)]
+            _watchdog: watchdog,
+        })
+    }
+
+    fn has_exited(&mut self) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        {
+            stng::subprocess::exited_unreaped(self.child.id())
+        }
+        #[cfg(not(unix))]
+        {
+            self.child.try_wait().map(|status| status.is_some())
+        }
+    }
+
+    fn finish(&mut self) -> Option<std::process::ExitStatus> {
+        #[cfg(unix)]
+        self._watchdog.kill_group(self.child.id());
+        let _ = self.child.kill();
+        self.child.wait().ok()
+    }
+}
+
+impl Drop for ToolChild {
+    fn drop(&mut self) {
+        let _ = self.finish();
+    }
+}
+
 fn run_tool(tool: &Path, path: &str, cmd: &str) -> Option<String> {
+    run_tool_with_timeout(tool, path, cmd, TOOL_TIMEOUT)
+}
+
+fn run_tool_with_timeout(tool: &Path, path: &str, cmd: &str, timeout: Duration) -> Option<String> {
     let mut command = Command::new(tool);
     command
         .args(["-NN", "-q", "-c", cmd])
@@ -298,45 +344,54 @@ fn run_tool(tool: &Path, path: &str, cmd: &str) -> Option<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     scrub_env(&mut command);
-    let mut child = command.spawn().ok()?;
-    let stdout = child.stdout.take()?;
-    // Read on another thread so the deadline holds even while rizin prints
-    // nothing; it finishes at end of output or at the cap.
+    let started = std::time::Instant::now();
+    let mut guard = ToolChild::spawn(&mut command, timeout).ok()?;
+    drop(command);
+    let stdout = guard.child.stdout.take()?;
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut out = Vec::new();
-        let read = stdout.take(MAX_TOOL_OUTPUT + 1).read_to_end(&mut out);
-        let _ = tx.send(read.map(|_| out));
-    });
-    let out = match rx.recv_timeout(TOOL_TIMEOUT) {
-        Ok(Ok(out)) if out.len() as u64 <= MAX_TOOL_OUTPUT => Some(out),
-        Ok(Ok(_)) => {
-            tracing::warn!(
-                cmd,
-                path,
-                "rizin output exceeds {MAX_TOOL_OUTPUT} bytes; dropped"
-            );
-            None
+    std::thread::Builder::new()
+        .name("stng-rizin-drain".into())
+        .spawn(move || {
+            let mut out = Vec::new();
+            let read = stdout.take(MAX_TOOL_OUTPUT + 1).read_to_end(&mut out);
+            let _ = tx.send(read.map(|_| out));
+        })
+        .ok()?;
+    let mut output = None;
+    loop {
+        if output.is_none() {
+            match rx.try_recv() {
+                Ok(Ok(out)) if out.len() as u64 <= MAX_TOOL_OUTPUT => output = Some(out),
+                Ok(_) | Err(mpsc::TryRecvError::Disconnected) => return None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
         }
-        Ok(Err(e)) => {
-            tracing::warn!(cmd, path, "reading rizin output: {e}");
-            None
+        match guard.has_exited() {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
         }
-        Err(_) => {
-            tracing::warn!(cmd, path, "rizin ran past {TOOL_TIMEOUT:?}; killed");
-            None
+        if started.elapsed() >= timeout {
+            // Kill before logging: a blocked stderr must not delay cleanup.
+            let _ = guard.finish();
+            tracing::warn!(cmd, path, "rizin ran past {timeout:?}; killed");
+            return None;
         }
-    };
-    if out.is_none() {
-        let _ = child.kill();
+        std::thread::sleep(Duration::from_millis(10));
     }
-    let status = child.wait().ok()?;
+    // Kill descendants holding stdout before waiting for the drain. EOF does
+    // not imply process exit, and process exit does not imply pipe closure.
+    let status = guard.finish()?;
     if !status.success() {
         tracing::debug!(cmd, path, %status, "rizin failed");
         return None;
     }
-    // Lossy, so one invalid name in a crafted binary cannot void the pass.
-    out.map(|o| String::from_utf8_lossy(&o).into_owned())
+    let out = output.or_else(|| rx.recv_timeout(Duration::from_secs(5)).ok()?.ok())?;
+    if out.len() as u64 > MAX_TOOL_OUTPUT {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out).into_owned())
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -775,6 +830,32 @@ fn arm_arch_possible(object: &Object<'_>) -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn deadline_still_applies_after_stdout_closes() {
+        use std::os::unix::fs::PermissionsExt;
+        let input = TempInput::write(b"#!/bin/sh\nexec 1>&-\nexec /bin/sleep 30\n").unwrap();
+        std::fs::set_permissions(input.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let started = std::time::Instant::now();
+        assert!(
+            run_tool_with_timeout(input.path(), "ignored", "aaa", Duration::from_millis(200))
+                .is_none()
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn exited_leader_cannot_leave_a_pipe_holding_descendant() {
+        use std::os::unix::fs::PermissionsExt;
+        let input = TempInput::write(b"#!/bin/sh\n/bin/sleep 30 &\necho '[]'\nexit 0\n").unwrap();
+        std::fs::set_permissions(input.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let started = std::time::Instant::now();
+        let out = run_tool_with_timeout(input.path(), "ignored", "aaa", Duration::from_secs(3));
+        assert_eq!(out.as_deref(), Some("[]\n"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn scrubbed_tool_environment_omits_secrets() {
