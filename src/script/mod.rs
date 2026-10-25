@@ -8,6 +8,7 @@ mod batch;
 pub mod decode_chain;
 pub mod detect;
 mod javascript;
+mod javascript_permutation;
 mod lua;
 mod php;
 mod powershell;

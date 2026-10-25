@@ -59,6 +59,7 @@ static EVAL_REVERSE_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {
     let mut results = Vec::new();
 
+    results.extend(super::javascript_permutation::extract(source));
     results.extend(try_eval_atob(source));
     results.extend(try_eval_buffer_b64(source));
     results.extend(try_eval_charcode(source));
