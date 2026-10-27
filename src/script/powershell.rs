@@ -21,6 +21,14 @@ static ENCODED_CMD_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("static regex")
 });
 
+// The one-letter `-e` option is also common in other programs (for example,
+// `grep -E`), so it needs a PowerShell executable on the same command line.
+#[allow(clippy::expect_used)]
+static POWERSHELL_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)(?:^|[^a-z0-9_])(?:powershell|pwsh)(?:\.exe)?(?:[\s"']|$)"#)
+        .expect("static regex")
+});
+
 /// `[Convert]::FromBase64String("...")` or `[System.Convert]::FromBase64String("...")`
 #[allow(clippy::expect_used)]
 static CONVERT_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -100,8 +108,21 @@ fn try_encoded_command(source: &str) -> Vec<DeobfuscationResult> {
     ENCODED_CMD_RE
         .captures_iter(source)
         .filter_map(|cap| {
+            let matched = cap.get(0)?;
+            let offset = matched.start();
+            if matched.as_str().get(..2)?.eq_ignore_ascii_case("-e")
+                && matched
+                    .as_str()
+                    .as_bytes()
+                    .get(2)
+                    .is_some_and(u8::is_ascii_whitespace)
+            {
+                let line_start = source[..offset].rfind('\n').map_or(0, |pos| pos + 1);
+                if !POWERSHELL_EXEC_RE.is_match(&source[line_start..offset]) {
+                    return None;
+                }
+            }
             let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
-            let offset = cap.get(0)?.start();
             let steps = vec![DecodeStep::Base64, DecodeStep::Utf16Le];
             let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps)?;
             Some(DeobfuscationResult {
@@ -282,6 +303,26 @@ mod tests {
         let results = extract_obfuscated_payloads(&src);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].decoded, "whoami");
+    }
+
+    #[test]
+    fn short_e_requires_powershell_command_context() {
+        let utf16: Vec<u8> = "Write-Host hello"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
+        assert!(try_encoded_command(&format!("grep -E '{encoded}'")).is_empty());
+        assert!(
+            try_encoded_command(&format!("powershell -Command noop\ngrep -E '{encoded}'"))
+                .is_empty()
+        );
+        for command in ["powershell.exe", "pwsh"] {
+            let result = try_encoded_command(&format!("{command} -e {encoded}"));
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].decoded, "Write-Host hello");
+        }
+        assert!(try_encoded_command("grep -E '/var/backups/shadow\\.bak$'").is_empty());
     }
 
     #[test]

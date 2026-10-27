@@ -1950,6 +1950,25 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bo
     let trimmed = s.trim();
     let len = trimmed.len();
 
+    // Short environment assignments in data sections can resemble random
+    // uppercase identifier noise. Retain the conventional NAME=value shape
+    // so a real setting such as HISTSIZE=0 remains searchable. Do not exempt
+    // strings recovered from executable code, where accidental bytes are
+    // common, or values containing whitespace/control characters.
+    if ctx.in_code_section != Some(true)
+        && let Some((name, value)) = trimmed.split_once('=')
+        && (5..=64).contains(&name.len())
+        && name.as_bytes()[0].is_ascii_uppercase()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        && !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|b| b.is_ascii_graphic() && b != b'=')
+    {
+        return false;
+    }
+
     // A trailing label separator does not change what a string is. Field names
     // (`TracerPid:` in /proc/<pid>/status, `VmRSS:`), header names
     // (`Content-Length:`) and struct labels are their identifier plus a colon,
@@ -2011,6 +2030,17 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retains_short_environment_assignments() {
+        assert!(!is_garbage("HISTSIZE=0"));
+        assert!(!is_garbage("LANGUAGE=en_US"));
+        let code = crate::types::StringContext {
+            in_code_section: Some(true),
+            ..crate::types::StringContext::empty()
+        };
+        assert!(is_garbage_with_context("HISTSIZE=0", &code));
+    }
 
     #[test]
     fn test_is_garbage_valid_strings() {
