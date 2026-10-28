@@ -97,7 +97,7 @@ filefacts	testdata/malware/vget_sample	1608	c7ecf6a2f60f69c2	Base64Decode=1 HexD
 filefacts	testdata/malware/wizardnet_downloader.dll	3297	e6cc1829e1554f3d	RawScan=2297 Structure=1 UrlDecode=1 WideString=998
 filefacts	testdata/malware/zyravpn_tun2socks.exe	24138	0bb2a6ed48925a10	Base64Decode=7 InstructionPattern=3747 PclntabSymbol=18218 RawScan=183 StackString=45 Structure=1922 UrlDecode=1 WideString=15
 filefacts	testdata/nsis/4d49_Constraining.Opm	5	c524f223250ba7cd	RawScan=1 StackString=2 XorDecode=2
-filefacts	testdata/nsis/57527_Hokerer118.hex	20	bbfe109af10cdaee	RawScan=1 XorDecode=19
+filefacts	testdata/nsis/57527_Hokerer118.hex	6	9be21b699421c29d	RawScan=1 XorDecode=5
 filefacts	testdata/pe/does-nothing-windows-amd64.exe	7993	4b31b3c4b710d47d	Base64Decode=1 InstructionPattern=1084 PclntabSymbol=5707 RawScan=89 Structure=1105 WideString=7
 filefacts	testdata/pe/dotnet_unsigned_x86.dll	31	cebbfcc1ae12e70d	RawScan=19 WideString=12
 filefacts	testdata/pe/gobump_windows_amd64.exe	26022	70c65d03167739a2	Base64Decode=3 Heuristic=2 InstructionPattern=2162 PclntabSymbol=11701 RawScan=10472 Structure=1675 WideString=7
@@ -112,6 +112,8 @@ filefacts	testdata/rust_elf/src/src/main.rs	13	711ea6b7ba31b202	RawScan=13
 filefacts	testdata/script/batch-cp708-powershell-dropper-db9.bat	8	544916ffb1ea4aa0	RawScan=8
 filefacts	testdata/script/batch-cp708-powershell-dropper-e289.bat	8	23a1b873cee42d0f	RawScan=8
 filefacts	testdata/script/batch-remap-sample.unknown	43	37dc6c72e83a959c	RawScan=43
+filefacts	testdata/script/jso-inert-permutation.js	5	7ccd849f708274a3	RawScan=3 ScriptDecode=1 UnicodeEscapeDecode=1
+filefacts	testdata/script/jso-permutation.js	6	02bd763f6ee2bff1	RawScan=3 ScriptDecode=2 UnicodeEscapeDecode=1
 filefacts	testdata/script/npm-charcode-rot-packer.js	5	206e67d414694ac0	RawScan=1 ScriptDecode=4
 filefacts	testdata/script/npm-charcode-rot-packer.md	14	5412b99ae26f17d7	RawScan=13 SpacedAscii=1
 filefacts	testdata/script/vbscript-encode.asp	3	6e339038a82f4e43	RawScan=2 ScriptDecode=1
@@ -119,7 +121,9 @@ filefacts	testdata/script/vbscript-encoded-malformed-asp.asp	1887	ddac148097475e
 filefacts	testdata/xor/brew_agent_xor_region.bin	668	927f5013e27b48f7	RawScan=397 XorDecode=271
 filefacts	testdata/xor/brew_agent_xor_region.md	32	c9f9cc364a848190	RawScan=32
 filefacts	testdata/xor/brew_agent_xor_sample	766	5bfb3fdb2885a3d7	CodeSignature=1 RawScan=489 StackString=3 XorDecode=271 XorStackPair=2
-filefacts	testdata/xor/libffmpeg_3cx_x64_xor	7226	a930ffdbcab8f412	Base64Decode=2 CodeSignature=27 Heuristic=655 InstructionPattern=30 RawScan=5500 Structure=770 UrlDecode=9 XorDecode=233
+filefacts	testdata/xor/libffmpeg_3cx_x64_xor	7184	fdd7c9998c07862d	Base64Decode=2 CodeSignature=27 Heuristic=655 InstructionPattern=30 RawScan=5503 Structure=774 UrlDecode=9 XorDecode=184
+filefacts	testdata/xor/overlay_crypter_loader_xor	503	a34eab9b5fdf71a9	RawScan=497 XorDecode=6
+filefacts	testdata/xor/overlay_crypter_loader_xor.md	18	dc7df647a5251554	RawScan=18
 default	testdata/elf/hello_linux_amd64	16329	ffe3b2b239c42292	Base64Decode=1 InstructionPattern=1199 PclntabSymbol=2751 RawScan=11723 SpacedAscii=1 Structure=650 WideString=4
 default	testdata/garble/build/trim.txt	1	aa60946b98098493	RawScan=1
 default	testdata/garble/garble_fresh_linux_amd64	18184	c6a4a8c732ba39c6	Base64Decode=3 InstructionPattern=1249 PclntabSymbol=8797 RawScan=7628 SpacedAscii=1 Structure=461 WideString=7 XorStackPair=38
@@ -219,7 +223,7 @@ default	testdata/malware/vget_sample	7537	6ae4f3716e52e3b5	Base64Decode=1 HexDec
 default	testdata/malware/wizardnet_downloader.dll	8010	942c89a0731e086b	RawScan=6560 Structure=10 UrlDecode=1 WideString=1439
 default	testdata/malware/zyravpn_tun2socks.exe	25773	40e578cd64fa761a	Base64Decode=7 InstructionPattern=4230 PclntabSymbol=18622 RawScan=863 SpacedAscii=3 StackString=54 Structure=1921 WideString=73
 default	testdata/nsis/4d49_Constraining.Opm	5	c524f223250ba7cd	RawScan=1 StackString=2 XorDecode=2
-default	testdata/nsis/57527_Hokerer118.hex	20	bbfe109af10cdaee	RawScan=1 XorDecode=19
+default	testdata/nsis/57527_Hokerer118.hex	6	9be21b699421c29d	RawScan=1 XorDecode=5
 default	testdata/pe/does-nothing-windows-amd64.exe	8673	8891213ffa105003	Base64Decode=1 InstructionPattern=1379 PclntabSymbol=5907 RawScan=266 SpacedAscii=1 Structure=1105 WideString=14
 default	testdata/pe/dotnet_unsigned_x86.dll	40	6442fa0d97134257	RawScan=26 WideString=14
 default	testdata/pe/gobump_windows_amd64.exe	49556	267abd76e721d9b0	Base64Decode=3 Heuristic=2 InstructionPattern=2658 PclntabSymbol=11989 RawScan=33202 SpacedAscii=2 Structure=1675 WideString=25
@@ -234,6 +238,8 @@ default	testdata/rust_elf/src/src/main.rs	14	c1ac2d55923c42be	RawScan=14
 default	testdata/script/batch-cp708-powershell-dropper-db9.bat	8	544916ffb1ea4aa0	RawScan=8
 default	testdata/script/batch-cp708-powershell-dropper-e289.bat	8	23a1b873cee42d0f	RawScan=8
 default	testdata/script/batch-remap-sample.unknown	43	37dc6c72e83a959c	RawScan=43
+default	testdata/script/jso-inert-permutation.js	6	ab5e5b4c059a58c7	RawScan=4 ScriptDecode=1 UnicodeEscapeDecode=1
+default	testdata/script/jso-permutation.js	7	4033d2e28023b9a3	RawScan=4 ScriptDecode=2 UnicodeEscapeDecode=1
 default	testdata/script/npm-charcode-rot-packer.js	5	206e67d414694ac0	RawScan=1 ScriptDecode=4
 default	testdata/script/npm-charcode-rot-packer.md	15	792d793b37789957	RawScan=14 SpacedAscii=1
 default	testdata/script/vbscript-encode.asp	5	55d8533c6b016d8f	RawScan=4 ScriptDecode=1
@@ -242,3 +248,5 @@ default	testdata/xor/brew_agent_xor_region.bin	1227	16d34d3647c21576	RawScan=122
 default	testdata/xor/brew_agent_xor_region.md	34	7b896319b3b64d5d	RawScan=34
 default	testdata/xor/brew_agent_xor_sample	1912	8edce6eb2ea4852d	CodeSignature=1 RawScan=1888 StackString=8 XorStackPair=15
 default	testdata/xor/libffmpeg_3cx_x64_xor	14685	6d0a784ad83bcea7	Base64Decode=2 CodeSignature=31 Heuristic=937 InstructionPattern=46 RawScan=12875 SpacedAscii=15 Structure=774 UrlDecode=5
+default	testdata/xor/overlay_crypter_loader_xor	2772	619d93acfb0555db	RawScan=2770 StackString=1 WideString=1
+default	testdata/xor/overlay_crypter_loader_xor.md	28	f4c6d397778f6306	RawScan=28

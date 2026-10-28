@@ -7,7 +7,7 @@ use super::key::{calculate_entropy, is_good_xor_key_candidate, score_xor_key_can
 use super::scan::{XOR_PATTERNS, extract_custom_xor_strings};
 use super::validate::{
     has_known_path_prefix, is_locale_string, is_meaningful_string, is_printable_char, is_valid_ip,
-    is_valid_port, is_valid_xor_string, looks_like_text,
+    is_valid_port, is_valid_xor_string, looks_like_text, nul_ends_string, reads_as_text,
 };
 use super::{MAX_AUTO_DETECT_SIZE, MAX_XOR_SCAN_SIZE, SKIP_XOR_KEYS};
 use crate::classifier::{classify_string, names_targeted_location};
@@ -454,6 +454,7 @@ pub(crate) fn extract_xor_strings(
         };
         if let Some((decoded, start, end)) = expanded
             && let Some(kind) = classify_xor_string(&decoded)
+            && (kind.is_some() || !reads_as_text(&data[start..end]))
         {
             let offset = start as u64;
             if seen.insert((offset, decoded.clone())) {
@@ -927,21 +928,21 @@ pub(crate) fn expand_xor_string(
     let min_start = match_pos.saturating_sub(MAX_EXPAND_DISTANCE);
     let max_end = (match_pos + MAX_EXPAND_DISTANCE).min(data.len());
 
-    // For high-byte keys (>0x7F): null bytes in the raw binary decode to the key value itself
-    // (raw=0x00 → decoded=0x00^K=K). These decoded-K values fall in the 0x80-0xF7 range,
-    // which is_printable_char accepts as UTF-8 lead bytes, but they are actually null bytes
-    // (string terminators) and must not be included in the expanded string.
-    // For low-byte keys (<0x80): null bytes decode to printable ASCII (e.g., key=0x77→decoded='w').
-    // These are naturally rejected by is_printable_char when the raw byte is 0x00 (not 'w'),
-    // so no special handling is needed.
-    let stop_on_key_byte = key > 0x7F;
-
+    // A raw NUL decodes to the key itself (0x00 ^ K = K), which is printable
+    // for most keys, so the printable test alone runs through terminators and
+    // into every neighboring string: a table of NUL-terminated paths under key
+    // 0x26 ('&') expanded to "&&/proc/self/fd/&&/var/tmp/.b&&&&&/tmp/.b&…",
+    // which fails validation, so not even the anchored path was reported.
+    // [`nul_ends_string`] tells a terminator from a plaintext byte equal to
+    // the key.
     let mut start = match_pos;
     let mut recent_backward: [u8; 8] = [0; 8];
     let mut backward_idx = 0;
     while start > min_start {
         let decoded = data[start - 1] ^ key;
-        if !is_printable_char(decoded) || (stop_on_key_byte && decoded == key) {
+        if !is_printable_char(decoded)
+            || (data[start - 1] == 0 && nul_ends_string(data, start - 1, key))
+        {
             break;
         }
         // Track recent chars to detect low-entropy regions
@@ -960,7 +961,7 @@ pub(crate) fn expand_xor_string(
     let mut forward_idx = 0;
     while end < max_end {
         let decoded = data[end] ^ key;
-        if !is_printable_char(decoded) || (stop_on_key_byte && decoded == key) {
+        if !is_printable_char(decoded) || (data[end] == 0 && nul_ends_string(data, end, key)) {
             break;
         }
         recent_forward[forward_idx % 8] = decoded;

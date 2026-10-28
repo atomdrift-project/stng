@@ -484,7 +484,7 @@ mod tests {
     #[test]
     fn qa4_recovers_source_without_executing() {
         let s = include_str!("../../testdata/script/jso-permutation.js");
-        let r = extract(&s);
+        let r = extract(s);
         assert_eq!(r.len(), 1);
         assert!(r[0].decoded.contains("eth_getTransactionByHash"));
         assert!(r[0].decoded.contains("child_process"));

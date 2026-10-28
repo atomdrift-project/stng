@@ -12,7 +12,10 @@ use super::classify::{
     classify_xor_string, clean_locale_trailing_garbage, clean_url_trailing_garbage,
     trim_consonant_clusters, trim_trailing_garbage,
 };
-use super::validate::is_locale_string;
+use super::validate::{
+    has_known_path_prefix, is_locale_string, is_valid_xor_string, nul_ends_string, reads_as_text,
+};
+use crate::classifier::classify_string;
 use crate::validation;
 use crate::{ExtractedString, StringKind, StringMethod};
 use aho_corasick::AhoCorasick;
@@ -294,6 +297,10 @@ impl Disjoint {
     }
 }
 
+/// Shortest NUL-terminated path object a single-byte pass keeps below its
+/// length floor: a known directory plus a name, as in "/tmp/x".
+const MIN_PATH_OBJECT_LEN: usize = 6;
+
 /// Single-byte XOR: decode the whole file once and validate each printable
 /// ASCII run, split at null padding.
 fn single_byte_xor_strings(
@@ -340,8 +347,8 @@ fn single_byte_xor_strings(
         // A single printable run can span several NUL-padded records: each stored
         // string is surrounded by NUL padding that XOR-decodes to a constant printable
         // byte (key 0x7a renders NUL as 'z', as in the 3CX libffmpeg C2 config). Split
-        // the run at padding boundaries — runs of >=2 raw NULs — and validate each
-        // non-pad segment on its own, so a real string is neither trimmed away with the
+        // the run at each NUL that ends a string (see `nul_ends_string`) and validate
+        // each segment on its own, so a real string is neither trimmed away with the
         // padding that precedes it nor rejected as part of a null-heavy run.
         let mut seg_start = run_start;
         while seg_start < end {
@@ -349,20 +356,24 @@ fn single_byte_xor_strings(
             while seg_start < end && data[seg_start] == 0 {
                 seg_start += 1;
             }
-            // Extend until the next padding boundary (>=2 consecutive raw NULs) or end,
-            // counting interior single NULs in the same pass for the density check below.
+            // Extend until the next terminating NUL or end, counting the NULs kept
+            // inside (plaintext bytes equal to the key) for the density check below.
             let mut seg_end = seg_start;
             let mut raw_null_count = 0usize;
-            while seg_end < end
-                && !(data[seg_end] == 0 && seg_end + 1 < end && data[seg_end + 1] == 0)
-            {
+            while seg_end < end && !(data[seg_end] == 0 && nul_ends_string(data, seg_end, key)) {
                 raw_null_count += usize::from(data[seg_end] == 0);
                 seg_end += 1;
             }
             let cur_start = seg_start;
             seg_start = seg_end + 1; // advance past the boundary NUL, regardless of outcome
 
-            if seg_end - cur_start < min_length
+            // A whole NUL-terminated object naming a known directory is a path
+            // even under the length floor: a loader's "/tmp/.b" is 7 bytes.
+            let len = seg_end - cur_start;
+            let is_object =
+                cur_start > 0 && data[cur_start - 1] == 0 && data.get(seg_end) == Some(&0);
+            let may_be_short_path = is_object && len >= MIN_PATH_OBJECT_LEN;
+            if (len < min_length && !may_be_short_path)
                 || excluded_ranges
                     .iter()
                     .any(|&(start, stop)| cur_start >= start && cur_start < stop)
@@ -372,7 +383,7 @@ fn single_byte_xor_strings(
 
             // A segment still dominated by raw NULs is padding noise (key reflection
             // artifact), not a string.
-            if raw_null_count * 2 > (seg_end - cur_start) {
+            if raw_null_count * 2 > len {
                 continue;
             }
 
@@ -380,12 +391,28 @@ fn single_byte_xor_strings(
                 continue;
             };
 
+            if len < min_length {
+                if has_known_path_prefix(&s) && is_valid_xor_string(&s) {
+                    results.push(ExtractedString {
+                        kind: classify_string(&s),
+                        value: s,
+                        data_offset: cur_start as u64,
+                        method: StringMethod::XorDecode,
+                        ..Default::default()
+                    });
+                }
+                continue;
+            }
+
             // Classify to reject garbage and pick the kind used by the vowel-ratio
             // bypass below. Unclassified strings are kept: these maximal ASCII runs
             // are far less noisy than the multi-byte scan's every-offset candidates.
             let Some(kind) = classify_xor_string(&s) else {
                 continue;
             };
+            if kind.is_none() && reads_as_text(&data[cur_start..seg_end]) {
+                continue;
+            }
 
             // Additional sanity check: reject obvious garbage.
             // Since single-byte XOR uses ASCII-only run detection, all strings are ASCII;
@@ -532,6 +559,7 @@ fn extract_xor_strings_from_hints(
                 let kind_opt = classify_xor_string(&s);
 
                 if let Some(kind) = kind_opt
+                    && (kind.is_some() || !reads_as_text(&data[offset..end]))
                     && seen.insert((offset as u64, s.clone()))
                 {
                     results.push(ExtractedString {

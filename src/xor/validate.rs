@@ -18,6 +18,35 @@ pub(crate) fn is_printable_char(b: u8) -> bool {
     (0x80..=0xF7).contains(&b)
 }
 
+/// Whether the raw NUL at `data[i]` ends a string XOR-encoded with `key`.
+///
+/// A NUL is where a C string ends, but it is also how a plaintext byte equal
+/// to the key encodes (`k ^ k = 0`): "password" under key 0x77 (`w`) is stored
+/// as `pass\0ord`, and a 3CX C2 domain under 0x7a (`z`) as `a\0ure`. Only that
+/// second reading keeps the text a word, so the NUL stays inside the string
+/// when it stands alone and its decoded byte, a word character or joiner,
+/// sits between two alphanumerics. Anything else ends the string: padding,
+/// or the lone NUL between two packed C strings, which under key 0x26 would
+/// otherwise read `/tmp/.b&/proc/self/exe`.
+pub(crate) fn nul_ends_string(data: &[u8], i: usize, key: u8) -> bool {
+    let joins_words =
+        key.is_ascii_alphanumeric() || matches!(key, b'.' | b'/' | b'\\' | b'-' | b'_' | b':');
+    let alnum_at = |j: usize| {
+        data.get(j)
+            .is_some_and(|&b| b != 0 && (b ^ key).is_ascii_alphanumeric())
+    };
+    !(joins_words && i > 0 && alnum_at(i - 1) && alnum_at(i + 1))
+}
+
+/// Whether `raw` already reads as text (NULs aside). Such bytes are plaintext,
+/// and a key below 0x40 only permutes plaintext into more printable text:
+/// "No such process" under 0x26 is "hI&USEN&VTIECUU". So a decode of them is
+/// kept only when it classifies as something specific.
+pub(crate) fn reads_as_text(raw: &[u8]) -> bool {
+    raw.iter()
+        .all(|&b| b == 0 || b == b' ' || b.is_ascii_graphic())
+}
+
 /// Check if a decoded XOR string is valid (not garbage with unusual punctuation).
 /// Returns true if the string passes basic sanity checks.
 pub(crate) fn is_valid_xor_string(s: &str) -> bool {
@@ -787,6 +816,12 @@ pub(crate) fn is_partial_xor_decode(s: &str) -> bool {
     }
 
     for pattern in KNOWN_XOR_PLAINTEXTS {
+        // A near miss keeps the pattern's lead ('%' or 'H'). Without this,
+        // "/proc/..." matches "%PROG" on P-R-O and reads as a garbled
+        // "%PROGRAMDATA%", which rejects every XOR-decoded /proc path.
+        if !s.as_bytes()[0].eq_ignore_ascii_case(&pattern.as_bytes()[0]) {
+            continue;
+        }
         // Check if string starts similarly to a known pattern
         let prefix_len = pattern.len().min(5).min(s.len());
         let pattern_chars: Vec<char> = pattern.chars().take(prefix_len).collect();

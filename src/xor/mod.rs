@@ -44,8 +44,8 @@ mod tests {
     use super::key::{calculate_entropy, is_good_xor_key_candidate};
     use super::scan::{extract_custom_xor_strings, extract_rolling_xor_with_known_plaintext};
     use super::validate::{
-        has_known_path_prefix, is_locale_string, is_meaningful_string, is_valid_ip, is_valid_port,
-        is_valid_xor_string,
+        has_known_path_prefix, is_locale_string, is_meaningful_string, is_partial_xor_decode,
+        is_valid_ip, is_valid_port, is_valid_xor_string, nul_ends_string,
     };
     use super::*;
     use crate::{ExtractedString, StringKind, StringMethod};
@@ -113,6 +113,42 @@ mod tests {
             is_valid_xor_string("ld.so.preload"),
             "ld.so.preload should be valid"
         );
+    }
+
+    #[test]
+    fn test_proc_paths_are_not_near_miss_decodes() {
+        // "/proc" shares P-R-O with "%PROG"; it is not a garbled %PROGRAMDATA%.
+        assert!(!is_partial_xor_decode("/proc/self/fd/"));
+        assert!(!is_partial_xor_decode("/proc/self/exe"));
+        assert!(is_partial_xor_decode("%UsERP4NFINE%\\"));
+    }
+
+    #[test]
+    fn test_nul_ends_string() {
+        // Encode C strings with `key`, keeping their NUL terminators raw.
+        let encode = |parts: &[&[u8]], key: u8| {
+            let mut out = Vec::new();
+            for (i, part) in parts.iter().enumerate() {
+                if i > 0 {
+                    out.push(0);
+                }
+                out.extend(part.iter().map(|b| b ^ key));
+            }
+            out
+        };
+        // A plaintext byte equal to the key encodes as a NUL mid-word.
+        let password = encode(&[b"password"], b'w');
+        assert_eq!(password[4], 0);
+        assert!(!nul_ends_string(&password, 4, b'w'));
+        // Between packed C strings a lone NUL ends one, whether the key is
+        // punctuation or a letter, since its neighbors do not form a word.
+        for key in *b"&x" {
+            let table = encode(&[b"/tmp/.b", b"/proc"], key);
+            assert!(nul_ends_string(&table, 7, key), "key {key:#x}");
+        }
+        // Padding (a NUL run) always ends a string.
+        let padded = encode(&[b"abc", b"", b"def"], b'x');
+        assert!(nul_ends_string(&padded, 3, b'x'));
     }
 
     fn make_xor_test_data(plaintext: &[u8], key: u8, offset: usize) -> Vec<u8> {
