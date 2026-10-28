@@ -382,7 +382,10 @@ pub(super) fn extract(source: &str) -> Vec<DeobfuscationResult> {
                 let Some(payload) = dictionary(codec, blob) else {
                     continue;
                 };
-                if payload == *blob || payload.len() < 100 {
+                // `blob` has already passed through the character shuffle.
+                // An identity dictionary layer must not discard that recovered
+                // source: it can be executable text without dictionary codes.
+                if payload.len() < 100 {
                     continue;
                 }
                 let (payload, chain) = match expand_table(&payload) {
@@ -458,6 +461,26 @@ mod tests {
             .replace("d[o] = d[h]", "d[o] = d[o]");
         assert!(extract(&s).is_empty());
     }
+    #[test]
+    fn identity_dictionary_preserves_permutation_recovered_constant_function() {
+        let source = include_str!("../../testdata/script/jso-inert-permutation.js");
+        let results = extract(source);
+        assert_eq!(results.len(), 1);
+        let recovered = &results[0];
+        assert_eq!(
+            recovered.chain_description,
+            "javascript:permutation+dictionary"
+        );
+        assert!(source[recovered.offset..].starts_with("function ype"));
+        let padding = recovered
+            .decoded
+            .strip_prefix("return/**/2;/*")
+            .and_then(|body| body.strip_suffix("*/"))
+            .expect("constant-return function body");
+        assert_eq!(padding.len(), 4000);
+        assert!(padding.bytes().all(|byte| byte == b'a'));
+    }
+
     #[test]
     fn qa4_recovers_source_without_executing() {
         let s = include_str!("../../testdata/script/jso-permutation.js");
