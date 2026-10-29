@@ -6,3 +6,6 @@ edition = "2021"
 [profile.release]
 strip = true
 opt-level = "s"
+
+# A standalone crate: the source of a test fixture, not a member of stng.
+[workspace]

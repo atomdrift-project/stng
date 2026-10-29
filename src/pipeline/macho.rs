@@ -1,27 +1,23 @@
 //! Mach-O: thin and universal binaries.
 
 use super::Scan;
+use super::extract_stack_strings_from_ranges;
 use super::{extend_unclaimed, merge_imports};
 use crate::GoStringExtractor;
 use crate::RustStringExtractor;
 use crate::StringKind;
 use crate::StringMethod;
-use crate::arm64_stack_xor;
 use crate::binary;
 use crate::collect_macho_section_info;
 use crate::collect_macho_segments;
 use crate::entitlements;
 use crate::extract_macho_imports;
 use crate::extract_raw_strings;
-use crate::extract_stack_strings_from_ranges;
-use crate::fmix_xor;
-use crate::heap_xor;
-use crate::lcg_xor;
 use crate::macho_go_skip_ranges;
 use crate::macho_has_go_sections;
 use crate::pclntab_strings;
-use crate::pointer_xor;
 use crate::swift_small_strings;
+use crate::xor;
 use crate::{ExtractOptions, ExtractedString};
 use goblin::Object;
 use goblin::mach::{MachO, MultiArch};
@@ -39,11 +35,11 @@ fn slice_decoders(
     let passes = [
         (
             "heap XOR",
-            heap_xor::extract_macho(macho, slice_base, min_length),
+            xor::heap::extract_macho(macho, slice_base, min_length),
         ),
         (
             "pointer XOR",
-            pointer_xor::extract_macho(macho, slice_base, min_length),
+            xor::pointer::extract_macho(macho, slice_base, min_length),
         ),
         (
             "Swift small strings",
@@ -51,15 +47,15 @@ fn slice_decoders(
         ),
         (
             "fmix XOR",
-            fmix_xor::extract_macho(macho, slice_base, min_length),
+            xor::fmix::extract_macho(macho, slice_base, min_length),
         ),
         (
             "LCG XOR",
-            lcg_xor::extract_macho_lcg_xor(macho, data, slice_base, min_length),
+            xor::lcg::extract_macho_lcg_xor(macho, data, slice_base, min_length),
         ),
         (
             "XOR-encoded Mach-O",
-            lcg_xor::extract_macho_xor_macho_strings(macho, data, slice_base, min_length),
+            xor::lcg::extract_macho_xor_macho_strings(macho, data, slice_base, min_length),
         ),
     ];
     let mut strings = Vec::new();
@@ -162,7 +158,7 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
             &exec_ranges,
         ));
         let xor_strings =
-            arm64_stack_xor::extract_arm64_stack_xor_strings(macho, data, 0, profile, min_length);
+            xor::arm64_stack::extract_arm64_stack_xor_strings(macho, data, 0, profile, min_length);
         strings.extend(xor_strings);
     }
     if !opts.caller_provides_symbols {
@@ -292,11 +288,11 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
                 let Some(arch_data) = data.get(arch_start..arch_end) else {
                     continue;
                 };
-                let profile = arm64_stack_xor::AdmissionProfile {
+                let profile = xor::arm64_stack::AdmissionProfile {
                     input_size: arch_data.len(),
                     ..profile
                 };
-                let xor_strings = arm64_stack_xor::extract_arm64_stack_xor_strings(
+                let xor_strings = xor::arm64_stack::extract_arm64_stack_xor_strings(
                     &macho,
                     arch_data,
                     u64::from(arch.offset),
@@ -573,7 +569,7 @@ fn is_certificate_string(s: &str) -> bool {
 fn arm64_stack_xor_profile(
     input_size: usize,
     strings: &[ExtractedString],
-) -> arm64_stack_xor::AdmissionProfile {
+) -> xor::arm64_stack::AdmissionProfile {
     let mut string_count = 0_usize;
     let mut string_bytes = 0_usize;
     for string in strings {
@@ -583,7 +579,7 @@ fn arm64_stack_xor_profile(
         string_count = string_count.saturating_add(1);
         string_bytes = string_bytes.saturating_add(string.value.len());
     }
-    arm64_stack_xor::AdmissionProfile {
+    xor::arm64_stack::AdmissionProfile {
         input_size,
         content_size: input_size,
         string_count,

@@ -1,4 +1,7 @@
 use super::*;
+use crate::pipeline::{
+    extract_stack_strings_from_ranges, passes_garbage_filter, unclaimed_raw_strings,
+};
 
 #[test]
 fn fat_linkedit_walk_is_bounded_by_the_buffer() {

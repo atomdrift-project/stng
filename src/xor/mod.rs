@@ -7,10 +7,16 @@
 //! [`repeating_pe`] recovers the repeating key of a whole file that decodes to
 //! a PE image (a dropper's encrypted payload), rather than individual strings.
 
+pub(crate) mod arm64_stack;
 mod autodetect;
 mod classify;
 mod expand;
+pub(crate) mod fmix;
+pub(crate) mod heap;
 mod key;
+pub(crate) mod lcg;
+pub(crate) mod pe_decoder;
+pub(crate) mod pointer;
 pub(crate) mod repeating_pe;
 mod scan;
 mod validate;

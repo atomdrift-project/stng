@@ -1,6 +1,7 @@
 //! ELF binaries.
 
 use super::merge_imports;
+use super::unclaimed_raw_strings;
 use super::{Scan, parallel};
 use crate::GoStringExtractor;
 use crate::RustStringExtractor;
@@ -17,7 +18,6 @@ use crate::extract_stack_strings_with_context;
 use crate::extract_wide_strings;
 use crate::pclntab_strings;
 use crate::scan_binary_ips;
-use crate::unclaimed_raw_strings;
 use crate::{ExtractOptions, ExtractedString};
 use goblin::elf::Elf;
 use std::collections::HashSet;
@@ -107,7 +107,7 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
                 })
                 .collect(),
         );
-        strings.extend(crate::extract_stack_strings_from_ranges(
+        strings.extend(super::extract_stack_strings_from_ranges(
             scan_data, min_length, &code,
         ));
     }

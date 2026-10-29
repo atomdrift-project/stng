@@ -1,5 +1,6 @@
 //! PE binaries.
 
+use super::extract_stack_strings_from_ranges;
 use super::merge_imports;
 use super::{Scan, parallel};
 use crate::GoStringExtractor;
@@ -12,14 +13,13 @@ use crate::dotnet;
 use crate::extract_overlay_strings;
 use crate::extract_pe_imports;
 use crate::extract_raw_strings;
-use crate::extract_stack_strings_from_ranges;
 use crate::extract_wide_strings;
 use crate::pclntab_strings;
 use crate::pe_go_skip_ranges;
 use crate::pe_is_rust;
 use crate::pe_rust_skip_ranges;
-use crate::pe_xor;
 use crate::scan_binary_ips;
+use crate::xor;
 use crate::{ExtractOptions, ExtractedString};
 use goblin::pe::PE;
 
@@ -143,7 +143,7 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     strings.extend(raw_strings);
     strings.extend(stack_strings);
     if opts.xor_scan && opts.xor_key.is_none() && !is_go_binary && !opts.is_cancelled() {
-        strings.extend(pe_xor::extract(pe, data, min_length));
+        strings.extend(xor::pe_decoder::extract(pe, data, min_length));
     }
 
     // Recover imports/exports from the PE directories — names behind RVA

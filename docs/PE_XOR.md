@@ -40,20 +40,9 @@ cannot bypass them. These are deliberate coverage limits: x64, stack-passed
 arguments, noncontiguous setup instructions, heap buffers, other ciphers, and
 arbitrary unpacking are outside this implementation.
 
-## Validation and profiling
+## Validation
 
-`cargo test --lib pe_xor` exercises inline and split-helper loops, changed keys,
-image bases, offsets, register roles, setup order, wide strings, malformed
-mappings, unsupported calls/instructions, incomplete decoding and infinite loops.
-
-Run the isolated, optimized microbenchmark with:
-
-```sh
-cargo test --lib pe_xor::tests::benchmark_prefilter_and_recovery -- --ignored --nocapture
-```
-
-The repository's test profile is optimized. Timings isolate the new pass and
-exclude PE parsing, normal string extraction and caches; they are not end-to-end
-throughput claims. `STNG_XOR_SAMPLE` optionally benchmarks an analyst-supplied
-specimen. `STNG_XOR_FIXTURE_OUT` writes the inert synthetic decoder fixture used
-by filefacts' cache/provenance integration test. Neither test executes a sample.
+`cargo test --lib xor::pe_decoder` exercises inline and split-helper loops,
+changed keys, image bases, offsets, register roles, setup order, wide strings,
+malformed mappings, unsupported calls/instructions, incomplete decoding and
+infinite loops. No test executes a sample.
