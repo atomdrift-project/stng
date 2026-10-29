@@ -433,50 +433,68 @@ fn assignment_table<'a>(data: &'a [u8], marker: &[u8], len: usize) -> Option<&'a
     None
 }
 
-
 /// Reorder only a label/SET carrier ending in one variable-only invocation.
 /// Reject every other command form and branch. This is bounded control-flow
 /// reconstruction, not execution, and the original source remains evidence.
 fn linearize_label_carrier(text: &str) -> Option<String> {
     let lines: Vec<_> = text.split('\n').map(|l| l.trim_end_matches('\r')).collect();
-    if lines.len() > 10_000 { return None; }
+    if lines.len() > 10_000 {
+        return None;
+    }
     let mut labels = HashMap::new();
     let (mut jumps, mut sets, mut invocations) = (0, 0, 0);
     for (i, raw) in lines.iter().enumerate() {
         let line = raw.trim_matches([' ', '\t']);
         let lower = line.to_ascii_lowercase();
         if let Some(label) = line.strip_prefix(':') {
-            if label.starts_with(':') { continue; }
-            if labels.insert(label.to_ascii_lowercase(), i).is_some() { return None; }
+            if label.starts_with(':') {
+                continue;
+            }
+            if labels.insert(label.to_ascii_lowercase(), i).is_some() {
+                return None;
+            }
         } else if lower.starts_with("goto ") {
-            if line.contains(['&', '|', '<', '>']) { return None; }
+            if line.contains(['&', '|', '<', '>']) {
+                return None;
+            }
             jumps += 1;
         } else if lower.starts_with("set ") && line.contains('=') {
             sets += 1;
-        } else if line.starts_with('%') && line.ends_with('%')
-            && !line.contains([' ', '\t', '&', '|', '<', '>']) {
+        } else if line.starts_with('%')
+            && line.ends_with('%')
+            && !line.contains([' ', '\t', '&', '|', '<', '>'])
+        {
             invocations += 1;
         } else if !line.is_empty() && lower != "@echo off" && lower != "echo off" {
             return None;
         }
     }
-    if jumps < 3 || sets < 3 || invocations != 1 { return None; }
+    if jumps < 3 || sets < 3 || invocations != 1 {
+        return None;
+    }
     let mut pc = 0;
     let mut visited = vec![false; lines.len()];
     let mut output = String::new();
     while pc < lines.len() {
-        if visited[pc] { return None; }
+        if visited[pc] {
+            return None;
+        }
         visited[pc] = true;
         let line = lines[pc];
         let trimmed = line.trim_matches([' ', '\t']);
         pc += 1;
         if trimmed.to_ascii_lowercase().starts_with("goto ") {
-            let target = trimmed[5..].trim_matches([' ', '\t']).trim_start_matches(':').to_ascii_lowercase();
+            let target = trimmed[5..]
+                .trim_matches([' ', '\t'])
+                .trim_start_matches(':')
+                .to_ascii_lowercase();
             pc = *labels.get(&target)? + 1;
         } else {
             output.push_str(line);
             output.push('\n');
-            if trimmed.starts_with('%') { return Some(output); }
+            if trimmed.starts_with('%') {
+                return Some(output);
+            }
         }
     }
     None
@@ -580,7 +598,10 @@ mod tests {
 
     #[test]
     fn large_data_carrier_keeps_prefix_visible() {
-        let src = format!("@%noise%echo off\nset tool=certutil\n%tool% -decode x y\n%tool% -decode y z\n%tool% -hashfile z\n{}", "A".repeat(3 * 1024 * 1024));
+        let src = format!(
+            "@%noise%echo off\nset tool=certutil\n%tool% -decode x y\n%tool% -decode y z\n%tool% -hashfile z\n{}",
+            "A".repeat(3 * 1024 * 1024)
+        );
         assert!(expand(&src).contains("certutil -decode x y"));
         assert!(expand_batch_variables(&vec![b'A'; MAX_INPUT + 1]).is_none());
     }

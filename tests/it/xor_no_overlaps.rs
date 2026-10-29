@@ -129,15 +129,7 @@ fn test_null_region_filtering() {
 #[test]
 fn test_brew_agent_no_overlaps() {
     // Test that the actual brew_agent malware doesn't produce overlaps
-    let path = "/Users/t/data/dissect/malware/macho/2026.homabrews_org/brew_agent";
-
-    // Skip if test file doesn't exist
-    if !std::path::Path::new(path).exists() {
-        eprintln!("Skipping test - brew_agent not found at {path}");
-        return;
-    }
-
-    let data = std::fs::read(path).expect("Failed to read brew_agent");
+    let data = crate::common::bytes("testdata/malware/brew_agent");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)

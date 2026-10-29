@@ -1,3 +1,4 @@
+//! The watchdog kills its tool on deadline and whenever the scanner goes away.
 #![cfg(unix)]
 
 use std::path::Path;
@@ -41,7 +42,7 @@ fn tool(timeout: Duration) -> (std::process::Child, Watchdog) {
 #[test]
 fn deadline_needs_no_scanner_polling() {
     let (mut child, _guard) = tool(Duration::from_millis(200));
-    wait_until(|| exited_unreaped(child.id()).unwrap());
+    wait_until(|| exited_unreaped(&child).unwrap());
     assert!(!child.wait().unwrap().success());
 }
 
@@ -50,10 +51,10 @@ fn another_watchdog_cannot_retain_the_first_lifeline() {
     let (mut first, first_guard) = tool(Duration::from_secs(10));
     let (mut second, mut second_guard) = tool(Duration::from_secs(10));
     drop(first_guard);
-    wait_until(|| exited_unreaped(first.id()).unwrap());
+    wait_until(|| exited_unreaped(&first).unwrap());
     assert!(!first.wait().unwrap().success());
     assert!(running(second.id()));
-    second_guard.kill_group(second.id());
+    second_guard.kill_group(&second);
     second.wait().unwrap();
 }
 

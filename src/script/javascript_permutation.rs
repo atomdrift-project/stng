@@ -441,6 +441,11 @@ mod tests {
         assert_eq!(fingerprint(TABLE).unwrap().1.len(), 8);
         assert_eq!(fingerprint(DICT).unwrap().1.len(), 49);
     }
+    /// The malicious script, read at run time so no binary embeds it.
+    fn sample() -> &'static str {
+        std::str::from_utf8(crate::test_fixture("testdata/script/jso-permutation.js"))
+            .expect("UTF-8 script")
+    }
     #[test]
     fn refuses_invalid_permutation_arithmetic() {
         assert!(permute("abcd", 1, &[1, 0, 1, 1, 1]).is_none());
@@ -448,7 +453,7 @@ mod tests {
     }
     #[test]
     fn renamed_and_reformatted_codec_recovers() {
-        let s = include_str!("../../testdata/script/jso-permutation.js")
+        let s = sample()
             .replace("ype", "decodeText")
             .replace("}; for", "};\nfor");
         let r = extract(&s);
@@ -457,8 +462,7 @@ mod tests {
     }
     #[test]
     fn changed_loop_is_not_evaluated() {
-        let s = include_str!("../../testdata/script/jso-permutation.js")
-            .replace("d[o] = d[h]", "d[o] = d[o]");
+        let s = sample().replace("d[o] = d[h]", "d[o] = d[o]");
         assert!(extract(&s).is_empty());
     }
     #[test]
@@ -483,7 +487,7 @@ mod tests {
 
     #[test]
     fn qa4_recovers_source_without_executing() {
-        let s = include_str!("../../testdata/script/jso-permutation.js");
+        let s = sample();
         let r = extract(s);
         assert_eq!(r.len(), 1);
         assert!(r[0].decoded.contains("eth_getTransactionByHash"));

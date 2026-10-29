@@ -94,7 +94,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 tikv-jemallocator = { version = "0.7", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-stng-process = { path = "crates/stng-process" }
+stng-process = { version = "0.1", path = "crates/stng-process" }
 
 [features]
 default = ["cli"]
@@ -116,6 +116,9 @@ cli = [
 #   _RJEM_MALLOC_CONF="prof:true,prof_active:true,prof_final:true,lg_prof_interval:28,prof_prefix:out/heap/jeprof" \
 #     out/stng.heap <path>
 jemalloc-prof = ["cli", "tikv-jemallocator/profiling"]
+
+[workspace]
+members = [".", "crates/stng-process"]
 
 [lib]
 name = "stng"
@@ -257,7 +260,10 @@ harness = false
 name = "corpus"
 harness = false
 
-# Keep the engine and its language ABI on the same fork as filefacts/cleave.
+# tree-sitter fork, pinned: hard caps on query states, cursor depth and stack
+# use for hostile input, an ambiguous-parse fix, and query caching, none of
+# them upstream yet. The engine and its language ABI must come from the same
+# tree, and Cargo links only one copy.
 [patch.crates-io]
-tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
-tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", branch = "master" }
+tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", rev = "b6a85b1062dac229f8008613d5017edeadbcfa97" }
+tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", rev = "b6a85b1062dac229f8008613d5017edeadbcfa97" }

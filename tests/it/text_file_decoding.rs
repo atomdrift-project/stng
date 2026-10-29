@@ -486,60 +486,6 @@ fn malformed_utf16_bom_with_utf8_payload_is_scanned_as_text() {
     assert_ne!(command.method, StringMethod::Utf16LeDecode);
 }
 
-#[test]
-fn test_dissect_vs_bare_options() {
-    let path = "/Users/t/data/dissect/malware/typescript/2026.property-demo/webfonts/fa-brands-regular.woff2";
-    let Ok(data) = std::fs::read(path) else {
-        eprintln!("Skipping test: sample file not found at {path}");
-        return;
-    };
-
-    // Test 1: bare options like the unit test
-    let opts1 = stng::ExtractOptions::new(4);
-    let strings1 = stng::extract_strings_with_options(&data, &opts1);
-    eprintln!("Bare options: {} strings", strings1.len());
-    for (i, s) in strings1.iter().take(3).enumerate() {
-        eprintln!(
-            "  bare[{}]: method={:?}, preview={}",
-            i,
-            s.method,
-            s.value.chars().take(60).collect::<String>()
-        );
-    }
-
-    // Test 2: DISSECT options
-    let opts2 = stng::ExtractOptions::new(4)
-        .with_garbage_filter(true)
-        .with_xor(None);
-    let strings2 = stng::extract_strings_with_options(&data, &opts2);
-    eprintln!(
-        "\nDISSECT options (garbage_filter=true, xor=None): {} strings",
-        strings2.len()
-    );
-    for (i, s) in strings2.iter().take(3).enumerate() {
-        eprintln!(
-            "  dissect[{}]: method={:?}, preview={}",
-            i,
-            s.method,
-            s.value.chars().take(60).collect::<String>()
-        );
-    }
-
-    // They should both find the decoded JavaScript
-    assert!(
-        strings1
-            .iter()
-            .any(|s| s.method == stng::StringMethod::HexDecode && s.value.contains("function")),
-        "Bare options should decode hex"
-    );
-    assert!(
-        strings2
-            .iter()
-            .any(|s| s.method == stng::StringMethod::HexDecode && s.value.contains("function")),
-        "DISSECT options should also decode hex"
-    );
-}
-
 /// A UTF-16 BOM in front of 8-bit text must not hide it, even when the text
 /// carries a stray NUL or invalid UTF-8 byte, and its encoded payloads must
 /// still be decoded.

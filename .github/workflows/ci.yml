@@ -78,7 +78,7 @@ jobs:
       - run: cargo fmt --all --check
 
       # Matches `make lint` exactly, so a clean local run means a clean CI run.
-      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       # The library alone, as its users build it: nothing outside src/cli and
       # src/main.rs may reach for a `cli`-only dependency.
       - run: cargo clippy --locked --no-default-features --lib -- -D warnings

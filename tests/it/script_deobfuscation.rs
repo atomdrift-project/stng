@@ -609,58 +609,6 @@ fn test_classification_of_decoded_content() {
     );
 }
 
-#[test]
-fn test_real_world_tahmin_uygulamasi() {
-    // Test against the actual malware sample if available
-    let path = "/Users/t/data/known-bad/dissect-malware/python/2026.tahmin-uygulamasi/app.py";
-    let Ok(data) = std::fs::read(path) else {
-        eprintln!("Skipping real-world test: {path} not found");
-        return;
-    };
-
-    let opts = ExtractOptions::new(4);
-    let strings = stng::extract_strings_with_options(&data, &opts);
-
-    let script_decoded: Vec<_> = strings
-        .iter()
-        .filter(|s| s.method == StringMethod::ScriptDecode)
-        .collect();
-
-    // Should decode the payload
-    assert!(
-        !script_decoded.is_empty(),
-        "Should decode the obfuscated payload from tahmin-uygulamasi"
-    );
-
-    // Should find the Solana address
-    assert!(
-        strings.iter().any(|s| {
-            s.method == StringMethod::ScriptDecode
-                && s.value
-                    .contains("BjVeAjPrSKFiingBn4vZvghsGj9KCE8AJVtbc9S8o8SC")
-        }),
-        "Should find Solana C2 address in decoded payload. Found {} ScriptDecode strings",
-        script_decoded.len()
-    );
-
-    // Should find Solana RPC endpoints
-    assert!(
-        strings.iter().any(|s| {
-            s.method == StringMethod::ScriptDecode
-                && s.value.contains("api.mainnet-beta.solana.com")
-        }),
-        "Should find Solana RPC endpoint in decoded payload"
-    );
-
-    // Should find suspicious function names
-    assert!(
-        strings.iter().any(|s| {
-            s.method == StringMethod::ScriptDecode && s.value.contains("_isRussianSystem")
-        }),
-        "Should find _isRussianSystem function in decoded payload"
-    );
-}
-
 // ============================================================================
 // Detection tests
 // ============================================================================

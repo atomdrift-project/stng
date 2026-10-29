@@ -3,15 +3,13 @@
 # Compatible with both GNU make and BSD make
 
 BINARY = stng
-# Cargo package name, which is not always the binary name (scan's package is
-# `atomdrift-scan` but ships `atomscan`). Read from Cargo.toml so `cut-release`
-# passes the right `-p` without a second place to keep in sync.
+# Cargo package name, read from Cargo.toml for `cut-release`'s `-p`.
 PACKAGE := $(shell awk -F'"' '/^name = /{print $$2; exit}' Cargo.toml)
 OUT_DIR = out
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release check-cargo install install-precommit test test-unit lint fix fmt clean ci help bench-build sampled-benchmark heap-build heap-benchmark tuna tuna-once cut-release
+.PHONY: all build debug release check-cargo install install-precommit test test-unit lint fix fmt clean ci help bench-path bench-build sampled-benchmark heap-build heap-benchmark cut-release
 
 # Default target
 all: build
@@ -33,6 +31,8 @@ help: ## Show this help
 	@echo "  lint        - Run code formatting and linting checks"
 	@echo "  ci          - Run all CI checks (test + lint)"
 	@echo "  clean       - Clean all build artifacts"
+	@echo "  sampled-benchmark BENCH_PATH=... - CPU profile with samply"
+	@echo "  heap-benchmark BENCH_PATH=...    - Heap profile with jemalloc"
 
 build: debug ## Build in debug mode (default)
 
@@ -201,93 +201,44 @@ clean: ## Clean all build artifacts
 $(OUT_DIR):
 	mkdir -p $(OUT_DIR)
 
-# ----- cleave-tuna integration --------------------------------------------
-# Standardized targets that cleave-tuna drives. The naming mirrors cleave/litmus
-# so one tuna binary can tune all three repos. See ../cleave-tuna/README.md.
+# ----- profiling ----------------------------------------------------------
+# CPU and heap profiles of one run over BENCH_PATH (a file or directory):
 #
-# Scrub GNU make's jobserver from cargo's environment. Without this, build
-# scripts that spawn their own `make` (e.g. tikv-jemalloc-sys) inherit a
-# malformed MAKEFLAGS and fail with "No rule to make target '-j'".
-TUNA_CARGO = env -u MAKEFLAGS -u MAKELEVEL -u MFLAGS cargo
-
-# Honor CARGO_TARGET_DIR if set (cleave-tuna sets it to share the cargo
-# cache across worktrees). Falls back to the cargo default `target` otherwise.
+#     make sampled-benchmark BENCH_PATH=~/corpus
+#     make heap-benchmark BENCH_PATH=~/corpus
+#
+# Build scripts that spawn their own `make` (tikv-jemalloc-sys) fail on GNU
+# make's inherited jobserver flags, so cargo runs without them.
+BENCH_CARGO = env -u MAKEFLAGS -u MAKELEVEL -u MFLAGS cargo
 CARGO_TARGET ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)
 
-TUNA_DATASET    ?= 600MB
-BENCHMARK_ROOT  ?= $(HOME)/data/benchmark
-TUNA_BENCH_PATH ?= $(BENCHMARK_ROOT)/$(TUNA_DATASET)
+bench-path:
+	@test -n "$(BENCH_PATH)" || { echo "usage: make $(MAKECMDGOALS) BENCH_PATH=<file or directory>" >&2; exit 1; }
+	@test -e "$(BENCH_PATH)" || { echo "error: BENCH_PATH not found: $(BENCH_PATH)" >&2; exit 1; }
 
 bench-build: $(OUT_DIR) ## Build benchmark binary (profiling profile, release + debug syms)
-	$(TUNA_CARGO) build --profile profiling
+	$(BENCH_CARGO) build --profile profiling
 	cp $(CARGO_TARGET)/profiling/$(BINARY) $(OUT_DIR)/$(BINARY).bench
 	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY).bench; fi
 	@echo "✓ Benchmark binary: $(OUT_DIR)/$(BINARY).bench"
 
-sampled-benchmark: bench-build ## Benchmark with samply CPU profiling
+sampled-benchmark: bench-path bench-build ## CPU profile with samply (BENCH_PATH=...)
 	@command -v samply >/dev/null 2>&1 || { echo "Error: samply not installed. Run: cargo install samply"; exit 1; }
-	@[ -e "$(TUNA_BENCH_PATH)" ] || { echo "error: benchmark path not found: $(TUNA_BENCH_PATH)"; exit 1; }
 	samply record --save-only -o $(OUT_DIR)/bench.profile.json.gz -- \
-		$(OUT_DIR)/$(BINARY).bench --json $(TUNA_BENCH_PATH) \
+		$(OUT_DIR)/$(BINARY).bench --json $(BENCH_PATH) \
 		>$(OUT_DIR)/bench.out 2>$(OUT_DIR)/bench.err
 	@echo "✓ Profile: $(OUT_DIR)/bench.profile.json.gz  Logs: $(OUT_DIR)/bench.err"
 
 heap-build: $(OUT_DIR) ## Build with jemalloc heap profiling support
-	$(TUNA_CARGO) build --profile profiling --features jemalloc-prof
+	$(BENCH_CARGO) build --profile profiling --features jemalloc-prof
 	cp $(CARGO_TARGET)/profiling/$(BINARY) $(OUT_DIR)/$(BINARY).heap
 	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY).heap; fi
 	@echo "✓ Heap-profiling binary: $(OUT_DIR)/$(BINARY).heap"
 
-heap-benchmark: heap-build ## Benchmark with jemalloc heap profiling
-	@[ -e "$(TUNA_BENCH_PATH)" ] || { echo "error: benchmark path not found: $(TUNA_BENCH_PATH)"; exit 1; }
+heap-benchmark: bench-path heap-build ## Heap profile with jemalloc (BENCH_PATH=...)
 	@rm -rf $(OUT_DIR)/heap && mkdir -p $(OUT_DIR)/heap
 	_RJEM_MALLOC_CONF="prof:true,prof_active:true,prof_final:true,lg_prof_interval:28,prof_prefix:$(OUT_DIR)/heap/jeprof" \
-		$(OUT_DIR)/$(BINARY).heap --json $(TUNA_BENCH_PATH) \
+		$(OUT_DIR)/$(BINARY).heap --json $(BENCH_PATH) \
 		>$(OUT_DIR)/bench.out 2>$(OUT_DIR)/bench.err
 	@echo "✓ Heap profiles: $(OUT_DIR)/heap/jeprof.*.heap"
 	@echo "  Analyze with: jeprof --text $(OUT_DIR)/$(BINARY).heap $(OUT_DIR)/heap/jeprof.*.heap"
-
-# cleave-tuna: LLM-driven CPU+memory autoresearch loop. See ../cleave-tuna/README.md.
-TUNA_REPO            ?= ../cleave-tuna
-TUNA_BIN             ?= $(TUNA_REPO)/out/cleave-tuna
-TUNA_EXPERIMENTS     ?= 6
-TUNA_SCREEN_SAMPLES  ?= 1
-TUNA_CONFIRM_SAMPLES ?= 2
-TUNA_PROVIDER        ?= gemini,codex,claude
-TUNA_MODE            ?=
-TUNA_INTERVAL        ?= 30
-
-tuna: ## Run cleave-tuna in a loop, alternating memory/cpu; cherry-picks wins (Ctrl-C to stop)
-	@test -x $(TUNA_BIN) || { echo "build cleave-tuna first: (cd $(TUNA_REPO) && make build)"; exit 1; }
-	@test -z "$$(git status --porcelain)" || { echo "working tree must be clean before starting tuna"; exit 1; }
-	@echo "tuna: looping forever, alternating memory/cpu (Ctrl-C to stop). settings: dataset=$(TUNA_DATASET) experiments=$(TUNA_EXPERIMENTS) screen-samples=$(TUNA_SCREEN_SAMPLES) confirm-samples=$(TUNA_CONFIRM_SAMPLES) provider=$(TUNA_PROVIDER)"
-	@mode=memory; \
-	while true; do \
-		echo "tuna: starting cycle in $$mode mode"; \
-		$(MAKE) tuna-once TUNA_MODE=$$mode || exit $$?; \
-		if [ "$$mode" = "memory" ]; then mode=cpu; else mode=memory; fi; \
-		echo "tuna: sleeping $(TUNA_INTERVAL)s before next cycle ($$mode) — Ctrl-C to stop"; \
-		sleep $(TUNA_INTERVAL); \
-	done
-
-tuna-once: ## One cleave-tuna cycle, then cherry-pick accepted experiments
-	@test -x $(TUNA_BIN) || { echo "build cleave-tuna first: (cd $(TUNA_REPO) && make build)"; exit 1; }
-	@test -z "$$(git status --porcelain)" || { echo "working tree must be clean before tuna-once"; exit 1; }
-	@before=$$(git rev-parse HEAD); \
-	$(TUNA_BIN) --source $(CURDIR) --root $(TUNA_REPO) --dataset $(TUNA_DATASET) \
-		--name stng \
-		--bench-arg --json \
-		--deny vendor/ --deny testdata/ --deny media/ \
-		--experiments $(TUNA_EXPERIMENTS) \
-		--screen-samples $(TUNA_SCREEN_SAMPLES) --confirm-samples $(TUNA_CONFIRM_SAMPLES) \
-		--provider $(TUNA_PROVIDER) $(if $(TUNA_MODE),--$(TUNA_MODE),) \
-		|| { echo "tuna: cleave-tuna exited non-zero; not cherry-picking"; exit 1; }; \
-	branch=$$(git for-each-ref --sort=-committerdate --format='%(refname:short)' 'refs/heads/tuna/*' | head -1); \
-	if [ -z "$$branch" ]; then echo "tuna: no tuna/* branch found"; exit 0; fi; \
-	ahead=$$(git rev-list --count $$before..$$branch); \
-	if [ "$$ahead" = "0" ]; then \
-		echo "tuna: no accepted experiments on $$branch — nothing to cherry-pick"; \
-		exit 0; \
-	fi; \
-	echo "tuna: cherry-picking $$ahead commit(s) from $$branch"; \
-	git cherry-pick $$branch~$$ahead..$$branch

@@ -154,11 +154,12 @@ jobs:
           PROFILE: ${{ inputs.profile }}
         run: cargo build --locked --profile "$PROFILE" --target "$TARGET" --bin stng
 
-      # Unit and integration tests. Integration tests link as one binary
-      # (tests/it) plus hostile_input, which needs a process to itself.
+      # Unit and integration tests for stng and stng-process. Integration tests
+      # link as one binary (tests/it) plus hostile_input, which needs a process
+      # to itself.
       - name: Test
         if: matrix.test
-        run: cargo test --locked
+        run: cargo test --locked --workspace
 
       # --- macOS signing ------------------------------------------------------
       # Unsigned path: an ad-hoc signature, matching what `make release` does on

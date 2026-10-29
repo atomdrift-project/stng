@@ -4,16 +4,7 @@ use stng::{ExtractOptions, StringMethod};
 
 #[test]
 fn test_crypto_wallet_paths_from_brew_agent() {
-    // Test against real DPRK malware sample
-    let sample_path = "/Users/t/data/dissect/malware/macho/2026.homabrews_org/brew_agent";
-
-    // Skip if sample doesn't exist
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found at {sample_path}");
-        return;
-    }
-
-    let data = std::fs::read(sample_path).expect("Failed to read malware sample");
+    let data = crate::common::bytes("testdata/malware/brew_agent");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
@@ -97,14 +88,7 @@ fn test_crypto_wallet_paths_from_brew_agent() {
 fn test_wallet_keyword_detection() {
     // Verify that strings containing "wallet" are properly detected
     // even without exact path matches
-    let sample_path = "/Users/t/data/dissect/malware/macho/2026.homabrews_org/brew_agent";
-
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found");
-        return;
-    }
-
-    let data = std::fs::read(sample_path).unwrap();
+    let data = crate::common::bytes("testdata/malware/brew_agent");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
@@ -141,14 +125,7 @@ fn test_wallet_keyword_detection() {
 #[test]
 fn test_crypto_terms_detection() {
     // Test detection of other cryptocurrency-related terms
-    let sample_path = "/Users/t/data/dissect/malware/macho/2026.homabrews_org/brew_agent";
-
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found");
-        return;
-    }
-
-    let data = std::fs::read(sample_path).unwrap();
+    let data = crate::common::bytes("testdata/malware/brew_agent");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)

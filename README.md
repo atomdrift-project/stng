@@ -13,7 +13,7 @@ suspicious paths.
 ```bash
 brew install atomdrift-project/tap/stng
 # or, with Rust 1.94+ and a C compiler:
-cargo install --git https://github.com/atomdrift-project/stng
+cargo install --locked --git https://github.com/atomdrift-project/stng
 ```
 
 Optional: [Rizin](https://rizin.re/) or [radare2](https://rada.re/n/) finds more strings and enables `--xorscan`.

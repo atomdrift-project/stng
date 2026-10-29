@@ -292,7 +292,7 @@ fn spawn_tool_command(tool: &Path, path: &str, cmd: &str, use_cache: bool) -> Op
 struct ToolChild {
     child: std::process::Child,
     #[cfg(unix)]
-    _watchdog: stng::subprocess::Watchdog,
+    watchdog: stng::subprocess::Watchdog,
 }
 
 impl ToolChild {
@@ -302,14 +302,14 @@ impl ToolChild {
         Ok(Self {
             child: command.spawn()?,
             #[cfg(unix)]
-            _watchdog: watchdog,
+            watchdog,
         })
     }
 
     fn has_exited(&mut self) -> std::io::Result<bool> {
         #[cfg(unix)]
         {
-            stng::subprocess::exited_unreaped(self.child.id())
+            stng::subprocess::exited_unreaped(&self.child)
         }
         #[cfg(not(unix))]
         {
@@ -319,7 +319,7 @@ impl ToolChild {
 
     fn finish(&mut self) -> Option<std::process::ExitStatus> {
         #[cfg(unix)]
-        self._watchdog.kill_group(self.child.id());
+        self.watchdog.kill_group(&self.child);
         let _ = self.child.kill();
         self.child.wait().ok()
     }

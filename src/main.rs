@@ -3,8 +3,7 @@
 //! Extract strings from Go and Rust binaries with proper boundary detection.
 
 // Use jemalloc on unix systems where it isn't the OS default (see Cargo.toml).
-// Built-in `--features jemalloc-prof` activates jemalloc's heap-profiling support
-// (`_RJEM_MALLOC_CONF=prof:true,...`) which cleave-tuna's memory-mode benches consume.
+// `--features jemalloc-prof` adds heap profiling (`make heap-benchmark`).
 #[cfg(all(
     unix,
     not(any(
@@ -686,29 +685,24 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Colorize the first `<key>` (entitlement name) and `<string>` (value) element
+/// on a plist line. The closing tag is searched for only after the opening tag:
+/// the line comes from the sample, so the tags may appear in any order.
 fn colorize_xml_line(line: &str) -> String {
     let mut output = line.to_string();
-
-    // Colorize <key>...</key> content (entitlement names) in red
-    if let Some(key_start) = output.find("<key>")
-        && let Some(key_end) = output.find("</key>")
-    {
-        let before = &output[..key_start + 5];
-        let content = &output[key_start + 5..key_end];
-        let after = &output[key_end..];
-        output = format!("{before}{RED}{content}{RESET}{after}");
+    for (open, close, color) in [("<key>", "</key>", RED), ("<string>", "</string>", CYAN)] {
+        if let Some(start) = output.find(open).map(|i| i + open.len())
+            && let Some(len) = output[start..].find(close)
+        {
+            let end = start + len;
+            output = format!(
+                "{}{color}{}{RESET}{}",
+                &output[..start],
+                &output[start..end],
+                &output[end..]
+            );
+        }
     }
-
-    // Colorize <string>...</string> content (values) in yellow
-    if let Some(str_start) = output.find("<string>")
-        && let Some(str_end) = output.find("</string>")
-    {
-        let before = &output[..str_start + 8];
-        let content = &output[str_start + 8..str_end];
-        let after = &output[str_end..];
-        output = format!("{before}{CYAN}{content}{RESET}{after}");
-    }
-
     output
 }
 
@@ -1217,6 +1211,26 @@ mod tests {
         assert_eq!(terminal_safe("one\ntwo"), "one\\ntwo");
         assert_eq!(terminal_safe("abc\u{202e}gpj.exe"), "abc\\u{202e}gpj.exe");
         assert_eq!(terminal_safe("c1\u{9b}31m"), "c1\\u{9b}31m");
+    }
+
+    #[test]
+    fn colorize_xml_line_colors_key_and_string() {
+        assert_eq!(
+            colorize_xml_line("<key>a</key><string>b</string>"),
+            format!("<key>{RED}a{RESET}</key><string>{CYAN}b{RESET}</string>")
+        );
+    }
+
+    #[test]
+    fn colorize_xml_line_tolerates_misordered_tags() {
+        // Closing tags before opening ones come from hostile signatures.
+        for line in ["</key><key>", "</string><string>", "<key>", "</string>"] {
+            assert_eq!(colorize_xml_line(line), line);
+        }
+        assert_eq!(
+            colorize_xml_line("</key><key>x</key>"),
+            format!("</key><key>{RED}x{RESET}</key>")
+        );
     }
 
     #[test]
