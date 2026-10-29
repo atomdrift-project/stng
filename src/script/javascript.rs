@@ -111,24 +111,10 @@ fn try_eval_charcode(source: &str) -> Vec<DeobfuscationResult> {
         .filter_map(|cap| {
             let nums_str = cap.get(1)?.as_str();
             let offset = cap.get(0)?.start();
-            let bytes: Vec<u8> = nums_str
-                .split(',')
-                .filter_map(|n| {
-                    let n = n.trim();
-                    if let Some(hex) = n.strip_prefix("0x").or_else(|| n.strip_prefix("0X")) {
-                        crate::bytes::hex_number(hex)
-                    } else {
-                        n.parse::<u32>().ok()
-                    }
-                })
-                .filter(|&n| n <= 0x10FFFF)
-                .filter_map(char::from_u32)
-                .collect::<String>()
-                .into_bytes();
-            if bytes.is_empty() {
+            let payload = super::char_codes(nums_str, true);
+            if payload.is_empty() {
                 return None;
             }
-            let payload = String::from_utf8(bytes).ok()?;
             Some(DeobfuscationResult {
                 decoded: payload,
                 offset,
@@ -225,14 +211,7 @@ fn try_charcode_array(source: &str) -> Vec<DeobfuscationResult> {
 
 /// Caesar-shift ASCII letters, leaving everything else alone.
 fn rot(text: &str, n: u8) -> String {
-    let n = n % 26;
-    text.chars()
-        .map(|c| match c {
-            'a'..='z' => char::from(((c as u8) - b'a' + n) % 26 + b'a'),
-            'A'..='Z' => char::from(((c as u8) - b'A' + n) % 26 + b'A'),
-            other => other,
-        })
-        .collect()
+    text.chars().map(|c| crate::text::rot(c, n)).collect()
 }
 
 fn try_eval_reverse(source: &str) -> Vec<DeobfuscationResult> {

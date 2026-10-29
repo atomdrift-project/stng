@@ -3,13 +3,14 @@
 //! This module contains pure string utility functions used by the XOR extraction
 //! pipeline to validate, classify, and clean decoded strings.
 
-use super::key::{calculate_entropy, is_good_xor_key_candidate, score_xor_key_candidate};
+use super::key::{is_good_xor_key_candidate, score_xor_key_candidate};
 use super::scan::{XOR_PATTERNS, extract_custom_xor_strings};
 use super::validate::{
     has_known_path_prefix, is_locale_string, is_meaningful_string, is_printable_char, is_valid_ip,
     is_valid_port, is_valid_xor_string, looks_like_text, nul_ends_string, reads_as_text,
 };
 use super::{MAX_AUTO_DETECT_SIZE, MAX_XOR_SCAN_SIZE, SKIP_XOR_KEYS};
+use crate::bytes::entropy;
 use crate::classifier::{classify_string, names_targeted_location};
 use crate::{ExtractedString, StringKind, StringMethod};
 use rayon::prelude::*;
@@ -214,7 +215,7 @@ pub(crate) fn auto_detect_xor_key(
         .iter()
         .filter(|s| !s.value.contains('_') && !s.value.starts_with("cstr."))
         .filter_map(|s| {
-            let entropy = calculate_entropy(s.value.as_bytes());
+            let entropy = entropy(s.value.as_bytes());
             if is_good_xor_key_candidate(&s.value, entropy) {
                 Some((
                     score_xor_key_candidate(&s.value, entropy),

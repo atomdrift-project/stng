@@ -364,7 +364,7 @@ fn decode_stack_arg_with_candidate_pads(
             let kind = classify_string(&value).or(Some(StringKind::StackString));
             let key_len = pad.len().min(32).max(len);
             let key = pad[..key_len].to_vec();
-            let key_value = format_xor_key(&key);
+            let key_value = format!("0x{}", crate::bytes::to_hex(&key));
             if !pads.contains(&key) {
                 pads.push(key);
             }
@@ -620,16 +620,6 @@ fn normalize_decoded_value(value: &str, min_length: usize) -> Option<String> {
     }
 }
 
-fn format_xor_key(key: &[u8]) -> String {
-    let mut out = String::with_capacity(2 + key.len() * 2);
-    out.push_str("0x");
-    for byte in key {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    out
-}
-
 fn collect_contiguous(
     memory: &HashMap<i64, Vec<u8>>,
     start: i64,
@@ -742,11 +732,6 @@ mod tests {
         assert_eq!(mem.disp, 0x480);
         assert_eq!(mem.size, 4);
         assert!(!mem.load);
-    }
-
-    #[test]
-    fn formats_binary_xor_key_as_hex() {
-        assert_eq!(format_xor_key(&[0xff, 0x19, 0x76]), "0xff1976");
     }
 
     #[test]

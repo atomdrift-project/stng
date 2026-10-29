@@ -113,6 +113,22 @@ fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
     all_results
 }
 
+/// The text a comma-separated list of code points spells, as in
+/// `String.fromCharCode(104, 0x69)` or `[char]104`. `0x` entries count only
+/// when `hex` is set; anything that is not a code point is skipped.
+fn char_codes(list: &str, hex: bool) -> String {
+    list.split(',')
+        .filter_map(|n| {
+            let n = n.trim();
+            match n.strip_prefix("0x").or_else(|| n.strip_prefix("0X")) {
+                Some(digits) if hex => crate::bytes::hex_number(digits),
+                _ => n.parse::<u32>().ok(),
+            }
+        })
+        .filter_map(char::from_u32)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

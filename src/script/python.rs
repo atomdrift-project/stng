@@ -171,17 +171,10 @@ fn try_exec_chr_array(source: &str) -> Vec<DeobfuscationResult> {
         .filter_map(|cap| {
             let nums_str = cap.get(1)?.as_str();
             let offset = cap.get(0)?.start();
-            let bytes: Vec<u8> = nums_str
-                .split(',')
-                .filter_map(|n| n.trim().parse::<u32>().ok())
-                .filter(|&n| n <= 0x10FFFF)
-                .filter_map(char::from_u32)
-                .collect::<String>()
-                .into_bytes();
-            if bytes.is_empty() {
+            let payload = super::char_codes(nums_str, false);
+            if payload.is_empty() {
                 return None;
             }
-            let payload = String::from_utf8(bytes).ok()?;
             Some(DeobfuscationResult {
                 decoded: payload,
                 offset,

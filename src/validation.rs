@@ -10,7 +10,7 @@ use crate::validation_thresholds::{
     MAX_AVG_RUN_LENGTH_CHAOS, MAX_CLASS_DOMINANCE_RATIO, MAX_HASH_LENGTH, MAX_NON_ASCII_RATIO,
     MAX_SHORT_ESCAPE_LENGTH, MAX_SPECIAL_RATIO_FOR_DOMAINS, MAX_SPECIAL_RATIO_FOR_PATHS,
     MAX_TRANSITION_RATIO, MAX_WALLET_LENGTH, MAX_WHITESPACE_RATIO, MIN_ALPHANUMERIC_RATIO,
-    MIN_BASE64_LENGTH, MIN_BASE64_RATIO_FOR_KEYS, MIN_CHAOTIC_PATTERN_LENGTH,
+    MIN_BASE64_RATIO_FOR_KEYS, MIN_BASE64_SHAPED_LENGTH, MIN_CHAOTIC_PATTERN_LENGTH,
     MIN_EMAIL_VALID_CHAR_RATIO, MIN_FAST_PATH_ALPHABETIC_RATIO, MIN_FAST_PATH_VALID_LENGTH,
     MIN_HASH_LENGTH, MIN_HEX_RATIO_FOR_HASH, MIN_LOWERCASE_RATIO_FOR_PATHS,
     MIN_NON_ASCII_ALPHABETIC_RATIO, MIN_NON_ASCII_COUNT_SHORT, MIN_SEGMENT_COUNT,
@@ -1222,7 +1222,7 @@ fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
     let looks_like_version = (s.starts_with("go") || s.starts_with('v') || s.starts_with('V'))
         && s.contains('.')
         && digit > 0;
-    let looks_like_base64 = len >= MIN_BASE64_LENGTH
+    let looks_like_base64 = len >= MIN_BASE64_SHAPED_LENGTH
         && stats.upper > 0
         && lower > 0
         && s.chars()

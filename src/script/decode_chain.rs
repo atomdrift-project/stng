@@ -6,8 +6,7 @@
 use base64::Engine;
 use std::cell::Cell;
 
-/// Maximum decoded output size to prevent memory exhaustion (10 MB).
-pub(crate) const MAX_DECODED_SIZE: usize = 10 * 1024 * 1024;
+pub(crate) use crate::decoders::MAX_DECODED_SIZE;
 
 /// Bytes that expanding steps (inflation, string replacement) may produce in
 /// one [`super::deobfuscate_script`] call. Each payload is capped at
@@ -162,29 +161,14 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
         DecodeStep::Zlib => inflate(flate2::read::ZlibDecoder::new(input)),
         DecodeStep::Gzip => inflate(flate2::read::GzDecoder::new(input)),
         DecodeStep::Xor(key) => Some(input.iter().map(|b| b ^ key).collect()),
-        DecodeStep::Rot13 => Some(
+        DecodeStep::Rot13 => apply_step(input, &DecodeStep::Rot(13)),
+        // Only ASCII letters change, so every byte maps to one byte.
+        DecodeStep::Rot(n) => Some(
             input
                 .iter()
-                .map(|&b| match b {
-                    b'a'..=b'm' | b'A'..=b'M' => b + 13,
-                    b'n'..=b'z' | b'N'..=b'Z' => b - 13,
-                    _ => b,
-                })
+                .map(|&b| crate::text::rot(char::from(b), *n) as u8)
                 .collect(),
         ),
-        DecodeStep::Rot(n) => {
-            let n = n % 26;
-            Some(
-                input
-                    .iter()
-                    .map(|&b| match b {
-                        b'a'..=b'z' => (b - b'a' + n) % 26 + b'a',
-                        b'A'..=b'Z' => (b - b'A' + n) % 26 + b'A',
-                        _ => b,
-                    })
-                    .collect(),
-            )
-        }
         DecodeStep::Utf16Le => {
             if input.len() < 2 || !input.len().is_multiple_of(2) {
                 return None;

@@ -3,35 +3,10 @@
 //! Pure functions for evaluating whether a string looks like an XOR encryption key
 //! and scoring it as a candidate. Used by the auto-detection pipeline.
 
-/// Calculate Shannon entropy of a byte string.
-/// Returns a value between 0.0 (no entropy) and 8.0 (maximum entropy for bytes).
-pub(super) fn calculate_entropy(data: &[u8]) -> f64 {
-    if data.is_empty() {
-        return 0.0;
-    }
-
-    let mut freq = [0u32; 256];
-    for &byte in data {
-        freq[usize::from(byte)] += 1;
-    }
-
-    let len = data.len() as f64;
-    let mut entropy = 0.0;
-
-    for &count in &freq {
-        if count > 0 {
-            let p = f64::from(count) / len;
-            entropy -= p * p.log2();
-        }
-    }
-
-    entropy
-}
-
 /// Check if a string is a good XOR key candidate based on entropy.
 /// DPRK malware often uses high-entropy keys like "Moz&Wie;#t/6T!2y", "12GWAPCT1F0I1S14".
 ///
-/// `entropy` must be pre-computed by the caller via `calculate_entropy`.
+/// `entropy` must be pre-computed by the caller via `bytes::entropy`.
 pub(super) fn is_good_xor_key_candidate(s: &str, entropy: f64) -> bool {
     let len = s.len();
 
@@ -190,10 +165,11 @@ pub(super) fn score_xor_key_candidate(s: &str, entropy: f64) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{calculate_entropy, is_good_xor_key_candidate};
+    use super::is_good_xor_key_candidate;
+    use crate::bytes::entropy;
 
     fn is_candidate(s: &str) -> bool {
-        is_good_xor_key_candidate(s, calculate_entropy(s.as_bytes()))
+        is_good_xor_key_candidate(s, entropy(s.as_bytes()))
     }
 
     #[test]

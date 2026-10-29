@@ -492,8 +492,8 @@ fn decode_base64_string(s: &ExtractedString, budget: &AtomicUsize) -> Option<Ext
     // `echo … | base64` payloads) is not a quality defect, and penalizing it
     // would sink genuine short commands like `/bin/rm\n` below their base64.
     if !validated_payload {
-        let input_quality = string_quality_score(&s.value);
-        let output_quality = string_quality_score(trimmed);
+        let input_quality = crate::text::quality(s.value.as_bytes()).0;
+        let output_quality = crate::text::quality(trimmed.as_bytes()).0;
         if input_quality > output_quality {
             return None;
         }
@@ -1004,14 +1004,7 @@ fn decode_rot13_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
         return None;
     }
 
-    let rotated: String = value
-        .chars()
-        .map(|c| match c {
-            'a'..='z' => (((c as u8 - b'a' + 13) % 26) + b'a') as char,
-            'A'..='Z' => (((c as u8 - b'A' + 13) % 26) + b'A') as char,
-            other => other,
-        })
-        .collect();
+    let rotated: String = value.chars().map(|c| crate::text::rot(c, 13)).collect();
     if !is_likely_base64(&rotated) {
         return None;
     }
@@ -1188,37 +1181,6 @@ fn is_likely_base32(s: &str) -> bool {
     has_letters && has_digits && (valid_count * 10 >= s.len() * 9)
 }
 
-/// Check if a string looks like base85-encoded data.
-/// Calculate string quality score (0-100). Higher scores = better quality text.
-fn string_quality_score(s: &str) -> u32 {
-    if s.is_empty() {
-        return 0;
-    }
-
-    let mut alpha_count = 0usize;
-    let mut vowel_count = 0usize;
-    let mut printable_count = 0usize;
-
-    for c in s.chars() {
-        if c.is_ascii_alphabetic() {
-            alpha_count += 1;
-            if matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u') {
-                vowel_count += 1;
-            }
-        }
-        if c.is_ascii_graphic() || c == ' ' {
-            printable_count += 1;
-        }
-    }
-
-    let len = s.len();
-    let printable_ratio = (printable_count * 100) / len;
-    let vowel_ratio = (vowel_count * 100).checked_div(alpha_count).unwrap_or(0);
-
-    // Quality = weighted combination of printability and vowel ratio
-    u32::try_from((printable_ratio * 7 + vowel_ratio * 3) / 10).unwrap_or(0)
-}
-
 fn is_likely_base85(s: &str) -> bool {
     // Require minimum length
     if s.len() < 20 {
@@ -1230,11 +1192,11 @@ fn is_likely_base85(s: &str) -> bool {
 
     // If it has delimiters, validate by attempting to decode
     if has_delimiters {
-        let original_quality = string_quality_score(s);
+        let original_quality = crate::text::quality(s.as_bytes()).0;
         if let Some(decoded) = decode_ascii85(s)
             && let Ok(decoded_str) = String::from_utf8(decoded)
         {
-            let decoded_quality = string_quality_score(&decoded_str);
+            let decoded_quality = crate::text::quality(decoded_str.as_bytes()).0;
             // Decoded should be better quality (at least 5 points higher)
             return decoded_quality > original_quality + 5;
         }
@@ -1273,11 +1235,11 @@ fn is_likely_base85(s: &str) -> bool {
     }
 
     // Final validation: try decoding and check quality
-    let original_quality = string_quality_score(s);
+    let original_quality = crate::text::quality(s.as_bytes()).0;
     if let Some(decoded) = decode_ascii85(s)
         && let Ok(decoded_str) = String::from_utf8(decoded)
     {
-        let decoded_quality = string_quality_score(&decoded_str);
+        let decoded_quality = crate::text::quality(decoded_str.as_bytes()).0;
         // Decoded should be better quality (at least 5 points higher)
         return decoded_quality > original_quality + 5;
     }

@@ -189,7 +189,7 @@ pub(super) fn is_base64(s: &str) -> bool {
     let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s) else {
         return true;
     };
-    let (input_quality, input_vowel_ratio) = text_quality_score(s.as_bytes());
+    let (input_quality, input_vowel_ratio) = crate::text::quality(s.as_bytes());
 
     // For short strings (< 24 chars) with high character repetition AND few input
     // vowels, verify the decoded output is mostly printable. This catches x86
@@ -209,7 +209,7 @@ pub(super) fn is_base64(s: &str) -> bool {
     // Only check quality comparison if input looks like natural language.
     // Real identifiers have ~30%+ vowels; random base64-ish strings have ~20%.
     if input_vowel_ratio >= 28 {
-        let (output_quality, _) = text_quality_score(&decoded);
+        let (output_quality, _) = crate::text::quality(&decoded);
 
         // If input is more readable than output, it's likely an identifier, not base64.
         if input_quality > output_quality {
@@ -218,37 +218,6 @@ pub(super) fn is_base64(s: &str) -> bool {
     }
 
     true
-}
-
-/// Calculate text quality score (0-100) and vowel ratio.
-/// Higher quality = more text-like. Returns (quality, vowel_ratio).
-fn text_quality_score(bytes: &[u8]) -> (u32, u32) {
-    if bytes.is_empty() {
-        return (0, 0);
-    }
-
-    let mut alpha = 0usize;
-    let mut vowel = 0usize;
-    let mut printable = 0usize;
-
-    for &b in bytes {
-        if b.is_ascii_alphabetic() {
-            alpha += 1;
-            if matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u') {
-                vowel += 1;
-            }
-        }
-        if b.is_ascii_graphic() || b == b' ' {
-            printable += 1;
-        }
-    }
-
-    let printable_ratio = (printable * 100) / bytes.len();
-    let vowel_ratio = (vowel * 100).checked_div(alpha).unwrap_or(0);
-
-    // Weighted combination: printability matters most, vowel ratio indicates natural language
-    let quality = u32::try_from((printable_ratio * 7 + vowel_ratio * 3) / 10).unwrap_or(0);
-    (quality, u32::try_from(vowel_ratio).unwrap_or(0))
 }
 
 /// Check if a string looks like hex-encoded ASCII data
@@ -645,18 +614,13 @@ pub(super) fn is_base58(s: &str) -> bool {
 
     // 5. Reject readable identifiers: if input is more text-like than it would be as base58
     //    Real base58 is random; readable PascalCase identifiers have high vowel ratios
-    let (_, input_vowel_ratio) = text_quality_score(s.as_bytes());
+    let (_, input_vowel_ratio) = crate::text::quality(s.as_bytes());
     if input_vowel_ratio >= 28 {
         // High vowel ratio indicates readable text, not random encoding
         return false;
     }
 
     true
-}
-
-/// Calculate string quality score (0-100). Higher scores = better quality text.
-pub(super) fn string_quality_score(s: &str) -> u32 {
-    text_quality_score(s.as_bytes()).0
 }
 
 /// Check if a string looks like Base85-encoded data (ASCII85 or Z85)
@@ -789,7 +753,7 @@ pub(super) fn is_base85(s: &str) -> bool {
     }
 
     // Reject readable identifiers: high vowel ratio indicates text, not encoding
-    let (_, input_vowel_ratio) = text_quality_score(s.as_bytes());
+    let (_, input_vowel_ratio) = crate::text::quality(s.as_bytes());
     if input_vowel_ratio >= 28 {
         return false;
     }
@@ -803,13 +767,13 @@ pub(super) fn is_base85(s: &str) -> bool {
 fn validate_base85_by_decoding(s: &str) -> bool {
     use crate::decoders::decode_ascii85;
 
-    let original_quality = string_quality_score(s);
+    let original_quality = crate::text::quality(s.as_bytes()).0;
 
     // Try to decode
     if let Some(decoded_bytes) = decode_ascii85(s) {
         // Check if decoded is valid UTF-8 and higher quality
         if let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
-            let decoded_quality = string_quality_score(&decoded_str);
+            let decoded_quality = crate::text::quality(decoded_str.as_bytes()).0;
 
             // Decoded should be better quality (at least 5 points higher)
             // Otherwise it's probably not actually base85

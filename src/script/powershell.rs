@@ -183,12 +183,7 @@ fn try_char_array(source: &str) -> Vec<DeobfuscationResult> {
         .filter_map(|cap| {
             let nums_str = cap.get(1)?.as_str();
             let offset = cap.get(0)?.start();
-            let payload: String = nums_str
-                .split(',')
-                .filter_map(|n| n.trim().parse::<u32>().ok())
-                .filter(|&n| n <= 0x10FFFF)
-                .filter_map(char::from_u32)
-                .collect();
+            let payload = super::char_codes(nums_str, false);
             if payload.is_empty() {
                 return None;
             }

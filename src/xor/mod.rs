@@ -41,13 +41,14 @@ pub const MAX_XOR_SCAN_SIZE: usize = 5 * 1024 * 1024;
 
 #[cfg(test)]
 mod tests {
-    use super::key::{calculate_entropy, is_good_xor_key_candidate};
+    use super::key::is_good_xor_key_candidate;
     use super::scan::{extract_custom_xor_strings, extract_rolling_xor_with_known_plaintext};
     use super::validate::{
         has_known_path_prefix, is_locale_string, is_meaningful_string, is_partial_xor_decode,
         is_valid_ip, is_valid_port, is_valid_xor_string, nul_ends_string,
     };
     use super::*;
+    use crate::bytes::entropy;
     use crate::{ExtractedString, StringKind, StringMethod};
 
     #[test]
@@ -579,7 +580,7 @@ mod tests {
         ];
 
         for key in &known_keys {
-            let entropy = calculate_entropy(key.as_bytes());
+            let entropy = entropy(key.as_bytes());
             assert!(
                 is_good_xor_key_candidate(key, entropy),
                 "Known XOR key '{key}' should qualify (entropy: {entropy:.2})"
@@ -600,7 +601,7 @@ mod tests {
         ];
 
         for key in &bad_keys {
-            let entropy = calculate_entropy(key.as_bytes());
+            let entropy = entropy(key.as_bytes());
             assert!(
                 !is_good_xor_key_candidate(key, entropy),
                 "Bad key candidate '{key}' should NOT qualify"
@@ -612,21 +613,21 @@ mod tests {
     fn test_entropy_calculation() {
         // Test entropy calculation
         let uniform = "abcdefgh"; // 8 unique chars = 3.0 bits
-        let entropy1 = calculate_entropy(uniform.as_bytes());
+        let entropy1 = entropy(uniform.as_bytes());
         assert!(
             entropy1 > 2.9 && entropy1 < 3.1,
             "Uniform distribution should have ~3.0 bits entropy, got {entropy1:.2}"
         );
 
         let repeated = "aaaaaaaa"; // All same = 0 bits
-        let entropy2 = calculate_entropy(repeated.as_bytes());
+        let entropy2 = entropy(repeated.as_bytes());
         assert!(
             entropy2 < 0.1,
             "All same character should have ~0 bits entropy, got {entropy2:.2}"
         );
 
         let mixed = "aAbBcCdD1!2@3#"; // High entropy
-        let entropy3 = calculate_entropy(mixed.as_bytes());
+        let entropy3 = entropy(mixed.as_bytes());
         assert!(
             entropy3 > 3.5,
             "Mixed characters should have high entropy, got {entropy3:.2}"

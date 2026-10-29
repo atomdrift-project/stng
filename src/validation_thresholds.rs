@@ -132,5 +132,6 @@ pub(crate) const MIN_SEGMENT_COUNT: usize = 2;
 
 // ========== Base64/Encoding Thresholds ==========
 
-/// Minimum length for base64 detection (16 chars)
-pub(crate) const MIN_BASE64_LENGTH: usize = 16;
+/// Shortest string the garbage filter treats as base64-shaped. Decoding
+/// tries shorter tokens (`decoders::MIN_BASE64_LENGTH`).
+pub(crate) const MIN_BASE64_SHAPED_LENGTH: usize = 16;

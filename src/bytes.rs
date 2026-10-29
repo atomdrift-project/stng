@@ -62,6 +62,31 @@ pub(crate) fn to_hex(bytes: &[u8]) -> String {
     text
 }
 
+/// Calculate Shannon entropy of a byte string.
+/// Returns a value between 0.0 (no entropy) and 8.0 (maximum entropy for bytes).
+pub(crate) fn entropy(data: &[u8]) -> f64 {
+    if data.is_empty() {
+        return 0.0;
+    }
+
+    let mut freq = [0u32; 256];
+    for &byte in data {
+        freq[usize::from(byte)] += 1;
+    }
+
+    let len = data.len() as f64;
+    let mut entropy = 0.0;
+
+    for &count in &freq {
+        if count > 0 {
+            let p = f64::from(count) / len;
+            entropy -= p * p.log2();
+        }
+    }
+
+    entropy
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

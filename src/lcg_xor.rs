@@ -136,7 +136,7 @@ pub fn extract_macho_lcg_xor(
         return Vec::new();
     }
     let encoded = &constant_bytes[4..];
-    if entropy(encoded) < MIN_ENTROPY {
+    if crate::bytes::entropy(encoded) < MIN_ENTROPY {
         return Vec::new();
     }
 
@@ -354,7 +354,7 @@ fn extract_macho_clock_lcg_xor(
     let Some(encoded) = constant.get(4..4 + payload_len) else {
         return Vec::new();
     };
-    if encoded.len() < min_length || entropy(encoded) < 6.5 {
+    if encoded.len() < min_length || crate::bytes::entropy(encoded) < 6.5 {
         return Vec::new();
     }
     let preview_len = encoded.len().min(96);
@@ -632,22 +632,4 @@ fn looks_like_script_or_command(bytes: &[u8]) -> bool {
     ]
     .iter()
     .any(|marker| lower.contains(marker))
-}
-
-fn entropy(bytes: &[u8]) -> f64 {
-    if bytes.is_empty() {
-        return 0.0;
-    }
-    let mut counts = [0usize; 256];
-    for &byte in bytes {
-        counts[usize::from(byte)] += 1;
-    }
-    counts
-        .iter()
-        .filter(|&&count| count != 0)
-        .map(|&count| {
-            let probability = count as f64 / bytes.len() as f64;
-            -probability * probability.log2()
-        })
-        .sum()
 }
