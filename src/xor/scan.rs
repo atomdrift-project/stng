@@ -372,6 +372,48 @@ fn trim_tail(value: &mut String, len: usize, min_length: usize) -> bool {
 /// length floor: a known directory plus a name, as in "/tmp/x".
 const MIN_PATH_OBJECT_LEN: usize = 6;
 
+/// What to make of a full-length single-byte decode `s` of `raw`. Unclassified
+/// runs are kept (maximal ASCII runs are far less noisy than the multi-byte
+/// scan's every-offset candidates) unless the raw bytes were already text. A
+/// kept run is at least half alphanumeric and, unless it is an encoding or a
+/// kind that need not read as English (`bcrypt.dll`, `BCryptDecrypt`, shell
+/// commands), vowelled like natural language.
+fn single_byte_verdict(s: &str, raw: &[u8]) -> Verdict {
+    let Verdict::Keep(kind) = classify_xor_string(s) else {
+        return Verdict::Reject;
+    };
+    if kind.is_none() && reads_as_text(raw) {
+        return Verdict::Reject;
+    }
+    // The run is ASCII, so bytes are characters.
+    let alnum = s.bytes().filter(u8::is_ascii_alphanumeric).count();
+    if !s.is_empty() && alnum * 100 < s.len() * 50 {
+        return Verdict::Reject;
+    }
+    let alpha = s.bytes().filter(u8::is_ascii_alphabetic).count();
+    let exempt = matches!(
+        kind,
+        Some(
+            StringKind::Base64
+                | StringKind::UnicodeEscaped
+                | StringKind::HexEncoded
+                | StringKind::UrlEncoded
+                | StringKind::SuspiciousPath
+                | StringKind::ShellCmd
+        )
+    );
+    if !exempt && alpha >= 3 {
+        let vowels = s
+            .bytes()
+            .filter(|b| matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u'))
+            .count();
+        if !(10..=70).contains(&(vowels * 100 / alpha)) {
+            return Verdict::Reject;
+        }
+    }
+    Verdict::Keep(kind)
+}
+
 /// Single-byte XOR: decode the whole file once and validate each printable
 /// ASCII run, split at null padding.
 fn single_byte_xor_strings(
@@ -471,71 +513,22 @@ fn single_byte_xor_strings(
                 continue;
             }
 
-            // Classify to reject garbage and pick the kind used by the vowel-ratio
-            // bypass below. Unclassified strings are kept: these maximal ASCII runs
-            // are far less noisy than the multi-byte scan's every-offset candidates.
-            let Verdict::Keep(kind) = classify_xor_string(&s) else {
+            let Verdict::Keep(kind) = single_byte_verdict(&s, &data[cur_start..seg_end]) else {
                 continue;
             };
-            if kind.is_none() && reads_as_text(&data[cur_start..seg_end]) {
-                continue;
-            }
-
-            // Additional sanity check: reject obvious garbage.
-            // Since single-byte XOR uses ASCII-only run detection, all strings are ASCII;
-            // use fast byte-based counting instead of slow Unicode char iteration.
-            let alnum = s.bytes().filter(u8::is_ascii_alphanumeric).count();
-            let alpha = s.bytes().filter(u8::is_ascii_alphabetic).count();
-
-            // Reject if < 50% alphanumeric (likely garbage)
-            let char_count = s.len(); // ASCII: len == char count
-            if char_count > 0 && alnum * 100 < char_count * 50 {
-                continue;
-            }
-
-            // Reject if has letters but poor vowel ratio (English-specific check).
-            // Skip for encoded formats (base64, hex, etc.) and high-value IOCs
-            // (SuspiciousPath/ShellCmd) which may not follow English vowel patterns.
-            // DLL names (bcrypt.dll), API names (BCryptDecrypt), and shell commands
-            // are valid targets even with 0% vowels.
-            let is_encoded_format = matches!(
-                kind,
-                Some(
-                    StringKind::Base64
-                        | StringKind::UnicodeEscaped
-                        | StringKind::HexEncoded
-                        | StringKind::UrlEncoded
-                        | StringKind::SuspiciousPath
-                        | StringKind::ShellCmd
-                )
-            );
-            if !is_encoded_format && alpha >= 3 {
-                let vowels = s
-                    .bytes()
-                    .filter(|&b| matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u'))
-                    .count();
-                let vowel_ratio = (vowels * 100).checked_div(alpha).unwrap_or(0);
-                if !(10..=70).contains(&vowel_ratio) {
-                    continue;
-                }
-            }
-
             let offset = cur_start as u64;
             if seen.insert((offset, s.clone())) {
-                // Clean up URLs by removing trailing garbage
-                let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
+                let value = if kind == Some(StringKind::Url) {
                     clean_url_trailing_garbage(&s)
                 } else {
-                    s.clone()
+                    s
                 };
-
                 results.push(ExtractedString {
-                    value: cleaned_value,
+                    value,
                     data_offset: offset,
-                    data_len: 0,
                     method: StringMethod::XorDecode,
                     kind,
-                    fragments: None,
+                    ..Default::default()
                 });
             }
         }
@@ -927,6 +920,52 @@ fn starts_garbage(decode: impl Fn(usize) -> u8, i: usize, end: usize) -> bool {
     false
 }
 
+/// Enough alphanumerics (60% under an auto-detected key, else 50%) and, for
+/// ASCII text that is not a network indicator or a locale code (which lack
+/// vowels by nature), a vowel ratio in a natural-language range.
+fn plausible_letters(s: &str, kind: Option<StringKind>, strict: bool) -> bool {
+    let char_count = s.chars().count();
+    let alnum = s.chars().filter(|c| c.is_alphanumeric()).count();
+    let min_alnum_pct = if strict { 60 } else { 50 };
+    if char_count > 0 && alnum * 100 < char_count * min_alnum_pct {
+        return false;
+    }
+    let alpha = s.chars().filter(|c| c.is_alphabetic()).count();
+    let network = matches!(
+        kind,
+        Some(StringKind::Url | StringKind::IP | StringKind::IPPort)
+    );
+    if network || alpha < 3 || !s.is_ascii() || is_locale_string(s) {
+        return true;
+    }
+    let vowels = s
+        .bytes()
+        .filter(|b| matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u'))
+        .count();
+    let (min_vowel, max_vowel) = if strict { (12, 65) } else { (10, 70) };
+    (min_vowel..=max_vowel).contains(&(vowels * 100 / alpha))
+}
+
+/// Strip the junk a misaligned decode leaves after each kind: URL and locale
+/// tails, a backtick and letter after a path (`` `R ``), shell garbage.
+fn trim_kind_tail(kind: Option<StringKind>, s: String) -> String {
+    match kind {
+        Some(StringKind::Url) => clean_url_trailing_garbage(&s),
+        Some(StringKind::SuspiciousPath) if is_locale_string(&s) => {
+            clean_locale_trailing_garbage(&s)
+        }
+        Some(StringKind::SuspiciousPath) => {
+            let b = s.as_bytes();
+            match b.iter().rposition(u8::is_ascii_alphabetic) {
+                Some(idx) if idx > 0 && b[idx - 1] == b'`' => s[..idx - 1].to_string(),
+                _ => s,
+            }
+        }
+        Some(StringKind::ShellCmd) => trim_trailing_garbage(&s).to_string(),
+        _ => s,
+    }
+}
+
 /// Validate, clean and classify one decoded candidate from the pattern scan.
 fn finish_xor_candidate(
     pos: usize,
@@ -990,90 +1029,13 @@ fn finish_xor_candidate(
         Verdict::Reject => None,
     };
 
-    // Additional sanity check: reject obvious garbage even if classify passed it
-    // Be especially strict when using automatically detected keys (paths)
-    let key_is_likely_auto_detected =
-        key_preview.starts_with('/') || key_preview.starts_with("C:\\");
-
-    let alnum = trimmed_s
-        .chars()
-        .filter(|c: &char| c.is_alphanumeric())
-        .count();
-    let alpha = trimmed_s
-        .chars()
-        .filter(|c: &char| c.is_alphabetic())
-        .count();
-
-    // For auto-detected keys, require at least 60% alphanumeric (stricter)
-    // For user-provided keys, require at least 50% alphanumeric
-    // Use character count for proper Unicode support
-    let char_count = trimmed_s.chars().count();
-    let min_alnum_pct = if key_is_likely_auto_detected { 60 } else { 50 };
-    if char_count > 0 && alnum * 100 < char_count * min_alnum_pct {
+    // Keys that are paths were auto-detected; hold their output to a
+    // stricter standard than a key the user gave.
+    let strict = key_preview.starts_with('/') || key_preview.starts_with("C:\\");
+    if !plausible_letters(&trimmed_s, kind, strict) {
         return None;
     }
-
-    // Reject if has letters but poor vowel ratio (linguistic check)
-    // Only apply to ASCII/English text - skip for international text (Russian, Chinese, etc.)
-    // Also skip for locale codes (e.g., zh_CN, fr_FR) which lack vowels by definition.
-    // Skip for network IOCs (URLs, IPs which naturally contain consonant-heavy protocol
-    // names like "http" or "ftp"). Always apply for other string types regardless of
-    // apply_filters, since vowel ratio is a reliable noise filter even in unfiltered mode.
-    let is_network_ioc = matches!(
-        kind,
-        Some(StringKind::Url | StringKind::IP | StringKind::IPPort)
-    );
-    if !is_network_ioc && alpha >= 3 && !is_locale_string(&trimmed_s) {
-        let has_non_ascii = !trimmed_s.is_ascii();
-        if !has_non_ascii {
-            // Only check vowels for ASCII/English text
-            let vowels = trimmed_s
-                .chars()
-                .filter(|c: &char| matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u'))
-                .count();
-            let vowel_ratio = (vowels * 100).checked_div(alpha).unwrap_or(0);
-
-            // For auto-detected keys, be stricter with vowel ratios
-            let (min_vowel, max_vowel) = if key_is_likely_auto_detected {
-                (12, 65) // Stricter range matching is_meaningful_string
-            } else {
-                (10, 70) // Slightly more lenient for user keys
-            };
-
-            if vowel_ratio < min_vowel || vowel_ratio > max_vowel {
-                return None;
-            }
-        }
-    }
-
-    // Apply category-specific fine-tuning after consonant cluster trimming
-    let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
-        clean_url_trailing_garbage(&trimmed_s)
-    } else if matches!(kind, Some(StringKind::SuspiciousPath)) && is_locale_string(&trimmed_s) {
-        clean_locale_trailing_garbage(&trimmed_s)
-    } else if matches!(kind, Some(StringKind::SuspiciousPath)) {
-        // Trim trailing backtick+letter pattern: XOR misalignment can produce e.g. `R at the end
-        let s = trimmed_s.as_str();
-        let bytes = s.as_bytes();
-        if bytes.len() >= 2 {
-            if let Some(idx) = bytes.iter().rposition(|&b: &u8| b.is_ascii_alphabetic()) {
-                if idx > 0 && bytes[idx - 1] == b'`' {
-                    s[..idx - 1].to_string()
-                } else {
-                    trimmed_s
-                }
-            } else {
-                trimmed_s
-            }
-        } else {
-            trimmed_s
-        }
-    } else if matches!(kind, Some(StringKind::ShellCmd)) {
-        // For shell commands and AppleScript, use the existing trimmer
-        trim_trailing_garbage(&trimmed_s).to_string()
-    } else {
-        trimmed_s
-    };
+    let cleaned_value = trim_kind_tail(kind, trimmed_s);
 
     // Category-specific cleaning (URL trailing garbage, shell cmd trimming, etc.) can
     // shorten the string below min_length. Re-check after cleaning.

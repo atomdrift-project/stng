@@ -68,26 +68,8 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
             t_struct.elapsed()
         );
 
-        // Recover the Go pclntab `pkgnamestab` table that lives inside
-        // .rdata on stripped Windows builds — varint-length-prefixed
-        // module paths and reflect type names that are not reachable
-        // via {ptr,len} structures.
         let t_pcln = std::time::Instant::now();
-        for sec in &pe.sections {
-            let name = binary::pe_section_name(&sec.name);
-            if !matches!(&*name, ".rdata" | ".rodata") {
-                continue;
-            }
-            let start = u64::from(sec.pointer_to_raw_data);
-            let Some(section_bytes) =
-                binary::file_range_clamped(data, start, u64::from(sec.size_of_raw_data))
-            else {
-                continue;
-            };
-            let (nulls, varints) = pclntab_strings(section_bytes, start, min_length);
-            strings.extend(varints);
-            strings.extend(nulls);
-        }
+        strings.extend(rdata_pclntab_strings(pe, data, min_length));
         tracing::debug!("TIME: Go PE pclntab scan took {:?}", t_pcln.elapsed());
     }
 
@@ -179,6 +161,29 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         sections: section_info,
         is_go: is_go_binary,
     }
+}
+
+/// Go's pclntab `pkgnamestab`, which stripped Windows builds keep inside
+/// `.rdata`: varint-prefixed module paths and reflect type names that no
+/// `{ptr, len}` structure reaches.
+fn rdata_pclntab_strings(pe: &PE<'_>, data: &[u8], min_length: usize) -> Vec<ExtractedString> {
+    let mut strings = Vec::new();
+    for sec in &pe.sections {
+        let name = binary::pe_section_name(&sec.name);
+        if !matches!(&*name, ".rdata" | ".rodata") {
+            continue;
+        }
+        let start = u64::from(sec.pointer_to_raw_data);
+        let Some(section_bytes) =
+            binary::file_range_clamped(data, start, u64::from(sec.size_of_raw_data))
+        else {
+            continue;
+        };
+        let (nulls, varints) = pclntab_strings(section_bytes, start, min_length);
+        strings.extend(varints);
+        strings.extend(nulls);
+    }
+    strings
 }
 
 /// The PDB path from the CodeView (RSDS) debug record. It sits in `.rdata`,

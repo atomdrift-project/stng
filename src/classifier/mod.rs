@@ -362,20 +362,8 @@ fn command_injection(s: &str) -> Option<StringKind> {
         {
             return Some(StringKind::CommandInjection);
         }
-        if let Some(start) = s.find("$(")
-            && let Some(end) = s[start + 2..].find(')')
-        {
-            let inner = &s[start + 2..start + 2 + end];
-            let commands = ["whoami", "id", "pwd", "hostname", "uname"];
-            let command = inner.contains(' ') || commands.iter().any(|c| inner.starts_with(c));
-            let alnum = || inner.bytes().filter(u8::is_ascii_alphanumeric).count();
-            if command
-                && inner.len() >= 2
-                && ascii_percent(inner) > 90
-                && alnum() * 100 / inner.len() > 40
-            {
-                return Some(StringKind::CommandInjection);
-            }
+        if code::substitution_runs_command(s) {
+            return Some(StringKind::CommandInjection);
         }
     }
     if s.len() >= 5 && s.starts_with('`') && s.ends_with('`') {

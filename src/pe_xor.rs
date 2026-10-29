@@ -162,6 +162,80 @@ fn operand(
     })
 }
 
+/// The instruction at `pc`, decoded once and cached in `code`. Prefixed
+/// string operations and more than `MAX_DECODER_INSNS` distinct instructions
+/// are out of scope.
+fn fetch(
+    image: &Image<'_, '_>,
+    code: &mut Vec<(u32, Instruction)>,
+    pc: u32,
+) -> Option<Instruction> {
+    if let Some(&(_, i)) = code.iter().find(|(va, _)| *va == pc) {
+        return Some(i);
+    }
+    if code.len() >= MAX_DECODER_INSNS {
+        return None;
+    }
+    let at = image.offset(pc, 1, true)?;
+    let mut decoder = Decoder::with_ip(
+        32,
+        &image.data[at..image.data.len().min(at + 15)],
+        u64::from(pc),
+        DecoderOptions::NONE,
+    );
+    let i = decoder.decode();
+    if i.is_invalid() || i.has_rep_prefix() || i.has_repne_prefix() || i.has_lock_prefix() {
+        return None;
+    }
+    image.offset(pc, i.len(), true)?;
+    code.push((pc, i));
+    Some(i)
+}
+
+/// `output` once the decoder returns: a complete bounded buffer, decoded by a
+/// real cyclic key that is one of the expected lengths and lies outside the
+/// buffer, and no instruction it ran overwritten.
+fn accept(
+    image: &Image<'_, '_>,
+    code: &[(u32, Instruction)],
+    mut output: Output,
+    keys: &[usize],
+    lengths: [usize; 2],
+) -> Option<Output> {
+    let n = output.bytes.len();
+    if !lengths.contains(&n) || n < 4 {
+        return None;
+    }
+    let first = *keys.first()?;
+    let key_len = keys
+        .iter()
+        .skip(1)
+        .position(|&k| k == first)
+        .map(|x| x + 1)?;
+    if key_len > 64 || !lengths.contains(&key_len) {
+        return None;
+    }
+    if keys
+        .iter()
+        .enumerate()
+        .any(|(i, &k)| k != first + i % key_len)
+    {
+        return None;
+    }
+    if first < output.start + n && first + key_len > output.start {
+        return None;
+    }
+    // Do not accept a decoder that overwrites any instruction it follows.
+    for (va, instruction) in code {
+        let at = image.offset(*va, instruction.len(), true)?;
+        if at < output.start + n && at + instruction.len() > output.start {
+            return None;
+        }
+    }
+    output.key = (first, key_len);
+    Some(output)
+}
+
 struct Output {
     start: usize,
     bytes: Vec<u8>,
@@ -190,27 +264,7 @@ fn interpret(
     let mut zero = None;
     loop {
         *steps = steps.checked_sub(1)?;
-        let ins = if let Some((_, i)) = code.iter().find(|(va, _)| *va == pc) {
-            *i
-        } else {
-            if code.len() >= MAX_DECODER_INSNS {
-                return None;
-            }
-            let at = image.offset(pc, 1, true)?;
-            let mut decoder = Decoder::with_ip(
-                32,
-                &image.data[at..image.data.len().min(at + 15)],
-                u64::from(pc),
-                DecoderOptions::NONE,
-            );
-            let i = decoder.decode();
-            if i.is_invalid() || i.has_rep_prefix() || i.has_repne_prefix() || i.has_lock_prefix() {
-                return None;
-            }
-            image.offset(pc, i.len(), true)?;
-            code.push((pc, i));
-            i
-        };
+        let ins = fetch(image, &mut code, pc)?;
         pc = ins.next_ip32();
         match ins.mnemonic() {
             Mnemonic::Mov | Mnemonic::Movzx => {
@@ -322,39 +376,7 @@ fn interpret(
             _ => return None,
         }
     }
-    // Require a complete bounded buffer, a real cyclic key, and no aliasing.
-    let n = output.bytes.len();
-    if !lengths.contains(&n) || n < 4 {
-        return None;
-    }
-    let first = *keys.first()?;
-    let key_len = keys
-        .iter()
-        .skip(1)
-        .position(|&k| k == first)
-        .map(|x| x + 1)?;
-    if key_len > 64 || !lengths.contains(&key_len) {
-        return None;
-    }
-    if keys
-        .iter()
-        .enumerate()
-        .any(|(i, &k)| k != first + i % key_len)
-    {
-        return None;
-    }
-    if first < output.start + n && first + key_len > output.start {
-        return None;
-    }
-    // Do not accept a decoder that overwrites any instruction it follows.
-    for (va, instruction) in &code {
-        let at = image.offset(*va, instruction.len(), true)?;
-        if at < output.start + n && at + instruction.len() > output.start {
-            return None;
-        }
-    }
-    output.key = (first, key_len);
-    Some(output)
+    accept(image, &code, output, &keys, lengths)
 }
 
 /// Recover strings without guessing keys or scanning every possible alignment.

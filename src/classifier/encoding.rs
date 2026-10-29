@@ -50,121 +50,57 @@ pub(super) fn is_cryptographic_hash(s: &str) -> bool {
     printable * 2 < decoded_len
 }
 
-/// Check if a string looks like base64-encoded data
+/// Whether `s` is shaped like base64 rather than an identifier: 16+ bytes in
+/// whole quanta of the alphabet, with upper, lower and digits, and none of the
+/// shapes base64 rarely takes but names often do.
+fn base64_shaped(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() < 16
+        || !b.len().is_multiple_of(4)
+        || !b
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='))
+    {
+        return false;
+    }
+    let has = |class: fn(&u8) -> bool| b.iter().any(class);
+    if !has(u8::is_ascii_uppercase) || !has(u8::is_ascii_lowercase) || !has(u8::is_ascii_digit) {
+        return false;
+    }
+    // Four leading capitals are a framework prefix (HTTP*, NSURL*), which only
+    // ~1.7% of real base64 has; four leading lowercase are lowerCamelCase
+    // (`wants10KeepAlive`).
+    let leading = |class: fn(&u8) -> bool| b.iter().take_while(|c| class(c)).count();
+    if leading(u8::is_ascii_uppercase) >= 4 || leading(u8::is_ascii_lowercase) >= 4 {
+        return false;
+    }
+    // Go package and type names.
+    if b.len() < 40
+        && [&b"http2"[..], b"grpc", b"proto"]
+            .iter()
+            .any(|word| contains_ignore_ascii_case(b, word))
+    {
+        return false;
+    }
+    // Alphabet tables and prose.
+    if ["ABCDE", "012345", "the ", "and "]
+        .iter()
+        .any(|p| s.contains(p))
+    {
+        return false;
+    }
+    // Eight or more digits in a row: ASN.1 timestamps (`201229235959Z0b1`)
+    // and version data.
+    !b.split(|c| !c.is_ascii_digit()).any(|run| run.len() >= 8)
+}
+
+/// Whether `s` is base64-encoded data: base64-shaped and, when it reads
+/// like text, no less readable once decoded.
 pub(super) fn is_base64(s: &str) -> bool {
-    // Must be reasonably long (short base64 could be anything)
-    if s.len() < 16 {
+    if !base64_shaped(s) {
         return false;
     }
-
-    // Must be properly padded (length must be multiple of 4)
-    if !s.len().is_multiple_of(4) {
-        return false;
-    }
-
-    // Single pass: validate characters AND track consecutive uppercase at start
     let bytes = s.as_bytes();
-    let mut has_upper = false;
-    let mut has_lower = false;
-    let mut has_digit = false;
-    let mut consecutive_upper_at_start = 0;
-    let mut found_non_upper = false;
-
-    for &b in bytes {
-        match b {
-            b'A'..=b'Z' => {
-                has_upper = true;
-
-                // Track consecutive uppercase at start only
-                if !found_non_upper {
-                    consecutive_upper_at_start += 1;
-                }
-            }
-            b'a'..=b'z' => {
-                has_lower = true;
-
-                if !found_non_upper {
-                    found_non_upper = true;
-                }
-            }
-            b'0'..=b'9' => {
-                has_digit = true;
-
-                if !found_non_upper {
-                    found_non_upper = true;
-                }
-            }
-            b'+' | b'/' | b'=' => {
-                if !found_non_upper {
-                    found_non_upper = true;
-                }
-            }
-            _ => return false, // Invalid character (including spaces)
-        }
-    }
-
-    // Must have mixed case and digits (good entropy)
-    if !has_upper || !has_lower || !has_digit {
-        return false;
-    }
-
-    // Reject obvious identifier patterns
-    // Base64 can have random CamelCase patterns, so we only reject very specific cases
-
-    // 1. Very long uppercase prefixes (4+) indicate framework prefixes (HTTP*, POST*, NSURL*, XML*)
-    // Real base64 rarely starts with 4+ consecutive uppercase (only ~1.7% chance)
-    if consecutive_upper_at_start >= 4 {
-        return false;
-    }
-
-    // 2. Go-specific package/type name patterns (http2, grpc, proto keywords)
-    // These are distinctive and unlikely in random base64
-    if s.len() < 40
-        && (contains_ignore_ascii_case(bytes, b"http2")
-            || contains_ignore_ascii_case(bytes, b"grpc")
-            || contains_ignore_ascii_case(bytes, b"proto"))
-    {
-        return false;
-    }
-
-    // 3. Reject lowerCamelCase identifiers
-    // These start with many consecutive lowercase letters (like "wants10KeepAlive")
-    // Real base64 has random case distribution, unlikely to start with 4+ consecutive lowercase
-    let mut consecutive_lower_at_start = 0;
-    for &b in bytes {
-        if b.is_ascii_lowercase() {
-            consecutive_lower_at_start += 1;
-        } else {
-            break;
-        }
-    }
-
-    // Reject if starts with 4+ consecutive lowercase (clear lowerCamelCase pattern)
-    if consecutive_lower_at_start >= 4 {
-        return false;
-    }
-
-    // Exclude sequential patterns (alphabet lookups, test data)
-    if s.contains("ABCDE") || s.contains("012345") || s.contains("the ") || s.contains("and ") {
-        return false;
-    }
-
-    // Reject strings with long runs of consecutive digits (8+).
-    // These are typically ASN.1 certificate timestamps (e.g. "201229235959Z0b1")
-    // or version-like data, not real base64.
-    {
-        let mut digit_run = 0u32;
-        for &b in bytes {
-            if b.is_ascii_digit() {
-                digit_run += 1;
-                if digit_run >= 8 {
-                    return false;
-                }
-            } else {
-                digit_run = 0;
-            }
-        }
-    }
 
     // Strings with many repeated characters are encoded binary, not readable text
     // (e.g. "TVqQAAMAAAAEAAAA" has many 'A's from null-byte padding). This uses only

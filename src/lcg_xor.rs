@@ -81,9 +81,8 @@ pub fn extract_macho_lcg_xor(
     slice_base: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    let clock_lcg = extract_macho_clock_lcg_xor(macho, data, slice_base, min_length);
-    if !clock_lcg.is_empty() {
-        return clock_lcg;
+    if let Some(s) = clock_lcg_xor(macho, data, slice_base, min_length) {
+        return vec![s];
     }
     if macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
         return Vec::new();
@@ -215,21 +214,20 @@ pub fn extract_macho_lcg_xor(
 /// an embedded `HH:MM:SS` string. The seed and multiplier must also appear in
 /// the architecture's code, and the decoded preview must identify a command
 /// or script before the payload is fully decoded.
-fn extract_macho_clock_lcg_xor(
+fn clock_lcg_xor(
     macho: &MachO<'_>,
     data: &[u8],
     slice_base: u64,
     min_length: usize,
-) -> Vec<ExtractedString> {
+) -> Option<ExtractedString> {
     use goblin::mach::constants::cputype::{CPU_TYPE_ARM64, CPU_TYPE_X86_64};
 
     const MAX_CODE: usize = 1024 * 1024;
     const MAX_PAYLOAD: usize = 8 * 1024 * 1024;
-    const MULTIPLIER: u32 = 0x3785;
 
     let cpu = macho.header.cputype;
     if !matches!(cpu, CPU_TYPE_ARM64 | CPU_TYPE_X86_64) {
-        return Vec::new();
+        return None;
     }
 
     let mut text = None;
@@ -249,39 +247,88 @@ fn extract_macho_clock_lcg_xor(
         };
         *target = Some((u64::from(section.offset), section.size));
     }
-    let (
-        Some((text_offset, text_size)),
-        Some((const_offset, const_size)),
-        Some((str_offset, str_size)),
-    ) = (text, constants, cstrings)
-    else {
-        return Vec::new();
-    };
+    let ((text_offset, text_size), (const_offset, const_size), (str_offset, str_size)) =
+        (text?, constants?, cstrings?);
     if text_size == 0
         || text_size > MAX_CODE as u64
         || !(5..=MAX_PAYLOAD as u64 + 4).contains(&const_size)
         || str_size == 0
     {
-        return Vec::new();
+        return None;
     }
     let section = |offset: u64, size: u64| -> Option<&[u8]> {
         let start = usize::try_from(slice_base.checked_add(offset)?).ok()?;
         let end = start.checked_add(usize::try_from(size).ok()?)?;
         data.get(start..end)
     };
-    let (Some(code), Some(constant), Some(cstrings)) = (
-        section(text_offset, text_size),
-        section(const_offset, const_size),
-        section(str_offset, str_size),
-    ) else {
-        return Vec::new();
-    };
+    let code = section(text_offset, text_size)?;
+    let constant = section(const_offset, const_size)?;
+    let cstrings = section(str_offset, str_size)?;
 
     let seed = u32::from_le_bytes(constant[..4].try_into().unwrap_or([0; 4]));
     if !(0x1_0000..=0x1_ffff).contains(&seed) {
-        return Vec::new();
+        return None;
     }
-    let modulus = cstrings.windows(8).find_map(|value| {
+    let modulus = clock_modulus(cstrings)?;
+    let x86 = cpu == CPU_TYPE_X86_64;
+    if !loads_lcg_constants(code, x86, seed) {
+        return None;
+    }
+
+    let max_len = constant.len().saturating_sub(4).min(MAX_PAYLOAD);
+    let min_bound = max_len.saturating_sub(15).max(min_length);
+    if min_bound > max_len {
+        return None;
+    }
+    let payload_len = if x86 {
+        code.windows(4).find_map(|word| {
+            let length = u32::from_le_bytes(word.try_into().unwrap_or([0; 4])) as usize;
+            (min_bound..=max_len).contains(&length).then_some(length)
+        })
+    } else {
+        code.as_chunks::<4>().0.iter().find_map(|word| {
+            let word = u32::from_le_bytes(*word);
+            if word & 0xff80_001f != 0xd280_0009 {
+                return None;
+            }
+            let length = usize::try_from((word >> 5) & 0xffff).ok()?;
+            ((word >> 21) & 3 == 0 && (min_bound..=max_len).contains(&length)).then_some(length)
+        })
+    }?;
+    let encoded = constant.get(4..4 + payload_len)?;
+    if encoded.len() < min_length || crate::bytes::entropy(encoded) < 6.5 {
+        return None;
+    }
+    let preview = decode_preview(
+        &encoded[..encoded.len().min(96)],
+        u64::from(seed),
+        u64::from(CLOCK_MULTIPLIER),
+        modulus,
+        0,
+    );
+    if !looks_like_script_or_command(&preview) {
+        return None;
+    }
+    let offset = usize::try_from(slice_base.checked_add(const_offset)?.checked_add(4)?).ok()?;
+    decode_lcg_xor(
+        data,
+        offset,
+        encoded.len(),
+        u64::from(seed),
+        u64::from(CLOCK_MULTIPLIER),
+        modulus,
+        0,
+    )
+    .filter(|s| s.value.len() >= min_length)
+}
+
+/// The clock-variant loader's LCG multiplier.
+const CLOCK_MULTIPLIER: u32 = 0x3785;
+
+/// The LCG modulus the loader derives from an embedded `HH:MM:SS`: the
+/// time in seconds, which must fit 16 bits.
+fn clock_modulus(cstrings: &[u8]) -> Option<u64> {
+    cstrings.windows(8).find_map(|value| {
         if value[2] != b':'
             || value[5] != b':'
             || !value
@@ -296,26 +343,25 @@ fn extract_macho_clock_lcg_xor(
         (hours < 24 && minutes < 60 && seconds < 60)
             .then_some(hours * 3600 + minutes * 60 + seconds)
             .filter(|&seconds| (0x1000..=0xffff).contains(&seconds))
-    });
-    let Some(modulus) = modulus else {
-        return Vec::new();
-    };
+    })
+}
 
-    let has_multiplier = if cpu == CPU_TYPE_X86_64 {
-        code_contains_u32(code, MULTIPLIER)
-    } else {
-        code.as_chunks::<4>().0.iter().any(|word| {
-            let word = u32::from_le_bytes(*word);
-            word & 0x7f80_001f == 0x5280_0009
-                && (word >> 5) & 0xffff == MULTIPLIER
-                && (word >> 21) & 3 == 0
-        })
-    };
-    let has_seed = if cpu == CPU_TYPE_X86_64 {
-        code_contains_u32(code, seed)
-    } else {
-        let words = code.as_chunks::<4>().0;
-        words.iter().zip(words.iter().skip(1)).any(|(movz, movk)| {
+/// Whether `code` loads both the multiplier and `seed` as immediates: as raw
+/// 32-bit constants on x86-64, or as MOVZ (plus MOVK for the seed's high
+/// half) on ARM64.
+fn loads_lcg_constants(code: &[u8], x86: bool, seed: u32) -> bool {
+    if x86 {
+        return code_contains_u32(code, CLOCK_MULTIPLIER) && code_contains_u32(code, seed);
+    }
+    let words = code.as_chunks::<4>().0;
+    let has_multiplier = words.iter().any(|word| {
+        let word = u32::from_le_bytes(*word);
+        word & 0x7f80_001f == 0x5280_0009
+            && (word >> 5) & 0xffff == CLOCK_MULTIPLIER
+            && (word >> 21) & 3 == 0
+    });
+    has_multiplier
+        && words.iter().zip(words.iter().skip(1)).any(|(movz, movk)| {
             let movz = u32::from_le_bytes(*movz);
             let movk = u32::from_le_bytes(*movk);
             movz & 0x7f80_001f == 0x5280_0001
@@ -324,71 +370,6 @@ fn extract_macho_clock_lcg_xor(
                 && (movk >> 5) & 0xffff == seed >> 16
                 && (movk >> 21) & 3 == 1
         })
-    };
-    if !has_multiplier || !has_seed {
-        return Vec::new();
-    }
-
-    let max_len = constant.len().saturating_sub(4).min(MAX_PAYLOAD);
-    let min_bound = max_len.saturating_sub(15).max(min_length);
-    let payload_len = if min_bound > max_len {
-        None
-    } else if cpu == CPU_TYPE_X86_64 {
-        code.windows(4).find_map(|word| {
-            let length = u32::from_le_bytes(word.try_into().unwrap_or([0; 4])) as usize;
-            (min_bound..=max_len).contains(&length).then_some(length)
-        })
-    } else {
-        code.as_chunks::<4>().0.iter().find_map(|word| {
-            let word = u32::from_le_bytes(*word);
-            if word & 0xff80_001f != 0xd280_0009 {
-                return None;
-            }
-            let length = usize::try_from((word >> 5) & 0xffff).ok()?;
-            ((word >> 21) & 3 == 0 && (min_bound..=max_len).contains(&length)).then_some(length)
-        })
-    };
-    let Some(payload_len) = payload_len else {
-        return Vec::new();
-    };
-    let Some(encoded) = constant.get(4..4 + payload_len) else {
-        return Vec::new();
-    };
-    if encoded.len() < min_length || crate::bytes::entropy(encoded) < 6.5 {
-        return Vec::new();
-    }
-    let preview_len = encoded.len().min(96);
-    let preview = decode_preview(
-        &encoded[..preview_len],
-        u64::from(seed),
-        u64::from(MULTIPLIER),
-        modulus,
-        0,
-    );
-    if !looks_like_script_or_command(&preview) {
-        return Vec::new();
-    }
-    let Some(offset) = slice_base
-        .checked_add(const_offset)
-        .and_then(|offset| offset.checked_add(4))
-    else {
-        return Vec::new();
-    };
-    let Ok(offset) = usize::try_from(offset) else {
-        return Vec::new();
-    };
-    decode_lcg_xor(
-        data,
-        offset,
-        encoded.len(),
-        u64::from(seed),
-        u64::from(MULTIPLIER),
-        modulus,
-        0,
-    )
-    .filter(|s| s.value.len() >= min_length)
-    .into_iter()
-    .collect()
 }
 
 /// Extract printable strings from a validated single-byte-XOR Mach-O payload

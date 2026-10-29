@@ -490,6 +490,104 @@ pub(super) fn is_applescript(s: &str) -> bool {
     false
 }
 
+/// Strings that cannot be shell commands: no shell punctuation, error
+/// messages built from format strings, `ABC12345:` error codes, no space
+/// (outside `/bin/...` and `$(...)`), .NET generic names (`List`1`), and
+/// expressions with comparison operators.
+fn cannot_be_shell(s: &str) -> bool {
+    // Quick byte-level check: shell commands typically contain key indicators
+    // If none of these bytes are present, it's very unlikely to be a shell command
+    let has_shell_indicators = s
+        .as_bytes()
+        .iter()
+        .any(|&b| matches!(b, b' ' | b'/' | b'$' | b'|' | b'&' | b'>' | b';' | b'`'));
+    if !has_shell_indicators {
+        return true;
+    }
+
+    // Reject common error message patterns (not shell commands)
+    // Format string placeholders, error codes, UI text markers
+    if s.contains("{0}") || s.contains("{1}") || s.contains("%s") || s.contains("%d") {
+        // Check if it looks like an error message or UI string
+        let is_error_message = SHELL_ERROR_PATTERNS.is_match(s);
+        if is_error_message {
+            return true;
+        }
+    }
+
+    // Skip strings with error code patterns like "ABC12345:" or "TTF24041:"
+    // (uppercase letters followed by digits and colon at start)
+    if s.len() >= 6 {
+        let chars: Vec<char> = s.chars().take(10).collect();
+        let mut has_letters = false;
+        let mut has_digits = false;
+        let mut found_colon = false;
+        for &c in &chars {
+            if c == ':' {
+                found_colon = true;
+                break;
+            }
+            if c.is_ascii_uppercase() {
+                has_letters = true;
+            }
+            if c.is_ascii_digit() {
+                has_digits = true;
+            }
+        }
+        if has_letters && has_digits && found_colon {
+            return true;
+        }
+    }
+
+    // Fast path: shell commands almost always contain a space
+    // Exceptions: paths like /bin/sh, command substitution $(...)
+    if memchr::memchr(b' ', s.as_bytes()).is_none()
+        && !s.starts_with("/bin/")
+        && !s.starts_with("$(")
+    {
+        return true;
+    }
+
+    // Skip if it looks like a .NET generic type (contains backtick followed by digit)
+    // e.g., IEnumerable`1, Dictionary`2, etc.
+    if s.contains('`') {
+        // Check if it's a .NET generic pattern: Name`N where N is a digit
+        let has_generic_pattern = s
+            .chars()
+            .zip(s.chars().skip(1))
+            .any(|(a, b)| a == '`' && b.is_ascii_digit());
+        if has_generic_pattern {
+            return true;
+        }
+    }
+
+    // Skip strings that look like code/programming expressions
+    // These contain comparison operators that wouldn't appear in shell commands
+    if SHELL_COMPARISON_OPS.is_match(s) {
+        return true;
+    }
+
+    false
+}
+
+/// Whether `s` has a `$(...)` substitution holding a command: something with
+/// arguments, or a bare reconnaissance command, in mostly-ASCII alphanumeric
+/// text rather than binary noise.
+pub(super) fn substitution_runs_command(s: &str) -> bool {
+    let Some(start) = s.find("$(") else {
+        return false;
+    };
+    let Some(end) = s[start + 2..].find(')') else {
+        return false;
+    };
+    let inner = &s[start + 2..start + 2 + end];
+    let commands = ["whoami", "id", "pwd", "hostname", "uname"];
+    let command = inner.contains(' ') || commands.iter().any(|c| inner.starts_with(c));
+    let ascii = inner.bytes().filter(u8::is_ascii).count();
+    let alnum = inner.bytes().filter(u8::is_ascii_alphanumeric).count();
+    command && inner.len() >= 2 && ascii * 100 / inner.len() > 90 && alnum * 100 / inner.len() > 40
+}
+
 /// Check if a string looks like a shell command
 pub(super) fn is_shell_command(s: &str) -> bool {
     let len = s.len();
@@ -516,72 +614,7 @@ pub(super) fn is_shell_command(s: &str) -> bool {
         return false;
     }
 
-    // Quick byte-level check: shell commands typically contain key indicators
-    // If none of these bytes are present, it's very unlikely to be a shell command
-    let bytes = s.as_bytes();
-    let has_shell_indicators = bytes
-        .iter()
-        .any(|&b| matches!(b, b' ' | b'/' | b'$' | b'|' | b'&' | b'>' | b';' | b'`'));
-    if !has_shell_indicators {
-        return false;
-    }
-
-    // Reject common error message patterns (not shell commands)
-    // Format string placeholders, error codes, UI text markers
-    if s.contains("{0}") || s.contains("{1}") || s.contains("%s") || s.contains("%d") {
-        // Check if it looks like an error message or UI string
-        let is_error_message = SHELL_ERROR_PATTERNS.is_match(s);
-        if is_error_message {
-            return false;
-        }
-    }
-
-    // Skip strings with error code patterns like "ABC12345:" or "TTF24041:"
-    // (uppercase letters followed by digits and colon at start)
-    if len >= 6 {
-        let chars: Vec<char> = s.chars().take(10).collect();
-        let mut has_letters = false;
-        let mut has_digits = false;
-        let mut found_colon = false;
-        for &c in &chars {
-            if c == ':' {
-                found_colon = true;
-                break;
-            }
-            if c.is_ascii_uppercase() {
-                has_letters = true;
-            }
-            if c.is_ascii_digit() {
-                has_digits = true;
-            }
-        }
-        if has_letters && has_digits && found_colon {
-            return false;
-        }
-    }
-
-    // Fast path: shell commands almost always contain a space
-    // Exceptions: paths like /bin/sh, command substitution $(...)
-    if memchr::memchr(b' ', bytes).is_none() && !s.starts_with("/bin/") && !s.starts_with("$(") {
-        return false;
-    }
-
-    // Skip if it looks like a .NET generic type (contains backtick followed by digit)
-    // e.g., IEnumerable`1, Dictionary`2, etc.
-    if s.contains('`') {
-        // Check if it's a .NET generic pattern: Name`N where N is a digit
-        let has_generic_pattern = s
-            .chars()
-            .zip(s.chars().skip(1))
-            .any(|(a, b)| a == '`' && b.is_ascii_digit());
-        if has_generic_pattern {
-            return false;
-        }
-    }
-
-    // Skip strings that look like code/programming expressions
-    // These contain comparison operators that wouldn't appear in shell commands
-    if SHELL_COMPARISON_OPS.is_match(s) {
+    if cannot_be_shell(s) {
         return false;
     }
 
@@ -613,30 +646,8 @@ pub(super) fn is_shell_command(s: &str) -> bool {
         }
     }
 
-    // Command substitution: $(...) - require actual command content inside
-    if let Some(start) = s.find("$(")
-        && let Some(end_rel) = s[start + 2..].find(')')
-    {
-        let content = &s[start + 2..start + 2 + end_rel];
-        // Must contain a space (actual command with args) or be a known command name
-        let is_command = !content.is_empty()
-            && (content.contains(' ')
-                || content.starts_with("whoami")
-                || content.starts_with("id")
-                || content.starts_with("pwd")
-                || content.starts_with("hostname")
-                || content.starts_with("uname"));
-        // Must be mostly ASCII with reasonable alphanumeric ratio
-        let ascii_count = content.bytes().filter(u8::is_ascii).count();
-        let alpha_count = content.bytes().filter(u8::is_ascii_alphanumeric).count();
-        let content_len = content.len();
-        if content_len >= 2
-            && ascii_count * 100 / content_len > 90
-            && alpha_count * 100 / content_len > 40
-            && is_command
-        {
-            return true;
-        }
+    if substitution_runs_command(s) {
+        return true;
     }
 
     // Backtick command substitution - must start with backtick and look like actual command

@@ -13,7 +13,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use crate::types::{ExtractedString, StringFragment, StringKind, StringMethod};
-use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
+use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
 use std::collections::{HashMap, HashSet};
 
 /// Check if bytes are printable ASCII and meet minimum length.
@@ -133,6 +133,105 @@ impl<'a> StackStringExtractor<'a> {
         }
     }
 
+    /// `MOV` of an immediate into a register, or of an immediate or a tracked
+    /// register into memory.
+    fn on_mov(&mut self, instr: &Instruction, instr_off: u64) {
+        let op0_kind = instr.op0_kind();
+        let op1_kind = instr.op1_kind();
+
+        match (op0_kind, op1_kind) {
+            // mov reg, imm
+            (
+                OpKind::Register,
+                OpKind::Immediate32 | OpKind::Immediate64 | OpKind::Immediate32to64,
+            ) => {
+                let reg = instr.op0_register();
+                // Extract immediate bytes directly from the instruction's data if possible,
+                // or use iced's value. Using raw bytes is safer for printable check.
+                let imm_val = if op1_kind == OpKind::Immediate64 {
+                    instr.immediate64().to_le_bytes().to_vec()
+                } else {
+                    instr.immediate32().to_le_bytes().to_vec()
+                };
+
+                if let Some(s) = check_printable(&imm_val, self.min_length) {
+                    self.regs.insert(reg, (s, instr_off));
+                    self.raw_regs.remove(&reg);
+                } else {
+                    self.regs.remove(&reg);
+                    self.raw_regs.insert(reg, imm_val);
+                }
+            }
+            // mov [mem], imm
+            (OpKind::Memory, OpKind::Immediate32 | OpKind::Immediate32to64) => {
+                let base = instr.memory_base();
+                let disp = instr.memory_displacement64().cast_signed();
+                let imm_val = instr.immediate32().to_le_bytes();
+
+                if let Some(s) = check_printable(&imm_val, 4) {
+                    self.add_write(base, disp, s, instr_off);
+                } else {
+                    self.add_raw_blob(base, disp, imm_val.to_vec(), instr_off);
+                }
+            }
+            // mov [mem], imm8
+            (OpKind::Memory, OpKind::Immediate8) => {
+                let base = instr.memory_base();
+                let disp = instr.memory_displacement64().cast_signed();
+                let b = instr.immediate8();
+                if b.is_ascii_graphic() || b == b' ' {
+                    self.add_write(base, disp, (b as char).to_string(), instr_off);
+                }
+            }
+            // mov [mem], reg
+            (OpKind::Memory, OpKind::Register) => {
+                let base = instr.memory_base();
+                let disp = instr.memory_displacement64().cast_signed();
+                let src_reg = instr.op1_register();
+
+                if let Some((s, _off)) = self.regs.get(&src_reg).cloned() {
+                    self.add_write(base, disp, s, instr_off);
+                }
+                if let Some(raw) = self.raw_regs.get(&src_reg).cloned() {
+                    self.add_raw_blob(base, disp, raw, instr_off);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// An SSE load into an XMM register, or a store of a tracked one.
+    fn on_sse_mov(&mut self, instr: &Instruction, instr_off: u64) {
+        let op0_kind = instr.op0_kind();
+        let op1_kind = instr.op1_kind();
+
+        match (op0_kind, op1_kind) {
+            // Load from memory to XMM (especially RIP-relative)
+            (OpKind::Register, OpKind::Memory) => {
+                let dst_reg = instr.op0_register();
+                if (Register::XMM0..=Register::XMM15).contains(&dst_reg)
+                    && let Some(data) = self.read_memory_for_instr(instr, 1, 16)
+                {
+                    let mut arr = [0u8; 16];
+                    arr.copy_from_slice(&data);
+                    self.xmm_regs.insert(dst_reg, arr);
+                }
+            }
+            // Store from XMM to memory
+            (OpKind::Memory, OpKind::Register) => {
+                let src_reg = instr.op1_register();
+                if (Register::XMM0..=Register::XMM15).contains(&src_reg)
+                    && let Some(data) = self.xmm_regs.get(&src_reg).cloned()
+                {
+                    let base = instr.memory_base();
+                    let disp = instr.memory_displacement64().cast_signed();
+                    self.add_raw_blob(base, disp, data.to_vec(), instr_off);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn extract(mut self) -> Vec<ExtractedString> {
         let mut results = Vec::new();
 
@@ -151,101 +250,9 @@ impl<'a> StackStringExtractor<'a> {
             let instr_off = instr.ip().wrapping_sub(self.section_vma);
 
             match instr.mnemonic() {
-                // --- 1. MOV ---
-                Mnemonic::Mov => {
-                    let op0_kind = instr.op0_kind();
-                    let op1_kind = instr.op1_kind();
-
-                    match (op0_kind, op1_kind) {
-                        // mov reg, imm
-                        (
-                            OpKind::Register,
-                            OpKind::Immediate32 | OpKind::Immediate64 | OpKind::Immediate32to64,
-                        ) => {
-                            let reg = instr.op0_register();
-                            // Extract immediate bytes directly from the instruction's data if possible,
-                            // or use iced's value. Using raw bytes is safer for printable check.
-                            let imm_val = if op1_kind == OpKind::Immediate64 {
-                                instr.immediate64().to_le_bytes().to_vec()
-                            } else {
-                                instr.immediate32().to_le_bytes().to_vec()
-                            };
-
-                            if let Some(s) = check_printable(&imm_val, self.min_length) {
-                                self.regs.insert(reg, (s, instr_off));
-                                self.raw_regs.remove(&reg);
-                            } else {
-                                self.regs.remove(&reg);
-                                self.raw_regs.insert(reg, imm_val);
-                            }
-                        }
-                        // mov [mem], imm
-                        (OpKind::Memory, OpKind::Immediate32 | OpKind::Immediate32to64) => {
-                            let base = instr.memory_base();
-                            let disp = instr.memory_displacement64().cast_signed();
-                            let imm_val = instr.immediate32().to_le_bytes();
-
-                            if let Some(s) = check_printable(&imm_val, 4) {
-                                self.add_write(base, disp, s, instr_off);
-                            } else {
-                                self.add_raw_blob(base, disp, imm_val.to_vec(), instr_off);
-                            }
-                        }
-                        // mov [mem], imm8
-                        (OpKind::Memory, OpKind::Immediate8) => {
-                            let base = instr.memory_base();
-                            let disp = instr.memory_displacement64().cast_signed();
-                            let b = instr.immediate8();
-                            if b.is_ascii_graphic() || b == b' ' {
-                                self.add_write(base, disp, (b as char).to_string(), instr_off);
-                            }
-                        }
-                        // mov [mem], reg
-                        (OpKind::Memory, OpKind::Register) => {
-                            let base = instr.memory_base();
-                            let disp = instr.memory_displacement64().cast_signed();
-                            let src_reg = instr.op1_register();
-
-                            if let Some((s, _off)) = self.regs.get(&src_reg).cloned() {
-                                self.add_write(base, disp, s, instr_off);
-                            }
-                            if let Some(raw) = self.raw_regs.get(&src_reg).cloned() {
-                                self.add_raw_blob(base, disp, raw, instr_off);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                // --- 2. SSE MOV (MOVUPS/MOVAPS) ---
+                Mnemonic::Mov => self.on_mov(&instr, instr_off),
                 Mnemonic::Movups | Mnemonic::Movaps | Mnemonic::Movdqu | Mnemonic::Movdqa => {
-                    let op0_kind = instr.op0_kind();
-                    let op1_kind = instr.op1_kind();
-
-                    match (op0_kind, op1_kind) {
-                        // Load from memory to XMM (especially RIP-relative)
-                        (OpKind::Register, OpKind::Memory) => {
-                            let dst_reg = instr.op0_register();
-                            if (Register::XMM0..=Register::XMM15).contains(&dst_reg)
-                                && let Some(data) = self.read_memory_for_instr(&instr, 1, 16)
-                            {
-                                let mut arr = [0u8; 16];
-                                arr.copy_from_slice(&data);
-                                self.xmm_regs.insert(dst_reg, arr);
-                            }
-                        }
-                        // Store from XMM to memory
-                        (OpKind::Memory, OpKind::Register) => {
-                            let src_reg = instr.op1_register();
-                            if (Register::XMM0..=Register::XMM15).contains(&src_reg)
-                                && let Some(data) = self.xmm_regs.get(&src_reg).cloned()
-                            {
-                                let base = instr.memory_base();
-                                let disp = instr.memory_displacement64().cast_signed();
-                                self.add_raw_blob(base, disp, data.to_vec(), instr_off);
-                            }
-                        }
-                        _ => {}
-                    }
+                    self.on_sse_mov(&instr, instr_off);
                 }
                 // --- 3. ALU XOR (vget case) ---
                 Mnemonic::Xor => {

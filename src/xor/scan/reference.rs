@@ -4,13 +4,8 @@
 
 use super::*;
 
-/// Simplified pattern-based extraction matching decode.py behavior.
-/// Scans every offset, no overlap skipping, minimal filtering.
-///
-/// # Arguments
-/// * `enable_early_termination` - If true, stops after finding MAX_STRINGS_BEFORE_EARLY_TERMINATION.
-///   Should be true for auto-detection (speeds up candidate testing) and false for user-provided
-///   keys (ensures complete extraction).
+/// Decode `data` under `key` from every offset, with no overlap skipping:
+/// the specification of the fast repeating-key scan.
 pub(super) fn pattern_scan(
     data: &[u8],
     key: &[u8],
@@ -20,30 +15,12 @@ pub(super) fn pattern_scan(
 ) -> Vec<ExtractedString> {
     let key_preview = key_preview(key);
 
-    // Each position is independent, so process in parallel.
-    // Use data.len() rather than data.len()-min_length: the inner length check filters
-    // short results, and data.len()-min_length is off-by-one when data is exactly min_length.
-    //
-    // with_min_len coarsens granularity: without it, Rayon creates one task per byte offset
-    // (potentially millions), and task dispatch/stealing overhead dominates. With min_len=4096,
-    // each Rayon task processes a contiguous block of 4096 offsets, reducing task count to
-    // data.len()/4096 ≈ a few hundred tasks for typical binaries.
-    let mut results: Vec<ExtractedString> = (0..data.len())
+    // Results come out in offset order.
+    (0..data.len())
         .filter_map(|pos| {
-            // XOR decode while printable: data[pos+j] ^ key[j % len(key)]
-            //
-            // Exact pre-filter, no allocation: a result needs at least
-            // `min_length` decoded bytes, and the decode below stops at the
-            // first non-printable byte (the consecutive-null rule only breaks
-            // on a non-printable decode too), so unless the first `min_length`
-            // positions all decode printable this position yields nothing.
-            // Byte 0 alone rejected ~63% of positions in binary data; the
-            // full prefix rejects nearly all of them before the `Vec` and
-            // the up-to-1024-byte walk. Measured 2026-09-05 on a scan server:
-            // `auto_detect_xor_key` (five candidate keys, every position of
-            // every Mach-O member ≤ 512 KB) was a third of all CPU, most of
-            // it this closure's walk over positions that could never reach
-            // `min_length`. Results are identical by construction.
+            // XOR decode while printable: data[pos+j] ^ key[j % len(key)].
+            // A result needs `min_length` printable bytes, so a position
+            // whose prefix fails cannot yield one.
             let key_len = key.len();
             let remaining = data.len() - pos;
             if remaining < min_length {
@@ -158,176 +135,9 @@ pub(super) fn pattern_scan(
                 return None;
             }
 
-            // Convert to string - if full conversion fails, try to salvage valid UTF-8 prefix
-            let s = match String::from_utf8(decoded) {
-                Ok(s) => s,
-                Err(e) => {
-                    // UTF-8 conversion failed - try to salvage the valid prefix
-                    // This handles cases where valid ASCII/UTF-8 data is followed by garbage
-                    let valid_up_to = e.utf8_error().valid_up_to();
-                    if valid_up_to >= min_length {
-                        // We have enough valid UTF-8 data - recover bytes and use valid prefix
-                        let mut bytes = e.into_bytes();
-                        bytes.truncate(valid_up_to);
-                        match String::from_utf8(bytes) {
-                            Ok(s) => s,
-                            Err(_) => return None, // Still invalid, skip
-                        }
-                    } else {
-                        // Not enough valid data
-                        return None;
-                    }
-                }
-            };
-
-            // Must have at least one letter, unless it's a known shell redirect/operator
-            let is_shell_op = s.contains("2>&") || s.contains("2>/") || s.contains("1>&");
-            if !is_shell_op && !s.chars().any(char::is_alphabetic) {
-                return None;
-            }
-
-            // Apply early trimming before classification to remove obvious garbage
-            // This ensures classification sees clean strings
-            let trimmed_s = trim_consonant_clusters(&s);
-
-            // Re-check minimum length after consonant cluster trimming
-            if trimmed_s.len() < min_length {
-                return None;
-            }
-
-            // Classify the string. When apply_filters=true, reject unclassified strings.
-            // When apply_filters=false, still classify to assign the correct kind for
-            // overlap resolution (IOCs win over generic Const strings of similar length).
-            let kind = match classify_xor_string(&trimmed_s) {
-                Verdict::Keep(kind) => kind,
-                Verdict::Reject if apply_filters => return None,
-                Verdict::Reject => None,
-            };
-
-            // Additional sanity check: reject obvious garbage even if classify passed it
-            // Be especially strict when using automatically detected keys (paths)
-            let key_is_likely_auto_detected =
-                key_preview.starts_with('/') || key_preview.starts_with("C:\\");
-
-            let alnum = trimmed_s
-                .chars()
-                .filter(|c: &char| c.is_alphanumeric())
-                .count();
-            let alpha = trimmed_s
-                .chars()
-                .filter(|c: &char| c.is_alphabetic())
-                .count();
-
-            // For auto-detected keys, require at least 60% alphanumeric (stricter)
-            // For user-provided keys, require at least 50% alphanumeric
-            // Use character count for proper Unicode support
-            let char_count = trimmed_s.chars().count();
-            let min_alnum_pct = if key_is_likely_auto_detected { 60 } else { 50 };
-            if char_count > 0 && alnum * 100 < char_count * min_alnum_pct {
-                return None;
-            }
-
-            // Reject if has letters but poor vowel ratio (linguistic check)
-            // Only apply to ASCII/English text - skip for international text (Russian, Chinese, etc.)
-            // Also skip for locale codes (e.g., zh_CN, fr_FR) which lack vowels by definition.
-            // Skip for network IOCs (URLs, IPs which naturally contain consonant-heavy protocol
-            // names like "http" or "ftp"). Always apply for other string types regardless of
-            // apply_filters, since vowel ratio is a reliable noise filter even in unfiltered mode.
-            let is_network_ioc = matches!(
-                kind,
-                Some(StringKind::Url | StringKind::IP | StringKind::IPPort)
-            );
-            if !is_network_ioc && alpha >= 3 && !is_locale_string(&trimmed_s) {
-                let has_non_ascii = !trimmed_s.is_ascii();
-                if !has_non_ascii {
-                    // Only check vowels for ASCII/English text
-                    let vowels = trimmed_s
-                        .chars()
-                        .filter(|c: &char| {
-                            matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u')
-                        })
-                        .count();
-                    let vowel_ratio = (vowels * 100).checked_div(alpha).unwrap_or(0);
-
-                    // For auto-detected keys, be stricter with vowel ratios
-                    let (min_vowel, max_vowel) = if key_is_likely_auto_detected {
-                        (12, 65) // Stricter range matching is_meaningful_string
-                    } else {
-                        (10, 70) // Slightly more lenient for user keys
-                    };
-
-                    if vowel_ratio < min_vowel || vowel_ratio > max_vowel {
-                        return None;
-                    }
-                }
-            }
-
-            // Apply category-specific fine-tuning after consonant cluster trimming
-            let cleaned_value = if matches!(kind, Some(StringKind::Url)) {
-                clean_url_trailing_garbage(&trimmed_s)
-            } else if matches!(kind, Some(StringKind::SuspiciousPath))
-                && is_locale_string(&trimmed_s)
-            {
-                clean_locale_trailing_garbage(&trimmed_s)
-            } else if matches!(kind, Some(StringKind::SuspiciousPath)) {
-                // Trim trailing backtick+letter pattern: XOR misalignment can produce e.g. `R at the end
-                let s = trimmed_s.as_str();
-                let bytes = s.as_bytes();
-                if bytes.len() >= 2 {
-                    if let Some(idx) = bytes.iter().rposition(|&b: &u8| b.is_ascii_alphabetic()) {
-                        if idx > 0 && bytes[idx - 1] == b'`' {
-                            s[..idx - 1].to_string()
-                        } else {
-                            trimmed_s
-                        }
-                    } else {
-                        trimmed_s
-                    }
-                } else {
-                    trimmed_s
-                }
-            } else if matches!(kind, Some(StringKind::ShellCmd)) {
-                // For shell commands and AppleScript, use the existing trimmer
-                trim_trailing_garbage(&trimmed_s).to_string()
-            } else {
-                trimmed_s
-            };
-
-            // Category-specific cleaning (URL trailing garbage, shell cmd trimming, etc.) can
-            // shorten the string below min_length. Re-check after cleaning.
-            if cleaned_value.len() < min_length {
-                return None;
-            }
-
-            // Pre-filter garbage before overlap removal: a garbage string that wins the overlap
-            // contest would leave the byte range uncovered (the garbage gets removed in post-processing
-            // but nothing else can fill that range). Skip it here so shorter, valid strings can win.
-            //
-            // Strings with embedded control characters (except tab/newline) are garbage.
-            // Newlines are valid in multi-line XOR payloads (AppleScript, shell commands, etc.).
-            let has_embedded_control = cleaned_value
-                .bytes()
-                .any(|b| b < 0x20 && b != b'\t' && b != b'\n');
-            if has_embedded_control || validation::is_garbage(&cleaned_value) {
-                return None;
-            }
-
-            Some(ExtractedString {
-                value: cleaned_value,
-                data_offset: pos as u64,
-                data_len: 0,
-                method: StringMethod::XorDecode,
-                kind,
-                fragments: None,
-            })
+            finish_xor_candidate(pos, decoded, min_length, apply_filters, &key_preview)
         })
-        .collect();
-
-    // Restore position order so the caller's overlap-removal logic is deterministic.
-    // (par_iter does not preserve insertion order.)
-    results.sort_by_key(|s| s.data_offset);
-
-    results
+        .collect()
 }
 
 /// The offsets [`pattern_scan`] decodes into strings, with their decoded
@@ -564,48 +374,25 @@ pub(super) fn rolling(
 
                 // Fixed 2026-10-01: decode with the key aligned to `offset`.
                 let skew = key_len - (offset - region_start) % key_len;
-                let mut pos = 0;
-                let mut decoded_bytes = Vec::with_capacity(128);
-                while pos < region.len() {
-                    // Find start of printable run
-                    while pos < region.len() {
-                        let decoded = region[pos] ^ candidate_key[(pos + skew) % key_len];
-                        if is_printable_byte_for_file_xor(decoded) {
-                            break;
-                        }
-                        pos += 1;
-                    }
-
-                    if pos >= region.len() {
-                        break;
-                    }
-
-                    // Collect printable run
-                    decoded_bytes.clear();
-                    let start_pos = pos;
-                    while pos < region.len() {
-                        let decoded = region[pos] ^ candidate_key[(pos + skew) % key_len];
-                        if is_printable_byte_for_file_xor(decoded) {
-                            decoded_bytes.push(decoded);
-                            pos += 1;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if decoded_bytes.len() >= min_length
-                        && let Ok(s) = String::from_utf8(decoded_bytes.clone())
+                let decoded: Vec<u8> = region
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &b)| b ^ candidate_key[(i + skew) % key_len])
+                    .collect();
+                let mut run_start = 0;
+                for run in decoded.split(|&b| !is_printable_byte_for_file_xor(b)) {
+                    let start = run_start;
+                    run_start += run.len() + 1;
+                    if run.len() >= min_length
+                        && let Ok(s) = std::str::from_utf8(run)
                         && s.bytes().any(|b| b.is_ascii_alphabetic())
                     {
-                        let file_offset = (region_start + start_pos) as u64;
-                        let kind = classify_xor_string(&s).kind();
                         results.push(ExtractedString {
-                            value: s,
-                            data_offset: file_offset,
-                            data_len: 0,
+                            value: s.to_owned(),
+                            data_offset: (region_start + start) as u64,
                             method: StringMethod::XorDecode,
-                            kind,
-                            fragments: None,
+                            kind: classify_xor_string(s).kind(),
+                            ..Default::default()
                         });
                     }
                 }

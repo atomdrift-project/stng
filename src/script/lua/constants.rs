@@ -363,75 +363,9 @@ impl<'s> Folder<'s> {
                 self.eval(*c, env, depth + 1, pure, trace)
             }),
             "function_definition" => Value::Function(n, captures(n, env, self.source)),
-            "table_constructor" => {
-                let mut map = BTreeMap::new();
-                let mut ix = 1;
-                for f in children(n) {
-                    let Some(value) = f.child_by_field_name("value") else {
-                        continue;
-                    };
-                    let v = self.eval(value, env, depth + 1, pure, trace);
-                    let k = if let Some(name) = f.child_by_field_name("name") {
-                        if name.kind() == "identifier" && !text(f, self.source).starts_with('[') {
-                            Some(Key::Bytes(text(name, self.source).as_bytes().to_vec()))
-                        } else {
-                            key(&self.eval(name, env, depth + 1, pure, trace))
-                        }
-                    } else {
-                        let k = Some(Key::Number(ix));
-                        ix += 1;
-                        k
-                    };
-                    let Some(k) = k else { return Value::Unknown };
-                    if !bounded_data(&v) {
-                        return Value::Unknown;
-                    }
-                    map.insert(k, v);
-                    if map.len() > MAX_TABLE {
-                        return Value::Unknown;
-                    }
-                }
-                Value::Table(Rc::new(map))
-            }
+            "table_constructor" => self.eval_table(n, env, depth, pure, trace),
             "dot_index_expression" | "bracket_index_expression" => {
-                let Some(base) = n.child_by_field_name("table") else {
-                    return Value::Unknown;
-                };
-                let Some(field) = n.child_by_field_name("field") else {
-                    return Value::Unknown;
-                };
-                let b = self.eval(base, env, depth + 1, pure, trace);
-                let f = if n.kind() == "dot_index_expression" {
-                    Value::Bytes(text(field, self.source).as_bytes().to_vec())
-                } else {
-                    self.eval(field, env, depth + 1, pure, trace)
-                };
-                match (b, f) {
-                    (Value::Native(lib), Value::Bytes(k)) => {
-                        Value::Native(format!("{lib}.{}", String::from_utf8_lossy(&k)))
-                    }
-                    (_, Value::Decoded(b)) if !pure => {
-                        self.decoded_strings += 1;
-                        self.decoded_bytes += b.len();
-                        self.printable_bytes += b
-                            .iter()
-                            .filter(|b| {
-                                b.is_ascii_graphic() || matches!(**b, b' ' | b'\r' | b'\n' | b'\t')
-                            })
-                            .count();
-                        self.edit(n, quote(&b));
-                        Value::Bytes(b)
-                    }
-                    (Value::Table(t), f) => {
-                        key(&f).map_or(Value::Unknown, |k| t.get(&k).cloned().unwrap_or(Value::Nil))
-                    }
-                    _ if !pure => Value::Affine {
-                        symbol: text(n, self.source).to_string(),
-                        mul: 1.,
-                        add: 0.,
-                    },
-                    _ => Value::Unknown,
-                }
+                self.eval_index(n, env, depth, pure, trace)
             }
             "unary_expression" => {
                 let Some(a) = n.child_by_field_name("operand") else {
@@ -469,59 +403,7 @@ impl<'s> Folder<'s> {
                 let b = self.eval(r, env, depth + 1, pure, trace);
                 self.binary(op, a, b, trace)
             }
-            "function_call" => {
-                let Some(name) = n.child_by_field_name("name") else {
-                    return Value::Unknown;
-                };
-                let Some(args) = n.child_by_field_name("arguments") else {
-                    return Value::Unknown;
-                };
-                let fnv = self.eval(name, env, depth + 1, pure, trace);
-                let args: Vec<_> = children(args)
-                    .into_iter()
-                    .map(|a| self.eval(a, env, depth + 1, pure, trace))
-                    .collect();
-                match fnv {
-                    Value::Function(f, captured) => {
-                        let result = self.helper(f, &args, &captured, depth + 1);
-                        if matches!(result, Value::Unknown) {
-                            for v in captured.values().chain(args.iter()) {
-                                if let Value::Table(t) = v {
-                                    invalidate_table(env, t);
-                                }
-                            }
-                        }
-                        result
-                    }
-                    Value::Native(name) => self.native(&name, &args),
-                    _ => {
-                        // An unknown call can mutate any table it receives.
-                        for a in &args {
-                            if let Value::Table(t) = a {
-                                invalidate_table(env, t);
-                            }
-                            if let Value::Native(lib) = a
-                                && matches!(lib.as_str(), "math" | "string" | "table")
-                            {
-                                invalidate_native(env, lib);
-                            }
-                        }
-                        if !pure
-                            && args.len() == 2
-                            && let (Value::Bytes(cipher), Value::Number(seed)) =
-                                (&args[0], &args[1])
-                            && seed.fract() == 0.
-                            && *seed >= 0.
-                            && *seed < super::prometheus::MOD45
-                            && let Some(parameters) = self.cipher
-                        {
-                            Value::Decoded(parameters.decrypt(cipher, *seed))
-                        } else {
-                            Value::Unknown
-                        }
-                    }
-                }
-            }
+            "function_call" => self.eval_call(n, env, depth, pure, trace),
             _ => Value::Unknown,
         };
         if let Value::Number(x) = v
@@ -542,6 +424,153 @@ impl<'s> Folder<'s> {
             self.patch(n, &v, pure)
         }
         v
+    }
+    /// A table constructor's fields, numbered or keyed. An unknown key, an
+    /// oversized value or too many fields gives up.
+    fn eval_table<'t>(
+        &mut self,
+        n: Node<'t>,
+        env: &mut Env<'t>,
+        depth: usize,
+        pure: bool,
+        trace: &mut BlockTrace,
+    ) -> Value<'t> {
+        let mut map = BTreeMap::new();
+        let mut ix = 1;
+        for f in children(n) {
+            let Some(value) = f.child_by_field_name("value") else {
+                continue;
+            };
+            let v = self.eval(value, env, depth + 1, pure, trace);
+            let k = if let Some(name) = f.child_by_field_name("name") {
+                if name.kind() == "identifier" && !text(f, self.source).starts_with('[') {
+                    Some(Key::Bytes(text(name, self.source).as_bytes().to_vec()))
+                } else {
+                    key(&self.eval(name, env, depth + 1, pure, trace))
+                }
+            } else {
+                let k = Some(Key::Number(ix));
+                ix += 1;
+                k
+            };
+            let Some(k) = k else { return Value::Unknown };
+            if !bounded_data(&v) {
+                return Value::Unknown;
+            }
+            map.insert(k, v);
+            if map.len() > MAX_TABLE {
+                return Value::Unknown;
+            }
+        }
+        Value::Table(Rc::new(map))
+    }
+    /// `t.f` or `t[k]`: a library member, a table field, or a decoded string that
+    /// replaces the expression in the output.
+    fn eval_index<'t>(
+        &mut self,
+        n: Node<'t>,
+        env: &mut Env<'t>,
+        depth: usize,
+        pure: bool,
+        trace: &mut BlockTrace,
+    ) -> Value<'t> {
+        let Some(base) = n.child_by_field_name("table") else {
+            return Value::Unknown;
+        };
+        let Some(field) = n.child_by_field_name("field") else {
+            return Value::Unknown;
+        };
+        let b = self.eval(base, env, depth + 1, pure, trace);
+        let f = if n.kind() == "dot_index_expression" {
+            Value::Bytes(text(field, self.source).as_bytes().to_vec())
+        } else {
+            self.eval(field, env, depth + 1, pure, trace)
+        };
+        match (b, f) {
+            (Value::Native(lib), Value::Bytes(k)) => {
+                Value::Native(format!("{lib}.{}", String::from_utf8_lossy(&k)))
+            }
+            (_, Value::Decoded(b)) if !pure => {
+                self.decoded_strings += 1;
+                self.decoded_bytes += b.len();
+                self.printable_bytes += b
+                    .iter()
+                    .filter(|b| b.is_ascii_graphic() || matches!(**b, b' ' | b'\r' | b'\n' | b'\t'))
+                    .count();
+                self.edit(n, quote(&b));
+                Value::Bytes(b)
+            }
+            (Value::Table(t), f) => {
+                key(&f).map_or(Value::Unknown, |k| t.get(&k).cloned().unwrap_or(Value::Nil))
+            }
+            _ if !pure => Value::Affine {
+                symbol: text(n, self.source).to_string(),
+                mul: 1.,
+                add: 0.,
+            },
+            _ => Value::Unknown,
+        }
+    }
+    /// A call to a known helper or library function; an unknown call clobbers the
+    /// tables it receives, unless it is the obfuscator's string decryptor.
+    fn eval_call<'t>(
+        &mut self,
+        n: Node<'t>,
+        env: &mut Env<'t>,
+        depth: usize,
+        pure: bool,
+        trace: &mut BlockTrace,
+    ) -> Value<'t> {
+        let Some(name) = n.child_by_field_name("name") else {
+            return Value::Unknown;
+        };
+        let Some(args) = n.child_by_field_name("arguments") else {
+            return Value::Unknown;
+        };
+        let fnv = self.eval(name, env, depth + 1, pure, trace);
+        let args: Vec<_> = children(args)
+            .into_iter()
+            .map(|a| self.eval(a, env, depth + 1, pure, trace))
+            .collect();
+        match fnv {
+            Value::Function(f, captured) => {
+                let result = self.helper(f, &args, &captured, depth + 1);
+                if matches!(result, Value::Unknown) {
+                    for v in captured.values().chain(args.iter()) {
+                        if let Value::Table(t) = v {
+                            invalidate_table(env, t);
+                        }
+                    }
+                }
+                result
+            }
+            Value::Native(name) => self.native(&name, &args),
+            _ => {
+                // An unknown call can mutate any table it receives.
+                for a in &args {
+                    if let Value::Table(t) = a {
+                        invalidate_table(env, t);
+                    }
+                    if let Value::Native(lib) = a
+                        && matches!(lib.as_str(), "math" | "string" | "table")
+                    {
+                        invalidate_native(env, lib);
+                    }
+                }
+                if !pure
+                    && args.len() == 2
+                    && let (Value::Bytes(cipher), Value::Number(seed)) = (&args[0], &args[1])
+                    && seed.fract() == 0.
+                    && *seed >= 0.
+                    && *seed < super::prometheus::MOD45
+                    && let Some(parameters) = self.cipher
+                {
+                    Value::Decoded(parameters.decrypt(cipher, *seed))
+                } else {
+                    Value::Unknown
+                }
+            }
+        }
     }
     fn binary<'t>(
         &mut self,
@@ -877,6 +906,138 @@ impl<'s> Folder<'s> {
         }
         Some(flow)
     }
+    /// The branch an `if` or `elseif` takes, run to completion.
+    fn pure_if<'t>(
+        &mut self,
+        st: Node<'t>,
+        env: &mut Env<'t>,
+        depth: usize,
+        trace: &mut BlockTrace,
+    ) -> Option<Flow<'t>> {
+        let condition = self.eval(
+            st.child_by_field_name("condition")?,
+            env,
+            depth + 1,
+            true,
+            trace,
+        );
+        if truth(&condition)? {
+            return match st.child_by_field_name("consequence") {
+                Some(body) => self.scoped(body, env, &[], depth + 1),
+                None => Some(Flow::Continue),
+            };
+        }
+        for alt in children(st) {
+            match alt.kind() {
+                "else_statement" => return self.pure_statements(&[alt], env, depth + 1),
+                "elseif_statement" => {
+                    let c = self.eval(
+                        alt.child_by_field_name("condition")?,
+                        env,
+                        depth + 1,
+                        true,
+                        trace,
+                    );
+                    if truth(&c)? {
+                        return self.pure_statements(&[alt], env, depth + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Some(Flow::Continue)
+    }
+    /// A numeric `for`, or a `for` over `ipairs(t)`, unrolled up to `MAX_LOOP`
+    /// iterations.
+    fn pure_for<'t>(
+        &mut self,
+        st: Node<'t>,
+        env: &mut Env<'t>,
+        depth: usize,
+        trace: &mut BlockTrace,
+    ) -> Option<Flow<'t>> {
+        let cl = st.child_by_field_name("clause")?;
+        let body = st.child_by_field_name("body")?;
+        if cl.kind() == "for_numeric_clause" {
+            let start = self.eval(
+                cl.child_by_field_name("start")?,
+                env,
+                depth + 1,
+                true,
+                trace,
+            );
+            let end = self.eval(cl.child_by_field_name("end")?, env, depth + 1, true, trace);
+            let step = cl
+                .child_by_field_name("step")
+                .map_or(Value::Number(1.), |n| {
+                    self.eval(n, env, depth + 1, true, trace)
+                });
+            let (mut x, end, step) = (number(&start)?, number(&end)?, number(&step)?);
+            if step == 0. || (end - x).abs() / step.abs() > MAX_LOOP as f64 {
+                return None;
+            }
+            let name = text(cl.child_by_field_name("name")?, self.source).to_owned();
+            let mut count = 0;
+            while if step > 0. { x <= end } else { x >= end } {
+                count += 1;
+                if count > MAX_LOOP {
+                    return None;
+                }
+                match self.scoped(body, env, &[(name.clone(), Value::Number(x))], depth + 1)? {
+                    Flow::Continue => (),
+                    Flow::Break => break,
+                    f => return Some(f),
+                }
+                x += step;
+            }
+        } else {
+            let expr = child(cl, "expression_list")?;
+            let args = children(expr);
+            if args.len() != 1 || args[0].kind() != "function_call" {
+                return None;
+            }
+            let call = args[0];
+            let name = self.eval(
+                call.child_by_field_name("name")?,
+                env,
+                depth + 1,
+                true,
+                trace,
+            );
+            if !matches!(name,Value::Native(ref n) if n=="ipairs") {
+                return None;
+            }
+            let args = children(call.child_by_field_name("arguments")?);
+            if args.len() != 1 {
+                return None;
+            }
+            let Value::Table(table) = self.eval(args[0], env, depth + 1, true, trace) else {
+                return None;
+            };
+            let names: Vec<_> = children(child(cl, "variable_list")?)
+                .iter()
+                .map(|n| text(*n, self.source).to_owned())
+                .collect();
+            if names.is_empty() || names.len() > 2 {
+                return None;
+            }
+            for i in 1..=MAX_LOOP {
+                let Some(value) = table.get(&Key::Number(i as i64)) else {
+                    break;
+                };
+                let mut bindings = vec![(names[0].clone(), Value::Number(i as f64))];
+                if names.len() == 2 {
+                    bindings.push((names[1].clone(), value.clone()));
+                }
+                match self.scoped(body, env, &bindings, depth + 1)? {
+                    Flow::Continue => (),
+                    Flow::Break => break,
+                    f => return Some(f),
+                }
+            }
+        }
+        Some(Flow::Continue)
+    }
     fn pure_statements<'t>(
         &mut self,
         statements: &[Node<'t>],
@@ -923,46 +1084,7 @@ impl<'s> Folder<'s> {
                 "do_statement" | "else_statement" => {
                     self.scoped(st.child_by_field_name("body")?, env, &[], depth + 1)?
                 }
-                "if_statement" | "elseif_statement" => {
-                    let condition = self.eval(
-                        st.child_by_field_name("condition")?,
-                        env,
-                        depth + 1,
-                        true,
-                        &mut trace,
-                    );
-                    if truth(&condition)? {
-                        if let Some(body) = st.child_by_field_name("consequence") {
-                            self.scoped(body, env, &[], depth + 1)?
-                        } else {
-                            Flow::Continue
-                        }
-                    } else {
-                        let alts: Vec<_> = children(st)
-                            .into_iter()
-                            .filter(|n| matches!(n.kind(), "elseif_statement" | "else_statement"))
-                            .collect();
-                        let mut chosen = Flow::Continue;
-                        for alt in alts {
-                            if alt.kind() == "else_statement" {
-                                chosen = self.pure_statements(&[alt], env, depth + 1)?;
-                                break;
-                            }
-                            let c = self.eval(
-                                alt.child_by_field_name("condition")?,
-                                env,
-                                depth + 1,
-                                true,
-                                &mut trace,
-                            );
-                            if truth(&c)? {
-                                chosen = self.pure_statements(&[alt], env, depth + 1)?;
-                                break;
-                            }
-                        }
-                        chosen
-                    }
-                }
+                "if_statement" | "elseif_statement" => self.pure_if(st, env, depth, &mut trace)?,
                 "while_statement" => {
                     let mut count = 0;
                     loop {
@@ -988,102 +1110,7 @@ impl<'s> Folder<'s> {
                     }
                     Flow::Continue
                 }
-                "for_statement" => {
-                    let cl = st.child_by_field_name("clause")?;
-                    let body = st.child_by_field_name("body")?;
-                    if cl.kind() == "for_numeric_clause" {
-                        let start = self.eval(
-                            cl.child_by_field_name("start")?,
-                            env,
-                            depth + 1,
-                            true,
-                            &mut trace,
-                        );
-                        let end = self.eval(
-                            cl.child_by_field_name("end")?,
-                            env,
-                            depth + 1,
-                            true,
-                            &mut trace,
-                        );
-                        let step = cl
-                            .child_by_field_name("step")
-                            .map_or(Value::Number(1.), |n| {
-                                self.eval(n, env, depth + 1, true, &mut trace)
-                            });
-                        let (mut x, end, step) = (number(&start)?, number(&end)?, number(&step)?);
-                        if step == 0. || (end - x).abs() / step.abs() > MAX_LOOP as f64 {
-                            return None;
-                        }
-                        let name = text(cl.child_by_field_name("name")?, self.source).to_owned();
-                        let mut count = 0;
-                        while if step > 0. { x <= end } else { x >= end } {
-                            count += 1;
-                            if count > MAX_LOOP {
-                                return None;
-                            }
-                            match self.scoped(
-                                body,
-                                env,
-                                &[(name.clone(), Value::Number(x))],
-                                depth + 1,
-                            )? {
-                                Flow::Continue => (),
-                                Flow::Break => break,
-                                f => return Some(f),
-                            }
-                            x += step;
-                        }
-                    } else {
-                        let expr = child(cl, "expression_list")?;
-                        let args = children(expr);
-                        if args.len() != 1 || args[0].kind() != "function_call" {
-                            return None;
-                        }
-                        let call = args[0];
-                        let name = self.eval(
-                            call.child_by_field_name("name")?,
-                            env,
-                            depth + 1,
-                            true,
-                            &mut trace,
-                        );
-                        if !matches!(name,Value::Native(ref n) if n=="ipairs") {
-                            return None;
-                        }
-                        let args = children(call.child_by_field_name("arguments")?);
-                        if args.len() != 1 {
-                            return None;
-                        }
-                        let Value::Table(table) =
-                            self.eval(args[0], env, depth + 1, true, &mut trace)
-                        else {
-                            return None;
-                        };
-                        let names: Vec<_> = children(child(cl, "variable_list")?)
-                            .iter()
-                            .map(|n| text(*n, self.source).to_owned())
-                            .collect();
-                        if names.is_empty() || names.len() > 2 {
-                            return None;
-                        }
-                        for i in 1..=MAX_LOOP {
-                            let Some(value) = table.get(&Key::Number(i as i64)) else {
-                                break;
-                            };
-                            let mut bindings = vec![(names[0].clone(), Value::Number(i as f64))];
-                            if names.len() == 2 {
-                                bindings.push((names[1].clone(), value.clone()));
-                            }
-                            match self.scoped(body, env, &bindings, depth + 1)? {
-                                Flow::Continue => (),
-                                Flow::Break => break,
-                                f => return Some(f),
-                            }
-                        }
-                    }
-                    Flow::Continue
-                }
+                "for_statement" => self.pure_for(st, env, depth, &mut trace)?,
                 "function_call" => {
                     let name = self.eval(
                         st.child_by_field_name("name")?,

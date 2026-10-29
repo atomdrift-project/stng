@@ -125,7 +125,7 @@ pub use validation::{is_garbage, is_garbage_with_context, is_garbage_with_kind};
 pub use goblin;
 use goblin::Object;
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -286,6 +286,48 @@ fn scans_for_xor(data: &[u8], opts: &ExtractOptions) -> bool {
     opts.xor_key.is_some() || (opts.format_hint != FormatHint::Text && detect::is_binary(data))
 }
 
+/// The single-byte XOR pattern scan. A key that decodes two or more strings
+/// is in use throughout the file, so it gets a full extraction pass, which
+/// also finds strings with no trigger pattern (syscall names, log paths) and
+/// supersedes that key's pattern hits.
+fn single_byte_xor_scan(
+    strings: &mut Vec<ExtractedString>,
+    data: &[u8],
+    opts: &ExtractOptions,
+    is_pe: bool,
+) {
+    let found = xor::extract_xor_strings(data, opts.xor_min_length, is_pe);
+    // Each result is a single-byte decode, so `value[0] == data[offset] ^
+    // key` (for UTF-16 too: the first character's low byte) recovers its key.
+    let key_of = |r: &ExtractedString| -> Option<u8> {
+        let off = usize::try_from(r.data_offset).ok()?;
+        Some(data.get(off)? ^ r.value.as_bytes().first()?)
+    };
+    let mut counts = [0usize; 256];
+    for key in found.iter().filter_map(key_of) {
+        counts[usize::from(key)] += 1;
+    }
+    let mut full = [false; 256];
+    for key in 0..=u8::MAX {
+        if counts[usize::from(key)] >= 2 && !xor::SKIP_XOR_KEYS.contains(&key) {
+            strings.extend(xor::extract_custom_xor_strings_with_hints(
+                data,
+                &[key],
+                opts.xor_min_length,
+                opts.rizin_boundaries.as_deref(),
+                opts.filter_garbage,
+                false,
+            ));
+            full[usize::from(key)] = true;
+        }
+    }
+    strings.extend(
+        found
+            .into_iter()
+            .filter(|r| key_of(r).is_none_or(|k| !full[usize::from(k)])),
+    );
+}
+
 /// Run XOR scanning and extend `strings` with any decoded results.
 ///
 /// `excluded_ranges` is a sorted list of `[start, end)` byte ranges the
@@ -395,50 +437,7 @@ fn apply_xor_scan(
                 false, // Even for auto-detected keys, extract completely for final results
             ));
         } else {
-            let xor_results = xor::extract_xor_strings(data, opts.xor_min_length, is_pe);
-
-            // Every `extract_xor_strings` result is a single-byte XOR decode, so
-            // its key is recoverable from the data without a stored tag:
-            // `value[0] == data[offset] ^ key`, hence `key = data[offset] ^ value[0]`
-            // (holds for the wide/16LE path too — the first char's low byte).
-            let xor_key_of = |r: &ExtractedString| -> Option<u8> {
-                let off = usize::try_from(r.data_offset).ok()?;
-                Some(data.get(off)? ^ r.value.as_bytes().first()?)
-            };
-
-            // If the pattern scan found 2+ strings encoded with the same single-byte key,
-            // that key is in use throughout the binary. Do a full extraction pass so we
-            // don't miss strings that lack a trigger pattern (e.g. syscall names, log paths).
-            let mut key_counts: HashMap<u8, usize> = HashMap::new();
-            for r in &xor_results {
-                if let Some(k) = xor_key_of(r) {
-                    *key_counts.entry(k).or_insert(0) += 1;
-                }
-            }
-            // Track keys that received a full extraction pass — their AC scan results
-            // are a strict subset and can be dropped to avoid redundant deduplication work.
-            let mut fully_extracted_keys: HashSet<u8> = HashSet::new();
-            for (key, count) in key_counts {
-                if count >= 2 && !xor::SKIP_XOR_KEYS.contains(&key) {
-                    let full = xor::extract_custom_xor_strings_with_hints(
-                        data,
-                        &[key],
-                        opts.xor_min_length,
-                        r2_boundaries,
-                        opts.filter_garbage,
-                        false,
-                    );
-                    strings.extend(full);
-                    fully_extracted_keys.insert(key);
-                }
-            }
-
-            // Skip AC-scan results for keys already covered by full extraction above.
-            strings.extend(
-                xor_results
-                    .into_iter()
-                    .filter(|r| xor_key_of(r).is_none_or(|k| !fully_extracted_keys.contains(&k))),
-            );
+            single_byte_xor_scan(strings, data, opts, is_pe);
         }
 
         // Always run incremental XOR detection if enabled - it might complement regular XOR

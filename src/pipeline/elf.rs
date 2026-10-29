@@ -13,7 +13,6 @@ use crate::elf_go_skip_ranges;
 use crate::extract_elf_imports;
 use crate::extract_overlay_strings;
 use crate::extract_raw_strings;
-use crate::extract_stack_strings;
 use crate::extract_stack_strings_with_context;
 use crate::extract_wide_strings;
 use crate::pclntab_strings;
@@ -21,7 +20,6 @@ use crate::scan_binary_ips;
 use crate::unclaimed_raw_strings;
 use crate::{ExtractOptions, ExtractedString};
 use goblin::elf::Elf;
-use rayon::prelude::*;
 use std::collections::HashSet;
 
 /// Strings from an ELF binary.
@@ -56,64 +54,7 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     let has_rust = !has_go && binary::elf_is_rust(elf, scan_data);
 
     if has_go {
-        is_go_binary = true;
-
-        // Go ELF extraction is six independent passes over `scan_data`:
-        //   1. structure-based Go string extraction (.rodata)
-        //   2. pclntab symbol recovery (funcnametab/pkgnamestab in
-        //      .gopclntab) — names the structure and raw passes can't
-        //      reach because the section is skip-scanned below.
-        //   3. raw-string fallback for cgo strings the structure pass
-        //      misses (.noptrdata, .strtab, .symtab, …). Skip-scanning
-        //      .rodata/.gopclntab avoids emitting Go's null-less packed
-        //      blobs as one giant garbage string.
-        //   4. UTF-16 wide-string scan
-        //   5. network-IP scan
-        //   6. .text XOR-pair extraction
-        // None of them depend on another's output, so run all six
-        // concurrently. The raw fallback is normally pruned of strings
-        // the structure pass already found; that `known`-set filter is a
-        // value comparison applied *after* the join, so it no longer
-        // forces the structure pass to complete first. Results are
-        // appended in the original sequential order, leaving downstream
-        // deduplication unaffected.
-        let skip = elf_go_skip_ranges(elf, scan_data.len());
-        let split = crate::par::splits(scan_data.len());
-        let [go_strings, pcln_res, raw_all, wide_res, ip_res, stack_res] = parallel(
-            split,
-            [
-                &|| GoStringExtractor::new(min_length).extract_elf(elf, scan_data),
-                &|| extract_elf_pclntab_strings(elf, scan_data, min_length),
-                &|| extract_raw_strings(scan_data, min_length, &segments, &skip),
-                &|| extract_wide_strings(scan_data, min_length, &segments, &skip),
-                &|| scan_binary_ips(scan_data, min_length, elf.header.e_machine, Some(elf), None),
-                &|| extract_go_text_xor_strings(elf, scan_data, min_length),
-            ],
-        );
-        // A section name is only the file's claim. Without Go structures
-        // behind it, scan as an unknown ELF below: the skipped `.rodata` and
-        // the XOR and IP passes Go turns off would otherwise hide a non-Go
-        // binary's strings behind one Go-named section.
-        if go_strings.is_empty() {
-            tracing::warn!(
-                "ELF has Go section names but no Go string structures; scanning as non-Go"
-            );
-            is_go_binary = false;
-            strings.extend(opts.r2_strings.iter().flatten().cloned());
-            strings.extend(extract_raw_strings(scan_data, min_length, &segments, &[]));
-        }
-        let known: HashSet<&str> = go_strings.iter().map(|s| s.value.as_str()).collect();
-        let fresh: Vec<ExtractedString> = raw_all
-            .into_iter()
-            .filter(|s| !known.contains(s.value.as_str()))
-            .collect();
-        drop(known);
-        strings.extend(go_strings);
-        strings.extend(pcln_res);
-        strings.extend(fresh);
-        strings.extend(wide_res);
-        strings.extend(ip_res);
-        strings.extend(stack_res);
+        is_go_binary = scan_go(elf, scan_data, opts, &segments, &mut strings);
     } else if has_rust {
         let extractor = RustStringExtractor::new(min_length);
         strings.extend(extractor.extract_elf(elf, scan_data));
@@ -149,8 +90,7 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
             None,
         ));
 
-        // Only scan executable sections for stack strings to avoid wasting time on data
-        // Parallelize section scanning using Rayon
+        // Stack strings live in code: scan only executable sections.
         let code = crate::binary::merge_overlapping(
             elf.section_headers
                 .iter()
@@ -167,19 +107,9 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
                 })
                 .collect(),
         );
-        let results: Vec<ExtractedString> = code
-            .par_iter()
-            .with_min_len(crate::par::job_len(code.len(), scan_data.len()))
-            .flat_map_iter(|&(start, end)| {
-                let mut results = extract_stack_strings(&scan_data[start..end], min_length);
-                for r in &mut results {
-                    r.rebase(start as u64);
-                }
-                results
-            })
-            .collect();
-
-        strings.extend(results);
+        strings.extend(crate::extract_stack_strings_from_ranges(
+            scan_data, min_length, &code,
+        ));
     }
 
     if !opts.caller_provides_symbols {
@@ -199,6 +129,74 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         sections: section_info,
         is_go: is_go_binary,
     }
+}
+
+/// The Go passes over an ELF with Go section names, appended to `strings`.
+/// Whether it is Go after all: without Go string structures behind the
+/// names, it is also scanned as an unknown ELF.
+fn scan_go(
+    elf: &Elf<'_>,
+    scan_data: &[u8],
+    opts: &ExtractOptions,
+    segments: &[String],
+    strings: &mut Vec<ExtractedString>,
+) -> bool {
+    let min_length = opts.min_length;
+    // Go ELF extraction is six independent passes over `scan_data`:
+    //   1. structure-based Go string extraction (.rodata)
+    //   2. pclntab symbol recovery (funcnametab/pkgnamestab in
+    //      .gopclntab) — names the structure and raw passes can't
+    //      reach because the section is skip-scanned below.
+    //   3. raw-string fallback for cgo strings the structure pass
+    //      misses (.noptrdata, .strtab, .symtab, …). Skip-scanning
+    //      .rodata/.gopclntab avoids emitting Go's null-less packed
+    //      blobs as one giant garbage string.
+    //   4. UTF-16 wide-string scan
+    //   5. network-IP scan
+    //   6. .text XOR-pair extraction
+    // None of them depend on another's output, so run all six
+    // concurrently. The raw fallback is normally pruned of strings
+    // the structure pass already found; that `known`-set filter is a
+    // value comparison applied *after* the join, so it no longer
+    // forces the structure pass to complete first. Results are
+    // appended in the original sequential order, leaving downstream
+    // deduplication unaffected.
+    let skip = elf_go_skip_ranges(elf, scan_data.len());
+    let split = crate::par::splits(scan_data.len());
+    let [go_strings, pcln_res, raw_all, wide_res, ip_res, stack_res] = parallel(
+        split,
+        [
+            &|| GoStringExtractor::new(min_length).extract_elf(elf, scan_data),
+            &|| extract_elf_pclntab_strings(elf, scan_data, min_length),
+            &|| extract_raw_strings(scan_data, min_length, segments, &skip),
+            &|| extract_wide_strings(scan_data, min_length, segments, &skip),
+            &|| scan_binary_ips(scan_data, min_length, elf.header.e_machine, Some(elf), None),
+            &|| extract_go_text_xor_strings(elf, scan_data, min_length),
+        ],
+    );
+    // A section name is only the file's claim. Without Go structures
+    // behind it, scan as an unknown ELF below: the skipped `.rodata` and
+    // the XOR and IP passes Go turns off would otherwise hide a non-Go
+    // binary's strings behind one Go-named section.
+    let is_go = !go_strings.is_empty();
+    if !is_go {
+        tracing::warn!("ELF has Go section names but no Go string structures; scanning as non-Go");
+        strings.extend(opts.r2_strings.iter().flatten().cloned());
+        strings.extend(extract_raw_strings(scan_data, min_length, segments, &[]));
+    }
+    let known: HashSet<&str> = go_strings.iter().map(|s| s.value.as_str()).collect();
+    let fresh: Vec<ExtractedString> = raw_all
+        .into_iter()
+        .filter(|s| !known.contains(s.value.as_str()))
+        .collect();
+    drop(known);
+    strings.extend(go_strings);
+    strings.extend(pcln_res);
+    strings.extend(fresh);
+    strings.extend(wide_res);
+    strings.extend(ip_res);
+    strings.extend(stack_res);
+    is_go
 }
 
 /// Extract XOR-obfuscated stack-pair strings from a Go ELF binary's `.text`

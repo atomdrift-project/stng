@@ -199,6 +199,103 @@ static KILLER_PATTERNS: LazyLock<aho_corasick::AhoCorasick> = LazyLock::new(|| {
         .expect("killer patterns")
 });
 
+/// How strongly the strings decoded under `key` look like a real payload:
+/// shell commands, crypto and browser targets, network indicators and paths,
+/// weighted by how rarely noise produces each. A value counts once, so
+/// garbled repeats of one string cannot inflate the score.
+fn decode_score(results: &[ExtractedString], key: &str) -> i32 {
+    // Use a set of already-scored values to avoid counting duplicate strings
+    // multiple times: real XOR keys decode to diverse content, but false-positive
+    // keys (e.g., a library path XOR'd with near-zero code) produce repetitive
+    // garbled copies of the key text that would otherwise inflate the score.
+    let mut score = 0;
+    let mut scored_values: HashSet<String> = HashSet::new();
+    let key_lower = key.to_ascii_lowercase();
+
+    for r in results {
+        let value_lower = r.value.to_ascii_lowercase();
+
+        // Skip results that are merely garbled echoes of the key. When the
+        // scanner derives a key from a token that repeats throughout a benign,
+        // text-rich input (e.g. an OpenAPI schema repeating "OAuth2Authorization
+        // Code"), XORing smears shards of the key across the output. Those shards
+        // trip the short-keyword IOC classifiers ("auth", "key", "user", ...) and
+        // would otherwise inflate the score past the confidence threshold. A real
+        // key is high-entropy bytes whose windows never appear in genuinely
+        // decoded plaintext, so true positives are unaffected. This generalizes
+        // the exact-duplicate dedup above to near-duplicate key fragments.
+        if value_is_key_echo(&value_lower, &key_lower) {
+            continue;
+        }
+
+        // CRITICAL: Shell commands and redirections (highest priority)
+        if value_lower.contains("osascript")
+            || value_lower.contains("screencapture")
+            || value_lower.contains("/bin/sh")
+            || value_lower.contains("/bin/bash")
+            || value_lower.contains("2>&1")
+            || value_lower.contains("<<eod")
+            || value_lower.contains("<<eof")
+        {
+            score += 100;
+        }
+
+        // Cryptocurrency terms (very high priority) - keywords are already lowercase
+        for crypto in CRYPTO_KEYWORDS {
+            if value_lower.contains(crypto) {
+                score += 80;
+                break;
+            }
+        }
+
+        // Suspicious paths (very high priority) - only count unique values
+        if matches!(r.kind, Some(StringKind::SuspiciousPath))
+            && scored_values.insert(value_lower.clone())
+        {
+            score += 75;
+        }
+
+        // URLs and network indicators - only count unique values
+        if matches!(
+            r.kind,
+            Some(StringKind::Url | StringKind::IP | StringKind::IPPort)
+        ) && scored_values.insert(value_lower.clone())
+        {
+            score += 50;
+        }
+
+        // Browser strings - keywords are already lowercase
+        for browser in BROWSER_KEYWORDS {
+            if value_lower.contains(browser) {
+                score += 40;
+                break;
+            }
+        }
+
+        // Shell commands - only count unique values
+        if matches!(r.kind, Some(StringKind::ShellCmd)) && scored_values.insert(value_lower.clone())
+        {
+            score += 30;
+        }
+
+        // Locale strings (en-US, ru-RU pattern)
+        if is_locale_string(&r.value) {
+            score += 25;
+        }
+
+        // Generic paths (lower priority, only if they match known prefixes)
+        if matches!(r.kind, Some(StringKind::Path)) && has_known_path_prefix(&r.value) {
+            score += 10;
+        }
+
+        // Base64 (low priority)
+        if matches!(r.kind, Some(StringKind::Base64)) {
+            score += 5;
+        }
+    }
+    score
+}
+
 pub(crate) fn auto_detect_xor_key(
     data: &[u8],
     candidate_strings: &[ExtractedString],
@@ -291,110 +388,16 @@ pub(crate) fn auto_detect_xor_key(
                 return None;
             }
 
-            // Calculate weighted score based on decoded string quality.
-            // Use a set of already-scored values to avoid counting duplicate strings
-            // multiple times: real XOR keys decode to diverse content, but false-positive
-            // keys (e.g., a library path XOR'd with near-zero code) produce repetitive
-            // garbled copies of the key text that would otherwise inflate the score.
-            let mut score = 0;
-            let mut scored_values: HashSet<String> = HashSet::new();
-            let key_lower = candidate.to_ascii_lowercase();
-
-            for r in &results {
-                let value_lower = r.value.to_ascii_lowercase();
-
-                // Skip results that are merely garbled echoes of the key. When the
-                // scanner derives a key from a token that repeats throughout a benign,
-                // text-rich input (e.g. an OpenAPI schema repeating "OAuth2Authorization
-                // Code"), XORing smears shards of the key across the output. Those shards
-                // trip the short-keyword IOC classifiers ("auth", "key", "user", ...) and
-                // would otherwise inflate the score past the confidence threshold. A real
-                // key is high-entropy bytes whose windows never appear in genuinely
-                // decoded plaintext, so true positives are unaffected. This generalizes
-                // the exact-duplicate dedup above to near-duplicate key fragments.
-                if value_is_key_echo(&value_lower, &key_lower) {
-                    continue;
-                }
-
-                // CRITICAL: Shell commands and redirections (highest priority)
-                if value_lower.contains("osascript")
-                    || value_lower.contains("screencapture")
-                    || value_lower.contains("/bin/sh")
-                    || value_lower.contains("/bin/bash")
-                    || value_lower.contains("2>&1")
-                    || value_lower.contains("<<eod")
-                    || value_lower.contains("<<eof")
-                {
-                    score += 100;
-                }
-
-                // Cryptocurrency terms (very high priority) - keywords are already lowercase
-                for crypto in CRYPTO_KEYWORDS {
-                    if value_lower.contains(crypto) {
-                        score += 80;
-                        break;
-                    }
-                }
-
-                // Suspicious paths (very high priority) - only count unique values
-                if matches!(r.kind, Some(StringKind::SuspiciousPath))
-                    && scored_values.insert(value_lower.clone())
-                {
-                    score += 75;
-                }
-
-                // URLs and network indicators - only count unique values
-                if matches!(
-                    r.kind,
-                    Some(StringKind::Url | StringKind::IP | StringKind::IPPort)
-                ) && scored_values.insert(value_lower.clone())
-                {
-                    score += 50;
-                }
-
-                // Browser strings - keywords are already lowercase
-                for browser in BROWSER_KEYWORDS {
-                    if value_lower.contains(browser) {
-                        score += 40;
-                        break;
-                    }
-                }
-
-                // Shell commands - only count unique values
-                if matches!(r.kind, Some(StringKind::ShellCmd))
-                    && scored_values.insert(value_lower.clone())
-                {
-                    score += 30;
-                }
-
-                // Locale strings (en-US, ru-RU pattern)
-                if is_locale_string(&r.value) {
-                    score += 25;
-                }
-
-                // Generic paths (lower priority, only if they match known prefixes)
-                if matches!(r.kind, Some(StringKind::Path)) && has_known_path_prefix(&r.value) {
-                    score += 10;
-                }
-
-                // Base64 (low priority)
-                if matches!(r.kind, Some(StringKind::Base64)) {
-                    score += 5;
-                }
-            }
-
+            let score = decode_score(&results, candidate);
             Some((score, offset, candidate.to_string(), key))
         })
         .collect();
 
-    // Find the best candidate from parallel results
-    let mut best_key: Option<(Vec<u8>, String, u64)> = None;
-    let mut best_score = 0;
-
+    // The first candidate with the highest score wins.
+    let mut best: Option<(i32, Vec<u8>, String, u64)> = None;
     for (score, offset, candidate, key) in candidate_scores {
-        if score > best_score {
-            best_score = score;
-            best_key = Some((key, candidate, offset));
+        if score > best.as_ref().map_or(0, |b| b.0) {
+            best = Some((score, key, candidate, offset));
         }
     }
 
@@ -402,19 +405,11 @@ pub(crate) fn auto_detect_xor_key(
     // score: 375 is five distinct suspicious paths (75 each). A handful of
     // garbled path matches does not reach it; real samples, with shell
     // commands (100+) or C2 URLs, do.
-    let min_xor_confidence_threshold = 375;
-
-    if best_score >= min_xor_confidence_threshold {
-        if let Some((ref _key, ref key_str, _)) = best_key {
-            // A `?` field, not interpolation: the key is the sample's bytes,
-            // and Debug escapes the CR or newline that would forge a log line.
-            tracing::info!(key = ?key_str, score = best_score, "Auto-detected XOR key");
-        }
-    } else {
-        return None;
-    }
-
-    best_key
+    let (score, key, key_str, offset) = best.filter(|b| b.0 >= 375)?;
+    // A `?` field, not interpolation: the key is the sample's bytes, and
+    // Debug escapes the CR or newline that would forge a log line.
+    tracing::info!(key = ?key_str, score, "Auto-detected XOR key");
+    Some((key, key_str, offset))
 }
 
 /// Extract XOR-encoded strings from binary data.
@@ -1527,56 +1522,192 @@ impl Verdict {
     }
 }
 
+/// Windows crypto and process APIs, resolved via `GetProcAddress` to hide
+/// AES decryption or injection from static imports.
+const WIN_API_NAMES: &[&str] = &[
+    "BCryptOpenAlgorithmProvider",
+    "BCryptGenerateSymmetricKey",
+    "BCryptCloseAlgorithmProvider",
+    "BCryptSetProperty",
+    "BCryptDecrypt",
+    "BCryptDestroyKey",
+    "CreateProcessW",
+    "CreateProcessA",
+    "VirtualAllocEx",
+    "WriteProcessMemory",
+    "GetProcAddress",
+    "LoadLibraryW",
+    "LoadLibraryA",
+    "FindWindowExW",
+    "GetWindowThreadProcessId",
+    "ShowWindow",
+];
+
+/// Browser and messenger data that stealers exfiltrate.
+const EXFIL_TARGETS: &[&str] = &[
+    "extension settings",
+    "local storage",
+    "cookies",
+    "bookmarks",
+    "history",
+    "preferences",
+    "session",
+    "cache",
+    "telegram",
+    "discord",
+    "slack",
+    "signal",
+    "whatsapp",
+    "tdata",
+    "desktop folder",
+    "documents folder",
+];
+
+/// Geofencing locales, stealer targets, DLL names and dynamically resolved
+/// APIs: worth keeping even inside noise. DLL names like `bcrypt.dll` have no
+/// vowels and would fail the linguistic checks.
+fn named_target(s: &str) -> Option<StringKind> {
+    (has_multiple_locales(s)
+        || names_targeted_location(s)
+        || s.ends_with(".dll")
+        || s.ends_with(".DLL")
+        || WIN_API_NAMES.iter().any(|api| s.contains(api)))
+    .then_some(StringKind::SuspiciousPath)
+}
+
+/// Shells, shell commands, credential words and exfiltration targets in the
+/// lowercased candidate, tolerating trailing garbage.
+fn keyword_kind(lower: &str) -> Option<StringKind> {
+    let has = |words: &[&str]| words.iter().any(|w| lower.contains(w));
+    if has(SHELL_EXECUTABLE_PATHS) {
+        Some(StringKind::SuspiciousPath)
+    } else if has(SHELL_COMMANDS) {
+        Some(StringKind::ShellCmd)
+    } else if has(CREDENTIAL_KEYWORDS) || has(EXFIL_TARGETS) {
+        Some(StringKind::SuspiciousPath)
+    } else {
+        None
+    }
+}
+
+/// A decoded path is kept only in a known shape: a known Unix/macOS prefix, a
+/// drive letter, or a relative path with a real component; few characters
+/// paths do not use; and Unix components that are mostly alphanumeric.
+fn plausible_path(s: &str) -> bool {
+    let b = s.as_bytes();
+    let is_windows_path =
+        b.len() > 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\';
+    let is_relative_path = (s.starts_with("./") || s.starts_with("../"))
+        && s.matches('/').count() >= 2
+        && s.split('/').any(|p| !p.is_empty() && p != "." && p != "..");
+    if !has_known_path_prefix(s) && !is_windows_path && !is_relative_path {
+        return false;
+    }
+
+    let bad_chars = s
+        .chars()
+        .filter(|&c| {
+            !c.is_alphanumeric() && !matches!(c, '/' | '\\' | '.' | '_' | '-' | ' ' | ':' | '%')
+        })
+        .count();
+    if bad_chars * 10 > s.len() {
+        return false;
+    }
+    if !s.starts_with('/') {
+        return true;
+    }
+
+    let parts: Vec<&str> = s.split('/').filter(|p| !p.is_empty()).collect();
+    if let [name] = parts[..] {
+        const TOP_LEVEL: &[&str] = &[
+            "bin",
+            "etc",
+            "usr",
+            "var",
+            "tmp",
+            "dev",
+            "opt",
+            "home",
+            "root",
+            "Library",
+            "Users",
+            "Applications",
+            "System",
+            "private",
+        ];
+        if !TOP_LEVEL.contains(&name) {
+            // Mixed case with digits, or case flipping more than a real
+            // name does, is gibberish.
+            let has_upper = name.chars().any(|c| c.is_ascii_uppercase());
+            let has_lower = name.chars().any(|c| c.is_ascii_lowercase());
+            let has_digit = name.chars().any(|c| c.is_ascii_digit());
+            if has_upper && has_lower && has_digit {
+                return false;
+            }
+            let mut case_changes = 0;
+            let mut prev_was_upper = false;
+            for c in name.chars().filter(char::is_ascii_alphabetic) {
+                let is_upper = c.is_ascii_uppercase();
+                if prev_was_upper != is_upper {
+                    case_changes += 1;
+                }
+                prev_was_upper = is_upper;
+            }
+            if case_changes > 3 {
+                return false;
+            }
+        }
+    }
+    parts.iter().all(|part| {
+        part.chars().filter(char::is_ascii_alphanumeric).count() * 100 / part.len() >= 60
+    })
+}
+
+/// The fallback for unclassified (or `Const`) candidates: at most 40%
+/// punctuation; prose when long and spaced; otherwise mostly alphanumeric.
+fn plausible_generic(s: &str) -> bool {
+    let char_count = s.chars().count();
+    let special_chars = s
+        .chars()
+        .filter(|&c| !c.is_alphanumeric() && !c.is_whitespace() && !matches!(c, '-' | '_' | '.'))
+        .count();
+    if char_count > 0 && special_chars * 10 > char_count * 4 {
+        return false;
+    }
+    if char_count >= 30 && s.contains(' ') {
+        return looks_like_text(s);
+    }
+    let alnum = s.chars().filter(|c| c.is_alphanumeric()).count();
+    !(char_count > 0 && alnum * 10 < char_count * 6)
+}
+
+/// Whether one character makes up over half of a 16+ character candidate:
+/// a run like repeated spaces XORed into a valid-looking alphabet.
+fn dominated_by_one_char(s: &str) -> bool {
+    let char_count = s.chars().count();
+    if char_count < 16 {
+        return false;
+    }
+    let mut counts = std::collections::HashMap::new();
+    let mut max_count = 0;
+    for c in s.chars() {
+        let count = counts.entry(c).or_insert(0);
+        *count += 1;
+        max_count = max_count.max(*count);
+    }
+    max_count * 2 > char_count
+}
+
 pub(crate) fn classify_xor_string(s: &str) -> Verdict {
     // Several rules below need the classifier's verdict; compute it once, and
     // only on paths that ask.
     let classified = std::cell::LazyCell::new(|| classify_string(s));
 
-    // FIRST: Check for high-value IOCs that should bypass strict filtering.
-    // These checks must come BEFORE is_partial_xor_decode to avoid false rejections
-    // of legitimate paths like /proc/net/tcp that could superficially resemble
-    // partial decodes of Windows environment variables.
-
-    // Check for locale strings (common in malware geofencing)
-    if has_multiple_locales(s) {
-        return Verdict::Keep(Some(StringKind::SuspiciousPath));
-    }
-
-    // Locations stealers go after (even with garbage around them)
-    if names_targeted_location(s) {
-        return Verdict::Keep(Some(StringKind::SuspiciousPath));
-    }
-
-    // Check for Windows DLL names - covert dynamic loading is a strong malware indicator.
-    // Names like "bcrypt.dll" have no vowels and would fail linguistic checks without this.
-    if s.ends_with(".dll") || s.ends_with(".DLL") {
-        return Verdict::Keep(Some(StringKind::SuspiciousPath));
-    }
-
-    // Check for Windows crypto/process API names - indicate AES decryption or injection.
-    // These are resolved dynamically via GetProcAddress to evade static analysis.
-    let win_api_patterns = [
-        "BCryptOpenAlgorithmProvider",
-        "BCryptGenerateSymmetricKey",
-        "BCryptCloseAlgorithmProvider",
-        "BCryptSetProperty",
-        "BCryptDecrypt",
-        "BCryptDestroyKey",
-        "CreateProcessW",
-        "CreateProcessA",
-        "VirtualAllocEx",
-        "WriteProcessMemory",
-        "GetProcAddress",
-        "LoadLibraryW",
-        "LoadLibraryA",
-        "FindWindowExW",
-        "GetWindowThreadProcessId",
-        "ShowWindow",
-    ];
-    for api in &win_api_patterns {
-        if s.contains(api) {
-            return Verdict::Keep(Some(StringKind::SuspiciousPath));
-        }
+    // High-value indicators bypass strict filtering. They come before the
+    // partial-decode check so that real paths like /proc/net/tcp, which can
+    // resemble a half-decoded %VAR%, are not rejected.
+    if let Some(kind) = named_target(s) {
+        return Verdict::Keep(Some(kind));
     }
 
     // EARLY REJECTION: Check for partial/failed XOR decodes before any classification.
@@ -1587,54 +1718,8 @@ pub(crate) fn classify_xor_string(s: &str) -> Verdict {
         return Verdict::Reject;
     }
 
-    // Defer lowercase allocation until needed for case-insensitive checks.
-    let lower = s.to_ascii_lowercase();
-
-    // Check for shell executable paths (before shell commands)
-    for exe_path in SHELL_EXECUTABLE_PATHS {
-        if lower.contains(exe_path) {
-            return Verdict::Keep(Some(StringKind::SuspiciousPath));
-        }
-    }
-
-    // Check for well-known shell commands (even with trailing garbage)
-    for cmd in SHELL_COMMANDS {
-        if lower.contains(cmd) {
-            return Verdict::Keep(Some(StringKind::ShellCmd));
-        }
-    }
-
-    // Check for credential keywords
-    for keyword in CREDENTIAL_KEYWORDS {
-        if lower.contains(keyword) {
-            return Verdict::Keep(Some(StringKind::SuspiciousPath));
-        }
-    }
-
-    // Check for browser/app data exfiltration targets
-    let exfil_indicators = [
-        "extension settings",
-        "local storage",
-        "cookies",
-        "bookmarks",
-        "history",
-        "preferences",
-        "session",
-        "cache",
-        "telegram",
-        "discord",
-        "slack",
-        "signal",
-        "whatsapp",
-        "tdata",
-        "desktop folder",
-        "documents folder",
-    ];
-
-    for indicator in &exfil_indicators {
-        if lower.contains(indicator) {
-            return Verdict::Keep(Some(StringKind::SuspiciousPath));
-        }
+    if let Some(kind) = keyword_kind(&s.to_ascii_lowercase()) {
+        return Verdict::Keep(Some(kind));
     }
 
     // Persistence plists and entitlements are spelled out tag by tag.
@@ -1643,7 +1728,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Verdict {
     }
 
     // Quick check for URLs/IPs before strict filtering
-    if lower.contains("http://") || lower.contains("https://") || lower.contains("://") {
+    if s.contains("://") {
         // Likely a URL, allow through
         let kind = *classified;
         if matches!(kind, Some(StringKind::Url)) {
@@ -1690,22 +1775,8 @@ pub(crate) fn classify_xor_string(s: &str) -> Verdict {
         }
     }
 
-    // Reject strings dominated by a single character (e.g. repeated spaces XORed)
-    // This catches false positives like sequences of spaces being XORed into valid base64 chars.
-    let char_count = s.chars().count();
-    if char_count >= 16 {
-        let mut char_counts = std::collections::HashMap::new();
-        let mut max_count = 0;
-        for c in s.chars() {
-            let entry = char_counts.entry(c).or_insert(0);
-            *entry += 1;
-            if *entry > max_count {
-                max_count = *entry;
-            }
-        }
-        if max_count * 2 > char_count {
-            return Verdict::Reject;
-        }
+    if dominated_by_one_char(s) {
+        return Verdict::Reject;
     }
 
     // SECOND+: Check for encoded data formats directly
@@ -1765,148 +1836,10 @@ pub(crate) fn classify_xor_string(s: &str) -> Verdict {
                 Verdict::Keep(kind)
             }
         }
-        Some(StringKind::Path) => {
-            // STRICT PATH VALIDATION: Only accept paths matching known OS patterns
-
-            // Check for known UNIX/macOS path prefixes
-            let has_known_prefix = has_known_path_prefix(s);
-
-            // Check for Windows paths with drive letter
-            let is_windows_path = s.len() > 3
-                && s.chars().nth(1) == Some(':')
-                && s.chars().nth(2) == Some('\\')
-                && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
-
-            // Check for relative paths with proper structure
-            let is_relative_path = (s.starts_with("./") || s.starts_with("../"))
-                && s.matches('/').count() >= 2
-                && s.split('/')
-                    .filter(|p| !p.is_empty() && *p != "." && *p != "..")
-                    .count()
-                    >= 1;
-
-            if !has_known_prefix && !is_windows_path && !is_relative_path {
-                return Verdict::Reject;
-            }
-
-            // Reject if path has too many non-path characters
-            let bad_chars = s
-                .chars()
-                .filter(|&c| {
-                    !c.is_alphanumeric()
-                        && !matches!(c, '/' | '\\' | '.' | '_' | '-' | ' ' | ':' | '%')
-                })
-                .count();
-
-            // Reject if > 10% bad characters
-            if bad_chars * 10 > s.len() {
-                return Verdict::Reject;
-            }
-
-            // For UNIX paths, ensure they have proper structure
-            if s.starts_with('/') {
-                let parts: Vec<&str> = s.split('/').filter(|p| !p.is_empty()).collect();
-
-                // Single-level paths (like "/something") need to match known patterns
-                if parts.len() == 1 {
-                    let name = parts[0];
-
-                    // Check if it matches known single-level paths
-                    let known_single_level = [
-                        "bin",
-                        "etc",
-                        "usr",
-                        "var",
-                        "tmp",
-                        "dev",
-                        "opt",
-                        "home",
-                        "root",
-                        "Library",
-                        "Users",
-                        "Applications",
-                        "System",
-                        "private",
-                    ];
-
-                    if !known_single_level.contains(&name) {
-                        // For other single-level paths, apply strict validation
-                        let has_upper = name.chars().any(|c| c.is_ascii_uppercase());
-                        let has_lower = name.chars().any(|c| c.is_ascii_lowercase());
-                        let has_digit = name.chars().any(|c| c.is_ascii_digit());
-
-                        // Reject paths with mixed case + digits (garbage pattern)
-                        if has_upper && has_lower && has_digit {
-                            return Verdict::Reject;
-                        }
-
-                        // Reject if it alternates between upper/lower too much (gibberish)
-                        let mut case_changes = 0;
-                        let mut prev_was_upper = false;
-                        for c in name.chars().filter(char::is_ascii_alphabetic) {
-                            let is_upper = c.is_ascii_uppercase();
-                            if prev_was_upper != is_upper {
-                                case_changes += 1;
-                            }
-                            prev_was_upper = is_upper;
-                        }
-                        // Real paths rarely change case more than 2-3 times
-                        if case_changes > 3 {
-                            return Verdict::Reject;
-                        }
-                    }
-                }
-
-                // Multi-level paths should have reasonable component names
-                for part in &parts {
-                    // Each component should be mostly alphanumeric
-                    let alnum = part.chars().filter(char::is_ascii_alphanumeric).count();
-                    if !part.is_empty() && alnum * 100 / part.len() < 60 {
-                        return Verdict::Reject;
-                    }
-                }
-            }
-
-            Verdict::Keep(kind)
-        }
-        _ => {
-            // Generic fallback for Const and other types
-            // Apply additional quality checks to avoid false positives
-            // Use character count for proper Unicode support
-            let char_count = s.chars().count();
-
-            // Reject strings with too many special characters
-            let special_chars = s
-                .chars()
-                .filter(|&c| {
-                    !c.is_alphanumeric() && !c.is_whitespace() && c != '-' && c != '_' && c != '.'
-                })
-                .count();
-
-            // Reject if > 40% special characters (garbage indicator)
-            if char_count > 0 && special_chars * 10 > char_count * 4 {
-                return Verdict::Reject;
-            }
-
-            // Longer strings with spaces should look like natural text
-            if char_count >= 30 && s.contains(' ') {
-                if looks_like_text(s) {
-                    return Verdict::Keep(None);
-                }
-                return Verdict::Reject;
-            }
-
-            // Short strings: must be mostly alphanumeric
-            // Use character count for proper Unicode support
-            let char_count = s.chars().count();
-            let alnum = s.chars().filter(|c| c.is_alphanumeric()).count();
-            if char_count > 0 && alnum * 10 < char_count * 6 {
-                // < 60% alphanumeric = likely garbage
-                return Verdict::Reject;
-            }
-
-            Verdict::Keep(None)
-        }
+        Some(StringKind::Path) if plausible_path(s) => Verdict::Keep(kind),
+        Some(StringKind::Path) => Verdict::Reject,
+        _ if plausible_generic(s) => Verdict::Keep(None),
+        _ => Verdict::Reject,
     }
 }
 

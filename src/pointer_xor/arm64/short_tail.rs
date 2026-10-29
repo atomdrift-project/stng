@@ -166,6 +166,66 @@ fn get(regs: &[Option<u64>; 4], r: u32) -> Option<u32> {
         Some(*regs.get(r.checked_sub(8)? as usize)?.as_ref()? as u32)
     }
 }
+/// The value an ALU instruction `w` leaves in its destination `slot`: MOVZ,
+/// MOVN or MOVK; a logical immediate; LSL; BFI of a low byte; or a logical
+/// operation on a shifted register. `None` for anything else.
+fn alu(w: u32, regs: &[Option<u64>; 4], slot: usize) -> Option<u64> {
+    if w >> 31 == 0 && w & 0x1f800000 == 0x12800000 {
+        let shift = ((w >> 21) & 3) * 16;
+        if shift >= 32 {
+            return None;
+        }
+        let imm = ((w >> 5) & 65535) << shift;
+        return Some(u64::from(match (w >> 29) & 3 {
+            0 => !imm,
+            2 => imm,
+            3 => (regs[slot]? as u32 & !(65535 << shift)) | imm,
+            _ => return None,
+        }));
+    }
+    if w >> 31 == 0 && w & 0x1f800000 == 0x12000000 {
+        let a = get(regs, (w >> 5) & 31)?;
+        let b = bitmask(w)?;
+        return Some(u64::from(match (w >> 29) & 3 {
+            0 => a & b,
+            1 => a | b,
+            2 => a ^ b,
+            _ => return None,
+        }));
+    }
+    if w & 0xffc00000 == 0x53000000 {
+        let r = (w >> 16) & 63;
+        let end = (w >> 10) & 63;
+        if r == 0 || r >= 32 || end + 1 != r {
+            return None;
+        }
+        return Some(u64::from(get(regs, (w >> 5) & 31)? << (32 - r)));
+    }
+    if w & 0xfffffc00 == 0x33001c00 {
+        let a = get(regs, (w >> 5) & 31)?;
+        return Some(u64::from((regs[slot]? as u32 & !255) | (a & 255)));
+    }
+    if w >> 31 == 0 && w & 0x1f200000 == 0x0a000000 {
+        let amount = (w >> 10) & 63;
+        if amount >= 32 || (w >> 22) & 3 > 1 {
+            return None;
+        }
+        let a = get(regs, (w >> 5) & 31)?;
+        let b = get(regs, (w >> 16) & 31)?;
+        let b = if (w >> 22) & 3 == 0 {
+            b << amount
+        } else {
+            b >> amount
+        };
+        return Some(u64::from(match (w >> 29) & 3 {
+            0 => a & b,
+            1 => a | b,
+            2 => a ^ b,
+            _ => return None,
+        }));
+    }
+    None
+}
 fn tail(
     code: &Region<'_>,
     regions: &[Region<'_>],
@@ -297,57 +357,8 @@ fn tail(
             for (out, byte) in dest.iter_mut().zip(bytes) {
                 *out = Some(byte);
             }
-        } else if w >> 31 == 0 && w & 0x1f800000 == 0x12800000 {
-            let shift = ((w >> 21) & 3) * 16;
-            if shift >= 32 {
-                return None;
-            }
-            let imm = ((w >> 5) & 65535) << shift;
-            regs[slot] = Some(u64::from(match (w >> 29) & 3 {
-                0 => !imm,
-                2 => imm,
-                3 => (regs[slot]? as u32 & !(65535 << shift)) | imm,
-                _ => return None,
-            }));
-        } else if w >> 31 == 0 && w & 0x1f800000 == 0x12000000 {
-            let a = get(&regs, (w >> 5) & 31)?;
-            let b = bitmask(w)?;
-            regs[slot] = Some(u64::from(match (w >> 29) & 3 {
-                0 => a & b,
-                1 => a | b,
-                2 => a ^ b,
-                _ => return None,
-            }));
-        } else if w & 0xffc00000 == 0x53000000 {
-            let r = (w >> 16) & 63;
-            let end = (w >> 10) & 63;
-            if r == 0 || r >= 32 || end + 1 != r {
-                return None;
-            }
-            regs[slot] = Some(u64::from(get(&regs, (w >> 5) & 31)? << (32 - r)));
-        } else if w & 0xfffffc00 == 0x33001c00 {
-            let a = get(&regs, (w >> 5) & 31)?;
-            regs[slot] = Some(u64::from((regs[slot]? as u32 & !255) | (a & 255)));
-        } else if w >> 31 == 0 && w & 0x1f200000 == 0x0a000000 {
-            let amount = (w >> 10) & 63;
-            if amount >= 32 || (w >> 22) & 3 > 1 {
-                return None;
-            }
-            let a = get(&regs, (w >> 5) & 31)?;
-            let b = get(&regs, (w >> 16) & 31)?;
-            let b = if (w >> 22) & 3 == 0 {
-                b << amount
-            } else {
-                b >> amount
-            };
-            regs[slot] = Some(u64::from(match (w >> 29) & 3 {
-                0 => a & b,
-                1 => a | b,
-                2 => a ^ b,
-                _ => return None,
-            }));
         } else {
-            return None;
+            regs[slot] = Some(alu(w, &regs, slot)?);
         }
         pc = next;
     }

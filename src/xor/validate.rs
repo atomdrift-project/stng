@@ -447,6 +447,131 @@ pub(crate) fn count_common_word_matches(s: &str, limit: usize) -> usize {
     count
 }
 
+/// Per-class character counts. Case and vowels are tracked for ASCII
+/// letters only: they are English-specific.
+#[derive(Clone, Copy, Default)]
+struct Letters {
+    alpha: usize,
+    digit: usize,
+    vowel: usize,
+    upper: usize,
+    lower: usize,
+    punct: usize,
+    spaces: usize,
+    has_non_ascii: bool,
+}
+
+impl Letters {
+    fn count(s: &str) -> Self {
+        let mut n = Self::default();
+        for c in s.chars() {
+            if c.is_alphabetic() {
+                n.alpha += 1;
+                n.has_non_ascii |= !c.is_ascii();
+                if c.is_ascii_uppercase() {
+                    n.upper += 1;
+                } else if c.is_ascii_lowercase() {
+                    n.lower += 1;
+                }
+                if matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u') {
+                    n.vowel += 1;
+                }
+            } else if c.is_numeric() {
+                n.digit += 1;
+            } else if c.is_ascii_punctuation() {
+                n.punct += 1;
+            } else if c == ' ' {
+                n.spaces += 1;
+            }
+        }
+        n
+    }
+}
+
+/// Whether ASCII text with five or more letters is shaped like English: a
+/// vowel ratio of 12-65% (English runs 35-45%), no run of more than six
+/// consonants, case that is consistent, Title or camelCase, and not a bare
+/// run of capitals or of vowelless lowercase.
+fn english_shaped(s: &str, n: &Letters) -> bool {
+    let Letters {
+        alpha,
+        digit,
+        vowel,
+        upper,
+        lower,
+        punct,
+        spaces,
+        ..
+    } = *n;
+    // English-specific analysis for ASCII text
+    let vowel_ratio = (vowel as u64 * 100) / alpha as u64;
+
+    // English text typically has 35-45% vowels
+    // Be lenient: accept 12-65%
+    if !(12..=65).contains(&vowel_ratio) {
+        return false;
+    }
+
+    // Check for word-like structure (not random letters)
+    // Count consonant clusters (more than 4 consecutive consonants is suspicious)
+    let chars: Vec<char> = s.chars().collect();
+    let mut max_consonant_run = 0;
+    let mut consonant_run = 0;
+
+    for &c in &chars {
+        if c.is_ascii_alphabetic() && !matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u')
+        {
+            consonant_run += 1;
+            max_consonant_run = max_consonant_run.max(consonant_run);
+        } else {
+            consonant_run = 0;
+        }
+    }
+
+    // English rarely has >5 consecutive consonants (e.g., "catchphrase" has 4)
+    if max_consonant_run > 6 {
+        return false;
+    }
+
+    // Check case consistency (Title Case, lowercase, UPPERCASE, or camelCase are OK)
+    // Random case mixing like "rAnDoM" is suspicious
+    if alpha > 8 && upper > 0 && lower > 0 {
+        // If we have mixed case, check if it's structured
+        let has_spaces_or_separators =
+            spaces > 0 || s.contains('/') || s.contains('.') || s.contains('_');
+
+        // Title Case or camelCase with separators is fine
+        // Random mixing without structure is bad
+        if !has_spaces_or_separators {
+            // Check if it's camelCase (starts lowercase, has capitals mid-word)
+            let starts_lower = chars[0].is_ascii_lowercase();
+            let has_mid_caps = chars
+                .windows(2)
+                .any(|w| w[0].is_ascii_lowercase() && w[1].is_ascii_uppercase());
+
+            if !starts_lower && !has_mid_caps {
+                // Not Title, not camel, not consistent - likely garbage
+                let upper_ratio = (upper as u64 * 100) / alpha as u64;
+                // Reject if 20-80% uppercase (random mixing)
+                if (20..=80).contains(&upper_ratio) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Reject all-caps with no punctuation/digits (likely garbage like "ABCDEFGH")
+    if upper > 0 && lower == 0 && alpha > 6 && punct == 0 && digit == 0 && spaces == 0 {
+        return false;
+    }
+
+    // Reject all-lowercase with no vowels (like "bcdfghjk")
+    if lower > 0 && upper == 0 && vowel == 0 && alpha > 4 {
+        return false;
+    }
+    true
+}
+
 /// Check if a string looks like well-formed text using linguistic patterns.
 /// This recognizes legitimate English/computing text without hardcoded keyword lists.
 pub(crate) fn is_meaningful_string(s: &str) -> bool {
@@ -457,41 +582,14 @@ pub(crate) fn is_meaningful_string(s: &str) -> bool {
     let len = s.len();
     // For ASCII strings (the common case), len == char_count. Only count chars for Unicode.
     let char_count = if s.is_ascii() { len } else { s.chars().count() };
-    let mut alpha = 0usize;
-    let mut digit = 0usize;
-    let mut vowel = 0usize;
-    let mut upper = 0usize;
-    let mut lower = 0usize;
-    let mut punct = 0usize;
-    let mut spaces = 0usize;
-    let mut has_non_ascii = false;
-
-    for c in s.chars() {
-        // Support Unicode alphabetic characters (Cyrillic, Chinese, Arabic, etc.)
-        if c.is_alphabetic() {
-            alpha += 1;
-            if !c.is_ascii() {
-                has_non_ascii = true;
-            }
-            // Only track case and vowels for ASCII (English-specific)
-            if c.is_ascii_alphabetic() {
-                if c.is_ascii_uppercase() {
-                    upper += 1;
-                } else {
-                    lower += 1;
-                }
-                if matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u') {
-                    vowel += 1;
-                }
-            }
-        } else if c.is_numeric() {
-            digit += 1;
-        } else if c.is_ascii_punctuation() {
-            punct += 1;
-        } else if c == ' ' {
-            spaces += 1;
-        }
-    }
+    let n = Letters::count(s);
+    let Letters {
+        alpha,
+        digit,
+        vowel,
+        has_non_ascii,
+        ..
+    } = n;
 
     let alnum = alpha + digit;
 
@@ -549,71 +647,7 @@ pub(crate) fn is_meaningful_string(s: &str) -> bool {
             return true;
         }
 
-        // English-specific analysis for ASCII text
-        let vowel_ratio = (vowel as u64 * 100) / alpha as u64;
-
-        // English text typically has 35-45% vowels
-        // Be lenient: accept 12-65%
-        if !(12..=65).contains(&vowel_ratio) {
-            return false;
-        }
-
-        // Check for word-like structure (not random letters)
-        // Count consonant clusters (more than 4 consecutive consonants is suspicious)
-        let chars: Vec<char> = s.chars().collect();
-        let mut max_consonant_run = 0;
-        let mut consonant_run = 0;
-
-        for &c in &chars {
-            if c.is_ascii_alphabetic()
-                && !matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u')
-            {
-                consonant_run += 1;
-                max_consonant_run = max_consonant_run.max(consonant_run);
-            } else {
-                consonant_run = 0;
-            }
-        }
-
-        // English rarely has >5 consecutive consonants (e.g., "catchphrase" has 4)
-        if max_consonant_run > 6 {
-            return false;
-        }
-
-        // Check case consistency (Title Case, lowercase, UPPERCASE, or camelCase are OK)
-        // Random case mixing like "rAnDoM" is suspicious
-        if alpha > 8 && upper > 0 && lower > 0 {
-            // If we have mixed case, check if it's structured
-            let has_spaces_or_separators =
-                spaces > 0 || s.contains('/') || s.contains('.') || s.contains('_');
-
-            // Title Case or camelCase with separators is fine
-            // Random mixing without structure is bad
-            if !has_spaces_or_separators {
-                // Check if it's camelCase (starts lowercase, has capitals mid-word)
-                let starts_lower = chars[0].is_ascii_lowercase();
-                let has_mid_caps = chars
-                    .windows(2)
-                    .any(|w| w[0].is_ascii_lowercase() && w[1].is_ascii_uppercase());
-
-                if !starts_lower && !has_mid_caps {
-                    // Not Title, not camel, not consistent - likely garbage
-                    let upper_ratio = (upper as u64 * 100) / alpha as u64;
-                    // Reject if 20-80% uppercase (random mixing)
-                    if (20..=80).contains(&upper_ratio) {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        // Reject all-caps with no punctuation/digits (likely garbage like "ABCDEFGH")
-        if upper > 0 && lower == 0 && alpha > 6 && punct == 0 && digit == 0 && spaces == 0 {
-            return false;
-        }
-
-        // Reject all-lowercase with no vowels (like "bcdfghjk")
-        if lower > 0 && upper == 0 && vowel == 0 && alpha > 4 {
+        if !english_shaped(s, &n) {
             return false;
         }
     }
