@@ -832,3 +832,47 @@ fn benign_swift_webview_has_no_pointer_xor_matches() {
     };
     assert!(super::super::extract_macho(&m, 0, 4).is_empty());
 }
+
+/// The setup is one build's template: slots and argument registers are fixed
+/// (see the mutation tests above), but the saved register carrying the seed
+/// is read from the code. Renaming it in its constant pair and its use
+/// resolves the same seed through the new register.
+#[test]
+fn saved_seed_register_renames_resolve_the_same_seed() {
+    let original = code();
+    let mut renamed = 0;
+    for row in rows() {
+        let found = setup(&original, num(&row, "call")).unwrap();
+        let (&Seed::Saved { register, .. }, Some(seed)) =
+            (&found.seed, local_seed(&original, &found))
+        else {
+            continue;
+        };
+        let to = if register == 27 { 26 } else { 27 };
+        let call = found.after - 4;
+        let mut bytes = original.bytes.to_vec();
+        let mut patch = |pc: u64, field: u32| {
+            let at = (pc - original.addr) as usize;
+            let w = word(&original, pc).unwrap();
+            assert_eq!((w >> field) & 31, register, "{pc:x}");
+            let w = (w & !(31 << field)) | (to << field);
+            bytes[at..at + 4].copy_from_slice(&w.to_le_bytes());
+        };
+        patch(call - 40, 0); // MOVZ Wr, #low
+        patch(call - 36, 0); // MOVK Wr, #high, LSL #16
+        let use_ = word(&original, call - 12).unwrap();
+        // STR Wr, [SP, #0xb0], or ADD W8, Wr, #imm
+        patch(call - 12, if use_ & !31 == 0xb900_b3e0 { 0 } else { 5 });
+        let region = Region {
+            addr: original.addr,
+            offset: 0,
+            bytes: &bytes,
+        };
+        let moved = setup(&region, call).unwrap();
+        assert!(matches!(moved.seed, Seed::Saved { register, .. } if register == to));
+        assert_eq!(local_seed(&region, &moved), Some(seed));
+        renamed += 1;
+    }
+    // The fixture loads every other seed as an immediate.
+    assert_eq!(renamed, 1);
+}

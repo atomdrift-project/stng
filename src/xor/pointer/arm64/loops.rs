@@ -1,4 +1,6 @@
 //! Complete outlined and inline qword XOR loops with exact consumer lengths.
+//! Literal instruction words of the same single build as `setup`; the
+//! mutation tests show each required word.
 use super::{Region, branch_target, sequence, word};
 use crate::arm64::RET;
 

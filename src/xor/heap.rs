@@ -3,6 +3,12 @@
 //! A byte prefilter selects allocation sites; only two consecutive, completely
 //! initialized arrays followed by the verified XOR loop are accepted. No
 //! emulation, guessed keys, or pairwise search is performed.
+//!
+//! Both architectures match the code one rustc build emitted (the
+//! `rust_heap_xor_installer_universal` fixture). The x86-64 prefilter is that
+//! build's literal `push 1; pop rsi; mov edi, len` allocation call, and the
+//! ARM64 matcher is a word-for-word template (see `arm64`'s docs and its
+//! `variant_tests` for what still matches).
 
 mod arm64;
 

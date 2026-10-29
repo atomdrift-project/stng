@@ -4,6 +4,15 @@
 //! XOR loop and matching consumer length are required before folding the key
 //! helper's register-only arithmetic. Recovered bytes do not imply execution or
 //! aliasing into later consumers. No memory emulation or key search is used.
+//!
+//! The matchers are templates of the code one rustc/LLVM build emitted (the
+//! `rust_heap_xor_installer_universal` fixture), and another build is
+//! unlikely to match. On x86-64 the registers the compiler chose freely are
+//! read from the code (the setup's scratch register, the loop's counter,
+//! source and temporary); the instruction order, the `rcx` slot pointer and
+//! the stack-slot shape are fixed.
+//! `tests::setup_scratch_register_is_free_and_slot_pointer_is_fixed` records
+//! both sides.
 
 mod arm64;
 

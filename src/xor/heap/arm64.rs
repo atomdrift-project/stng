@@ -1,4 +1,11 @@
 //! ARM64 immediate arrays and a complete checked-index byte XOR loop.
+//!
+//! A template of the code one rustc build emitted (the
+//! `rust_heap_xor_installer_universal` fixture), matched word for word apart
+//! from the fields read out of it: lengths, array bytes, and the registers
+//! holding each role. `variant_tests` records the edges: any register
+//! allocation matches, while one extra instruction, a caller-saved base or a
+//! different allocator thunk does not.
 use super::{MAX_ARRAY, MAX_CANDIDATES, MAX_CODE};
 use crate::arm64::RET;
 struct Code<'a> {
@@ -296,3 +303,6 @@ pub(super) fn extract(
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod variant_tests;

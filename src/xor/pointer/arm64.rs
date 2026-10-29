@@ -1,5 +1,12 @@
 //! Bounded register-only folding for ARM64 pointer-derived XOR keys.
 //! The caller must first validate the literal setup and complete decoding loop.
+//!
+//! `setup` and its `setups` prefilter match one build's literal words: the
+//! argument registers, X8/X9 as scratch, and the `[sp, #0xb0]` seed slot are
+//! fixed. Only immediates, addresses and the saved register holding a seed
+//! (X19-X28) are read from the code. See
+//! `tests::saved_seed_register_renames_resolve_the_same_seed` and the mutation
+//! tests beside it.
 #![allow(clippy::cast_possible_truncation)]
 use super::Region;
 use crate::arm64::RET;

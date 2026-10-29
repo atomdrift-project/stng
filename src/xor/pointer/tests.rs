@@ -276,3 +276,50 @@ fn invalid_endpoint_bytes_do_not_suppress_other_valid_literals() {
         assert_eq!(out.len() + 1, original.len());
     }
 }
+
+/// The setup is one build's template with a few free fields. The scratch
+/// register that re-reads the seed slot is one (renaming `rax` to `rdx` in
+/// every setup changes nothing); the `rcx` slot pointer is fixed, and
+/// renaming it leaves nothing to match.
+#[test]
+fn setup_scratch_register_is_free_and_slot_pointer_is_fixed() {
+    let original = code();
+    let values = |bytes: &[u8]| -> Vec<String> {
+        let mut v: Vec<_> = extract_macho(&macho(&replace_code(bytes, original.addr)), 0, 4)
+            .into_iter()
+            .map(|s| s.value)
+            .collect();
+        v.sort();
+        v
+    };
+    let baseline = values(original.bytes);
+    assert!(!baseline.is_empty());
+
+    let at = |addr: u64| (addr - original.addr) as usize;
+    let mut scratch = original.bytes.to_vec();
+    let mut slot = original.bytes.to_vec();
+    let mut renamed = 0;
+    for (addr, _) in setups(&original) {
+        let mut d = original.decoder(addr, 64).unwrap();
+        let s: Vec<Instruction> = (0..8).map(|_| d.decode()).collect();
+        // lea rax,[rbp+d8] (48 8d 45 d8); mov esi,[rax] (8b 30)
+        let (lea, mov) = (at(s[5].ip()), at(s[6].ip()));
+        if s[5].op0_register() == Register::RAX && s[5].len() == 4 && s[6].len() == 2 {
+            scratch[lea + 2] = (scratch[lea + 2] & !0x38) | (2 << 3); // reg: rdx
+            scratch[mov + 1] = (scratch[mov + 1] & !0x07) | 2; // rm: [rdx]
+            renamed += 1;
+        }
+        // rcx -> rdx throughout: lea rcx,[rbp+disp] (ModRM after 48 8d);
+        // mov [rcx],rax;
+        // mov rdi,[rcx]; mov dword [rcx],imm32.
+        assert_eq!([s[2].len(), s[3].len(), s[4].len()], [3, 3, 6]);
+        let lea_rcx = at(s[1].ip());
+        slot[lea_rcx + 2] = (slot[lea_rcx + 2] & !0x38) | (2 << 3);
+        for modrm in [at(s[2].ip()) + 2, at(s[3].ip()) + 2, at(s[4].ip()) + 1] {
+            slot[modrm] = (slot[modrm] & !0x07) | 2;
+        }
+    }
+    assert!(renamed > 0);
+    assert_eq!(values(&scratch), baseline);
+    assert!(values(&slot).is_empty());
+}

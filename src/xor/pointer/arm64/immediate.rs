@@ -1,4 +1,6 @@
 //! One-iteration qword XOR with ciphertext assembled from immediates and a byte.
+//! Literal instruction words of the same single build as `setup`; the
+//! mutation tests show each required word.
 use super::{Region, Setup, branch_target, fold, local_seed, sequence, word};
 use crate::arm64::RET;
 
