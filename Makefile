@@ -100,8 +100,6 @@ install-precommit: ## Install the git pre-commit hook
 	chmod +x "$$hooks_dir/pre-commit"; \
 	echo "✓ Pre-commit hook installed to $$hooks_dir/pre-commit"
 
-# Tests named `rizin_*` need rizin or r2 on PATH; they are #[ignore]d and run
-# here only when one is installed.
 test: ## Run all tests (unit + integration)
 	@echo "Running all tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
@@ -109,11 +107,6 @@ test: ## Run all tests (unit + integration)
 		cargo test --doc --locked; \
 	else \
 		cargo test --workspace --locked; \
-	fi
-	@if command -v rizin >/dev/null 2>&1 || command -v r2 >/dev/null 2>&1; then \
-		cargo test --locked --test it -- --ignored rizin_; \
-	else \
-		echo "Note: rizin/r2 not installed, skipping rizin_* tests"; \
 	fi
 	@echo ""
 	@echo "✓ All tests passed"

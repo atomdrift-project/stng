@@ -983,6 +983,18 @@ fn scan_url_authorities(value: &str, mut emit: impl FnMut(NetworkMatch)) {
             })
             .map_or(bytes.len(), |end| authority_start + end);
         let authority = &value[authority_start..authority_end];
+        // A document type definition URL names a schema, as in a plist's
+        // `<!DOCTYPE … "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`;
+        // readers do not fetch it, so its host is not one the sample contacts.
+        let url_end = bytes[authority_end..]
+            .iter()
+            .position(|b| b.is_ascii_whitespace() || matches!(*b, b'"' | b'\'' | b'<' | b'>'))
+            .map_or(bytes.len(), |end| authority_end + end);
+        if url_end >= authority_end + 4 && bytes[url_end - 4..url_end].eq_ignore_ascii_case(b".dtd")
+        {
+            search_from = url_end;
+            continue;
+        }
         if let Some((kind, canonical, port, host_len)) = parse_authority(authority, true) {
             let userinfo_len = authority.rfind('@').map_or(0, |at| at.saturating_add(1));
             let bracket_len = usize::from(authority[userinfo_len..].starts_with('['));

@@ -19,7 +19,7 @@ fn test_garbage_filter_enabled() {
 // context-free `is_garbage`; they agree on /bin/ls but not in general
 // (e.g. x86 asm noise in a data section). Revisit with P8.5.
 #[test]
-#[cfg_attr(windows, ignore = "reads /bin/ls")]
+#[cfg(unix)] // reads /bin/ls
 fn test_garbage_filter_removes_garbage() {
     let data = std::fs::read("/bin/ls").expect("read /bin/ls");
     let opts = ExtractOptions::new(4).with_garbage_filter(true);

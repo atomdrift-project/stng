@@ -10,10 +10,6 @@ use std::fs;
 use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
 fn test_imports_not_marked_as_codesig() {
     let bin_path = "/bin/ls";
 
@@ -43,10 +39,6 @@ fn test_imports_not_marked_as_codesig() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
 fn test_only_base64_gets_codesig_hash_kind() {
     let bin_path = "/bin/ls";
 
@@ -98,10 +90,6 @@ fn test_only_base64_gets_codesig_hash_kind() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
 fn test_linkedit_const_strings_selective_codesig() {
     let bin_path = "/bin/ls";
 
@@ -216,10 +204,6 @@ fn test_linkedit_const_strings_selective_codesig() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
 fn test_codesig_method_on_signatures() {
     let bin_path = "/bin/ls";
 
@@ -321,10 +305,6 @@ fn test_codesig_method_on_signatures() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
 fn test_no_base64_kind_in_linkedit() {
     let bin_path = "/bin/ls";
 
@@ -360,10 +340,6 @@ fn test_no_base64_kind_in_linkedit() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
 fn test_cert_strings_not_marked_as_hashes() {
     let bin_path = "/bin/ls";
 
@@ -394,10 +370,6 @@ fn test_cert_strings_not_marked_as_hashes() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
 fn test_exact_hash_count() {
     let bin_path = "/bin/ls";
 

@@ -142,7 +142,7 @@ fn malformed_network_shapes_never_emit() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "reads Unix system binaries")]
+#[cfg(unix)] // reads Unix system binaries
 fn clean_system_binary_iocs_have_structural_evidence() {
     for path in ["/bin/ls", "/bin/cat"] {
         let data = std::fs::read(path).unwrap();

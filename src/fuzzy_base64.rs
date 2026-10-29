@@ -236,13 +236,20 @@ fn try_fuzzy_extract(input: &str) -> Option<String> {
         return None;
     }
 
-    // Clean up the segment
+    // Whitespace joins base64 wrapped across lines, but also pulls in the
+    // words around a single token, which misaligns it. Fall back to the
+    // longest token on its own.
     let cleaned: String = best_segment
         .chars()
         .filter(|c| is_base64_char(*c))
         .collect();
-
-    decode_base64_fuzzy(&cleaned)
+    decode_base64_fuzzy(&cleaned).or_else(|| {
+        best_segment
+            .split_whitespace()
+            .filter(|token| token.len() >= MIN_BASE64_SEGMENT)
+            .max_by_key(|token| token.len())
+            .and_then(decode_base64_fuzzy)
+    })
 }
 
 /// Check if a character is valid in base64
@@ -394,7 +401,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known gap: whitespace joins surrounding words into the segment (REDFLAGS_AUDIT P6.12)"]
     fn test_fuzzy_extract() {
         // Must have >= MIN_BASE64_SEGMENT (32 chars) and decode to meaningful content (>= 10 chars, >= 60% printable)
         // "function powershell script code" in base64

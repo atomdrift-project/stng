@@ -4,6 +4,7 @@
 //! - Immediate loads to registers (`mov reg, imm`).
 //! - Immediate stores to memory (`mov [mem], imm`).
 //! - Register stores to memory (`mov [mem], reg`).
+//! - Inlined `strcat` of short literals (see `extract_strcat_chains`).
 //!
 //! Tracks register state and memory offsets to correctly reconstruct
 //! strings that are built out-of-order or with overlaps.
@@ -137,6 +138,7 @@ impl<'a> StackStringExtractor<'a> {
 
         // First pass: look for loop-based string building patterns
         results.extend(self.extract_loop_built_strings());
+        results.extend(self.extract_strcat_chains());
 
         let mut decoder = Decoder::with_ip(64, self.data, self.section_vma, DecoderOptions::NONE);
 
@@ -674,6 +676,141 @@ impl<'a> StackStringExtractor<'a> {
                 }
             }
             i += 1;
+        }
+        results
+    }
+
+    /// GCC inlines `strcat(buf, "lit")` for a short literal: it computes
+    /// `buf + strlen(buf)` and stores the literal, NUL included, as
+    /// immediates at that pointer.
+    ///
+    /// ```text
+    /// lea rax, [rbp-0x90]; mov rdi, rax; call strlen; mov rdx, rax
+    /// lea rax, [rbp-0x90]; add rax, rdx
+    /// mov dword [rax], 0x6d742f          ; "/tm\0"
+    /// ```
+    ///
+    /// Consecutive appends to one frame buffer spell one string; anything
+    /// else between them ends it.
+    fn extract_strcat_chains(&self) -> Vec<ExtractedString> {
+        /// Instructions an append may take between its stores and the next.
+        const MAX_GAP: usize = 12;
+        let mut results = Vec::new();
+        let mut decoder = Decoder::with_ip(64, self.data, self.section_vma, DecoderOptions::NONE);
+        // The frame buffer whose address `rax` holds, then its end.
+        let mut start_in_rax: Option<(Register, i64)> = None;
+        let mut end_in_rax: Option<(Register, i64)> = None;
+        // The literal being stored at the end, and the chain so far.
+        let mut chunk = [0u8; 32];
+        let mut chain = String::new();
+        let mut chain_buf: Option<(Register, i64)> = None;
+        let mut fragments: Vec<StringFragment> = Vec::new();
+        let mut gap = 0;
+
+        let mut flush = |chain: &mut String, fragments: &mut Vec<StringFragment>| {
+            if chain.len() >= self.min_length && self.looks_like_real_string(chain) {
+                results.push(ExtractedString {
+                    value: std::mem::take(chain),
+                    data_offset: fragments.first().map_or(0, |f| f.offset),
+                    data_len: 0,
+                    method: StringMethod::StackString,
+                    kind: Some(StringKind::StackString),
+                    fragments: Some(Box::new(std::mem::take(fragments))),
+                });
+            }
+            chain.clear();
+            fragments.clear();
+        };
+        // Append the stored literal, up to its NUL, to the chain; false if
+        // it is not printable text.
+        let take_chunk = |chunk: &mut [u8; 32], chain: &mut String| -> bool {
+            let len = chunk.iter().position(|&b| b == 0).unwrap_or(chunk.len());
+            let text = &chunk[..len];
+            let ok = !text.is_empty() && text.iter().all(|&b| b.is_ascii_graphic() || b == b' ');
+            if ok {
+                chain.extend(text.iter().map(|&b| char::from(b)));
+            }
+            *chunk = [0; 32];
+            ok
+        };
+
+        while decoder.can_decode() {
+            let instr = decoder.decode();
+            gap += 1;
+            let writes_rax = instr.op_count() > 0
+                && instr.op0_kind() == OpKind::Register
+                && instr.op0_register() == Register::RAX;
+            match instr.mnemonic() {
+                Mnemonic::Lea
+                    if writes_rax
+                        && matches!(instr.memory_base(), Register::RBP | Register::RSP) =>
+                {
+                    start_in_rax =
+                        Some((instr.memory_base(), instr.memory_displacement64() as i64));
+                }
+                Mnemonic::Add
+                    if writes_rax
+                        && instr.op1_kind() == OpKind::Register
+                        && start_in_rax.is_some() =>
+                {
+                    let buf = start_in_rax.take();
+                    if chain_buf != buf || !take_chunk(&mut chunk, &mut chain) {
+                        flush(&mut chain, &mut fragments);
+                    }
+                    chain_buf = buf;
+                    end_in_rax = buf;
+                    gap = 0;
+                }
+                Mnemonic::Mov
+                    if end_in_rax.is_some()
+                        && instr.op0_kind() == OpKind::Memory
+                        && instr.memory_base() == Register::RAX
+                        && instr.memory_index() == Register::None
+                        && matches!(
+                            instr.op1_kind(),
+                            OpKind::Immediate8 | OpKind::Immediate16 | OpKind::Immediate32
+                        ) =>
+                {
+                    let at = instr.memory_displacement64() as usize;
+                    let bytes = instr.immediate32().to_le_bytes();
+                    let size = match instr.op1_kind() {
+                        OpKind::Immediate8 => 1,
+                        OpKind::Immediate16 => 2,
+                        _ => 4,
+                    };
+                    if at + size <= chunk.len() {
+                        chunk[at..at + size].copy_from_slice(&bytes[..size]);
+                        fragments.push(StringFragment {
+                            offset: instr.ip().wrapping_sub(self.section_vma),
+                            length: size,
+                        });
+                    }
+                    gap = 0;
+                }
+                _ => {
+                    if writes_rax {
+                        start_in_rax = None;
+                        end_in_rax = None;
+                    }
+                    if matches!(instr.mnemonic(), Mnemonic::Call) {
+                        start_in_rax = None;
+                        end_in_rax = None;
+                    }
+                }
+            }
+            if gap > MAX_GAP || instr.is_invalid() {
+                if chain_buf.is_some() && take_chunk(&mut chunk, &mut chain) {
+                    flush(&mut chain, &mut fragments);
+                } else {
+                    chain.clear();
+                    fragments.clear();
+                }
+                chain_buf = None;
+                end_in_rax = None;
+            }
+        }
+        if take_chunk(&mut chunk, &mut chain) || !chain.is_empty() {
+            flush(&mut chain, &mut fragments);
         }
         results
     }

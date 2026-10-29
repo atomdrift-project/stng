@@ -117,6 +117,18 @@ pub(crate) fn is_valid_xor_string(s: &str) -> bool {
             || (s.contains("/dev/") && s.contains('>'))
             || (s.contains("2>&1") || s.contains("1>&2")));
 
+    let paired_braces = s.contains(' ') && {
+        let mut depth = 0usize;
+        s.chars().all(|c| match c {
+            '{' => {
+                depth += 1;
+                true
+            }
+            '}' => depth.checked_sub(1).map(|d| depth = d).is_some(),
+            _ => true,
+        }) && depth == 0
+    };
+
     let bad_punct_count = s
         .chars()
         .filter(|&c| {
@@ -126,6 +138,11 @@ pub(crate) fn is_valid_xor_string(s: &str) -> bool {
             }
             // Allow | for shell commands
             if looks_like_shell && c == '|' {
+                return false;
+            }
+            // Allow braces that pair up in multi-word text: AppleScript
+            // lists, format placeholders, code.
+            if paired_braces && matches!(c, '{' | '}') {
                 return false;
             }
             matches!(

@@ -510,8 +510,10 @@ fn test_cli_xor_min_length_respected() {
 /// rizin's connect()-site scan recovers Kimwolf's C2 sockaddr, which stng's
 /// own passes do not; the CLI runs rizin and hands the result to extraction.
 #[test]
-#[ignore = "requires rizin; `make test` runs it when rizin or r2 is installed"]
 fn rizin_recovers_kimwolf_connect_address() {
+    if !crate::rizin_installed() {
+        return;
+    }
     let output = stng_cmd()
         .args(["--json", "--no-cache"])
         .arg(crate::common::path("testdata/malware/kimwolf_installer"))

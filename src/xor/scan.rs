@@ -186,7 +186,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
     if key.is_empty() || data.is_empty() {
         return Vec::new();
     }
-    let mut kept = Disjoint::default();
+    let mut kept = Disjoint::new(key.len(), min_length);
     if let [key] = key {
         // Maximal printable runs, disjoint by construction.
         kept.extend(single_byte_xor_strings(
@@ -272,29 +272,91 @@ impl Covered {
     }
 }
 
-/// Strings whose byte ranges do not overlap, kept first come, first served.
-#[derive(Default)]
+/// Bytes a decoded run may overrun into the next string. Strings are often
+/// encoded back to back, each from the start of the key, so a run decodes a
+/// few garbage bytes of its neighbour before going unprintable.
+const MAX_TAIL_OVERRUN: usize = 8;
+
+/// Strings whose byte ranges do not overlap, kept first come, first served,
+/// except that a short overrun into a string decoded at another key phase is
+/// trimmed from the earlier string's tail rather than costing the later
+/// string its place, when the later string classified as something, or is
+/// long and the cut falls between words. At the same phase the later string is a suffix of the
+/// earlier one, the same text, and nothing is trimmed.
 struct Disjoint {
+    /// Key length: offsets this far apart decode at the same key phase.
+    period: usize,
+    /// Shortest string worth keeping; trimming never goes below it.
+    min_length: usize,
     strings: Vec<ExtractedString>,
-    /// Kept ranges, `start -> end`. They never overlap, so a new range can
-    /// only collide with its nearest neighbour on each side.
-    ranges: BTreeMap<usize, usize>,
+    /// Kept ranges, `start -> (end, index into strings)`. They never overlap,
+    /// so a new range can only collide with its nearest neighbour on each side.
+    ranges: BTreeMap<usize, (usize, usize)>,
 }
 
 impl Disjoint {
+    fn new(period: usize, min_length: usize) -> Self {
+        Self {
+            period,
+            min_length,
+            strings: Vec::new(),
+            ranges: BTreeMap::new(),
+        }
+    }
+
     fn extend(&mut self, candidates: impl IntoIterator<Item = ExtractedString>) {
-        for candidate in candidates {
+        for mut candidate in candidates {
             let start = candidate.data_offset as usize;
-            let end = start + candidate.value.len();
+            let mut end = start + candidate.value.len();
+            if let Some((&kept_start, &(kept_end, i))) = self.ranges.range(..=start).next_back()
+                && kept_end > start
+                && kept_end - start <= MAX_TAIL_OVERRUN
+                && !(start - kept_start).is_multiple_of(self.period)
+                && (candidate.kind.is_some()
+                    || (candidate.value.len() > 2 * MAX_TAIL_OVERRUN
+                        && !splits_word(&self.strings[i].value, start - kept_start)))
+                && trim_tail(
+                    &mut self.strings[i].value,
+                    start - kept_start,
+                    self.min_length,
+                )
+            {
+                self.ranges.insert(kept_start, (start, i));
+            }
+            if let Some((&next, _)) = self.ranges.range(start + 1..).next()
+                && next < end
+                && end - next <= MAX_TAIL_OVERRUN
+                && !(next - start).is_multiple_of(self.period)
+                && trim_tail(&mut candidate.value, next - start, self.min_length)
+            {
+                end = next;
+            }
             let before = self.ranges.range(..=start).next_back();
             let after = self.ranges.range(start..).next();
-            if before.is_some_and(|(_, &e)| e > start) || after.is_some_and(|(&s, _)| s < end) {
+            if before.is_some_and(|(_, &(e, _))| e > start) || after.is_some_and(|(&s, _)| s < end)
+            {
                 continue;
             }
-            self.ranges.insert(start, end);
+            self.ranges.insert(start, (end, self.strings.len()));
             self.strings.push(candidate);
         }
     }
+}
+
+/// Whether cutting `value` at byte `at` splits an alphanumeric run.
+fn splits_word(value: &str, at: usize) -> bool {
+    let b = value.as_bytes();
+    at > 0 && at < b.len() && b[at - 1].is_ascii_alphanumeric() && b[at].is_ascii_alphanumeric()
+}
+
+/// Cut `value` to `len` bytes if that leaves a whole string of at least
+/// `min_length` bytes.
+fn trim_tail(value: &mut String, len: usize, min_length: usize) -> bool {
+    if len < min_length.max(1) || !value.is_char_boundary(len) {
+        return false;
+    }
+    value.truncate(len);
+    true
 }
 
 /// Shortest NUL-terminated path object a single-byte pass keeps below its
@@ -893,6 +955,15 @@ fn finish_xor_candidate(
                 // We have enough valid UTF-8 data - recover bytes and use valid prefix
                 let mut bytes = e.into_bytes();
                 bytes.truncate(valid_up_to);
+                // Garbage can decode to a valid multi-byte character before the
+                // first invalid byte. After a long ASCII run, a non-ASCII tail of
+                // at most one character belongs to that garbage.
+                if let Some(ascii) = bytes.iter().position(|b| !b.is_ascii())
+                    && ascii >= min_length
+                    && std::str::from_utf8(&bytes[ascii..]).is_ok_and(|t| t.chars().count() == 1)
+                {
+                    bytes.truncate(ascii);
+                }
                 match String::from_utf8(bytes) {
                     Ok(s) => s,
                     Err(_) => return None, // Still invalid, skip

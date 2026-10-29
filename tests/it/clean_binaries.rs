@@ -9,7 +9,7 @@ use stng::{ExtractOptions, StringKind, extract_strings_with_options};
 /// Test that /bin/ls has no obfuscated content.
 /// This is a clean system binary that should not trigger XOR or encoding detections.
 #[test]
-#[cfg_attr(windows, ignore = "reads a Unix system binary")]
+#[cfg(unix)] // reads a Unix system binary
 fn test_bin_ls_clean() {
     let bin_path = "/bin/ls";
 
@@ -103,7 +103,7 @@ fn test_bin_ls_clean() {
 
 /// Test that /bin/cat has no obfuscated content.
 #[test]
-#[cfg_attr(windows, ignore = "reads a Unix system binary")]
+#[cfg(unix)] // reads a Unix system binary
 fn test_bin_cat_clean() {
     let bin_path = "/bin/cat";
 

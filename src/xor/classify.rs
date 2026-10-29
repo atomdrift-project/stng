@@ -45,8 +45,10 @@ pub(crate) fn trim_consonant_clusters(s: &str) -> String {
     }
 
     if let Some(pos) = trim_pos {
-        // Make sure we're trimming at a reasonable boundary (at least 10 chars into the string)
-        if pos >= 10 {
+        // Trim only a cluster in the final word, at least 10 chars in. A word
+        // followed by more words is text: an identifier such as `aflst` in
+        // "set end of aflst to item i of fl" is not a decoding failure.
+        if pos >= 10 && !chars[pos..].iter().any(|c| c.is_whitespace()) {
             return chars[..pos].iter().collect();
         }
     }
@@ -1479,6 +1481,30 @@ pub(crate) fn report_kinds(strings: &mut [ExtractedString]) {
 /// credential or browser word) counts as `SuspiciousPath` or `ShellCmd`. The
 /// scan's own trimming, overlap and English-shape checks key on evidence;
 /// [`report_kinds`] gives the strings it keeps their reported kinds.
+/// Whether `s` is XML markup: it starts and ends with a tag, and every `<`
+/// opens a tag whose name starts with a letter (after `/`, `?` or `!`).
+fn is_markup(s: &str) -> bool {
+    if !(s.starts_with('<') && s.ends_with('>')) {
+        return false;
+    }
+    let mut rest = s;
+    while let Some(open) = rest.find('<') {
+        let Some(len) = rest[open..].find('>') else {
+            return false;
+        };
+        let tag = &rest[open + 1..open + len];
+        if tag.contains('<')
+            || !tag
+                .trim_start_matches(['/', '?', '!'])
+                .starts_with(|c: char| c.is_ascii_alphabetic())
+        {
+            return false;
+        }
+        rest = &rest[open + len + 1..];
+    }
+    true
+}
+
 pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     // FIRST: Check for high-value IOCs that should bypass strict filtering.
     // These checks must come BEFORE is_partial_xor_decode to avoid false rejections
@@ -1583,6 +1609,11 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
         if lower.contains(indicator) {
             return Some(Some(StringKind::SuspiciousPath));
         }
+    }
+
+    // Persistence plists and entitlements are spelled out tag by tag.
+    if is_markup(s) {
+        return Some(None);
     }
 
     // Quick check for URLs/IPs before strict filtering

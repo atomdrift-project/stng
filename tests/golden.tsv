@@ -39,7 +39,7 @@ symbols_provided	testdata/go_pclntab/linux_amd64	6101	884768cd1e328935	Instructi
 symbols_provided	testdata/go_pclntab/linux_arm64	5981	f4a680d0401714b6	InstructionPattern=833 PclntabSymbol=2986 RawScan=1554 Structure=608
 symbols_provided	testdata/go_pclntab/windows_amd64	6318	dfb1a36dfe43a50e	Base64Decode=1 Heuristic=1 InstructionPattern=963 PclntabSymbol=4414 RawScan=77 StackString=17 Structure=841 WideString=4
 symbols_provided	testdata/go_pclntab/windows_arm64	6248	c7aacfac6cf929bb	Base64Decode=1 Heuristic=1 InstructionPattern=897 PclntabSymbol=4364 RawScan=75 Structure=906 WideString=4
-symbols_provided	testdata/kworker_samples/kworker_obfuscated_1	70	3895c211a916dc01	RawScan=69 WideString=1
+symbols_provided	testdata/kworker_samples/kworker_obfuscated_1	76	ef8c479e329b3c07	RawScan=69 StackString=6 WideString=1
 symbols_provided	testdata/macho/arm64_lcg_xor_universal.macho	89	95fee40e2c3a33c8	RawScan=88 XorDecode=1
 symbols_provided	testdata/macho/charge0x_installer_universal.macho	87	020c5785106368ab	RawScan=85 XorDecode=2
 symbols_provided	testdata/macho/fmix_xor_stealer_universal.macho	2782	9c65afb86a728f34	RawScan=1996 Structure=3 XorDecode=783
@@ -51,7 +51,7 @@ symbols_provided	testdata/macho/rust_heap_xor_installer_universal.macho	16317	1e
 symbols_provided	testdata/macho/swift_small_strings_webview.macho	641	ceb97b9316b68f05	CodeSignature=1 Heuristic=9 InstructionPattern=1 RawScan=625 Structure=5
 symbols_provided	testdata/macho/wallet_report_objc	70	f99b20a72d9f1e19	RawScan=70
 symbols_provided	testdata/macho/xor_fat_dropper.macho	452	5b038e9a1f07be91	Heuristic=60 RawScan=197 StackString=2 XorDecode=193
-symbols_provided	testdata/malware/brew_agent	766	5bfb3fdb2885a3d7	CodeSignature=1 RawScan=489 StackString=3 XorDecode=271 XorStackPair=2
+symbols_provided	testdata/malware/brew_agent	787	cd3ebfa7bc008617	CodeSignature=1 RawScan=488 StackString=3 XorDecode=293 XorStackPair=2
 symbols_provided	testdata/malware/brickstorm_linux_amd64	11797	73b935a7eaf2fdf7	Base64Decode=6 InstructionPattern=2083 PclntabSymbol=7593 RawScan=491 Structure=1095 WideString=15 XorStackPair=514
 symbols_provided	testdata/malware/dynamichub/DynamicHub	709	64eb6bd3900b9d1b	CodeSignature=12 RawScan=429 XorStackPair=268
 symbols_provided	testdata/malware/goodboy-stage-01.exe	375	7fc2cd43805bf42e	RawScan=154 StackString=2 Structure=134 WideString=85
@@ -81,8 +81,8 @@ symbols_provided	testdata/script/jso-permutation.js	6	02bd763f6ee2bff1	RawScan=3
 symbols_provided	testdata/script/npm-charcode-rot-packer.js	5	206e67d414694ac0	RawScan=1 ScriptDecode=4
 symbols_provided	testdata/script/vbscript-encode.asp	3	6e339038a82f4e43	RawScan=2 ScriptDecode=1
 symbols_provided	testdata/script/vbscript-encoded-malformed-asp.asp	1887	ddac148097475ea9	RawScan=378 ScriptDecode=1509
-symbols_provided	testdata/xor/brew_agent_xor_region.bin	668	927f5013e27b48f7	RawScan=397 XorDecode=271
-symbols_provided	testdata/xor/brew_agent_xor_sample	766	5bfb3fdb2885a3d7	CodeSignature=1 RawScan=489 StackString=3 XorDecode=271 XorStackPair=2
+symbols_provided	testdata/xor/brew_agent_xor_region.bin	689	a7d56949f942cb69	RawScan=396 XorDecode=293
+symbols_provided	testdata/xor/brew_agent_xor_sample	787	cd3ebfa7bc008617	CodeSignature=1 RawScan=488 StackString=3 XorDecode=293 XorStackPair=2
 symbols_provided	testdata/xor/libffmpeg_3cx_x64_xor	7184	fdd7c9998c07862d	Base64Decode=2 CodeSignature=27 Heuristic=655 InstructionPattern=30 RawScan=5503 Structure=774 UrlDecode=9 XorDecode=184
 symbols_provided	testdata/xor/overlay_crypter_loader_xor	503	a34eab9b5fdf71a9	RawScan=497 XorDecode=6
 default	testdata/elf/hello_linux_amd64	16329	ffe3b2b239c42292	Base64Decode=1 InstructionPattern=1199 PclntabSymbol=2751 RawScan=11723 SpacedAscii=1 Structure=650 WideString=4
@@ -126,7 +126,7 @@ default	testdata/go_pclntab/linux_amd64	8342	ba7d6a037cc51218	InstructionPattern
 default	testdata/go_pclntab/linux_arm64	7377	7bbe4b221ad2228a	InstructionPattern=1114 PclntabSymbol=2988 RawScan=2659 SpacedAscii=1 Structure=608 WideString=7
 default	testdata/go_pclntab/windows_amd64	6898	4ae680407db6fc47	Base64Decode=1 Heuristic=1 InstructionPattern=1232 PclntabSymbol=4589 RawScan=200 SpacedAscii=1 StackString=23 Structure=841 WideString=10
 default	testdata/go_pclntab/windows_arm64	6819	9c2a1cee0328a53e	Base64Decode=1 Heuristic=1 InstructionPattern=1167 PclntabSymbol=4538 RawScan=197 SpacedAscii=1 Structure=906 WideString=8
-default	testdata/kworker_samples/kworker_obfuscated_1	84	f258c7bb2a0d2663	RawScan=81 StackString=1 Structure=1 WideString=1
+default	testdata/kworker_samples/kworker_obfuscated_1	90	b6de57e3eaf916d6	RawScan=81 StackString=7 Structure=1 WideString=1
 default	testdata/macho/arm64_lcg_xor_universal.macho	548	23b07ede789a1e22	RawScan=547 XorDecode=1
 default	testdata/macho/charge0x_installer_universal.macho	542	13028e23d86ee7bf	RawScan=540 XorDecode=2
 default	testdata/macho/fmix_xor_stealer_universal.macho	4128	1457a490ee26888c	RawScan=3342 Structure=3 XorDecode=783

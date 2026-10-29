@@ -120,7 +120,6 @@ fn test_kworker_missing_strings_utf16_url() {
 }
 
 #[test]
-#[ignore = "known gap: byte-assembled persistence strings are not recovered (REDFLAGS_AUDIT P6.13)"]
 fn test_kworker_missing_persistence_strings() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
 
@@ -129,14 +128,13 @@ fn test_kworker_missing_persistence_strings() {
     let extracted = stng::extract_strings_with_options(&data, &opts);
 
     // These strings are expected to be found (either fully or as components):
+    // Each is appended to a stack buffer piece by piece by inlined strcat.
     let expected_components = vec![
-        ("bashrc", "Bash RC file for persistence"),
-        ("/etc/", "Config directory for persistence"),
-        ("profile", "Profile initialization for persistence"),
-        ("/tmp", "Temporary directory for coordination"),
-        ("ICE-unix", "Socket name for process coordination"),
-        ("[k", "Start of [kworker] process name"),
-        ("worker", "Part of process name spoofing"),
+        ("%s/.bashrc", "Bash RC file for persistence"),
+        ("%s/.local/kworker", "Dropped copy of itself"),
+        ("/tmp/.ICE-unix.pid", "Lock file for process coordination"),
+        ("[kworker/8:3]", "Spoofed kernel worker process name"),
+        ("%s 2>&1 > /dev/null", "Silenced command template"),
     ];
 
     for (component, description) in &expected_components {

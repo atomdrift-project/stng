@@ -8,6 +8,7 @@
 use std::fs;
 use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
+#[cfg(target_os = "macos")]
 fn macho_arch_count(data: &[u8]) -> usize {
     match goblin::Object::parse(data) {
         Ok(goblin::Object::Mach(goblin::mach::Mach::Fat(fat))) => fat.narches,
@@ -17,10 +18,7 @@ fn macho_arch_count(data: &[u8]) -> usize {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
+#[cfg(target_os = "macos")] // reads an Apple-signed system binary
 fn test_codesig_base64_categorization() {
     let bin_path = "/bin/ls";
 
@@ -139,10 +137,7 @@ fn test_entitlements_extraction_brew_agent() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
+#[cfg(target_os = "macos")] // reads an Apple-signed system binary
 fn test_entitlements_extraction_securityd() {
     let bin_path = "/usr/libexec/securityd_system";
 
@@ -216,10 +211,7 @@ fn test_entitlements_extraction_securityd() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
+#[cfg(target_os = "macos")] // reads an Apple-signed system binary
 fn test_linkedit_section_enrichment() {
     let bin_path = "/bin/ls";
 
@@ -252,10 +244,7 @@ fn test_linkedit_section_enrichment() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
+#[cfg(target_os = "macos")] // reads an Apple-signed system binary
 fn test_codesig_hash_format() {
     let bin_path = "/bin/ls";
 
@@ -312,10 +301,7 @@ fn test_codesig_hash_format() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
+#[cfg(target_os = "macos")] // reads an Apple-signed system binary
 fn test_entitlements_vs_codesign_count() {
     let bin_path = "/usr/libexec/securityd_system";
 
@@ -355,10 +341,7 @@ fn test_entitlements_vs_codesign_count() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
+#[cfg(target_os = "macos")] // reads an Apple-signed system binary
 fn test_no_entitlements_in_clean_binaries() {
     // Some system binaries like /bin/ls don't have entitlements
     let bin_path = "/bin/ls";
@@ -420,10 +403,7 @@ fn test_entitlements_offset_accuracy() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "macos"),
-    ignore = "reads an Apple-signed system binary"
-)]
+#[cfg(target_os = "macos")] // reads an Apple-signed system binary
 fn test_codesig_hashes_are_sha1() {
     let bin_path = "/bin/cat";
 

@@ -42,7 +42,7 @@ fn test_xor_extraction(test_strings: &[&str], test_name: &str) {
 }
 
 #[test]
-#[ignore = "known gap: known-key XOR drops or truncates some strings (REDFLAGS_AUDIT P6.11)"]
+
 fn test_applescript_strings_not_filtered() {
     // AppleScript commands from real malware
     let applescript_strings = vec![
@@ -61,7 +61,7 @@ fn test_applescript_strings_not_filtered() {
 }
 
 #[test]
-#[ignore = "known gap: known-key XOR drops or truncates some strings (REDFLAGS_AUDIT P6.11)"]
+
 fn test_xml_plist_strings_not_filtered() {
     let xml_strings = vec![
         ">ProgramArguments</key>",
