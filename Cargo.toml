@@ -265,5 +265,5 @@ harness = false
 # them upstream yet. The engine and its language ABI must come from the same
 # tree, and Cargo links only one copy.
 [patch.crates-io]
-tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", rev = "b6a85b1062dac229f8008613d5017edeadbcfa97" }
-tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", rev = "b6a85b1062dac229f8008613d5017edeadbcfa97" }
+tree-sitter = { git = "https://github.com/tstromberg/tree-sitter" }
+tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter" }
