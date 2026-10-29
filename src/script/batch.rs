@@ -9,14 +9,15 @@
 //! This module replays cmd's percent-expansion phase line by line, recording
 //! each `set` as it goes, and returns the expanded script when doing so
 //! reveals text that was not literally present. It is a static simulation:
-//! no control flow, `call` double expansion, or `set /a` arithmetic.
+//! only closed, acyclic label/assignment carriers are reordered; general
+//! control flow, `call` double expansion, and `set /a` arithmetic are unsupported.
 
 use std::collections::HashMap;
 
 use super::DeobfuscationResult;
 
 /// Scripts larger than this are not simulated.
-const MAX_INPUT: usize = 2 * 1024 * 1024;
+const MAX_INPUT: usize = 4 * 1024 * 1024;
 /// Cap on the expanded output, so a doubling `set a=%a%%a%` chain cannot blow up.
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
 /// Cap on one variable's value.
@@ -432,6 +433,55 @@ fn assignment_table<'a>(data: &'a [u8], marker: &[u8], len: usize) -> Option<&'a
     None
 }
 
+
+/// Reorder only a label/SET carrier ending in one variable-only invocation.
+/// Reject every other command form and branch. This is bounded control-flow
+/// reconstruction, not execution, and the original source remains evidence.
+fn linearize_label_carrier(text: &str) -> Option<String> {
+    let lines: Vec<_> = text.split('\n').map(|l| l.trim_end_matches('\r')).collect();
+    if lines.len() > 10_000 { return None; }
+    let mut labels = HashMap::new();
+    let (mut jumps, mut sets, mut invocations) = (0, 0, 0);
+    for (i, raw) in lines.iter().enumerate() {
+        let line = raw.trim_matches([' ', '\t']);
+        let lower = line.to_ascii_lowercase();
+        if let Some(label) = line.strip_prefix(':') {
+            if label.starts_with(':') { continue; }
+            if labels.insert(label.to_ascii_lowercase(), i).is_some() { return None; }
+        } else if lower.starts_with("goto ") {
+            if line.contains(['&', '|', '<', '>']) { return None; }
+            jumps += 1;
+        } else if lower.starts_with("set ") && line.contains('=') {
+            sets += 1;
+        } else if line.starts_with('%') && line.ends_with('%')
+            && !line.contains([' ', '\t', '&', '|', '<', '>']) {
+            invocations += 1;
+        } else if !line.is_empty() && lower != "@echo off" && lower != "echo off" {
+            return None;
+        }
+    }
+    if jumps < 3 || sets < 3 || invocations != 1 { return None; }
+    let mut pc = 0;
+    let mut visited = vec![false; lines.len()];
+    let mut output = String::new();
+    while pc < lines.len() {
+        if visited[pc] { return None; }
+        visited[pc] = true;
+        let line = lines[pc];
+        let trimmed = line.trim_matches([' ', '\t']);
+        pc += 1;
+        if trimmed.to_ascii_lowercase().starts_with("goto ") {
+            let target = trimmed[5..].trim_matches([' ', '\t']).trim_start_matches(':').to_ascii_lowercase();
+            pc = *labels.get(&target)? + 1;
+        } else {
+            output.push_str(line);
+            output.push('\n');
+            if trimmed.starts_with('%') { return Some(output); }
+        }
+    }
+    None
+}
+
 /// Expand cmd variables through a batch script.
 ///
 /// Returns the expanded script when the replay resolved enough references
@@ -442,7 +492,12 @@ pub fn expand_batch_variables(data: &[u8]) -> Option<DeobfuscationResult> {
     if data.len() > MAX_INPUT {
         return None;
     }
-    let original = String::from_utf8_lossy(data);
+    // Preserve distinct legacy single-byte variable names. Replacement
+    // characters collapse different names and silently corrupt reconstruction.
+    let original = match std::str::from_utf8(data) {
+        Ok(text) => std::borrow::Cow::Borrowed(text),
+        Err(_) => std::borrow::Cow::Owned(data.iter().map(|&b| char::from(b)).collect::<String>()),
+    };
     let (worth_simulating, has_remap_markers) = worth_simulating(&original);
     if !worth_simulating {
         return None;
@@ -456,7 +511,10 @@ pub fn expand_batch_variables(data: &[u8]) -> Option<DeobfuscationResult> {
     } else {
         original
     };
-    let delayed = text.to_ascii_lowercase().contains("enabledelayedexpansion");
+    let ordered = linearize_label_carrier(&text);
+    let text = ordered.as_deref().unwrap_or(&text);
+    let mut delayed = false;
+    let mut delayed_stack = Vec::new();
     let mut exp = Expander::default();
     let mut out = String::with_capacity(text.len());
     for raw in text.split('\n') {
@@ -464,6 +522,26 @@ pub fn expand_batch_variables(data: &[u8]) -> Option<DeobfuscationResult> {
         let mut expanded = exp.expand_percent(line);
         if delayed {
             expanded = exp.expand_delayed(&expanded);
+        }
+        // SETLOCAL can itself be reconstructed by percent expansion. Track
+        // its state in source order; later enable directives cannot affect
+        // earlier exclamation marks, and ENDLOCAL restores the prior mode.
+        for stmt in split_statements(&expanded) {
+            let stmt = command_head(stmt);
+            let mut words = stmt.split_whitespace();
+            let Some(head) = words.next() else { continue };
+            if head.eq_ignore_ascii_case("setlocal") {
+                delayed_stack.push(delayed);
+                for option in words {
+                    if option.eq_ignore_ascii_case("enabledelayedexpansion") {
+                        delayed = true;
+                    } else if option.eq_ignore_ascii_case("disabledelayedexpansion") {
+                        delayed = false;
+                    }
+                }
+            } else if head.eq_ignore_ascii_case("endlocal") {
+                delayed = delayed_stack.pop().unwrap_or(false);
+            }
         }
         exp.record_sets(&expanded);
         out.push_str(&unescape_carets(&expanded));
@@ -498,6 +576,41 @@ mod tests {
         expand_batch_variables(src.as_bytes())
             .map(|r| r.decoded)
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn large_data_carrier_keeps_prefix_visible() {
+        let src = format!("@%noise%echo off\nset tool=certutil\n%tool% -decode x y\n%tool% -decode y z\n%tool% -hashfile z\n{}", "A".repeat(3 * 1024 * 1024));
+        assert!(expand(&src).contains("certutil -decode x y"));
+        assert!(expand_batch_variables(&vec![b'A'; MAX_INPUT + 1]).is_none());
+    }
+
+    #[test]
+    fn shuffled_assignment_carrier_reconstructs_only_closed_paths() {
+        let src = "@echo off\ngoto a\n:c\nset c=done\ngoto end\n:b\nset b=echo\ngoto c\n:a\nset a=cmd /c \ngoto b\n:end\n%a%%b%%c%\n";
+        assert!(expand(src).contains("cmd /c echodone"));
+        assert!(linearize_label_carrier(&src.replace("goto c", "if exist flag goto c")).is_none());
+        assert!(linearize_label_carrier(&src.replace("goto end", "goto a")).is_none());
+        assert!(linearize_label_carrier(&src.replace("goto end", "goto absent")).is_none());
+        assert!(linearize_label_carrier(&format!("{src}:a\n")).is_none());
+    }
+
+    #[test]
+    fn distinct_legacy_byte_names_do_not_collide() {
+        let src = b"@echo off\nset \x81=A\nset \x82=B\nset \x83=C\necho %\x81%%\x82%%\x83%\n";
+        let result = expand_batch_variables(src).unwrap();
+        assert!(result.decoded.contains("echo ABC"), "{}", result.decoded);
+    }
+
+    #[test]
+    fn reconstructed_delayed_mode_and_scope() {
+        let src = "set a=pow\nset b=ershell\n!a!!b! before\n%noise%setlocal enable%noise%delayedexpansion\nset c=!a!!b!\n!c! enabled\nsetlocal disabledelayedexpansion\n!a!!b! disabled\nendlocal\n!c! restored\nendlocal\n!a!!b! after\n";
+        let got = expand(src);
+        assert!(got.contains("!a!!b! before"));
+        assert!(got.contains("powershell enabled"));
+        assert!(got.contains("!a!!b! disabled"));
+        assert!(got.contains("powershell restored"));
+        assert!(got.contains("!a!!b! after"));
     }
 
     #[test]
