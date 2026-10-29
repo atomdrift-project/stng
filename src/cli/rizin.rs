@@ -280,7 +280,7 @@ fn spawn_tool_command(tool: &Path, path: &str, cmd: &str, use_cache: bool) -> Op
     {
         return Some(cached);
     }
-    let result = run_tool(tool, path, cmd)?;
+    let result = run_tool_with_timeout(tool, path, cmd, TOOL_TIMEOUT)?;
     if use_cache && let Ok(cache) = R2Cache::new() {
         let _ = cache.set(path, cmd, &result);
     }
@@ -329,10 +329,6 @@ impl Drop for ToolChild {
     fn drop(&mut self) {
         let _ = self.finish();
     }
-}
-
-fn run_tool(tool: &Path, path: &str, cmd: &str) -> Option<String> {
-    run_tool_with_timeout(tool, path, cmd, TOOL_TIMEOUT)
 }
 
 fn run_tool_with_timeout(tool: &Path, path: &str, cmd: &str, timeout: Duration) -> Option<String> {
@@ -536,7 +532,7 @@ pub(crate) fn extract_connect_addrs(
     {
         return Vec::new();
     }
-    if let Some(sockaddr) = parse_sockaddr_from_disasm(&output, data) {
+    if let Some(sockaddr) = parse_sockaddr_from_disasm(&output) {
         let es = sockaddr_to_string(&sockaddr);
         if seen.insert(es.value.clone()) {
             results.push(es);
@@ -585,7 +581,7 @@ struct SockaddrIn {
     port: u16,
     offset: u64,
 }
-fn parse_sockaddr_from_disasm(disasm: &str, _data: &[u8]) -> Option<SockaddrIn> {
+fn parse_sockaddr_from_disasm(disasm: &str) -> Option<SockaddrIn> {
     let (mut ip, mut port, mut offset, mut found, mut pending) = ([0u8; 4], 0u16, 0u64, 0, None);
     for line in disasm.lines() {
         if let Some(addr_str) = line.split_whitespace().next()

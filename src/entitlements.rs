@@ -6,11 +6,7 @@ use goblin::mach::MachO;
 /// Extract entitlements from Mach-O code signature as raw XML.
 ///
 /// Returns the full XML plist as a single string for inline display.
-pub(crate) fn extract_macho_entitlements(
-    macho: &MachO<'_>,
-    data: &[u8],
-    _min_length: usize,
-) -> Vec<ExtractedString> {
+pub(crate) fn extract_macho_entitlements(macho: &MachO<'_>, data: &[u8]) -> Vec<ExtractedString> {
     use goblin::mach::load_command::CommandVariant;
 
     let mut entitlements = Vec::new();

@@ -307,10 +307,6 @@ fn extract_arm64_inline_string(
     let mut lookback = 12;
     while lookback <= max_lookback {
         let pos = bl_pos - lookback;
-        if pos + 12 > text_data.len() {
-            lookback += 4;
-            continue;
-        }
 
         let inst1 = word(pos);
         let inst2 = word(pos + 4);
@@ -500,11 +496,6 @@ fn decode_arm_bitmask_immediate(inst: u32) -> Option<u64> {
 
     let esize = 1u32 << elem_len;
     if esize > size {
-        return None;
-    }
-
-    // Bounds check to prevent overflow
-    if elem_len > 6 || esize > 64 {
         return None;
     }
 

@@ -729,22 +729,14 @@ fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
         && !(stats.first_char.is_ascii_digit() && stats.last_char.is_ascii_digit())
         && !has_suspicious_leading_digit;
 
-    // Check for consonant-only strings (no vowels) - likely random garbage
-    // unless it's a known pattern like "str", "ptr", "chr", "src", etc.
-    if is_all_lower && len >= 4 {
-        let vowel_count = s
+    // Lowercase strings of four or more letters with no vowel are random.
+    if is_all_lower
+        && len >= 4
+        && !s
             .bytes()
-            .filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
-            .count();
-        if vowel_count == 0 {
-            // Whitelist common consonant-only strings
-            let known = [
-                "str", "ptr", "chr", "src", "dst", "tmp", "prn", "sys", "cfg", "mgr", "ctx",
-            ];
-            if !known.contains(&s) {
-                return true;
-            }
-        }
+            .any(|b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
+    {
+        return true;
     }
 
     if is_all_upper
@@ -1272,18 +1264,6 @@ fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
         if len <= 7 && avg_run_length < 1.5 && transitions >= 4 {
             return true;
         }
-    } else if is_structured_pattern
-        && avg_run_length < 2.0
-        && len >= 10
-        && !looks_like_path
-        && !looks_like_domain
-        && !looks_like_version
-        && !looks_like_base64
-        && !looks_like_format_string
-        && !looks_like_url
-        && !looks_like_multi_word
-    {
-        return true;
     }
     false
 }
@@ -1633,13 +1613,10 @@ fn is_statistical_garbage(
             .filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
             .count();
 
-        // No vowels at all - likely random garbage
+        // At most one vowel: likely random, unless a common word
         if vowel_count <= 1 {
-            // Whitelist common short words/abbreviations
             let known_short = [
-                "init", "main", "type", "file", "func", "data", "test", "temp", "code", "info",
-                "user", "node", "sync", "async", "true", "null", "void", "char", "bool", "time",
-                "size", "path", "name", "text",
+                "type", "func", "test", "temp", "sync", "async", "null", "char", "path", "text",
             ];
             if !known_short.contains(&s) {
                 return true;
@@ -1716,8 +1693,7 @@ fn is_statistical_garbage(
         // If has 0-1 vowels and ends with digit, likely garbage
         if vowel_count <= 1 && stats.last_char.is_ascii_digit() {
             // Whitelist known patterns (encoding, crypto, architecture suffixes)
-            let known_4char_suffix = ["sha1", "md5", "utf8", "mp3", "mp4", "avi"];
-            if !known_4char_suffix.iter().any(|k| s.eq_ignore_ascii_case(k)) {
+            if !matches!(s, "sha1" | "utf8") {
                 return true;
             }
         }
@@ -1747,11 +1723,6 @@ fn is_statistical_garbage(
     // fragment (assembly output like `MOV EAX, 0`, list literals, formatted
     // text) where the punctuation is structural rather than noise.
     if len <= 10 && stats.noise_punct > 0 && stats.whitespace == 0 {
-        return true;
-    }
-
-    // Trailing spaces after short content indicate misaligned reads
-    if s.ends_with(' ') && len < 10 && stats.alphanumeric < 4 {
         return true;
     }
 

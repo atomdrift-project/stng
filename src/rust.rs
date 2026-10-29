@@ -151,7 +151,7 @@ impl RustStringExtractor {
 
         // PHASE 2: Raw extraction from __cstring (null-terminated strings)
         if let Some((cstring_addr, cstring_data)) = cstring_info {
-            let raw = self.extract_raw_strings(cstring_data, Some("__cstring"));
+            let raw = self.extract_raw_strings(cstring_data);
             let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
             let new_strings: Vec<_> = raw
                 .into_iter()
@@ -175,7 +175,7 @@ impl RustStringExtractor {
         const MAX_HEURISTIC_SECTION_SIZE: usize = 1024 * 1024;
         if let Some((text_const_addr, text_const_data)) = text_const_info {
             let heuristic = if text_const_data.len() <= MAX_HEURISTIC_SECTION_SIZE {
-                self.extract_packed_strings(text_const_data, Some("__TEXT,__const"))
+                self.extract_packed_strings(text_const_data)
             } else {
                 Vec::new()
             };
@@ -200,15 +200,9 @@ impl RustStringExtractor {
 
         // PHASE 4: Instruction pattern analysis
         if let Some((text_addr, text_data)) = text_info {
-            let targets: Vec<(u64, &[u8], &str)> = [
-                cstring_info.map(|(a, d)| (a, d, "__cstring")),
-                text_const_info.map(|(a, d)| (a, d, "__TEXT,__const")),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-
-            for (section_addr, section_data, _section_name) in targets {
+            for (section_addr, section_data) in
+                [cstring_info, text_const_info].into_iter().flatten()
+            {
                 let inline_strings = match macho.header.cputype() {
                     CPU_TYPE_ARM64 => extract_inline_strings_arm64(
                         text_data,
@@ -452,11 +446,7 @@ impl RustStringExtractor {
     }
 
     /// Extract raw strings as fallback.
-    fn extract_raw_strings(
-        &self,
-        data: &[u8],
-        _section_name: Option<&str>,
-    ) -> Vec<ExtractedString> {
+    fn extract_raw_strings(&self, data: &[u8]) -> Vec<ExtractedString> {
         let mut strings = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         let mut current = Vec::new();
@@ -498,11 +488,7 @@ impl RustStringExtractor {
     /// Rust often packs format strings and literals together without null
     /// terminators or pointer structures. This method uses pattern recognition
     /// to split and extract meaningful strings.
-    fn extract_packed_strings(
-        &self,
-        data: &[u8],
-        section_name: Option<&str>,
-    ) -> Vec<ExtractedString> {
+    fn extract_packed_strings(&self, data: &[u8]) -> Vec<ExtractedString> {
         // Collect segments with their byte offsets within `data`.
         //
         // A segment is a maximal run of printable ASCII (or newline, a real
@@ -539,13 +525,7 @@ impl RustStringExtractor {
             .map(|(segment, segment_base)| {
                 let mut strings = Vec::new();
                 let mut seen = HashSet::new();
-                self.extract_patterns_from_segment(
-                    segment,
-                    *segment_base,
-                    section_name,
-                    &mut strings,
-                    &mut seen,
-                );
+                self.extract_patterns_from_segment(segment, *segment_base, &mut strings, &mut seen);
                 strings
             })
             .collect();
@@ -567,7 +547,6 @@ impl RustStringExtractor {
         &self,
         segment: &str,
         segment_base: u64,
-        section_name: Option<&str>,
         strings: &mut Vec<ExtractedString>,
         seen: &mut HashSet<String>,
     ) {
@@ -575,7 +554,7 @@ impl RustStringExtractor {
         for cap in RE_URL.find_iter(segment) {
             let url = cap.as_str().trim_end_matches(['.', ',', ';']);
             let offset = segment_base + cap.start() as u64;
-            self.add_if_valid(url, offset, section_name, strings, seen);
+            self.add_if_valid(url, offset, strings, seen);
         }
 
         // Pattern 2: Unix file paths
@@ -583,7 +562,7 @@ impl RustStringExtractor {
             let path = cap.as_str();
             if path.contains('/') && path.len() >= self.min_length {
                 let offset = segment_base + cap.start() as u64;
-                self.add_if_valid(path, offset, section_name, strings, seen);
+                self.add_if_valid(path, offset, strings, seen);
             }
         }
 
@@ -592,7 +571,7 @@ impl RustStringExtractor {
             let env_var = cap.as_str();
             if env_var.contains('_') && env_var.len() >= self.min_length {
                 let offset = segment_base + cap.start() as u64;
-                self.add_if_valid(env_var, offset, section_name, strings, seen);
+                self.add_if_valid(env_var, offset, strings, seen);
             }
         }
 
@@ -601,7 +580,7 @@ impl RustStringExtractor {
             let ident = cap.as_str();
             if ident.len() >= self.min_length {
                 let offset = segment_base + cap.start() as u64;
-                self.add_if_valid(ident, offset, section_name, strings, seen);
+                self.add_if_valid(ident, offset, strings, seen);
             }
         }
 
@@ -610,7 +589,7 @@ impl RustStringExtractor {
             let domain = cap.as_str();
             if domain.len() >= self.min_length {
                 let offset = segment_base + cap.start() as u64;
-                self.add_if_valid(domain, offset, section_name, strings, seen);
+                self.add_if_valid(domain, offset, strings, seen);
             }
         }
 
@@ -639,13 +618,7 @@ impl RustStringExtractor {
                     let byte_end = char_indices[i].0;
                     let sub = &part[last_byte..byte_end];
                     if sub.len() >= self.min_length {
-                        self.add_if_valid(
-                            sub,
-                            part_base + last_byte as u64,
-                            section_name,
-                            strings,
-                            seen,
-                        );
+                        self.add_if_valid(sub, part_base + last_byte as u64, strings, seen);
                     }
                     last_byte = byte_end;
                 }
@@ -653,13 +626,7 @@ impl RustStringExtractor {
             // Add remaining part
             let sub = &part[last_byte..];
             if sub.len() >= self.min_length {
-                self.add_if_valid(
-                    sub,
-                    part_base + last_byte as u64,
-                    section_name,
-                    strings,
-                    seen,
-                );
+                self.add_if_valid(sub, part_base + last_byte as u64, strings, seen);
             }
         }
     }
@@ -669,7 +636,6 @@ impl RustStringExtractor {
         &self,
         s: &str,
         data_offset: u64,
-        _section_name: Option<&str>,
         strings: &mut Vec<ExtractedString>,
         seen: &mut HashSet<String>,
     ) {
@@ -809,7 +775,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"Hello\0World\0foo\0";
 
-        let strings = extractor.extract_raw_strings(data, Some(".rodata"));
+        let strings = extractor.extract_raw_strings(data);
 
         assert_eq!(strings.len(), 2); // "Hello" and "World", "foo" is < 4 chars
         assert!(strings.iter().any(|s| s.value == "Hello"));
@@ -821,7 +787,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"Hello\0Hello\0World\0";
 
-        let strings = extractor.extract_raw_strings(data, None);
+        let strings = extractor.extract_raw_strings(data);
 
         // Should deduplicate
         assert_eq!(strings.iter().filter(|s| s.value == "Hello").count(), 1);
@@ -832,7 +798,7 @@ mod tests {
         let extractor = RustStringExtractor::new(6);
         let data = b"Hello\0World\0";
 
-        let strings = extractor.extract_raw_strings(data, None);
+        let strings = extractor.extract_raw_strings(data);
 
         // "Hello" is 5 chars, "World" is 5 chars - both < 6
         assert!(strings.is_empty());
@@ -843,7 +809,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"  Hello  \0  World  \0";
 
-        let strings = extractor.extract_raw_strings(data, None);
+        let strings = extractor.extract_raw_strings(data);
 
         assert!(strings.iter().any(|s| s.value == "Hello"));
         assert!(strings.iter().any(|s| s.value == "World"));
@@ -855,7 +821,7 @@ mod tests {
         // Non-printable byte should break the string
         let data = b"Hello\x01World\0";
 
-        let strings = extractor.extract_raw_strings(data, None);
+        let strings = extractor.extract_raw_strings(data);
 
         // Should have World (5 chars), Hello was broken
         assert!(strings.iter().any(|s| s.value == "World"));
@@ -866,7 +832,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"https://example.com/path?query=value";
 
-        let strings = extractor.extract_packed_strings(data, Some("test"));
+        let strings = extractor.extract_packed_strings(data);
 
         assert!(strings.iter().any(|s| s.value.contains("example.com")));
     }
@@ -876,7 +842,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"/usr/local/bin/rustc";
 
-        let strings = extractor.extract_packed_strings(data, None);
+        let strings = extractor.extract_packed_strings(data);
 
         assert!(strings.iter().any(|s| s.value.contains("/usr")));
     }
@@ -886,7 +852,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"RUST_BACKTRACE=full HOME_DIR=/home";
 
-        let strings = extractor.extract_packed_strings(data, None);
+        let strings = extractor.extract_packed_strings(data);
 
         assert!(strings.iter().any(|s| s.value.contains("RUST_BACKTRACE")));
     }
@@ -896,7 +862,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"my_function_name some_other_var";
 
-        let strings = extractor.extract_packed_strings(data, None);
+        let strings = extractor.extract_packed_strings(data);
 
         assert!(strings.iter().any(|s| s.value.contains("my_function_name")));
     }
@@ -906,7 +872,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"example.com api.github.com";
 
-        let strings = extractor.extract_packed_strings(data, None);
+        let strings = extractor.extract_packed_strings(data);
 
         assert!(strings.iter().any(|s| s.value.contains("example.com")));
     }
@@ -916,7 +882,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"hello\0world\0test";
 
-        let strings = extractor.extract_packed_strings(data, None);
+        let strings = extractor.extract_packed_strings(data);
 
         // Should split on nulls
         assert!(strings.iter().any(|s| s.value == "hello"));
@@ -928,7 +894,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"line1\nline2\nline3";
 
-        let strings = extractor.extract_packed_strings(data, None);
+        let strings = extractor.extract_packed_strings(data);
 
         // Should process newlines
         assert!(!strings.is_empty());
@@ -940,7 +906,7 @@ mod tests {
         let mut strings = Vec::new();
         let mut seen = HashSet::new();
 
-        extractor.add_if_valid("short", 0, None, &mut strings, &mut seen);
+        extractor.add_if_valid("short", 0, &mut strings, &mut seen);
 
         assert!(strings.is_empty());
     }
@@ -952,7 +918,7 @@ mod tests {
         let mut seen = HashSet::new();
 
         seen.insert("hello".to_string());
-        extractor.add_if_valid("hello", 0, None, &mut strings, &mut seen);
+        extractor.add_if_valid("hello", 0, &mut strings, &mut seen);
 
         assert!(strings.is_empty());
     }
@@ -964,7 +930,7 @@ mod tests {
         let mut seen = HashSet::new();
 
         // More than 70% digits should be rejected
-        extractor.add_if_valid("12345678ab", 0, None, &mut strings, &mut seen);
+        extractor.add_if_valid("12345678ab", 0, &mut strings, &mut seen);
 
         assert!(strings.is_empty());
     }
@@ -976,7 +942,7 @@ mod tests {
         let mut seen = HashSet::new();
 
         // Short hex patterns should be rejected
-        extractor.add_if_valid("deadbeef", 0, None, &mut strings, &mut seen);
+        extractor.add_if_valid("deadbeef", 0, &mut strings, &mut seen);
 
         assert!(strings.is_empty());
     }
@@ -987,7 +953,7 @@ mod tests {
         let mut strings = Vec::new();
         let mut seen = HashSet::new();
 
-        extractor.add_if_valid("hello_world", 0, Some(".rodata"), &mut strings, &mut seen);
+        extractor.add_if_valid("hello_world", 0, &mut strings, &mut seen);
 
         assert_eq!(strings.len(), 1);
         assert_eq!(strings[0].value, "hello_world");
@@ -1001,13 +967,7 @@ mod tests {
         let mut strings = Vec::new();
         let mut seen = HashSet::new();
 
-        extractor.extract_patterns_from_segment(
-            segment,
-            0,
-            Some(".rodata"),
-            &mut strings,
-            &mut seen,
-        );
+        extractor.extract_patterns_from_segment(segment, 0, &mut strings, &mut seen);
 
         // Should extract URLs, paths, env vars, and identifiers
         assert!(!strings.is_empty());
@@ -1021,7 +981,7 @@ mod tests {
         let mut strings = Vec::new();
         let mut seen = HashSet::new();
 
-        extractor.extract_patterns_from_segment(segment, 0, None, &mut strings, &mut seen);
+        extractor.extract_patterns_from_segment(segment, 0, &mut strings, &mut seen);
 
         // Should handle case transitions
         assert!(!strings.is_empty());
@@ -1047,7 +1007,7 @@ mod tests {
         let extractor = RustStringExtractor::new(4);
         let data = b"https://example.com\0/usr/bin\0ERROR_CODE\0";
 
-        let strings = extractor.extract_raw_strings(data, None);
+        let strings = extractor.extract_raw_strings(data);
 
         // Check classification
         let url = strings

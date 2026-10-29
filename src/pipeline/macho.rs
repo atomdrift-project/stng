@@ -151,7 +151,7 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
     if !opts.caller_provides_symbols {
         merge_imports(&mut strings, extract_macho_imports(macho, data, min_length));
     }
-    apply_entitlements(&mut strings, macho, data, min_length);
+    apply_entitlements(&mut strings, macho, data);
     Scan {
         strings,
         sections: section_info,
@@ -311,7 +311,7 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
                 extract_macho_imports(macho, slice, min_length),
             );
         }
-        apply_entitlements(&mut strings, macho, data, min_length);
+        apply_entitlements(&mut strings, macho, data);
     }
     Scan {
         strings,
@@ -367,13 +367,8 @@ fn scan_macho_sections(
 }
 
 /// Apply Mach-O entitlements: remove overlapping strings, then append entitlement XML.
-fn apply_entitlements(
-    strings: &mut Vec<ExtractedString>,
-    macho: &MachO<'_>,
-    data: &[u8],
-    min_length: usize,
-) {
-    let entitlements = entitlements::extract_macho_entitlements(macho, data, min_length);
+fn apply_entitlements(strings: &mut Vec<ExtractedString>, macho: &MachO<'_>, data: &[u8]) {
+    let entitlements = entitlements::extract_macho_entitlements(macho, data);
     for ent in &entitlements {
         if ent.kind == Some(StringKind::EntitlementsXml) {
             let ent_start = ent.data_offset;
@@ -429,22 +424,8 @@ fn extract_macho_pclntab_strings(
     // varint-prefixed pkgnamestab.
     let (varints, mut nulls) = crate::par::join(
         section_bytes.len(),
-        || {
-            extract_varint_prefixed_strings(
-                section_bytes,
-                start as u64,
-                Some("__gopclntab"),
-                min_length,
-            )
-        },
-        || {
-            extract_null_separated_strings(
-                section_bytes,
-                start as u64,
-                Some("__gopclntab"),
-                min_length,
-            )
-        },
+        || extract_varint_prefixed_strings(section_bytes, start as u64, min_length),
+        || extract_null_separated_strings(section_bytes, start as u64, min_length),
     );
     nulls.extend(varints);
     tracing::debug!(

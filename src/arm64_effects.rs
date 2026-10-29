@@ -7,7 +7,6 @@ fn reg(index: u32) -> u32 {
 
 /// Bit 31 denotes SP, while XZR/WZR never produces a write bit.
 /// Unsupported instruction families fail closed instead of assuming no writes.
-#[allow(dead_code)] // Connected with caller-state analysis.
 pub(crate) fn writes(inst: u32) -> Option<u32> {
     let rd = inst & 31;
     let rn = (inst >> 5) & 31;

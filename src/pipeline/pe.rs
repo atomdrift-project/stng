@@ -87,22 +87,8 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
             };
             let (varints, nulls) = crate::par::join(
                 section_bytes.len(),
-                || {
-                    extract_varint_prefixed_strings(
-                        section_bytes,
-                        start,
-                        Some(name.as_str()),
-                        min_length,
-                    )
-                },
-                || {
-                    extract_null_separated_strings(
-                        section_bytes,
-                        start,
-                        Some(name.as_str()),
-                        min_length,
-                    )
-                },
+                || extract_varint_prefixed_strings(section_bytes, start, min_length),
+                || extract_null_separated_strings(section_bytes, start, min_length),
             );
             strings.extend(varints);
             strings.extend(nulls);

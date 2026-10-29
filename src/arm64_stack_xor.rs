@@ -76,11 +76,9 @@ pub(crate) fn extract_arm64_stack_xor_strings(
                 continue;
             };
 
-            let section_name = section.name().ok().map(str::to_string);
             results.extend(extract_section(
                 code,
                 arch_base_offset + u64::from(section.offset),
-                section_name.as_deref(),
                 min_length,
             ));
         }
@@ -113,7 +111,6 @@ fn should_extract(profile: AdmissionProfile) -> bool {
 fn extract_section(
     code: &[u8],
     section_file_offset: u64,
-    section_name: Option<&str>,
     min_length: usize,
 ) -> Vec<ExtractedString> {
     let mut regs: HashMap<u8, RegValue> = HashMap::with_capacity(32);
@@ -134,15 +131,7 @@ fn extract_section(
         }
 
         if let Some((rd, rn, imm)) = decode_add_imm(word) {
-            let base = if rn == 31 {
-                Some(0)
-            } else {
-                match regs.get(&rn) {
-                    Some(RegValue::Ptr(offset)) => Some(*offset),
-                    _ => None,
-                }
-            };
-            if let Some(base) = base {
+            if let Some(base) = ptr_offset(&regs, rn) {
                 regs.insert(rd, RegValue::Ptr(base + imm));
             } else {
                 regs.remove(&rd);
@@ -159,7 +148,6 @@ fn extract_section(
                     &memory,
                     *arg0,
                     section_file_offset + instr_off,
-                    section_name,
                     min_length,
                 );
                 for pad in decoded.pads {
@@ -198,7 +186,6 @@ fn extract_section(
                         &recovered_pads,
                         &mut decoded_blob_state,
                         section_file_offset + instr_off,
-                        section_name,
                         min_length,
                     );
                     append_unique_results(&mut sink_results, decoded, &mut seen_values);
@@ -302,7 +289,6 @@ fn decode_stack_arg_with_candidate_pads(
     memory: &HashMap<i64, Vec<u8>>,
     cipher_start: i64,
     instr_off: u64,
-    _section_name: Option<&str>,
     min_length: usize,
 ) -> StackDecodeResults {
     let Some(cipher) = collect_contiguous(memory, cipher_start, 128) else {
@@ -399,7 +385,6 @@ fn decode_recent_stack_blobs_with_pads(
     pads: &[Vec<u8>],
     decoded_blob_state: &mut HashMap<i64, (usize, usize, u64)>,
     instr_off: u64,
-    _section_name: Option<&str>,
     min_length: usize,
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();

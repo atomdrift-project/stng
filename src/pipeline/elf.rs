@@ -281,22 +281,8 @@ fn extract_elf_pclntab_strings(
     // larger funcname pass and recovers package paths the latter can't.
     let (varints, mut nulls) = crate::par::join(
         section_bytes.len(),
-        || {
-            extract_varint_prefixed_strings(
-                section_bytes,
-                start as u64,
-                Some(".gopclntab"),
-                min_length,
-            )
-        },
-        || {
-            extract_null_separated_strings(
-                section_bytes,
-                start as u64,
-                Some(".gopclntab"),
-                min_length,
-            )
-        },
+        || extract_varint_prefixed_strings(section_bytes, start as u64, min_length),
+        || extract_null_separated_strings(section_bytes, start as u64, min_length),
     );
     nulls.extend(varints);
     tracing::debug!(

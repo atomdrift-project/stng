@@ -1,24 +1,10 @@
 //! Complete outlined and inline qword XOR loops with exact consumer lengths.
 use super::{Region, branch_target, sequence, word};
 
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum OutputLink {
-    // A later copy reads another register. This records an unproven alias
-    // relationship, not a prerequisite for recovering the loop's XOR bytes.
-    Copied {
-        write_register: u32,
-        copy_register: u32,
-        delta: u64,
-    },
-    // Both the loop and consumer use the same unmodified frame register.
-    Frame,
-}
 #[derive(Debug)]
 pub(super) struct Literal {
     pub cipher: u64,
     pub length: usize,
-    #[allow(dead_code)] // Retained for analysis/tests; extraction makes no alias claim.
-    pub link: OutputLink,
 }
 fn target(code: &Region<'_>, pc: u64, opcode: u32) -> Option<u64> {
     let inst = word(code, pc)?;
@@ -41,7 +27,6 @@ fn address(code: &Region<'_>, pc: u64) -> Option<u64> {
 
 /// Validate complete constant-input decoding and a following matching length.
 /// Copied forms do not establish aliasing into that following consumer.
-#[allow(dead_code)]
 pub(super) fn read(code: &Region<'_>, start: u64) -> Option<Literal> {
     // Guard arithmetic below once, including all inline instructions.
     start.checked_add(72)?;
@@ -83,15 +68,7 @@ pub(super) fn read(code: &Region<'_>, start: u64) -> Option<Literal> {
     )?;
     let consumer = target(code, wrapper.checked_add(12)?, 0x14000000)?;
     word(code, consumer)?;
-    Some(Literal {
-        cipher,
-        length: 32,
-        link: OutputLink::Copied {
-            write_register: 19,
-            copy_register: 20,
-            delta: 32,
-        },
-    })
+    Some(Literal { cipher, length: 32 })
 }
 fn inline(code: &Region<'_>, start: u64) -> Option<Literal> {
     // Full 32-byte writes supersede the zero initialization, but the permitted
@@ -127,9 +104,5 @@ fn inline(code: &Region<'_>, start: u64) -> Option<Literal> {
     sequence(code, start + 64, &[0x52800402])?;
     let consumer = branch_target(code, start + 68)?;
     word(code, consumer)?;
-    Some(Literal {
-        cipher,
-        length: 32,
-        link: OutputLink::Frame,
-    })
+    Some(Literal { cipher, length: 32 })
 }

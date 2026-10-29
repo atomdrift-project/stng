@@ -783,8 +783,12 @@ fn decode_unicode_escapes(s: &str) -> Option<String> {
                 Some('U') => 8,
                 _ => 0,
             };
+            // Too few digits, non-hex digits, and invalid code points (lone
+            // surrogates, beyond U+10FFFF) are not escapes.
             if width > 0
-                && let Some(decoded) = parse_hex_escape(&chars, esc + 1, width)
+                && let Some(digits) = chars.get(esc + 1..esc + 1 + width)
+                && let Some(code) = crate::bytes::hex_number(&digits.iter().collect::<String>())
+                && let Some(decoded) = char::from_u32(code)
             {
                 result.push(decoded);
                 changed = true;
@@ -803,18 +807,6 @@ fn decode_unicode_escapes(s: &str) -> Option<String> {
     }
 
     if changed { Some(result) } else { None }
-}
-
-/// Parse `width` hex digits starting at `start` in `chars` into a `char`.
-/// Returns `None` when there are too few digits, they aren't hex, or the code
-/// point is invalid (a lone surrogate or beyond U+10FFFF).
-fn parse_hex_escape(chars: &[char], start: usize, width: usize) -> Option<char> {
-    let end = start.checked_add(width)?;
-    if end > chars.len() {
-        return None;
-    }
-    let hex: String = chars[start..end].iter().collect();
-    char::from_u32(crate::bytes::hex_number(&hex)?)
 }
 
 /// Check if a string looks like base64-encoded data.

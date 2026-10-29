@@ -291,7 +291,7 @@ impl GoStringExtractor {
             .map_or(0u64, |opt| opt.windows_fields.image_base);
 
         // Find .rodata or .rdata section
-        let rodata_info = self.find_rodata_pe(pe, data);
+        let rodata_info = Self::find_rodata_pe(pe, data);
         let Some((rodata_addr, rodata_data)) = rodata_info else {
             return strings;
         };
@@ -430,7 +430,7 @@ impl GoStringExtractor {
     }
 
     /// Find .rodata or .rdata section in PE
-    fn find_rodata_pe<'a>(&self, pe: &PE<'_>, data: &'a [u8]) -> Option<(u64, &'a [u8])> {
+    fn find_rodata_pe<'a>(pe: &PE<'_>, data: &'a [u8]) -> Option<(u64, &'a [u8])> {
         // Try .rodata or .rdata
         for section in &pe.sections {
             let name = crate::binary::pe_section_name(&section.name);
@@ -665,7 +665,6 @@ fn long_hex_run_start(s: &str) -> Option<usize> {
 pub(crate) fn extract_varint_prefixed_strings(
     data: &[u8],
     section_data_offset: u64,
-    _section: Option<&str>,
     min_length: usize,
 ) -> Vec<ExtractedString> {
     use crate::types::StringMethod;
@@ -774,7 +773,6 @@ pub(crate) fn extract_varint_prefixed_strings(
 pub(crate) fn extract_null_separated_strings(
     data: &[u8],
     section_data_offset: u64,
-    _section: Option<&str>,
     min_length: usize,
 ) -> Vec<ExtractedString> {
     use crate::types::StringMethod;
@@ -904,7 +902,7 @@ mod tests {
             buf.push(word.len() as u8);
             buf.extend_from_slice(word.as_bytes());
         }
-        let out = extract_varint_prefixed_strings(&buf, 0, None, 4);
+        let out = extract_varint_prefixed_strings(&buf, 0, 4);
         let values: Vec<&str> = out.iter().map(|s| s.value.as_str()).collect();
         assert!(values.contains(&"alpha"));
         assert!(values.contains(&"epsilonn"));
@@ -917,7 +915,7 @@ mod tests {
         let mut buf = vec![0x05, b'h', b'e', b'l', b'l', b'o'];
         buf.extend_from_slice(&[0xFF, 0xFE, 0x00, 0xC0]);
         buf.extend_from_slice(&[0x05, b'w', b'o', b'r', b'l', b'd']);
-        let out = extract_varint_prefixed_strings(&buf, 0, None, 4);
+        let out = extract_varint_prefixed_strings(&buf, 0, 4);
         assert!(out.is_empty(), "isolated matches must not surface");
     }
 
@@ -929,7 +927,7 @@ mod tests {
             buf.extend_from_slice(w.as_bytes());
             buf.push(0);
         }
-        let out = extract_null_separated_strings(&buf, 0, None, 4);
+        let out = extract_null_separated_strings(&buf, 0, 4);
         let values: Vec<&str> = out.iter().map(|s| s.value.as_str()).collect();
         assert!(values.contains(&"debugCall32"));
         assert!(values.contains(&"debugCall128"));
@@ -953,7 +951,7 @@ mod tests {
             buf.extend_from_slice(n.as_bytes());
             buf.push(0);
         }
-        let out = extract_null_separated_strings(&buf, 0, None, 4);
+        let out = extract_null_separated_strings(&buf, 0, 4);
         let values: Vec<&str> = out.iter().map(|s| s.value.as_str()).collect();
         for n in names {
             assert!(values.contains(&n), "missing {n}");
@@ -965,7 +963,7 @@ mod tests {
         // A long unsegmented printable run should produce nothing.
         let mut buf = b"longstringwithoutanydelimitersjustabunchoflettersinarow".to_vec();
         buf.push(0);
-        let out = extract_null_separated_strings(&buf, 0, None, 4);
+        let out = extract_null_separated_strings(&buf, 0, 4);
         assert!(out.is_empty(), "a single long entry shouldn't qualify");
     }
 

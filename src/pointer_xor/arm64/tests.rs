@@ -507,8 +507,6 @@ fn local_saved_seed_requires_adjacent_constant_pair_and_preserved_register() {
 fn all_298_complete_id_loops_match_independent_cipher_reads_and_lengths() {
     let code = code();
     let rows = rows();
-    let mut copied = 0;
-    let mut frame = 0;
     for i in (1..596).step_by(2) {
         let row = &rows[i];
         let found = loops::read(&code, num(row, "call") + 4).unwrap_or_else(|| panic!("loop {i}"));
@@ -519,19 +517,7 @@ fn all_298_complete_id_loops_match_independent_cipher_reads_and_lengths() {
                 .iter()
                 .any(|r| num(r, "address") == found.cipher && r["length"] == 8)
         );
-        match found.link {
-            loops::OutputLink::Copied {
-                write_register,
-                copy_register,
-                delta,
-            } => {
-                copied += 1;
-                assert_eq!((write_register, copy_register, delta), (19, 20, 32));
-            }
-            loops::OutputLink::Frame => frame += 1,
-        }
     }
-    assert_eq!((copied, frame), (296, 2));
 }
 
 fn constant_bytes(addr: u64, len: usize) -> Vec<u8> {

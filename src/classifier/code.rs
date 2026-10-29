@@ -494,15 +494,7 @@ pub(super) fn is_applescript(s: &str) -> bool {
 pub(super) fn is_shell_command(s: &str) -> bool {
     let len = s.len();
 
-    // Must have some length
     if len < 4 {
-        // Shell commands are predominantly ASCII. Long strings with many non-ASCII chars
-        // (like localized UI text) are almost never shell commands.
-        let ascii_count = s.bytes().filter(u8::is_ascii).count();
-        if len > 100 && ascii_count * 100 / len < 95 {
-            return false;
-        }
-
         return false;
     }
 

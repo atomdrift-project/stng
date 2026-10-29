@@ -68,8 +68,6 @@ filefacts	testdata/macho/go_reflection_tags_minirat_arm64.macho	13194	8bd207f86c
 filefacts	testdata/macho/go_reflection_tags_minirat_arm64.md	7	87764cfc121b1f64	RawScan=7
 filefacts	testdata/macho/rust_arm64_framed_register_writes.bin	0	e3b0c44298fc1c14	
 filefacts	testdata/macho/rust_arm64_framed_register_writes.md	17	8aaa5d595bce4e1f	RawScan=17
-filefacts	testdata/macho/rust_arm64_helper_writes.bin	0	e3b0c44298fc1c14	
-filefacts	testdata/macho/rust_arm64_helper_writes.md	16	4b09e2521f5e3512	RawScan=16
 filefacts	testdata/macho/rust_arm64_register_writes.bin	0	e3b0c44298fc1c14	
 filefacts	testdata/macho/rust_arm64_register_writes.md	20	67358005967771d1	RawScan=20
 filefacts	testdata/macho/rust_arm64_short_tail_expected.json	371	5a218a45df4453f4	RawScan=371
@@ -194,8 +192,6 @@ default	testdata/macho/go_reflection_tags_minirat_arm64.macho	17762	493786e8dd85
 default	testdata/macho/go_reflection_tags_minirat_arm64.md	8	8dc4c66d0df545b7	RawScan=8
 default	testdata/macho/rust_arm64_framed_register_writes.bin	0	e3b0c44298fc1c14	
 default	testdata/macho/rust_arm64_framed_register_writes.md	18	7f54dacb16dab50c	RawScan=18
-default	testdata/macho/rust_arm64_helper_writes.bin	0	e3b0c44298fc1c14	
-default	testdata/macho/rust_arm64_helper_writes.md	17	21e8fce452a879b8	RawScan=17
 default	testdata/macho/rust_arm64_register_writes.bin	114	f1291f05bacb3aa6	RawScan=114
 default	testdata/macho/rust_arm64_register_writes.md	20	67358005967771d1	RawScan=20
 default	testdata/macho/rust_arm64_short_tail_expected.json	1602	39b14408049e0b49	RawScan=1602

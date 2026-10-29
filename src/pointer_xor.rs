@@ -503,7 +503,7 @@ fn fold_helper(code: &Region<'_>, addr: u64, base: u64, seed: u64) -> Option<u64
         } else {
             return None;
         };
-        if i.op0_kind() != OpKind::Register || index == 4 || !matches!(width, 32 | 64) {
+        if i.op0_kind() != OpKind::Register || index == 4 {
             return None;
         }
         let value = match i.mnemonic() {

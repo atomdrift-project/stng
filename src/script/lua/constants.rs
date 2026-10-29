@@ -136,14 +136,11 @@ fn invalidate_native(env: &mut Env<'_>, library: &str) {
         }
     }
 }
-fn table_id<'t>(t: &Rc<BTreeMap<Key, Value<'t>>>) -> usize {
-    Rc::as_ptr(t) as usize
-}
 fn table_ids<'t>(root: &Rc<BTreeMap<Key, Value<'t>>>) -> BTreeSet<usize> {
     let mut ids = BTreeSet::new();
     let mut pending = vec![root];
     while let Some(t) = pending.pop() {
-        if !ids.insert(table_id(t)) {
+        if !ids.insert(Rc::as_ptr(t) as usize) {
             continue;
         }
         if ids.len() > MAX_TABLE {

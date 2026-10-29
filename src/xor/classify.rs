@@ -519,10 +519,6 @@ pub(crate) fn extract_multikey_xor_strings(
         }
         let key_bytes = &data[start..end];
 
-        if key_bytes.is_empty() {
-            continue;
-        }
-
         // Blind Decode Fallback: For HIGH confidence keys, try all shifts of the key
         // to find short or split strings (which won't match Aho-Corasick patterns).
         for shift in 0..key_bytes.len() {
@@ -589,7 +585,6 @@ pub(crate) fn extract_multikey_xor_strings(
 
         // Single pass through data for all pattern alignments
         for mat in ac.find_overlapping_iter(data) {
-            let mat: aho_corasick::Match = mat;
             let pattern_idx = mat.pattern().as_usize();
             // Original pattern index is pattern_idx / key_bytes.len()
             // Shift used was pattern_idx % key_bytes.len()

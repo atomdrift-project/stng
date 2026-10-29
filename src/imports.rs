@@ -167,14 +167,6 @@ pub(crate) fn extract_elf_imports(
             continue;
         };
 
-        // Look up the actual section name from the section index
-        let _section = if sym.st_shndx > 0 && sym.st_shndx < elf.section_headers.len() {
-            elf.shdr_strtab
-                .get_at(elf.section_headers[sym.st_shndx].sh_name)
-                .map(std::string::ToString::to_string)
-        } else {
-            None
-        };
         strings.push(ExtractedString {
             value: name.to_string(),
             data_offset: sym.st_value,

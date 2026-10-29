@@ -528,7 +528,6 @@ fn append_strings(output: &Output, min_length: usize, out: &mut Vec<ExtractedStr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
     fn put32(b: &mut [u8], at: usize, n: u32) {
         b[at..at + 4].copy_from_slice(&n.to_le_bytes());
@@ -747,108 +746,5 @@ mod tests {
             .is_none()
         );
         assert_eq!(steps, 0);
-    }
-    #[test]
-    #[ignore = "manual release benchmark, no CI timing threshold"]
-    fn benchmark_prefilter_and_recovery() {
-        let b = fixture(b"arbitrary-key-1234567", false, 0x400000, 0x800);
-        if let Ok(path) = std::env::var("STNG_XOR_FIXTURE_OUT") {
-            std::fs::write(path, &b).unwrap();
-        }
-        let pe = PE::parse(&b).unwrap();
-        let start = Instant::now();
-        for _ in 0..1000 {
-            std::hint::black_box(extract(&pe, &b, 4));
-        }
-        eprintln!("decoder: {:?}/file", start.elapsed() / 1000);
-        let mut clean = b.clone();
-        clean[0x200..].fill(0x90);
-        let pe = PE::parse(&clean).unwrap();
-        let start = Instant::now();
-        for _ in 0..100000 {
-            std::hint::black_box(extract(&pe, &clean, 4));
-        }
-        eprintln!("no candidate (12 KiB): {:?}/file", start.elapsed() / 100000);
-        // Large code section with realistic call-byte density, but no setup.
-        clean.resize(1024 * 1024 + 0x200, 0x90);
-        put32(&mut clean, 0x188, 1024 * 1024);
-        for at in (0x200..clean.len()).step_by(32) {
-            clean[at] = 0xe8;
-        }
-        let pe = PE::parse(&clean).unwrap();
-        let start = Instant::now();
-        for _ in 0..1000 {
-            std::hint::black_box(extract(&pe, &clean, 4));
-        }
-        eprintln!(
-            "no candidate (1 MiB, dense CALLs): {:?}/file",
-            start.elapsed() / 1000
-        );
-        for name in [
-            "rtc.dll",
-            "hello_windows.exe",
-            "does-nothing-windows-amd64.exe",
-        ] {
-            let bytes = crate::test_fixture(&format!("testdata/pe/{name}"));
-            let Ok(pe) = PE::parse(bytes) else {
-                continue;
-            };
-            if pe.header.coff_header.machine != 0x14c || pe.is_64 {
-                // `extract` returns before touching these, so timing them would
-                // report the machine check rather than the scan.
-                eprintln!("benign {name}: skipped, not an x86 PE");
-                continue;
-            }
-            let start = Instant::now();
-            for _ in 0..1000 {
-                assert!(
-                    extract(&pe, bytes, 4).is_empty(),
-                    "unexpected decode in {name}"
-                );
-            }
-            eprintln!(
-                "benign {name} ({} bytes): {:?}/file",
-                bytes.len(),
-                start.elapsed() / 1000
-            );
-        }
-        let mut bad = b.clone();
-        bad[0x300..0x302].copy_from_slice(&[0xeb, 0xfe]);
-        let pe = PE::parse(&bad).unwrap();
-        let start = Instant::now();
-        for _ in 0..100 {
-            assert!(extract(&pe, &bad, 4).is_empty());
-        }
-        eprintln!(
-            "budget-exhausting decoder: {:?}/file",
-            start.elapsed() / 100
-        );
-        if let Ok(path) = std::env::var("STNG_XOR_SAMPLE") {
-            let b = std::fs::read(path).unwrap();
-            let pe = PE::parse(&b).unwrap();
-            let start = Instant::now();
-            for _ in 0..1000 {
-                std::hint::black_box(extract(&pe, &b, 4));
-            }
-            eprintln!(
-                "analyst specimen decoder: {:?}/file",
-                start.elapsed() / 1000
-            );
-        }
-    }
-    #[test]
-    #[ignore = "local analyst specimen; not required by CI"]
-    fn analyst_sample() {
-        let path = std::env::var("STNG_XOR_SAMPLE").expect("set STNG_XOR_SAMPLE");
-        let b = std::fs::read(path).unwrap();
-        let now = Instant::now();
-        let found = strings(&b);
-        eprintln!("sample recovery including PE parse: {:?}", now.elapsed());
-        for s in &found {
-            eprintln!("{} @ {:#x}", s.value, s.data_offset);
-        }
-        assert!(found.iter().any(|s| s.value == "InternetReadFile"));
-        assert!(found.iter().any(|s| s.value == "ShellExecuteW"));
-        assert!(found.iter().any(|s| s.value == "packaging-labelling.com"));
     }
 }

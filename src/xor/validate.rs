@@ -635,7 +635,7 @@ pub(crate) fn is_valid_ip(s: &str) -> bool {
     }
 
     // Reject x.0.0.0 patterns
-    if octets.len() == 4 && octets[1] == 0 && octets[2] == 0 && octets[3] == 0 {
+    if octets[1] == 0 && octets[2] == 0 && octets[3] == 0 {
         return false;
     }
 
@@ -644,12 +644,8 @@ pub(crate) fn is_valid_ip(s: &str) -> bool {
         return false;
     }
 
-    // Reject if first octet is 0 (0.x.x.x is not valid for hosts)
-    if octets[0] == 0 {
-        return false;
-    }
-
-    // Reject if first octet < 10 (very low octets are usually XOR artifacts, not real C2)
+    // Reject if first octet < 10: 0.x.x.x is not a host address, and other
+    // very low octets are usually XOR artifacts, not real C2
     if octets[0] < 10 {
         return false;
     }
@@ -659,8 +655,8 @@ pub(crate) fn is_valid_ip(s: &str) -> bool {
         return false;
     }
 
-    // Reject if .0 appears in first or last octet (only allow in middle two)
-    if octets[0] == 0 || octets[3] == 0 {
+    // Reject a trailing .0 (a network address)
+    if octets[3] == 0 {
         return false;
     }
 

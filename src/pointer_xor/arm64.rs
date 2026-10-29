@@ -2,9 +2,6 @@
 //! The caller must first validate the literal setup and complete decoding loop.
 #![allow(clippy::cast_possible_truncation)]
 use super::Region;
-use crate::arm64_effects as effects;
-mod functions;
-mod helpers;
 mod immediate;
 mod loops;
 mod short_tail;

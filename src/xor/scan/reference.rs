@@ -17,7 +17,6 @@ pub(super) fn pattern_scan(
     min_length: usize,
     apply_filters: bool,
     excluded_ranges: &[(usize, usize)],
-    _enable_early_termination: bool,
 ) -> Vec<ExtractedString> {
     let key_preview = key_preview(key);
 
@@ -839,7 +838,7 @@ mod differential {
                     ));
                 }
                 assert_eq!(resumed, candidates, "seed {seed}, resumed");
-                let want = super::pattern_scan(&data, &key, min_length, filters, &excluded, false);
+                let want = super::pattern_scan(&data, &key, min_length, filters, &excluded);
                 let got = extract_custom_xor_strings_pattern_based_simple(
                     &data, &key, min_length, filters, &excluded, false,
                 );

@@ -167,7 +167,6 @@ fn read_array(d: &mut Decoder<'_>, min_length: usize) -> Option<Array> {
         if store.mnemonic() != Mnemonic::Mov
             || store.op0_kind() != OpKind::Memory
             || !memory(&store, base, bytes.len() as u64)
-            || !matches!(width, 1 | 2 | 4 | 8)
             || bytes.len() + width > len
         {
             return None;
