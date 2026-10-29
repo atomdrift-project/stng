@@ -2,6 +2,8 @@
 //! specification: each re-decodes from every offset, which is easy to read and
 //! check but quadratic. The `differential` tests assert the fast scans match.
 
+use super::repeating::finish_xor_candidate;
+use super::rolling::ROLLING_XOR_PATTERNS;
 use super::*;
 
 /// Decode `data` under `key` from every offset, with no overlap skipping:
@@ -453,10 +455,9 @@ pub(super) fn single_byte_anchors(data: &[u8], wide: bool) -> Vec<(usize, u8, bo
 
 #[cfg(test)]
 mod differential {
-    use super::super::{
-        Alignment, ROLLING_XOR_PATTERNS, extract_custom_xor_strings_pattern_based_simple,
-        extract_rolling_xor_with_known_plaintext, scan_alignments,
-    };
+    use super::super::extract_custom_xor_strings_pattern_based_simple;
+    use super::super::repeating::{Alignment, scan_alignments};
+    use super::super::rolling::{ROLLING_XOR_PATTERNS, extract_rolling_xor_with_known_plaintext};
     use rayon::prelude::*;
 
     /// xorshift64*: deterministic cases, so a failure reproduces by seed.

@@ -1,5 +1,6 @@
 //! Bounded def/use checks for a constant pointer copied into a call argument.
-use super::{decode_arm_mov_immediate, decode_rodata_string};
+use super::arm64::decode_arm_mov_immediate;
+use super::decode_rodata_string;
 use crate::arm64::walk::{self, Path};
 use crate::arm64::{effects, frame};
 const MAX_CODE: usize = 8 * 1024 * 1024;

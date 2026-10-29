@@ -1,8 +1,11 @@
 //! Base64 → zlib must stay binary until inflation has completed.
+use super::base64_text::{decode_base64_bytes, decode_base64_string, decode_base64_strings};
+use super::embedded::extract_embedded_base64;
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use flate2::{Compression, write::ZlibEncoder};
 use std::io::Write;
+use std::sync::atomic::AtomicUsize;
 
 fn compress(bytes: &[u8], level: u32) -> Vec<u8> {
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(level));
