@@ -6,8 +6,8 @@ use std::sync::LazyLock;
 static RECIPE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
  r#"(?ix-u)\A\s*(?:Dim\s+[\w,\s]+:\s*)?"#,
- r#"(\w+)\s*=\s*Array\(([^)]+)\)\s*:\s*"#,
- r#"(\w+)\s*=\s*Array\(([^)]+)\)\s*:\s*"#,
+ r#"(\w+)\s*=\s*Array\(([a-z0-9&,+\s-]+)\)\s*:\s*"#,
+ r#"(\w+)\s*=\s*Array\(([a-z0-9&,+\s-]+)\)\s*:\s*"#,
  r#"(\w+)\s*=\s*""\s*:\s*For\s+(\w+)\s*=\s*0\s+To\s+UBound\((\w+)\)\s*:\s*"#,
  r#"(\w+)\s*=\s*(\w+)\s*&\s*ChrW?\(\s*(\w+)\((\w+)\)\s*([+-])\s*(\w+)\((\w+)\)\s*\)\s*:\s*Next\s*:\s*"#,
  r#"(\w+)\s*=\s*((?:"[A-Za-z]+"\s*&\s*){0,8}"[A-Za-z]+")\s*:\s*"#,
