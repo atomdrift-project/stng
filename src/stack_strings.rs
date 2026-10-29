@@ -434,13 +434,13 @@ impl<'a> StackStringExtractor<'a> {
         results
     }
 
-    fn merge_adjacent_fragments(&self, mut strings: Vec<ExtractedString>) -> Vec<ExtractedString> {
-        if strings.is_empty() {
-            return strings;
-        }
-
+    fn merge_adjacent_fragments(&self, strings: Vec<ExtractedString>) -> Vec<ExtractedString> {
         let mut merged = Vec::new();
-        let mut current_group = vec![strings.remove(0)];
+        let mut strings = strings.into_iter();
+        let Some(first) = strings.next() else {
+            return Vec::new();
+        };
+        let mut current_group = vec![first];
 
         for next_str in strings {
             if let Some(last) = current_group.last() {

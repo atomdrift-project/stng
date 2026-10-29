@@ -282,7 +282,7 @@ pub(crate) fn scan_binary_ips(
                 if s.data_offset >= section_start && s.data_offset < section_end {
                     let name = crate::binary::pe_section_name(&section.name);
                     return matches!(
-                        name.as_str(),
+                        &*name,
                         ".data" | ".rdata" | ".bss" | ".idata" | ".edata" | ".rsrc"
                     );
                 }

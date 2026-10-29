@@ -356,7 +356,7 @@ impl RustStringExtractor {
         let scan_sections = crate::extraction::uncovered_pair_ranges(
             pe.sections.iter().filter_map(|sec| {
                 let name = crate::binary::pe_section_name(&sec.name);
-                if !candidate_names.contains(&name.as_str()) {
+                if !candidate_names.contains(&&*name) {
                     return None;
                 }
                 let bytes = crate::binary::file_range_clamped(
@@ -389,7 +389,7 @@ impl RustStringExtractor {
         // result lines up with the raw scanner's reporting convention.
         let rdata_file_start_u64 = rdata_file_start as u64;
         for s in &mut structured {
-            s.data_offset = rdata_file_start_u64 + (s.data_offset - rdata_va);
+            s.data_offset = rdata_file_start_u64.wrapping_add(s.data_offset.wrapping_sub(rdata_va));
         }
 
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);

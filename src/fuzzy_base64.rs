@@ -353,10 +353,10 @@ fn is_meaningful_decoded(s: &str) -> bool {
 
     // Look for common indicators of meaningful content
     let has_spaces = s.contains(' ');
-    let has_common_words = s.to_lowercase().contains("function")
-        || s.to_lowercase().contains("http")
-        || s.to_lowercase().contains("powershell")
-        || s.to_lowercase().contains("script")
+    let lower = s.to_lowercase();
+    let has_common_words = ["function", "http", "powershell", "script"]
+        .iter()
+        .any(|word| lower.contains(word))
         || s.contains('$')
         || s.contains("://");
 

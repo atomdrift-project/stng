@@ -15,6 +15,15 @@ pub(crate) fn u32_le(data: &[u8], at: usize) -> Option<u32> {
     ))
 }
 
+/// Whether `needle` occurs in `haystack`, ignoring ASCII case. An empty
+/// needle always does.
+pub(crate) fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
+    needle.is_empty()
+        || haystack
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
+}
+
 /// A hex digit's value.
 pub(crate) fn hex_digit(c: u8) -> Option<u8> {
     char::from(c)

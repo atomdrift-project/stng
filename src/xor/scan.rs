@@ -187,14 +187,10 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
         return Vec::new();
     }
     let mut kept = Disjoint::new(key.len(), min_length);
+    let excluded = Excluded::new(excluded_ranges);
     if let [key] = key {
         // Maximal printable runs, disjoint by construction.
-        kept.extend(single_byte_xor_strings(
-            data,
-            *key,
-            min_length,
-            excluded_ranges,
-        ));
+        kept.extend(single_byte_xor_strings(data, *key, min_length, &excluded));
     } else {
         // Every offset is a candidate, so they overlap: prefer high-value
         // IOCs, then the longest string. Network IOCs (URL, IP) beat longer
@@ -204,7 +200,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
             key,
             min_length,
             apply_filters,
-            excluded_ranges,
+            &excluded,
             enable_early_termination,
         );
         candidates.sort_by_key(|s| {
@@ -227,22 +223,14 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
 /// Bytes on each side of a validated key that its region decodes.
 const REGION_RADIUS: usize = 4096;
 
-/// Byte ranges a scan must not inspect again: caller exclusions, then each
-/// region already decoded. A list checked in full for every candidate was
-/// quadratic: a file of repeated encoded anchors adds a region every 4 KiB,
-/// and a binary can declare tens of thousands of code sections.
-struct Covered {
-    /// Exclusions, sorted and merged so one binary search answers.
-    excluded: Vec<(usize, usize)>,
-    /// Decoded regions, `start -> end`. Each spans at most
-    /// `2 * REGION_RADIUS`, so only those starting that close before an
-    /// offset can contain it.
-    regions: BTreeMap<usize, usize>,
-}
+/// Caller-excluded byte ranges, sorted and merged so one binary search
+/// answers. A list checked in full for every candidate was quadratic: a
+/// binary can declare tens of thousands of code sections.
+pub(super) struct Excluded(Vec<(usize, usize)>);
 
-impl Covered {
-    fn new(excluded: &[(usize, usize)]) -> Self {
-        let mut sorted: Vec<_> = excluded.iter().copied().filter(|&(s, e)| s < e).collect();
+impl Excluded {
+    pub(super) fn new(ranges: &[(usize, usize)]) -> Self {
+        let mut sorted: Vec<_> = ranges.iter().copied().filter(|&(s, e)| s < e).collect();
         sorted.sort_unstable();
         let mut merged: Vec<(usize, usize)> = Vec::with_capacity(sorted.len());
         for (start, end) in sorted {
@@ -251,15 +239,36 @@ impl Covered {
                 _ => merged.push((start, end)),
             }
         }
+        Self(merged)
+    }
+
+    fn contains(&self, offset: usize) -> bool {
+        let i = self.0.partition_point(|&(s, _)| s <= offset);
+        i > 0 && offset < self.0[i - 1].1
+    }
+}
+
+/// Byte ranges a scan must not inspect again: caller exclusions, then each
+/// region already decoded. A file of repeated encoded anchors adds a region
+/// every 4 KiB.
+struct Covered {
+    excluded: Excluded,
+    /// Decoded regions, `start -> end`. Each spans at most
+    /// `2 * REGION_RADIUS`, so only those starting that close before an
+    /// offset can contain it.
+    regions: BTreeMap<usize, usize>,
+}
+
+impl Covered {
+    fn new(excluded: &[(usize, usize)]) -> Self {
         Self {
-            excluded: merged,
+            excluded: Excluded::new(excluded),
             regions: BTreeMap::new(),
         }
     }
 
     fn contains(&self, offset: usize) -> bool {
-        let i = self.excluded.partition_point(|&(s, _)| s <= offset);
-        (i > 0 && offset < self.excluded[i - 1].1)
+        self.excluded.contains(offset)
             || self
                 .regions
                 .range(offset.saturating_sub(2 * REGION_RADIUS)..=offset)
@@ -369,7 +378,7 @@ fn single_byte_xor_strings(
     data: &[u8],
     key: u8,
     min_length: usize,
-    excluded_ranges: &[(usize, usize)],
+    excluded: &Excluded,
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();
     let mut seen: HashSet<(u64, String)> = HashSet::new();
@@ -435,11 +444,7 @@ fn single_byte_xor_strings(
             let is_object =
                 cur_start > 0 && data[cur_start - 1] == 0 && data.get(seg_end) == Some(&0);
             let may_be_short_path = is_object && len >= MIN_PATH_OBJECT_LEN;
-            if (len < min_length && !may_be_short_path)
-                || excluded_ranges
-                    .iter()
-                    .any(|&(start, stop)| cur_start >= start && cur_start < stop)
-            {
+            if (len < min_length && !may_be_short_path) || excluded.contains(cur_start) {
                 continue;
             }
 
@@ -734,21 +739,13 @@ fn extract_custom_xor_strings_pattern_based_simple(
     key: &[u8],
     min_length: usize,
     apply_filters: bool,
-    excluded_ranges: &[(usize, usize)],
+    excluded: &Excluded,
     enable_early_termination: bool,
 ) -> Vec<ExtractedString> {
     let mut alignments: Vec<Alignment> =
         (0..key.len().min(data.len())).map(Alignment::new).collect();
-    let mut scan = |limit: usize| {
-        scan_alignments(
-            &mut alignments,
-            data,
-            key,
-            min_length,
-            excluded_ranges,
-            limit,
-        )
-    };
+    let mut scan =
+        |limit: usize| scan_alignments(&mut alignments, data, key, min_length, excluded, limit);
     let key_preview = key_preview(key);
     let finish = |&(pos, len): &(usize, usize)| {
         let decoded = data[pos..pos + len]
@@ -788,14 +785,14 @@ fn scan_alignments(
     data: &[u8],
     key: &[u8],
     min_length: usize,
-    excluded_ranges: &[(usize, usize)],
+    excluded: &Excluded,
     limit: usize,
 ) -> Vec<(usize, usize)> {
     let job_len = crate::par::job_len(alignments.len(), limit);
     let mut candidates: Vec<(usize, usize)> = alignments
         .par_iter_mut()
         .with_min_len(job_len)
-        .flat_map_iter(|a| a.scan(data, key, min_length, excluded_ranges, limit))
+        .flat_map_iter(|a| a.scan(data, key, min_length, excluded, limit))
         .collect();
     candidates.sort_unstable();
     candidates
@@ -843,7 +840,7 @@ impl Alignment {
         data: &[u8],
         key: &[u8],
         min_length: usize,
-        excluded_ranges: &[(usize, usize)],
+        excluded: &Excluded,
         limit: usize,
     ) -> Vec<(usize, usize)> {
         let (k, phase) = (key.len(), self.phase);
@@ -866,11 +863,7 @@ impl Alignment {
             }
             let run_end = self.run_end;
             let end = run_end.min(pos + MAX_PATTERN_DECODE);
-            if end - pos < min_length
-                || excluded_ranges
-                    .iter()
-                    .any(|&(start, stop)| pos >= start && pos < stop)
-            {
+            if end - pos < min_length || excluded.contains(pos) {
                 continue;
             }
             // Inside null padding, which a printable key decodes to printable

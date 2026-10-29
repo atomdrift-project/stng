@@ -155,7 +155,12 @@ impl GoStringExtractor {
         // emitting giant concatenated runs, while pointer/length analysis can
         // miss constants that are assembled at runtime. Recover only bounded
         // high-signal substrings from the packed pool.
-        if rodata_data.len() <= MAX_PACKED_RODATA_HEURISTIC_SIZE {
+        if rodata_data.len() > MAX_PACKED_RODATA_HEURISTIC_SIZE {
+            tracing::debug!(
+                size = rodata_data.len(),
+                "Go packed-literal scan skipped: rodata too large"
+            );
+        } else {
             let packed = extract_packed_rodata_literals(rodata_data, rodata_addr, self.min_length);
             // Borrow existing values (no per-string clone). Collect the genuinely new
             // literals first so the borrow on `strings` is released before we extend it.
@@ -386,7 +391,12 @@ impl GoStringExtractor {
         // Recover bounded high-signal literals (URLs, find-command fragments)
         // from the packed `.rdata` pool, which the generic raw scanner skips to
         // avoid emitting one giant concatenated run.
-        if rodata_data.len() <= MAX_PACKED_RODATA_HEURISTIC_SIZE {
+        if rodata_data.len() > MAX_PACKED_RODATA_HEURISTIC_SIZE {
+            tracing::debug!(
+                size = rodata_data.len(),
+                "Go packed-literal scan skipped: rodata too large"
+            );
+        } else {
             let packed = extract_packed_rodata_literals(rodata_data, rodata_va, self.min_length);
             let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
             let fresh: Vec<ExtractedString> = packed

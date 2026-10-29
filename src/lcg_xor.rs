@@ -169,15 +169,21 @@ pub fn extract_macho_lcg_xor(
             if multiplier == modulus {
                 continue;
             }
+            // The mask XORs every byte, so the keystream is shared by all 256.
+            let unmasked = decode_preview(
+                &encoded[..preview_len],
+                u64::from(seed_word),
+                multiplier,
+                modulus,
+                0,
+            );
+            let mut preview = [0u8; PREVIEW_SIZE];
+            let preview = &mut preview[..preview_len];
             for mask in 0..=u8::MAX {
-                let preview = decode_preview(
-                    &encoded[..preview_len],
-                    u64::from(seed_word),
-                    multiplier,
-                    modulus,
-                    mask,
-                );
-                if !looks_like_script_or_command(&preview) {
+                for (out, &byte) in preview.iter_mut().zip(&unmasked) {
+                    *out = byte ^ mask;
+                }
+                if !looks_like_script_or_command(preview) {
                     continue;
                 }
                 let Some(offset) = slice_base
@@ -404,9 +410,9 @@ pub fn extract_macho_xor_macho_strings(
 ) -> Vec<ExtractedString> {
     const MAX_SECTION_SIZE: usize = 32 * 1024 * 1024;
     const MAX_PAYLOADS: usize = 8;
-    /// Bytes one section may spend decoding candidates in full. A header
-    /// planted every 28 bytes, each claiming the rest of the section, made
-    /// the scan quadratic: a few megabytes cost hours.
+    /// Bytes the file may spend decoding candidates in full, over all its
+    /// sections. A header planted every 28 bytes, each claiming the rest of
+    /// the section, made the scan quadratic: a few megabytes cost hours.
     const MAX_DECODE_WORK: usize = 8 * MAX_SECTION_SIZE;
     const FAT_MAGICS: [[u8; 4]; 4] = [
         [0xca, 0xfe, 0xba, 0xbe], // FAT_MAGIC
@@ -417,6 +423,7 @@ pub fn extract_macho_xor_macho_strings(
 
     let mut out = Vec::new();
     let mut payload_count = 0;
+    let mut work = 0usize;
     for segment in &macho.segments {
         let Ok(sections) = segment.sections() else {
             continue;
@@ -443,7 +450,6 @@ pub fn extract_macho_xor_macho_strings(
             };
 
             let mut cursor = 0usize;
-            let mut work = 0usize;
             while cursor
                 .checked_add(8)
                 .is_some_and(|n| n <= encoded_section.len())
@@ -495,6 +501,10 @@ pub fn extract_macho_xor_macho_strings(
                 } else {
                     cursor += 1;
                 }
+            }
+            if work > MAX_DECODE_WORK {
+                tracing::debug!(MAX_DECODE_WORK, "fat Mach-O XOR: decode budget exhausted");
+                return out;
             }
             if payload_count >= MAX_PAYLOADS {
                 return out;

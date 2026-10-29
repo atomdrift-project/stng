@@ -4,7 +4,7 @@
 use super::DeobfuscationResult;
 use super::decode_chain::{MAX_DECODED_SIZE, spend_expansion};
 use regex::Regex;
-use std::{collections::HashMap, sync::LazyLock};
+use std::{cell::LazyCell, collections::HashMap, sync::LazyLock};
 
 const SHUFFLE: &str = "b var t=2319581;var l=b.length;var d=[];for(var k=0;k<l;k++){d[k]=b.charAt(k)};for(var k=0;k<l;k++){var g=t*(k+143)+(t%34562);var j=t*(k+599)+(t%19024);var o=g%l;var h=j%l;var q=d[o];d[o]=d[h];d[h]=q;t=(g+j)%3591111;};return d.join('')";
 const TABLE: &str = "h,x var k=h.length;var c=[];for(var u=0;u<k;u++){c[u]=h.charAt(u)};for(var u=0;u<k;u++){var f=x*(u+106)+(x%49301);var n=x*(u+87)+(x%15685);var m=f%k;var a=n%k;var y=c[m];c[m]=c[a];c[a]=y;x=(f+n)%5618418};var d=String.fromCharCode(127);var s='';var v='%';var g='#1';var o='%';var q='#0';var j='#';return c.join(s).split(v).join(d).split(g).join(o).split(q).join(j).split(d)";
@@ -22,6 +22,29 @@ static FUNCTIONS: LazyLock<Regex> = LazyLock::new(|| {
 #[allow(clippy::expect_used)]
 static STRINGS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"#).expect("js strings"));
+/// `name(arg)` where the argument is one string literal or identifier.
+#[allow(clippy::expect_used)]
+static CALLS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"([A-Za-z_$][\w$]*)\s*\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[A-Za-z_$][\w$]*)\s*\)"#,
+    )
+    .expect("codec calls")
+});
+/// `name = "literal"`.
+#[allow(clippy::expect_used)]
+static ASSIGNMENTS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\b([A-Za-z_$][\w$]*)\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')"#)
+        .expect("string assignments")
+});
+/// The `, seed);` that closes a string-table codec call.
+#[allow(clippy::expect_used)]
+static TABLE_CALL_END: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*,\s*\d+\s*\)\s*;?").expect("table call end"));
+static SHUFFLE_FINGERPRINT: LazyLock<Option<(String, Vec<u64>)>> =
+    LazyLock::new(|| fingerprint(SHUFFLE));
+static TABLE_FINGERPRINT: LazyLock<Option<(String, Vec<u64>)>> =
+    LazyLock::new(|| fingerprint(TABLE));
+static DICT_FINGERPRINT: LazyLock<Option<(String, Vec<u64>)>> = LazyLock::new(|| fingerprint(DICT));
 
 // Preserve member names, keywords, literal values and the identity relationships
 // between all local variables. Ignore only whitespace, optional semicolons and
@@ -166,10 +189,10 @@ fn permute(s: &str, seed: u64, c: &[u64]) -> Option<String> {
 }
 fn dictionary(codec: &str, blob: &str) -> Option<String> {
     let (fp, n) = fingerprint(codec)?;
-    if fp != fingerprint(DICT)?.0 || n.len() != 49 {
+    let (dict_fp, expected) = DICT_FINGERPRINT.as_ref()?;
+    if fp != *dict_fp || n.len() != 49 {
         return None;
     }
-    let expected = fingerprint(DICT)?.1;
     for i in 23..n.len() {
         if !(25..=27).contains(&i) && !(41..47).contains(&i) && n[i] != expected[i] {
             return None;
@@ -254,7 +277,7 @@ fn dictionary(codec: &str, blob: &str) -> Option<String> {
     Some(out.replace(".!", "."))
 }
 fn expand_table(source: &str) -> Option<String> {
-    let closing = Regex::new(r"^\s*,\s*\d+\s*\)\s*;?").ok()?;
+    let table_fp = &TABLE_FINGERPRINT.as_ref()?.0;
     for cap in FUNCTIONS.captures_iter(source).take(32) {
         if cap.get(1).is_some() {
             continue;
@@ -262,7 +285,7 @@ fn expand_table(source: &str) -> Option<String> {
         let start = cap.get(0)?.end();
         let end = body_end(source, start)?;
         let (fp, n) = fingerprint(&format!("{} {}", &cap[2], &source[start..end]))?;
-        if fp != fingerprint(TABLE)?.0 || n.len() != 8 || n[0] != 0 || n[1] != 0 || n[7] != 127 {
+        if fp != *table_fp || n.len() != 8 || n[0] != 0 || n[1] != 0 || n[7] != 127 {
             continue;
         }
         let tail = source.get(end + 1..)?;
@@ -299,7 +322,7 @@ fn expand_table(source: &str) -> Option<String> {
         ))
         .ok()?;
         let rest = &source[end + 1 + open + 1 + sm.end()..];
-        let Some(close) = closing.find(rest) else {
+        let Some(close) = TABLE_CALL_END.find(rest) else {
             continue;
         };
         let mut valid = true;
@@ -330,9 +353,35 @@ pub(super) fn extract(source: &str) -> Vec<DeobfuscationResult> {
         return Vec::new();
     }
     let mut out = Vec::new();
-    let Some((shuffle_fingerprint, _)) = fingerprint(SHUFFLE) else {
+    let (Some((shuffle_fingerprint, _)), Some((dict_fingerprint, _))) =
+        (SHUFFLE_FINGERPRINT.as_ref(), DICT_FINGERPRINT.as_ref())
+    else {
         return out;
     };
+    // Every `name(arg)` call, at most 64 per name, and the first string
+    // literal assigned to each name: one pass each over the source.
+    let calls = LazyCell::new(|| {
+        let mut calls: HashMap<&str, Vec<&str>> = HashMap::new();
+        for cap in CALLS.captures_iter(source) {
+            let (Some(name), Some(arg)) = (cap.get(1), cap.get(2)) else {
+                continue;
+            };
+            let args = calls.entry(name.as_str()).or_default();
+            if args.len() < 64 {
+                args.push(arg.as_str());
+            }
+        }
+        calls
+    });
+    let literals = LazyCell::new(|| {
+        let mut literals: HashMap<&str, &str> = HashMap::new();
+        for cap in ASSIGNMENTS.captures_iter(source) {
+            if let (Some(name), Some(value)) = (cap.get(1), cap.get(2)) {
+                literals.entry(name.as_str()).or_insert(value.as_str());
+            }
+        }
+        literals
+    });
     for cap in FUNCTIONS.captures_iter(source).take(64) {
         let Some(whole) = cap.get(0) else {
             continue;
@@ -345,29 +394,15 @@ pub(super) fn extract(source: &str) -> Vec<DeobfuscationResult> {
         let Some((fp, n)) = fingerprint(&format!("{} {}", &cap[2], &source[start..end])) else {
             continue;
         };
-        if fp != shuffle_fingerprint || n.len() != 8 || n[1] != 0 || n[2] != 0 {
+        if fp != *shuffle_fingerprint || n.len() != 8 || n[1] != 0 || n[2] != 0 {
             continue;
         }
-        let Some(calls) = Regex::new(&format!(
-            r#"{}\s*\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[A-Za-z_$][\w$]*)\s*\)"#,
-            regex::escape(name.as_str())
-        ))
-        .ok() else {
-            continue;
-        };
         let mut decoded = Vec::new();
-        for call in calls.captures_iter(source).take(64) {
-            let arg = &call[1];
+        for &arg in calls.get(name.as_str()).into_iter().flatten() {
             let value = if arg.starts_with(['\'', '"']) {
                 unquote(arg)
             } else {
-                let pat = format!(
-                    r#"\b{}\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')"#,
-                    regex::escape(arg)
-                );
-                Regex::new(&pat)
-                    .ok()
-                    .and_then(|r| r.captures(source).and_then(|c| unquote(&c[1])))
+                literals.get(arg).and_then(|literal| unquote(literal))
             };
             let Some(value) = value else { continue };
             if let Some(value) = permute(&value, n[0], &n[3..8]) {
@@ -375,7 +410,7 @@ pub(super) fn extract(source: &str) -> Vec<DeobfuscationResult> {
             }
         }
         for codec in &decoded {
-            if fingerprint(codec).map(|x| x.0) != fingerprint(DICT).map(|x| x.0) {
+            if fingerprint(codec).is_none_or(|(fp, _)| fp != *dict_fingerprint) {
                 continue;
             }
             for blob in &decoded {

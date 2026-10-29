@@ -13,12 +13,18 @@ use goblin::mach::constants::S_ATTR_SOME_INSTRUCTIONS;
 use goblin::mach::constants::cputype::CPU_TYPE_ARM64;
 use std::collections::{HashMap, HashSet};
 
-// The known stack-XOR family is compact (DynamicHub's ARM64 slice is well
-// under this). Above this size, only pay for the specialized disassembly when
-// the ordinary extraction pass says the image is opaque. This is an admission
-// heuristic, not a work budget: admitted samples are analyzed completely.
+// The known stack-XOR family is compact. Above this size, only pay for the
+// specialized disassembly when the ordinary extraction pass says the image is
+// opaque.
 const SMALL_INPUT: usize = 1024 * 1024;
 const FEW_STRINGS: usize = 64;
+
+/// Stack slots the decoders may visit per file, summed over calls. Each call
+/// scans every slot recorded so far, so a section of stores and calls costs
+/// quadratic time. The largest known sample (DynamicHub) uses ~2^24.
+const MAX_DECODE_WORK: usize = 1 << 28;
+/// Distinct stack slots tracked per section. Past this the map starts over.
+const MAX_SLOTS: usize = 1 << 16;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AdmissionProfile {
@@ -55,6 +61,7 @@ pub(crate) fn extract_arm64_stack_xor_strings(
     }
 
     let mut results = Vec::new();
+    let mut budget = MAX_DECODE_WORK;
 
     for seg in &macho.segments {
         let Ok(sections) = seg.sections() else {
@@ -80,6 +87,7 @@ pub(crate) fn extract_arm64_stack_xor_strings(
                 code,
                 arch_base_offset + u64::from(section.offset),
                 min_length,
+                &mut budget,
             ));
         }
     }
@@ -112,6 +120,7 @@ fn extract_section(
     code: &[u8],
     section_file_offset: u64,
     min_length: usize,
+    budget: &mut usize,
 ) -> Vec<ExtractedString> {
     let mut regs: HashMap<u8, RegValue> = HashMap::with_capacity(32);
     let mut memory: HashMap<i64, Vec<u8>> = HashMap::new();
@@ -119,7 +128,20 @@ fn extract_section(
     let mut decoded_arg_starts = HashSet::new();
     let mut decoded_blob_state: HashMap<i64, (usize, usize, u64)> = HashMap::new();
     let mut recovered_pads: Vec<Vec<u8>> = Vec::new();
+    let mut seen_pads: HashSet<Vec<u8>> = HashSet::new();
     let mut seen_values = HashSet::new();
+    // Charge a decoder call for the slots it will scan.
+    let spend = |budget: &mut usize, slots: usize| {
+        if *budget < slots {
+            if *budget > 0 {
+                tracing::debug!(MAX_DECODE_WORK, "arm64 stack XOR: decode budget exhausted");
+                *budget = 0;
+            }
+            return false;
+        }
+        *budget -= slots;
+        true
+    };
 
     for (idx, chunk) in code.as_chunks::<4>().0.iter().enumerate() {
         let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
@@ -143,6 +165,7 @@ fn extract_section(
         if word & 0xfc00_0000 == 0x9400_0000 {
             if let Some(RegValue::Ptr(arg0)) = regs.get(&0)
                 && decoded_arg_starts.insert(*arg0)
+                && spend(budget, memory.len())
             {
                 let decoded = decode_stack_arg_with_candidate_pads(
                     &memory,
@@ -151,7 +174,7 @@ fn extract_section(
                     min_length,
                 );
                 for pad in decoded.pads {
-                    if !recovered_pads.contains(&pad) {
+                    if seen_pads.insert(pad.clone()) {
                         recovered_pads.push(pad);
                     }
                 }
@@ -178,8 +201,13 @@ fn extract_section(
                 }
                 _ => None,
             } {
+                if memory.len() >= MAX_SLOTS && !memory.contains_key(&disp) {
+                    tracing::debug!(MAX_SLOTS, "arm64 stack XOR: slot map full, starting over");
+                    memory.clear();
+                    decoded_blob_state.clear();
+                }
                 memory.insert(disp, bytes);
-                if !recovered_pads.is_empty() {
+                if !recovered_pads.is_empty() && spend(budget, memory.len()) {
                     let decoded = decode_recent_stack_blobs_with_pads(
                         &memory,
                         disp,

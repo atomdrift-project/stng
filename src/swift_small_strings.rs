@@ -39,6 +39,13 @@ pub(crate) fn extract_macho(
                 Some("__text") if bytes.len() <= MAX_CODE => {
                     code = Some((u64::from(section.offset), bytes));
                 }
+                Some("__text") => {
+                    tracing::debug!(
+                        size = bytes.len(),
+                        MAX_CODE,
+                        "Swift small strings: __text too large"
+                    );
+                }
                 _ => {}
             }
         }

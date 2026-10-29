@@ -37,18 +37,39 @@ fn slice_decoders(
     slice_base: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    let mut strings = heap_xor::extract_macho(macho, slice_base, min_length);
-    strings.extend(pointer_xor::extract_macho(macho, slice_base, min_length));
-    strings.extend(swift_small_strings::extract_macho(
-        macho, slice_base, min_length,
-    ));
-    strings.extend(fmix_xor::extract_macho(macho, slice_base, min_length));
-    strings.extend(lcg_xor::extract_macho_lcg_xor(
-        macho, data, slice_base, min_length,
-    ));
-    strings.extend(lcg_xor::extract_macho_xor_macho_strings(
-        macho, data, slice_base, min_length,
-    ));
+    let passes = [
+        (
+            "heap XOR",
+            heap_xor::extract_macho(macho, slice_base, min_length),
+        ),
+        (
+            "pointer XOR",
+            pointer_xor::extract_macho(macho, slice_base, min_length),
+        ),
+        (
+            "Swift small strings",
+            swift_small_strings::extract_macho(macho, slice_base, min_length),
+        ),
+        (
+            "fmix XOR",
+            fmix_xor::extract_macho(macho, slice_base, min_length),
+        ),
+        (
+            "LCG XOR",
+            lcg_xor::extract_macho_lcg_xor(macho, data, slice_base, min_length),
+        ),
+        (
+            "XOR-encoded Mach-O",
+            lcg_xor::extract_macho_xor_macho_strings(macho, data, slice_base, min_length),
+        ),
+    ];
+    let mut strings = Vec::new();
+    for (pass, found) in passes {
+        if !found.is_empty() {
+            tracing::debug!(slice_base, found = found.len(), "{pass}: recovered strings");
+        }
+        strings.extend(found);
+    }
     strings
 }
 

@@ -814,11 +814,12 @@ mod differential {
                 let min_length = [4, 6, 10][rng.below(3)];
                 let filters = rng.below(2) == 0;
                 let excluded = excluded(&mut rng, data.len());
+                let skip = super::super::Excluded::new(&excluded);
                 let fresh = || -> Vec<Alignment> {
                     (0..key.len().min(data.len())).map(Alignment::new).collect()
                 };
                 let candidates =
-                    scan_alignments(&mut fresh(), &data, &key, min_length, &excluded, data.len());
+                    scan_alignments(&mut fresh(), &data, &key, min_length, &skip, data.len());
                 assert_eq!(
                     candidates,
                     super::pattern_candidates(&data, &key, min_length, &excluded),
@@ -833,18 +834,18 @@ mod differential {
                         &data,
                         &key,
                         min_length,
-                        &excluded,
+                        &skip,
                         limit,
                     ));
                 }
                 assert_eq!(resumed, candidates, "seed {seed}, resumed");
                 let want = super::pattern_scan(&data, &key, min_length, filters, &excluded);
                 let got = extract_custom_xor_strings_pattern_based_simple(
-                    &data, &key, min_length, filters, &excluded, false,
+                    &data, &key, min_length, filters, &skip, false,
                 );
                 assert_eq!(got, want, "seed {seed}");
                 let first = extract_custom_xor_strings_pattern_based_simple(
-                    &data, &key, min_length, filters, &excluded, true,
+                    &data, &key, min_length, filters, &skip, true,
                 );
                 assert_eq!(first, want[..want.len().min(50)], "seed {seed}, early");
                 want.len()

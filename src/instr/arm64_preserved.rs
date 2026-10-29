@@ -156,7 +156,15 @@ impl<'a> Context<'a> {
         if len < min as u64 || len == 0 || len > 1000 {
             return None;
         }
-        if self.attempts == MAX_CANDIDATES {
+        if self.attempts >= MAX_CANDIDATES {
+            // Counting past the limit marks it reported.
+            if self.attempts == MAX_CANDIDATES {
+                tracing::debug!(
+                    MAX_CANDIDATES,
+                    "ARM64 preserved-register strings: attempt limit"
+                );
+                self.attempts += 1;
+            }
             return None;
         }
         self.attempts += 1;

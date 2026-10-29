@@ -64,7 +64,8 @@ pub(crate) fn extract_us_heap_strings(
     };
     let metadata_size = metadata_size as usize;
     if metadata_size == 0 || metadata_size > 100 * 1024 * 1024 {
-        return results; // Invalid metadata size
+        tracing::debug!(metadata_size, ".NET metadata size out of range");
+        return results;
     }
     let Some(metadata_offset) = rva_to_offset(pe, metadata_rva) else {
         return results;

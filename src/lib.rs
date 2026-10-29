@@ -35,6 +35,11 @@
 //! }
 //! ```
 
+// Offsets and sizes from headers are u64, and the code converts them to usize
+// freely: on a 32-bit target that would truncate them silently.
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!("stng requires a 64-bit target");
+
 /// Explicit native-tool lifetime protection; extraction itself starts no processes.
 #[cfg(unix)]
 pub use stng_process as subprocess;

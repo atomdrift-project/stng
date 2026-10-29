@@ -180,16 +180,11 @@ fn signature_blobs(data: &[u8]) -> Vec<&[u8]> {
     }
 }
 
-/// Convert a PE section name ([u8; 8]) to a String, trimming NUL bytes.
-/// Avoids the allocation overhead of `String::from_utf8_lossy` for ASCII section names.
-#[inline]
-pub(crate) fn pe_section_name(name: &[u8; 8]) -> String {
+/// A PE section name, up to its first NUL. Borrowed unless the name is not
+/// UTF-8, which only a malformed binary has.
+pub(crate) fn pe_section_name(name: &[u8; 8]) -> std::borrow::Cow<'_, str> {
     let end = name.iter().position(|&b| b == 0).unwrap_or(8);
-    // PE section names are ASCII; use from_utf8 with lossy fallback for malformed binaries
-    match std::str::from_utf8(&name[..end]) {
-        Ok(s) => s.to_string(),
-        Err(_) => String::from_utf8_lossy(&name[..end]).into_owned(),
-    }
+    String::from_utf8_lossy(&name[..end])
 }
 
 /// Section metadata including name, size, type, and byte range.
@@ -230,9 +225,11 @@ impl SectionInfo {
 /// its imports, not the whole extraction. This is stng's only `catch_unwind`:
 /// confine it to third-party walks we cannot bound ourselves.
 pub(crate) fn contain<T, E>(walk: impl FnOnce() -> Result<T, E>) -> Option<T> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(walk))
-        .ok()?
-        .ok()
+    let Ok(result) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(walk)) else {
+        tracing::warn!("goblin panicked on a malformed table; skipping it");
+        return None;
+    };
+    result.ok()
 }
 
 /// The most imports a Mach-O's bind streams may declare before
@@ -250,6 +247,10 @@ pub(crate) fn macho_imports<'m>(
     slice: &[u8],
 ) -> Option<Vec<goblin::mach::imports::Import<'m>>> {
     if macho_bind_count(macho, slice) > MAX_MACHO_BIND_IMPORTS {
+        tracing::debug!(
+            MAX_MACHO_BIND_IMPORTS,
+            "Mach-O imports skipped: too many bindings"
+        );
         return None;
     }
     contain(|| macho.imports())
@@ -436,7 +437,7 @@ pub fn collect_pe_section_info(pe: &goblin::pe::PE<'_>) -> Vec<SectionInfo> {
     let mut sections = Vec::new();
 
     for sec in &pe.sections {
-        let name = pe_section_name(&sec.name);
+        let name = pe_section_name(&sec.name).into_owned();
 
         let is_executable = (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
         let is_writable = (sec.characteristics & IMAGE_SCN_MEM_WRITE) != 0;
@@ -533,7 +534,7 @@ pub(crate) fn pe_go_skip_ranges(
             // that the cmp-immediate dispatch code happens to embed.
             // Stack-constructed strings in `.text` are still recovered by
             // the stack-string extractor.
-            if !matches!(name.as_str(), ".rodata" | ".rdata" | ".gopclntab" | ".text") {
+            if !matches!(&*name, ".rodata" | ".rdata" | ".gopclntab" | ".text") {
                 return None;
             }
             let start = usize::try_from(sec.pointer_to_raw_data).ok()?;
@@ -670,7 +671,7 @@ pub(crate) fn elf_is_rust(elf: &goblin::elf::Elf<'_>, data: &[u8]) -> bool {
 pub(crate) fn pe_is_rust(pe: &goblin::pe::PE<'_>, data: &[u8]) -> bool {
     for section in &pe.sections {
         let name = pe_section_name(&section.name);
-        if !matches!(name.as_str(), ".rdata" | ".rodata") {
+        if !matches!(&*name, ".rdata" | ".rodata") {
             continue;
         }
         let Ok(start) = usize::try_from(section.pointer_to_raw_data) else {
@@ -707,7 +708,7 @@ pub(crate) fn pe_rust_skip_ranges(
         .iter()
         .filter_map(|sec| {
             let name = pe_section_name(&sec.name);
-            if !matches!(name.as_str(), ".rdata" | ".rodata") {
+            if !matches!(&*name, ".rdata" | ".rodata") {
                 return None;
             }
             let start = usize::try_from(sec.pointer_to_raw_data).ok()?;

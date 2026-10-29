@@ -33,7 +33,7 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     let segments: Vec<String> = pe
         .sections
         .iter()
-        .map(|sec| binary::pe_section_name(&sec.name))
+        .map(|sec| binary::pe_section_name(&sec.name).into_owned())
         .collect();
     let section_info = collect_pe_section_info(pe);
 
@@ -76,7 +76,7 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         let t_pcln = std::time::Instant::now();
         for sec in &pe.sections {
             let name = binary::pe_section_name(&sec.name);
-            if !matches!(name.as_str(), ".rdata" | ".rodata") {
+            if !matches!(&*name, ".rdata" | ".rodata") {
                 continue;
             }
             let start = u64::from(sec.pointer_to_raw_data);

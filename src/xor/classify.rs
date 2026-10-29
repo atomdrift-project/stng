@@ -395,11 +395,6 @@ pub(crate) fn auto_detect_xor_key(
             best_score = score;
             best_key = Some((key, candidate, offset));
         }
-
-        // Early termination: if we found a key with very high confidence
-        if score > 500 {
-            break;
-        }
     }
 
     // Require VERY high score to avoid false positives from random XOR keys
@@ -497,10 +492,12 @@ pub(crate) fn extract_multikey_xor_strings(
 ) -> Vec<ExtractedString> {
     // Blind decoding reads the whole file once per key rotation, up to 56
     // per key offset, and the disassembler reports as many offsets as the
-    // binary shows it loads: bound it as the other full-file XOR passes are,
-    // in input size and in strings kept.
+    // binary shows it loads. Bound it in input size, in bytes decoded (about
+    // 256 passes over the largest input) and in strings kept.
     const MAX_BLIND_RESULTS: usize = 5000;
-    let blind = data.len() <= MAX_XOR_SCAN_SIZE;
+    const MAX_BLIND_WORK: usize = 256 * MAX_XOR_SCAN_SIZE;
+    let mut blind = data.len() <= MAX_XOR_SCAN_SIZE;
+    let mut blind_work = 0usize;
     let mut decoded_full = Vec::new();
     let mut results = Vec::new();
     let mut seen: HashSet<(u64, String)> = HashSet::new();
@@ -525,6 +522,15 @@ pub(crate) fn extract_multikey_xor_strings(
         // to find short or split strings (which won't match Aho-Corasick patterns).
         for shift in 0..key_bytes.len() {
             if !blind || results.len() >= MAX_BLIND_RESULTS {
+                break;
+            }
+            blind_work += data.len();
+            if blind_work > MAX_BLIND_WORK {
+                tracing::debug!(
+                    MAX_BLIND_WORK,
+                    "multi-key XOR: blind decode budget exhausted"
+                );
+                blind = false;
                 break;
             }
             decoded_full.clear();

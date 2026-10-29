@@ -1077,7 +1077,7 @@ jobs:
   # Cross.toml, and supplies QEMU for the emulated smoke tests.
   cross:
     name: ${{ matrix.target }}
-    if: ${{ (inputs.wave == '' || inputs.wave == 'fast') && (inputs.target == '' || contains(' x86_64-unknown-linux-musl aarch64-unknown-linux-musl arm-unknown-linux-musleabihf armv7-unknown-linux-musleabihf loongarch64-unknown-linux-musl x86_64-unknown-illumos s390x-unknown-linux-gnu riscv64gc-unknown-linux-gnu powerpc64le-unknown-linux-gnu ', format(' {0} ', inputs.target))) }}
+    if: ${{ (inputs.wave == '' || inputs.wave == 'fast') && (inputs.target == '' || contains(' x86_64-unknown-linux-musl aarch64-unknown-linux-musl loongarch64-unknown-linux-musl x86_64-unknown-illumos s390x-unknown-linux-gnu riscv64gc-unknown-linux-gnu powerpc64le-unknown-linux-gnu ', format(' {0} ', inputs.target))) }}
     # Container builds, so the host's glibc never reaches the artifact — same
     # reasoning as the freebsd job, and unlike `native`.
     runs-on: ubuntu-24.04
@@ -1097,16 +1097,6 @@ jobs:
           # Same artifact for arm64. No smoke test: the runner is x86_64, so
           # there is nothing here that can execute it.
           - target: aarch64-unknown-linux-musl
-
-          # Static ARMv6 hard-float: Raspberry Pi 1/Zero-class systems.
-          - target: arm-unknown-linux-musleabihf
-            emulated_smoke: true
-
-          # ARMv7-A is still common in routers, cameras, NAS appliances and
-          # industrial gateways. The static artifact works on glibc, musl and
-          # uClibc userlands that use the standard hard-float ABI.
-          - target: armv7-unknown-linux-musleabihf
-            emulated_smoke: true
 
           # LoongArch64 is an edge/server target rather than a constrained MCU
           # target. Its Rust and Cross support are Tier 2 and QEMU-capable; use

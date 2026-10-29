@@ -2,7 +2,7 @@
 //!
 //! Detects Python, JavaScript, PHP, AppleScript, and shell command patterns.
 
-use super::encoding::contains_ignore_ascii_case;
+use crate::bytes::contains_ignore_ascii_case;
 use aho_corasick::AhoCorasick;
 use std::sync::LazyLock;
 

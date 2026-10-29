@@ -357,9 +357,9 @@ fn worth_simulating(text: &str) -> (bool, bool) {
 /// should pay only the marker scan, and no locale or shell is invoked.
 fn decode_codepage_remap(data: &[u8]) -> Option<Vec<u8>> {
     const TABLE_LEN: usize = 94;
-    if !contains_ascii_case_insensitive(data, b"chcp 708")
-        || !contains_ascii_case_insensitive(data, b"@manezao@=")
-        || !contains_ascii_case_insensitive(data, b"@jasa@=")
+    if !crate::bytes::contains_ignore_ascii_case(data, b"chcp 708")
+        || !crate::bytes::contains_ignore_ascii_case(data, b"@manezao@=")
+        || !crate::bytes::contains_ignore_ascii_case(data, b"@jasa@=")
     {
         return None;
     }
@@ -404,12 +404,6 @@ fn decode_codepage_remap(data: &[u8]) -> Option<Vec<u8>> {
     // A full command is represented by many mapped variable references. This
     // excludes a stray marker or an incidental occurrence in documentation.
     (substitutions >= 16).then_some(out)
-}
-
-fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 fn assignment_table<'a>(data: &'a [u8], marker: &[u8], len: usize) -> Option<&'a [u8]> {

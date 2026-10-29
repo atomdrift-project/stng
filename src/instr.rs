@@ -649,7 +649,7 @@ fn extract_amd64_stored_strings(
     min_length: usize,
     strings: &mut Vec<ExtractedString>,
 ) {
-    let rodata_end = rodata_addr + rodata.len() as u64;
+    let rodata_end = rodata_addr.saturating_add(rodata.len() as u64);
     let mut seen: HashSet<(u64, u64)> = HashSet::new();
     for op in memchr::memchr_iter(0x8D, text) {
         // REX.W (optionally .R) 8D /r with ModRM mod=00 rm=101: LEA r64, [rip+disp32].
@@ -939,10 +939,10 @@ fn find_inline_length_string(
     lea_dest: u8,
 ) -> Option<(String, Option<u8>)> {
     let validate = |len: u64| -> Option<String> {
-        if len == 0 || len > 1000 || str_addr + len > rodata_end {
+        if len == 0 || len > 1000 || str_addr.checked_add(len)? > rodata_end {
             return None;
         }
-        let start = (str_addr - rodata_addr) as usize;
+        let start = str_addr.checked_sub(rodata_addr)? as usize;
         let s = std::str::from_utf8(rodata_data.get(start..start + len as usize)?).ok()?;
         (is_valid_utf8_string(s) && s.len() >= min_length).then(|| s.to_string())
     };

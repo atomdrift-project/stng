@@ -2,7 +2,7 @@
 //!
 //! Detects Base64, Base32, Base58, Base85, hex, Unicode escape, URL encoding, and cryptographic hashes.
 
-use crate::bytes::{hex_digit, hex_number};
+use crate::bytes::{contains_ignore_ascii_case, hex_digit, hex_number};
 
 /// The bytes the hex digit pairs in `s` spell, skipping any pair that is not
 /// two hex digits.
@@ -16,13 +16,6 @@ fn hex_pairs(s: &str) -> impl Iterator<Item = u8> + '_ {
 
 /// Case-insensitive ASCII substring search without allocation.
 #[inline]
-pub(super) fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
-    needle.is_empty()
-        || haystack
-            .windows(needle.len())
-            .any(|w| w.eq_ignore_ascii_case(needle))
-}
-
 /// Check if a string looks like a cryptographic hash (MD5, SHA1, SHA256, SHA512).
 ///
 /// Returns true for hex strings of length 32/40/64/128 that decode to mostly non-printable bytes.
