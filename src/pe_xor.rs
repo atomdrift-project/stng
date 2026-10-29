@@ -15,7 +15,8 @@ const MAX_SCAN: usize = 4 * 1024 * 1024;
 const MAX_ANCHORS: usize = 65536;
 const MAX_CANDIDATES: usize = 4;
 const MAX_STEPS: usize = 262144; // Shared by all candidates in a file.
-const MAX_CODE: usize = 128;
+/// Instructions a candidate decoder routine may have.
+const MAX_DECODER_INSNS: usize = 128;
 const MAX_OUTPUT: usize = 16384;
 const MAX_STACK: usize = 32;
 
@@ -192,7 +193,7 @@ fn interpret(
         let ins = if let Some((_, i)) = code.iter().find(|(va, _)| *va == pc) {
             *i
         } else {
-            if code.len() >= MAX_CODE {
+            if code.len() >= MAX_DECODER_INSNS {
                 return None;
             }
             let at = image.offset(pc, 1, true)?;

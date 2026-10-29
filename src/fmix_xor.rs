@@ -46,23 +46,18 @@ pub(crate) fn extract_macho(
 ) -> Vec<ExtractedString> {
     let mut code = None;
     let mut data = Vec::new();
-    for segment in &macho.segments {
-        let Ok(sections) = segment.sections() else {
-            continue;
-        };
-        for (section, bytes) in sections {
-            let kind = section.flags & SECTION_TYPE;
-            if section.flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS) != 0 {
-                if section.name().ok() == Some("__text") {
-                    code = Some(bytes);
-                }
-            } else if !matches!(kind, S_ZEROFILL | S_GB_ZEROFILL | S_THREAD_LOCAL_ZEROFILL)
-                && matches!(section.name(), Ok("__const" | "__data" | "__cstring"))
-            {
-                // Compiler metadata (Swift reflection, unwind tables) is dense
-                // enough to forge a short record by chance; constants are not.
-                data.push((section.addr, u64::from(section.offset), bytes));
+    for (section, bytes) in crate::binary::macho_sections(macho) {
+        let kind = section.flags & SECTION_TYPE;
+        if section.flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS) != 0 {
+            if section.name().ok() == Some("__text") {
+                code = Some(bytes);
             }
+        } else if !matches!(kind, S_ZEROFILL | S_GB_ZEROFILL | S_THREAD_LOCAL_ZEROFILL)
+            && matches!(section.name(), Ok("__const" | "__data" | "__cstring"))
+        {
+            // Compiler metadata (Swift reflection, unwind tables) is dense
+            // enough to forge a short record by chance; constants are not.
+            data.push((section.addr, u64::from(section.offset), bytes));
         }
     }
     if !code.is_some_and(|c| c.len() <= MAX_CODE && materializes_constants(c)) {

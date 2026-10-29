@@ -672,7 +672,22 @@ fn long_hex_run_start(s: &str) -> Option<usize> {
 ///
 /// We only emit a run of entries when at least three valid entries appear
 /// back-to-back, which suppresses false positives in regular text.
-pub(crate) fn extract_varint_prefixed_strings(
+/// Go's pclntab names in `table`, which starts at file `offset`: the
+/// NUL-separated funcnametab and the varint-prefixed pkgnamestab, scanned
+/// concurrently. Returns `(nul_separated, varint_prefixed)`.
+pub(crate) fn pclntab_strings(
+    table: &[u8],
+    offset: u64,
+    min_length: usize,
+) -> (Vec<ExtractedString>, Vec<ExtractedString>) {
+    crate::par::join(
+        table.len(),
+        || extract_null_separated_strings(table, offset, min_length),
+        || extract_varint_prefixed_strings(table, offset, min_length),
+    )
+}
+
+fn extract_varint_prefixed_strings(
     data: &[u8],
     section_data_offset: u64,
     min_length: usize,
@@ -780,7 +795,7 @@ pub(crate) fn extract_varint_prefixed_strings(
 ///
 /// To avoid false positives in user-data regions, an entry is only emitted
 /// when at least three contiguous valid entries appear back-to-back.
-pub(crate) fn extract_null_separated_strings(
+fn extract_null_separated_strings(
     data: &[u8],
     section_data_offset: u64,
     min_length: usize,

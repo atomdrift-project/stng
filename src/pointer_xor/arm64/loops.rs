@@ -1,5 +1,6 @@
 //! Complete outlined and inline qword XOR loops with exact consumer lengths.
 use super::{Region, branch_target, sequence, word};
+use crate::arm64::RET;
 
 #[derive(Debug)]
 pub(super) struct Literal {
@@ -11,7 +12,7 @@ fn target(code: &Region<'_>, pc: u64, opcode: u32) -> Option<u64> {
     if inst & 0xfc000000 != opcode {
         return None;
     }
-    pc.checked_add_signed(i64::from(inst & 0x03ffffff) << 38 >> 36)
+    crate::arm64::branch_target(pc, inst)
 }
 fn called(code: &Region<'_>, pc: u64, body: &[u32]) -> Option<()> {
     sequence(code, branch_target(code, pc)?, body)
@@ -33,17 +34,16 @@ pub(super) fn read(code: &Region<'_>, start: u64) -> Option<Literal> {
     if word(code, start)? == 0x6f00e400 {
         return inline(code, start);
     }
-    called(code, start, &[0x6f00e400, 0xad010280, 0xd65f03c0])?;
+    called(code, start, &[0x6f00e400, 0xad010280, RET])?;
     let cipher = address(code, start + 4)?.checked_sub(3)?;
     sequence(code, start + 12, &[0x52800069])?;
-    called(code, start + 16, &[0xd1000d2a, 0xf1007d5f, 0xd65f03c0])?;
+    called(code, start + 16, &[0xd1000d2a, 0xf1007d5f, RET])?;
     sequence(code, start + 20, &[0x54000068])?; // B.HI start+32
     called(
         code,
         start + 24,
         &[
-            0xf840840a, 0xf85fd10b, 0xca0a016a, 0x8b09026b, 0xf81fd16a, 0x91002129, 0x91002108,
-            0xd65f03c0,
+            0xf840840a, 0xf85fd10b, 0xca0a016a, 0x8b09026b, 0xf81fd16a, 0x91002129, 0x91002108, RET,
         ],
     )?;
     if target(code, start + 28, 0x14000000)? != start + 16 {
@@ -56,7 +56,7 @@ pub(super) fn read(code: &Region<'_>, start: u64) -> Option<Literal> {
         return None;
     }
     let stack_offset = ((store >> 15) & 63) * 16;
-    sequence(code, copy.checked_add(8)?, &[0xd65f03c0])?;
+    sequence(code, copy.checked_add(8)?, &[RET])?;
     let wrapper = branch_target(code, start + 36)?;
     if word(code, wrapper)? & 0xffc003ff != 0x910003e0 {
         return None;
@@ -83,17 +83,13 @@ fn inline(code: &Region<'_>, start: u64) -> Option<Literal> {
     if frame & 0xffc003ff != 0xd10003aa {
         return None;
     } // SUB X10,X29,#imm
-    called(code, start + 24, &[0xd1000d2b, 0xf1007d7f, 0xd65f03c0])?;
+    called(code, start + 24, &[0xd1000d2b, 0xf1007d7f, RET])?;
     sequence(
         code,
         start + 28,
         &[0x540000e8, 0xf840840b, 0xf85fd10c, 0xca0b018b, 0x8b09014c],
     )?;
-    called(
-        code,
-        start + 48,
-        &[0xf81fd18b, 0x91002129, 0x91002108, 0xd65f03c0],
-    )?;
+    called(code, start + 48, &[0xf81fd18b, 0x91002129, 0x91002108, RET])?;
     if target(code, start + 52, 0x14000000)? != start + 24 {
         return None;
     }

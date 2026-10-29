@@ -61,35 +61,30 @@ pub(crate) fn extract_arm64_stack_xor_strings(
     }
 
     let mut results = Vec::new();
-    let mut budget = MAX_DECODE_WORK;
+    let mut budget = Budget(MAX_DECODE_WORK);
 
-    for seg in &macho.segments {
-        let Ok(sections) = seg.sections() else {
+    for (section, _) in crate::binary::macho_sections(macho) {
+        if (section.flags & S_ATTR_SOME_INSTRUCTIONS) == 0 || section.size < 4 {
+            continue;
+        }
+
+        let start = section.offset as usize;
+        let Ok(size) = usize::try_from(section.size) else {
             continue;
         };
-        for (section, _) in sections {
-            if (section.flags & S_ATTR_SOME_INSTRUCTIONS) == 0 || section.size < 4 {
-                continue;
-            }
+        let Some(end) = start.checked_add(size) else {
+            continue;
+        };
+        let Some(code) = arch_data.get(start..end) else {
+            continue;
+        };
 
-            let start = section.offset as usize;
-            let Ok(size) = usize::try_from(section.size) else {
-                continue;
-            };
-            let Some(end) = start.checked_add(size) else {
-                continue;
-            };
-            let Some(code) = arch_data.get(start..end) else {
-                continue;
-            };
-
-            results.extend(extract_section(
-                code,
-                arch_base_offset + u64::from(section.offset),
-                min_length,
-                &mut budget,
-            ));
-        }
+        results.extend(extract_section(
+            code,
+            arch_base_offset + u64::from(section.offset),
+            min_length,
+            &mut budget,
+        ));
     }
 
     results.sort_by_key(|r| (r.data_offset, r.value.len()));
@@ -116,11 +111,29 @@ fn should_extract(profile: AdmissionProfile) -> bool {
         || profile.string_bytes.saturating_mul(1024) < profile.content_size
 }
 
+/// Stack slots the decoders may still visit in this file.
+struct Budget(usize);
+
+impl Budget {
+    /// Charge a decoder call for the slots it will scan; false once spent.
+    fn spend(&mut self, slots: usize) -> bool {
+        if let Some(left) = self.0.checked_sub(slots) {
+            self.0 = left;
+            return true;
+        }
+        if self.0 > 0 {
+            tracing::debug!(MAX_DECODE_WORK, "arm64 stack XOR: decode budget exhausted");
+            self.0 = 0;
+        }
+        false
+    }
+}
+
 fn extract_section(
     code: &[u8],
     section_file_offset: u64,
     min_length: usize,
-    budget: &mut usize,
+    budget: &mut Budget,
 ) -> Vec<ExtractedString> {
     let mut regs: HashMap<u8, RegValue> = HashMap::with_capacity(32);
     let mut memory: HashMap<i64, Vec<u8>> = HashMap::new();
@@ -131,20 +144,8 @@ fn extract_section(
     let mut seen_pads: HashSet<Vec<u8>> = HashSet::new();
     let mut seen_values = HashSet::new();
     // Charge a decoder call for the slots it will scan.
-    let spend = |budget: &mut usize, slots: usize| {
-        if *budget < slots {
-            if *budget > 0 {
-                tracing::debug!(MAX_DECODE_WORK, "arm64 stack XOR: decode budget exhausted");
-                *budget = 0;
-            }
-            return false;
-        }
-        *budget -= slots;
-        true
-    };
-
     for (idx, chunk) in code.as_chunks::<4>().0.iter().enumerate() {
-        let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let word = u32::from_le_bytes(*chunk);
         let instr_off = (idx * 4) as u64;
 
         if let Some((rd, value)) = decode_mov_wide(word, &regs) {
@@ -165,7 +166,7 @@ fn extract_section(
         if word & 0xfc00_0000 == 0x9400_0000 {
             if let Some(RegValue::Ptr(arg0)) = regs.get(&0)
                 && decoded_arg_starts.insert(*arg0)
-                && spend(budget, memory.len())
+                && budget.spend(memory.len())
             {
                 let decoded = decode_stack_arg_with_candidate_pads(
                     &memory,
@@ -207,7 +208,7 @@ fn extract_section(
                     decoded_blob_state.clear();
                 }
                 memory.insert(disp, bytes);
-                if !recovered_pads.is_empty() && spend(budget, memory.len()) {
+                if !recovered_pads.is_empty() && budget.spend(memory.len()) {
                     let decoded = decode_recent_stack_blobs_with_pads(
                         &memory,
                         disp,
@@ -236,34 +237,16 @@ fn ptr_offset(regs: &HashMap<u8, RegValue>, rn: u8) -> Option<i64> {
 }
 
 fn decode_mov_wide(word: u32, regs: &HashMap<u8, RegValue>) -> Option<(u8, u64)> {
-    if (word & 0x1f80_0000) != 0x1280_0000 {
-        return None;
+    let mov = crate::arm64::move_wide(word).filter(|mov| mov.rd != 31)?;
+    let rd = u8::try_from(mov.rd).ok()?;
+    if !mov.keep {
+        return Some((rd, mov.imm));
     }
-    let sf = (word >> 31) & 1;
-    let opc = (word >> 29) & 0x3;
-    let hw = (word >> 21) & 0x3;
-    let imm16 = u64::from((word >> 5) & 0xffff);
-    let rd = (word & 0x1f) as u8;
-    if rd == 31 {
-        return None;
-    }
-    let shift = hw * 16;
-    if sf == 0 && shift >= 32 {
-        return None;
-    }
-
-    match opc {
-        2 => Some((rd, imm16 << shift)), // MOVZ
-        3 => {
-            let prev = match regs.get(&rd) {
-                Some(RegValue::Imm(value)) => *value,
-                _ => 0,
-            };
-            let mask = !(0xffff_u64 << shift);
-            Some((rd, (prev & mask) | (imm16 << shift)))
-        }
-        _ => None,
-    }
+    let before = match regs.get(&rd) {
+        Some(RegValue::Imm(value)) => *value,
+        _ => 0,
+    };
+    Some((rd, before & !(0xffff << mov.shift) | mov.imm))
 }
 
 fn decode_add_imm(word: u32) -> Option<(u8, u8, i64)> {

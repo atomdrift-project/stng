@@ -1,28 +1,24 @@
 //! ARM64 immediate arrays and a complete checked-index byte XOR loop.
 use super::{MAX_ARRAY, MAX_CANDIDATES, MAX_CODE};
+use crate::arm64::RET;
 struct Code<'a> {
     bytes: &'a [u8],
     addr: u64,
 }
 impl Code<'_> {
     fn word(&self, pos: usize) -> Option<u32> {
-        if pos & 3 != 0 {
-            return None;
-        }
-        Some(u32::from_le_bytes(
-            self.bytes.get(pos..pos.checked_add(4)?)?.try_into().ok()?,
-        ))
+        crate::arm64::word(self.bytes, pos)
     }
     fn at(&self, addr: u64) -> Option<usize> {
         usize::try_from(addr.checked_sub(self.addr)?).ok()
     }
     fn call(&self, pos: usize) -> Option<usize> {
         let w = self.word(pos)?;
-        if w & 0xfc000000 != 0x94000000 {
+        if !crate::arm64::is_bl(w) {
             return None;
         }
         let pc = self.addr.checked_add(pos as u64)?;
-        self.at(pc.checked_add_signed(i64::from(w & 0x03ffffff) << 38 >> 36)?)
+        self.at(crate::arm64::branch_target(pc, w)?)
     }
     fn seq(&self, pos: usize, words: &[u32]) -> Option<()> {
         for (i, w) in words.iter().enumerate() {
@@ -57,11 +53,10 @@ fn array(code: &Code<'_>, pos: &mut usize, min: usize, first: Option<u32>) -> Op
     if tail & 0xfc000000 != 0x14000000 {
         return None;
     }
-    let target = code
-        .addr
-        .checked_add(allocator as u64)?
-        .checked_add(4)?
-        .checked_add_signed(i64::from(tail & 0x03ffffff) << 38 >> 36)?;
+    let target = crate::arm64::branch_target(
+        code.addr.checked_add(allocator as u64)?.checked_add(4)?,
+        tail,
+    )?;
     code.word(code.at(target)?)?;
     *pos = pos.checked_add(8)?;
     let save = code.word(*pos)?;
@@ -77,7 +72,7 @@ fn array(code: &Code<'_>, pos: &mut usize, min: usize, first: Option<u32>) -> Op
         if mov & !31 != 0xaa0003e0 || zero & !31 != 0xd2800000 {
             return None;
         }
-        code.seq(helper.checked_add(8)?, &[0xd65f03c0])?;
+        code.seq(helper.checked_add(8)?, &[RET])?;
         let (base, counter) = (mov & 31, zero & 31);
         if !preserved(base)
             || !preserved(counter)
@@ -211,12 +206,12 @@ fn decode(code: &Code<'_>, start: usize, min: usize) -> Option<(String, u32)> {
         &[
             0xaa0003e2 | (count << 16),
             0xaa0003e3 | (desc_reg << 16),
-            0xd65f03c0,
+            RET,
         ],
     )?;
     let index = code.call(pos + 20)?;
     // The out-of-range branch is unreachable for the verified 0..length loop.
-    code.seq(index, &[0xeb01005f, 0x54000062, 0x8b020000, 0xd65f03c0])?;
+    code.seq(index, &[0xeb01005f, 0x54000062, 0x8b020000, RET])?;
     let load = code.word(pos + 24)?;
     let value = load & 31;
     if load & !31 != 0x39400000
@@ -244,18 +239,11 @@ fn decode(code: &Code<'_>, start: usize, min: usize) -> Option<(String, u32)> {
         &[
             0x4a000000 | (value << 16) | (temp << 5) | temp,
             0x39000000 | temp,
-            0xd65f03c0,
+            RET,
         ],
     )?;
     code.seq(pos + 48, &[0x91000400 | (count << 5) | count, 0x17fffff3])?;
-    let value =
-        String::from_utf8(a.bytes.iter().zip(b.bytes).map(|(x, y)| x ^ y).collect()).ok()?;
-    if !value
-        .chars()
-        .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
-    {
-        return None;
-    }
+    let value = crate::text::readable(a.bytes.iter().zip(b.bytes).map(|(x, y)| x ^ y).collect())?;
     Some((
         value,
         u32::try_from(begin.checked_add(56)?.checked_sub(start)?).ok()?,

@@ -1,12 +1,13 @@
 //! One-iteration qword XOR with ciphertext assembled from immediates and a byte.
 use super::{Region, Setup, branch_target, fold, local_seed, sequence, word};
+use crate::arm64::RET;
 
 fn read(code: &Region<'_>, constants: &[Region<'_>], start: u64) -> Option<[u8; 8]> {
     start.checked_add(48)?;
     sequence(
         code,
         branch_target(code, start)?,
-        &[0xd2800008, 0xd280000c, 0x52800029, 0xd65f03c0],
+        &[0xd2800008, 0xd280000c, 0x52800029, RET],
     )?;
     let mut cipher = 0u64;
     for i in 0u32..4 {
@@ -29,7 +30,7 @@ fn read(code: &Region<'_>, constants: &[Region<'_>], start: u64) -> Option<[u8; 
         code,
         branch_target(code, start + 32)?,
         &[
-            0x52800009, 0xf86c6808, 0x386c696c, 0xaa0a018c, 0xca080188, 0x5280010c, 0xd65f03c0,
+            0x52800009, 0xf86c6808, 0x386c696c, 0xaa0a018c, 0xca080188, 0x5280010c, RET,
         ],
     )?;
     sequence(code, start + 36, &[0x3707ffe9, 0xf9003be8])?;
@@ -39,9 +40,7 @@ fn read(code: &Region<'_>, constants: &[Region<'_>], start: u64) -> Option<[u8; 
     if tail & 0xfc000000 != 0x14000000 {
         return None;
     }
-    let target = consumer
-        .checked_add(12)?
-        .checked_add_signed(i64::from(tail & 0x03ffffff) << 38 >> 36)?;
+    let target = crate::arm64::branch_target(consumer.checked_add(12)?, tail)?;
     word(code, target)?;
     let byte = constants.iter().find_map(|r| r.at(address, 1))?[0];
     Some((cipher | u64::from(byte)).to_le_bytes())
@@ -60,13 +59,7 @@ pub(super) fn extract(
     let encoded = read(code, constants, setup.after)?;
     let key = fold(code, setup.helper, setup.base, local_seed(code, setup)?)?;
     let key = constants.iter().find_map(|r| r.at(key, 8))?;
-    let value = String::from_utf8(encoded.iter().zip(key).map(|(a, b)| a ^ b).collect()).ok()?;
-    if !value
-        .chars()
-        .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
-    {
-        return None;
-    }
+    let value = crate::text::readable(encoded.iter().zip(key).map(|(a, b)| a ^ b).collect())?;
     Some(crate::ExtractedString {
         kind: crate::classify_string(&value),
         value,

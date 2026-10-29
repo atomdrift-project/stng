@@ -26,28 +26,22 @@ pub(crate) fn extract_macho(
     }
     let mut code = None;
     let mut swift = false;
-    for seg in &macho.segments {
-        if seg.name().ok() != Some("__TEXT") {
-            continue;
-        }
-        let Ok(sections) = seg.sections() else {
-            continue;
-        };
-        for (section, bytes) in sections {
-            match section.name().ok() {
-                Some("__swift5_types") if !bytes.is_empty() => swift = true,
-                Some("__text") if bytes.len() <= MAX_CODE => {
-                    code = Some((u64::from(section.offset), bytes));
-                }
-                Some("__text") => {
-                    tracing::debug!(
-                        size = bytes.len(),
-                        MAX_CODE,
-                        "Swift small strings: __text too large"
-                    );
-                }
-                _ => {}
+    for (section, bytes) in crate::binary::macho_sections(macho)
+        .filter(|(section, _)| section.segname().ok() == Some("__TEXT"))
+    {
+        match section.name().ok() {
+            Some("__swift5_types") if !bytes.is_empty() => swift = true,
+            Some("__text") if bytes.len() <= MAX_CODE => {
+                code = Some((u64::from(section.offset), bytes));
             }
+            Some("__text") => {
+                tracing::debug!(
+                    size = bytes.len(),
+                    MAX_CODE,
+                    "Swift small strings: __text too large"
+                );
+            }
+            _ => {}
         }
     }
     let Some((offset, code)) = code.filter(|_| swift) else {
@@ -68,26 +62,21 @@ pub(crate) fn extract_macho(
         let rd = (w & 31) as usize;
         let op = w & 0x7f80_0000;
         if rd < 31 && (op == 0x5280_0000 || op == 0x7280_0000) {
-            // MOVZ/MOVK, including W-register zero extension. Reject reserved
-            // W-register shifts; a MOVK without a known MOVZ cannot qualify.
-            let shift = ((w >> 21) & 3) * 16;
-            let wide = w >> 31 != 0;
-            if !wide && shift >= 32 {
+            // MOVZ/MOVK, including W-register zero extension. Reserved
+            // W-register shifts end the sequence; a MOVK without a known
+            // MOVZ cannot qualify.
+            let Some(mov) = crate::arm64::move_wide(w) else {
                 epoch += 1;
                 continue;
-            }
-            let imm = u64::from((w >> 5) & 0xffff) << shift;
-            if op == 0x5280_0000 {
+            };
+            if !mov.keep {
                 regs[rd] = Constant {
-                    value: imm,
+                    value: mov.imm,
                     start: index,
                     epoch,
                 };
             } else if regs[rd].epoch == epoch && index - regs[rd].start < MAX_DISTANCE {
-                regs[rd].value = (regs[rd].value & !(0xffff_u64 << shift)) | imm;
-                if !wide {
-                    regs[rd].value &= 0xffff_ffff;
-                }
+                regs[rd].value = mov.apply(regs[rd].value);
             } else {
                 regs[rd].epoch = 0;
             }

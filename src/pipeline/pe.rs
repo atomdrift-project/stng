@@ -9,13 +9,12 @@ use crate::StringMethod;
 use crate::binary;
 use crate::collect_pe_section_info;
 use crate::dotnet;
-use crate::extract_null_separated_strings;
 use crate::extract_overlay_strings;
 use crate::extract_pe_imports;
 use crate::extract_raw_strings;
 use crate::extract_stack_strings_from_ranges;
-use crate::extract_varint_prefixed_strings;
 use crate::extract_wide_strings;
+use crate::pclntab_strings;
 use crate::pe_go_skip_ranges;
 use crate::pe_is_rust;
 use crate::pe_rust_skip_ranges;
@@ -85,11 +84,7 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
             else {
                 continue;
             };
-            let (varints, nulls) = crate::par::join(
-                section_bytes.len(),
-                || extract_varint_prefixed_strings(section_bytes, start, min_length),
-                || extract_null_separated_strings(section_bytes, start, min_length),
-            );
+            let (nulls, varints) = pclntab_strings(section_bytes, start, min_length);
             strings.extend(varints);
             strings.extend(nulls);
         }

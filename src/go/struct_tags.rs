@@ -12,21 +12,16 @@ pub(super) fn extract(macho: &MachO<'_>, min_length: usize) -> Vec<ExtractedStri
     let mut types = None;
     let mut links = None;
     let mut modern = false;
-    for seg in &macho.segments {
-        let Ok(sections) = seg.sections() else {
-            continue;
-        };
-        for (sec, data) in sections {
-            match sec.name().unwrap_or("") {
-                "__rodata" if seg.name().unwrap_or("") == "__DATA_CONST" => {
-                    types = Some((sec.addr, data));
-                }
-                "__typelink" => links = Some(data),
-                "__gopclntab" => {
-                    modern = matches!(data.get(..4), Some([0xf0 | 0xf1, 0xff, 0xff, 0xff]));
-                }
-                _ => {}
+    for (sec, data) in crate::binary::macho_sections(macho) {
+        match sec.name().unwrap_or("") {
+            "__rodata" if sec.segname().unwrap_or("") == "__DATA_CONST" => {
+                types = Some((sec.addr, data));
             }
+            "__typelink" => links = Some(data),
+            "__gopclntab" => {
+                modern = matches!(data.get(..4), Some([0xf0 | 0xf1, 0xff, 0xff, 0xff]));
+            }
+            _ => {}
         }
     }
     let (Some((base, data)), Some(links)) = (types, links) else {

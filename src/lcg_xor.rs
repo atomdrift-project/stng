@@ -49,7 +49,7 @@ pub fn decode_lcg_xor(
     }
     let readable = value
         .chars()
-        .filter(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+        .filter(|&c| crate::text::is_readable(c))
         .count();
     if readable * 5 < value.chars().count() * 4 {
         return None;
@@ -235,25 +235,19 @@ fn extract_macho_clock_lcg_xor(
     let mut text = None;
     let mut constants = None;
     let mut cstrings = None;
-    for segment in &macho.segments {
-        if segment.name().ok() != Some("__TEXT") {
-            continue;
-        }
-        let Ok(sections) = segment.sections() else {
+    for (section, _) in crate::binary::macho_sections(macho)
+        .filter(|(section, _)| section.segname().ok() == Some("__TEXT"))
+    {
+        let Ok(name) = section.name() else {
             continue;
         };
-        for (section, _) in sections {
-            let Ok(name) = section.name() else {
-                continue;
-            };
-            let target = match name {
-                "__text" => &mut text,
-                "__const" => &mut constants,
-                "__cstring" => &mut cstrings,
-                _ => continue,
-            };
-            *target = Some((u64::from(section.offset), section.size));
-        }
+        let target = match name {
+            "__text" => &mut text,
+            "__const" => &mut constants,
+            "__cstring" => &mut cstrings,
+            _ => continue,
+        };
+        *target = Some((u64::from(section.offset), section.size));
     }
     let (
         Some((text_offset, text_size)),
@@ -424,91 +418,84 @@ pub fn extract_macho_xor_macho_strings(
     let mut out = Vec::new();
     let mut payload_count = 0;
     let mut work = 0usize;
-    for segment in &macho.segments {
-        let Ok(sections) = segment.sections() else {
+    for (section, _) in crate::binary::macho_sections(macho) {
+        if !section.name().is_ok_and(|name| name == "__const") {
+            continue;
+        }
+        let Ok(start) = usize::try_from(slice_base.saturating_add(u64::from(section.offset)))
+        else {
             continue;
         };
-        for (section, _) in sections {
-            if !section.name().is_ok_and(|name| name == "__const") {
-                continue;
-            }
-            let Ok(start) = usize::try_from(slice_base.saturating_add(u64::from(section.offset)))
-            else {
-                continue;
-            };
-            let Ok(size) = usize::try_from(section.size) else {
-                continue;
-            };
-            if !(4096..=MAX_SECTION_SIZE).contains(&size) {
-                continue;
-            }
-            let Some(end) = start.checked_add(size) else {
-                continue;
-            };
-            let Some(encoded_section) = data.get(start..end) else {
-                continue;
-            };
+        let Ok(size) = usize::try_from(section.size) else {
+            continue;
+        };
+        if !(4096..=MAX_SECTION_SIZE).contains(&size) {
+            continue;
+        }
+        let Some(end) = start.checked_add(size) else {
+            continue;
+        };
+        let Some(encoded_section) = data.get(start..end) else {
+            continue;
+        };
 
-            let mut cursor = 0usize;
-            while cursor
-                .checked_add(8)
-                .is_some_and(|n| n <= encoded_section.len())
-                && payload_count < MAX_PAYLOADS
-                && work <= MAX_DECODE_WORK
-            {
-                let mut found = None;
-                for magic in FAT_MAGICS {
-                    let key = encoded_section[cursor] ^ magic[0];
-                    if encoded_section[cursor..cursor + 4]
-                        .iter()
-                        .zip(magic)
-                        .all(|(&encoded, plain)| encoded ^ key == plain)
-                    {
-                        work = work.saturating_add(
-                            decode_fat_length(&encoded_section[cursor..], key).unwrap_or(0),
-                        );
-                        let Some(decoded) = decode_xor_fat_macho(&encoded_section[cursor..], key)
-                        else {
-                            continue;
-                        };
-                        found = Some((key, decoded));
-                        break;
-                    }
-                }
-
-                if let Some((key, decoded)) = found {
-                    let mut strings =
-                        crate::raw::extract_raw_strings(&decoded, min_length, &[], &[]);
-                    let payload_offset = start.saturating_add(cursor);
-                    for string in &mut strings {
-                        string.data_offset =
-                            string.data_offset.saturating_add(payload_offset as u64);
-                        string.method = StringMethod::XorDecode;
-                    }
-                    // Preserve the one-byte key as an analyst-visible fact while
-                    // tying it to the encoded payload's source offset.
-                    out.push(ExtractedString {
-                        value: format!("0x{key:02x}"),
-                        data_offset: payload_offset as u64,
-                        data_len: 1,
-                        kind: Some(crate::StringKind::XorKey),
-                        method: StringMethod::XorDecode,
-                        ..Default::default()
-                    });
-                    out.extend(strings);
-                    payload_count += 1;
-                    cursor = cursor.saturating_add(decoded.len());
-                } else {
-                    cursor += 1;
+        let mut cursor = 0usize;
+        while cursor
+            .checked_add(8)
+            .is_some_and(|n| n <= encoded_section.len())
+            && payload_count < MAX_PAYLOADS
+            && work <= MAX_DECODE_WORK
+        {
+            let mut found = None;
+            for magic in FAT_MAGICS {
+                let key = encoded_section[cursor] ^ magic[0];
+                if encoded_section[cursor..cursor + 4]
+                    .iter()
+                    .zip(magic)
+                    .all(|(&encoded, plain)| encoded ^ key == plain)
+                {
+                    work = work.saturating_add(
+                        decode_fat_length(&encoded_section[cursor..], key).unwrap_or(0),
+                    );
+                    let Some(decoded) = decode_xor_fat_macho(&encoded_section[cursor..], key)
+                    else {
+                        continue;
+                    };
+                    found = Some((key, decoded));
+                    break;
                 }
             }
-            if work > MAX_DECODE_WORK {
-                tracing::debug!(MAX_DECODE_WORK, "fat Mach-O XOR: decode budget exhausted");
-                return out;
+
+            if let Some((key, decoded)) = found {
+                let mut strings = crate::raw::extract_raw_strings(&decoded, min_length, &[], &[]);
+                let payload_offset = start.saturating_add(cursor);
+                for string in &mut strings {
+                    string.data_offset = string.data_offset.saturating_add(payload_offset as u64);
+                    string.method = StringMethod::XorDecode;
+                }
+                // Preserve the one-byte key as an analyst-visible fact while
+                // tying it to the encoded payload's source offset.
+                out.push(ExtractedString {
+                    value: format!("0x{key:02x}"),
+                    data_offset: payload_offset as u64,
+                    data_len: 1,
+                    kind: Some(crate::StringKind::XorKey),
+                    method: StringMethod::XorDecode,
+                    ..Default::default()
+                });
+                out.extend(strings);
+                payload_count += 1;
+                cursor = cursor.saturating_add(decoded.len());
+            } else {
+                cursor += 1;
             }
-            if payload_count >= MAX_PAYLOADS {
-                return out;
-            }
+        }
+        if work > MAX_DECODE_WORK {
+            tracing::debug!(MAX_DECODE_WORK, "fat Mach-O XOR: decode budget exhausted");
+            return out;
+        }
+        if payload_count >= MAX_PAYLOADS {
+            return out;
         }
     }
     out

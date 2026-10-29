@@ -346,6 +346,18 @@ fn leb128(bytes: &[u8], at: &mut usize) -> Option<u64> {
     }
 }
 
+/// Every section of `macho` with its bytes, across all segments. Segments
+/// whose section table does not parse contribute nothing.
+pub(crate) fn macho_sections<'m, 'a>(
+    macho: &'m MachO<'a>,
+) -> impl Iterator<Item = (goblin::mach::segment::Section, &'a [u8])> + 'm {
+    macho
+        .segments
+        .iter()
+        .filter_map(|segment| segment.sections().ok())
+        .flatten()
+}
+
 /// Collect segment and section names from a Mach-O binary.
 #[must_use]
 pub(crate) fn collect_macho_segments(macho: &MachO<'_>) -> Vec<String> {

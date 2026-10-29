@@ -11,6 +11,4 @@ mod extractor;
 mod struct_tags;
 
 // Re-export the main extractor
-pub(crate) use extractor::{
-    GoStringExtractor, extract_null_separated_strings, extract_varint_prefixed_strings,
-};
+pub(crate) use extractor::{GoStringExtractor, pclntab_strings};

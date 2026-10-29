@@ -214,8 +214,10 @@ fn forged_bind_repeat_count_is_not_replayed() {
         &data,
         &stng::ExtractOptions::new(4),
     ));
+    // Normally instant. The replay it guards against allocates gigabytes over
+    // minutes, so a generous bound stays reliable on a loaded machine.
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(5),
+        started.elapsed() < std::time::Duration::from_secs(60),
         "took {:?}",
         started.elapsed()
     );

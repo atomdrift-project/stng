@@ -11,13 +11,12 @@ use crate::collect_elf_segments;
 use crate::detect_elf_overlay_from_elf;
 use crate::elf_go_skip_ranges;
 use crate::extract_elf_imports;
-use crate::extract_null_separated_strings;
 use crate::extract_overlay_strings;
 use crate::extract_raw_strings;
 use crate::extract_stack_strings;
 use crate::extract_stack_strings_with_context;
-use crate::extract_varint_prefixed_strings;
 use crate::extract_wide_strings;
+use crate::pclntab_strings;
 use crate::scan_binary_ips;
 use crate::unclaimed_raw_strings;
 use crate::{ExtractOptions, ExtractedString};
@@ -279,11 +278,7 @@ fn extract_elf_pclntab_strings(
     // funcnametab is NUL-separated; pkgnamestab is varint-length-prefixed.
     // Scan for both concurrently — the varint pass is fully hidden behind the
     // larger funcname pass and recovers package paths the latter can't.
-    let (varints, mut nulls) = crate::par::join(
-        section_bytes.len(),
-        || extract_varint_prefixed_strings(section_bytes, start as u64, min_length),
-        || extract_null_separated_strings(section_bytes, start as u64, min_length),
-    );
+    let (mut nulls, varints) = pclntab_strings(section_bytes, start as u64, min_length);
     nulls.extend(varints);
     tracing::debug!(
         "TIME: Go ELF .gopclntab scan took {:?} ({} symbols)",

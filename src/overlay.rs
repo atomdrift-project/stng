@@ -102,70 +102,14 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
 
             // Classify overlay strings and adjust offsets
             for s in &mut strings[initial_count..] {
-                // Classify the string - if it's something highly specific and interesting
-                // (encoded data, crypto, network indicators), keep that classification.
-                // Otherwise mark as generic Overlay.
-                let classified_kind = classify_string(&s.value);
-                s.kind = match classified_kind {
-                    // Keep highly specific/interesting classifications
-                    Some(
-                        StringKind::Base32
-                        | StringKind::Base58
-                        | StringKind::Base64
-                        | StringKind::Base85
-                        | StringKind::CryptoWallet
-                        | StringKind::MiningPool
-                        | StringKind::IP
-                        | StringKind::IPPort
-                        | StringKind::Hostname
-                        | StringKind::Url
-                        | StringKind::Email
-                        | StringKind::TorAddress
-                        | StringKind::ShellCmd
-                        | StringKind::SuspiciousPath
-                        | StringKind::XorKey
-                        | StringKind::HexEncoded
-                        | StringKind::APIKey
-                        | StringKind::JWT
-                        | StringKind::CTFFlag,
-                    ) => classified_kind,
-                    // Everything else stays as Overlay
-                    _ => Some(StringKind::Overlay),
-                };
+                s.kind = Some(overlay_kind(&s.value, StringKind::Overlay));
                 s.rebase(start as u64);
             }
 
             // Extract wide strings
             let wide_strings = extract_wide_strings(overlay_data, min_length, &[], &[]);
             for mut s in wide_strings {
-                // Classify wide overlay strings - keep highly specific classifications
-                let classified_kind = classify_string(&s.value);
-                s.kind = match classified_kind {
-                    // Keep highly specific/interesting classifications
-                    Some(
-                        StringKind::Base32
-                        | StringKind::Base58
-                        | StringKind::Base64
-                        | StringKind::Base85
-                        | StringKind::CryptoWallet
-                        | StringKind::MiningPool
-                        | StringKind::IP
-                        | StringKind::IPPort
-                        | StringKind::Hostname
-                        | StringKind::Url
-                        | StringKind::Email
-                        | StringKind::TorAddress
-                        | StringKind::ShellCmd
-                        | StringKind::SuspiciousPath
-                        | StringKind::XorKey
-                        | StringKind::HexEncoded
-                        | StringKind::APIKey
-                        | StringKind::JWT
-                        | StringKind::CTFFlag,
-                    ) => classified_kind,
-                    // Everything else stays as OverlayWide
-                    _ => Some(StringKind::OverlayWide),
-                };
+                s.kind = Some(overlay_kind(&s.value, StringKind::OverlayWide));
                 s.rebase(start as u64);
                 strings.push(s);
             }
@@ -173,4 +117,34 @@ pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedS
     }
 
     strings
+}
+
+/// The kind of a string found in an overlay: the classifier's kind when it
+/// is specific evidence (encoded data, crypto, network indicators, commands),
+/// `otherwise` for anything else.
+fn overlay_kind(value: &str, otherwise: StringKind) -> StringKind {
+    match classify_string(value) {
+        Some(
+            kind @ (StringKind::Base32
+            | StringKind::Base58
+            | StringKind::Base64
+            | StringKind::Base85
+            | StringKind::CryptoWallet
+            | StringKind::MiningPool
+            | StringKind::IP
+            | StringKind::IPPort
+            | StringKind::Hostname
+            | StringKind::Url
+            | StringKind::Email
+            | StringKind::TorAddress
+            | StringKind::ShellCmd
+            | StringKind::SuspiciousPath
+            | StringKind::XorKey
+            | StringKind::HexEncoded
+            | StringKind::APIKey
+            | StringKind::JWT
+            | StringKind::CTFFlag),
+        ) => kind,
+        _ => otherwise,
+    }
 }

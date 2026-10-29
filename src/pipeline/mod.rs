@@ -150,6 +150,21 @@ fn finish(
     deduplicate_by_offset(strings)
 }
 
+/// Append the `candidates` whose values `strings` does not already hold.
+fn extend_unclaimed(
+    strings: &mut Vec<ExtractedString>,
+    candidates: impl IntoIterator<Item = ExtractedString>,
+) {
+    let fresh: Vec<ExtractedString> = {
+        let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+        candidates
+            .into_iter()
+            .filter(|s| !known.contains(s.value.as_str()))
+            .collect()
+    };
+    strings.extend(fresh);
+}
+
 /// Merge a set of imports into the strings list.
 /// Updates kind for strings already present, then appends new ones.
 fn merge_imports(strings: &mut Vec<ExtractedString>, imports: Vec<ExtractedString>) {

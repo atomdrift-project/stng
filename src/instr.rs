@@ -22,6 +22,37 @@ mod arm64_preserved;
 /// assigns for that call — `runtime.stringtoslicebyte` passes them in x1/x2, not
 /// the x0/x1 or x2/x3 a fixed list would expect — so this accepts any `ADRP+ADD`
 /// into rodata followed by a length load into a *different* register.
+/// The code being scanned, the read-only data its instructions address, and
+/// the shortest string worth reporting.
+#[derive(Clone, Copy)]
+struct Scan<'a> {
+    text: &'a [u8],
+    text_addr: u64,
+    rodata: &'a [u8],
+    rodata_addr: u64,
+    rodata_end: u64,
+    min_length: usize,
+}
+
+impl<'a> Scan<'a> {
+    fn new(
+        text: &'a [u8],
+        text_addr: u64,
+        rodata: &'a [u8],
+        rodata_addr: u64,
+        min_length: usize,
+    ) -> Self {
+        Self {
+            text,
+            text_addr,
+            rodata,
+            rodata_addr,
+            rodata_end: rodata_addr.saturating_add(rodata.len() as u64),
+            min_length,
+        }
+    }
+}
+
 pub(crate) fn extract_inline_strings_arm64(
     text_data: &[u8],
     text_addr: u64,
@@ -32,7 +63,7 @@ pub(crate) fn extract_inline_strings_arm64(
     let mut strings = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    let rodata_end = rodata_addr.saturating_add(rodata_data.len() as u64);
+    let scan = Scan::new(text_data, text_addr, rodata_data, rodata_addr, min_length);
     let mut preserved = arm64_preserved::Context::new(text_data, text_addr);
 
     // ARM64 instructions are a fixed 4 bytes.
@@ -59,17 +90,7 @@ pub(crate) fn extract_inline_strings_arm64(
                     ..Default::default()
                 });
             }
-            extract_arm64_inline_string(
-                i,
-                text_data,
-                text_addr,
-                rodata_data,
-                rodata_addr,
-                rodata_end,
-                min_length,
-                &mut strings,
-                &mut seen,
-            );
+            extract_arm64_inline_string(i, &scan, &mut strings, &mut seen);
         }
 
         i += 4;
@@ -281,18 +302,17 @@ fn decode_rodata_string(
 /// length right after the address. The length register must differ from `Rd`
 /// (a length MOV into the pointer register would clobber it), and
 /// [`decode_arm64_string`] validates the slice, so an unrelated MOV is rejected.
-#[allow(clippy::too_many_arguments)]
 fn extract_arm64_inline_string(
     bl_pos: usize,
-    text_data: &[u8],
-    text_addr: u64,
-    rodata_data: &[u8],
-    rodata_addr: u64,
-    rodata_end: u64,
-    min_length: usize,
+    scan: &Scan<'_>,
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
+    let Scan {
+        text: text_data,
+        min_length,
+        ..
+    } = *scan;
     let word = |o: usize| {
         u32::from_le_bytes([
             text_data[o],
@@ -360,16 +380,7 @@ fn extract_arm64_inline_string(
             && is_add
             && is_len
             && preserved
-            && let Some((s, str_addr)) = decode_arm64_string(
-                inst1,
-                inst2,
-                inst3,
-                pos,
-                text_addr,
-                rodata_data,
-                rodata_addr,
-                rodata_end,
-            )
+            && let Some((s, str_addr)) = decode_arm64_string(inst1, inst2, inst3, pos, scan)
             && s.len() >= min_length
             && seen.insert(s.clone())
         {
@@ -409,17 +420,20 @@ fn looks_like_key(s: &str) -> bool {
 /// can record a unique `data_offset` per inline string (rather than collapsing
 /// every inline string at the section base, which dedup-by-offset would prune
 /// down to a single survivor).
-#[allow(clippy::too_many_arguments)]
 fn decode_arm64_string(
     inst1: u32,
     inst2: u32,
     inst3: u32,
     pos: usize,
-    text_addr: u64,
-    rodata_data: &[u8],
-    rodata_addr: u64,
-    rodata_end: u64,
+    scan: &Scan<'_>,
 ) -> Option<(String, u64)> {
+    let Scan {
+        text_addr,
+        rodata: rodata_data,
+        rodata_addr,
+        rodata_end,
+        ..
+    } = *scan;
     // ADRP + ADD: the string's address.
     let str_addr = crate::arm64::adrp_add(text_addr.checked_add(pos as u64)?, inst1, inst2)?;
 
@@ -455,81 +469,15 @@ fn decode_arm64_string(
 fn decode_arm_mov_immediate(inst: u32) -> Option<u64> {
     // MOVZ Wd/Xd zeroes every lane not supplied by its immediate. A W write
     // zero-extends into the corresponding X register; lanes 32/48 are reserved.
-    if (inst & 0x7f800000) == 0x52800000 {
-        let shift = ((inst >> 21) & 3) * 16;
-        if inst >> 31 == 0 && shift >= 32 {
-            return None;
-        }
-        return Some(u64::from((inst >> 5) & 0xffff) << shift);
+    if inst & 0x7f80_0000 == 0x5280_0000 {
+        return crate::arm64::move_wide(inst).map(|mov| mov.imm);
     }
     // ORR Rd, ZR, #imm is a constant load; ORR from a live register is not.
     if (inst & 0x7f800000) == 0x32000000 && (inst >> 5) & 31 == 31 {
-        return decode_arm_bitmask_immediate(inst);
+        return crate::arm64::bitmask_imm(inst).filter(|&v| v > 0 && v <= 1000);
     }
 
     None
-}
-
-/// Decode ARM64 bitmask immediate encoding used in ORR/AND instructions.
-fn decode_arm_bitmask_immediate(inst: u32) -> Option<u64> {
-    let sf = (inst >> 31) & 0x1;
-    let n = (inst >> 22) & 0x1;
-    let immr = (inst >> 16) & 0x3F;
-    let imms = (inst >> 10) & 0x3F;
-
-    let size = if sf == 1 { 64u32 } else { 32u32 };
-
-    // Find element size
-    let elem_len = if n == 1 {
-        6 // 64-bit element
-    } else if (imms & 0x20) == 0 {
-        5 // 32-bit element
-    } else if (imms & 0x10) == 0 {
-        4 // 16-bit element
-    } else if (imms & 0x08) == 0 {
-        3 // 8-bit element
-    } else if (imms & 0x04) == 0 {
-        2 // 4-bit element
-    } else {
-        return None; // Invalid
-    };
-
-    let esize = 1u32 << elem_len;
-    if esize > size {
-        return None;
-    }
-
-    let levels = (1u32 << elem_len) - 1;
-    let s = imms & levels;
-    let r = immr & levels;
-
-    let welem = s + 1;
-    if welem > 63 {
-        return None;
-    }
-    let mut pattern = (1u64 << welem) - 1;
-
-    if r != 0 && r < esize {
-        let mask = if esize >= 64 {
-            u64::MAX
-        } else {
-            (1u64 << esize) - 1
-        };
-        pattern = ((pattern >> r) | (pattern << (esize - r))) & mask;
-    }
-
-    let mut value = 0u64;
-    let mut i = 0u32;
-    while i < size && i < 64 {
-        value |= pattern << i;
-        i += esize;
-    }
-
-    if value > 0 && value <= 1000 {
-        Some(value)
-    } else {
-        None
-    }
 }
 
 /// Extracts inline strings from AMD64 executable code.
@@ -545,7 +493,7 @@ pub(crate) fn extract_inline_strings_amd64(
 ) -> Vec<ExtractedString> {
     use rayon::prelude::*;
 
-    let rodata_end = rodata_addr.saturating_add(rodata_data.len() as u64);
+    let scan = Scan::new(text_data, text_addr, rodata_data, rodata_addr, min_length);
 
     // Find all CALL instruction positions first
     let call_positions: Vec<usize> = text_data
@@ -568,30 +516,10 @@ pub(crate) fn extract_inline_strings_amd64(
             let mut seen = HashSet::new();
 
             // Consolidated backward scan for all register and stack patterns
-            extract_backward_strings(
-                i,
-                text_data,
-                text_addr,
-                rodata_data,
-                rodata_addr,
-                rodata_end,
-                min_length,
-                &mut strings,
-                &mut seen,
-            );
+            extract_backward_strings(i, &scan, &mut strings, &mut seen);
 
             // Extract value strings after CALL (forward-scanning, kept separate)
-            extract_amd64_value_string(
-                i,
-                text_data,
-                text_addr,
-                rodata_data,
-                rodata_addr,
-                rodata_end,
-                min_length,
-                &mut strings,
-                &mut seen,
-            );
+            extract_amd64_value_string(i, &scan, &mut strings, &mut seen);
 
             strings
         })
@@ -838,18 +766,19 @@ fn mov_imm(b: &[u8], at: usize) -> Option<(u8, u32)> {
 /// *different* register, validating the resulting slice as a printable string.
 /// A stack-stored length (`MOV $len, disp(RSP)`) is the fallback for strings
 /// spilled into a struct on the stack.
-#[allow(clippy::too_many_arguments)]
 fn extract_backward_strings(
     call_pos: usize,
-    text_data: &[u8],
-    text_addr: u64,
-    rodata_data: &[u8],
-    rodata_addr: u64,
-    rodata_end: u64,
-    min_length: usize,
+    scan: &Scan<'_>,
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
+    let Scan {
+        text: text_data,
+        text_addr,
+        rodata_addr,
+        rodata_end,
+        ..
+    } = *scan;
     // 256 bytes back covers a string spilled to the stack ahead of its CALL
     // and the longer Go setup sequences seen around runtime.concatstring2.
     // The LEA+immediate-length pair itself remains exact, so widening this
@@ -885,17 +814,9 @@ fn extract_backward_strings(
             // LEA destination (reg field + REX.R): a length MOV into this same
             // register would clobber the pointer, so it is never the length.
             let lea_dest = ((modrm >> 3) & 0x07) | ((rex & 0x04) << 1);
-            if let Some((value, len_reg)) = find_inline_length_string(
-                pos,
-                call_pos,
-                text_data,
-                str_addr,
-                rodata_data,
-                rodata_addr,
-                rodata_end,
-                min_length,
-                lea_dest,
-            ) && seen.insert(value.clone())
+            if let Some((value, len_reg)) =
+                find_inline_length_string(pos, call_pos, scan, str_addr, lea_dest)
+                && seen.insert(value.clone())
             {
                 // Preserve the map-access hint: `LEA RSI, key; MOV EDX, keylen`
                 // precedes a runtime map lookup. Otherwise classify by content.
@@ -926,18 +847,21 @@ fn extract_backward_strings(
 /// (`[41] B8+r id`) or `MOV r64, imm32` (`(48|4C) C7 C0+r id`), then falls back
 /// to a stack store `MOV $len, disp(RSP)`. A length whose slice is non-printable
 /// or runs past rodata is skipped, so the first length yielding a valid string wins.
-#[allow(clippy::too_many_arguments)]
 fn find_inline_length_string(
     lea_pos: usize,
     call_pos: usize,
-    text_data: &[u8],
+    scan: &Scan<'_>,
     str_addr: u64,
-    rodata_data: &[u8],
-    rodata_addr: u64,
-    rodata_end: u64,
-    min_length: usize,
     lea_dest: u8,
 ) -> Option<(String, Option<u8>)> {
+    let Scan {
+        text: text_data,
+        rodata: rodata_data,
+        rodata_addr,
+        rodata_end,
+        min_length,
+        ..
+    } = *scan;
     let validate = |len: u64| -> Option<String> {
         if len == 0 || len > 1000 || str_addr.checked_add(len)? > rodata_end {
             return None;
@@ -1092,19 +1016,21 @@ fn decode_mov_imm32(text_data: &[u8], p: usize) -> Option<(u8, u64)> {
 ///
 /// This pattern captures strings built after calling allocation or initialization functions,
 /// common in Go runtime for map values and struct fields.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::similar_names)]
 fn extract_amd64_value_string(
     call_pos: usize,
-    text_data: &[u8],
-    text_addr: u64,
-    rodata_data: &[u8],
-    rodata_addr: u64,
-    rodata_end: u64,
-    min_length: usize,
+    scan: &Scan<'_>,
     strings: &mut Vec<ExtractedString>,
     seen: &mut HashSet<String>,
 ) {
+    let Scan {
+        text: text_data,
+        text_addr,
+        rodata: rodata_data,
+        rodata_addr,
+        rodata_end,
+        min_length,
+    } = *scan;
     let max_lookforward = (text_data.len() - call_pos - 5).min(80);
 
     // Find MOVQ $len, 8(RAX) (48 C7 40 08 xx xx xx xx)
@@ -1297,22 +1223,6 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_arm_bitmask_immediate_basic() {
-        // Test basic bitmask encoding for small values
-        // ORR X0, XZR, #n - encodes small immediate values
-        // ORR X0, XZR, #1: N=1, immr=0, imms=0 is a single set bit.
-        let inst = 0xB2400000;
-        assert_eq!(decode_arm_bitmask_immediate(inst), Some(1));
-    }
-
-    #[test]
-    fn test_decode_arm_bitmask_immediate_invalid_size() {
-        // Invalid element size encoding
-        let inst = 0xB2400000 | (0x3F << 10); // imms = 0x3F which is invalid
-        assert_eq!(decode_arm_bitmask_immediate(inst), None);
-    }
-
-    #[test]
     fn test_looks_like_key_basic() {
         assert!(looks_like_key("name"));
         assert!(looks_like_key("user_id"));
@@ -1422,15 +1332,12 @@ mod tests {
     #[test]
     fn test_decode_arm64_string_invalid_addr() {
         // Address outside rodata range
+        let scan = Scan::new(&[], 0x1000, &[0u8; 100], 0x5000, 4);
         let result = decode_arm64_string(
             0x90000000, // ADRP
             0x91000000, // ADD
             0xD2800000, // MOV
-            0,
-            0x1000,
-            &[0u8; 100],
-            0x5000, // rodata_addr
-            0x5100, // rodata_end
+            0, &scan,
         );
 
         assert!(result.is_none());
@@ -1439,15 +1346,10 @@ mod tests {
     #[test]
     fn test_decode_arm64_string_invalid_length() {
         // Length too long
+        let scan = Scan::new(&[], 0x5000, &[0u8; 100], 0x5000, 4);
         let result = decode_arm64_string(
-            0x90000000,
-            0x91000000,
-            0xD2BC4000, // Encodes large value
-            0,
-            0x5000,
-            &[0u8; 100],
-            0x5000,
-            0x5100,
+            0x90000000, 0x91000000, 0xD2BC4000, // Encodes large value
+            0, &scan,
         );
 
         // Should return None for invalid length
@@ -1461,17 +1363,8 @@ mod tests {
         let mut strings = Vec::new();
         let mut seen = HashSet::new();
 
-        extract_amd64_value_string(
-            0,
-            &text_data,
-            0x1000,
-            rodata_data,
-            0x2000,
-            0x2004,
-            4,
-            &mut strings,
-            &mut seen,
-        );
+        let scan = Scan::new(&text_data, 0x1000, rodata_data, 0x2000, 4);
+        extract_amd64_value_string(0, &scan, &mut strings, &mut seen);
 
         assert!(strings.is_empty());
     }

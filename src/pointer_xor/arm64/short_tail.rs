@@ -1,6 +1,7 @@
 //! Bounded 5..7/9..11-byte XOR literals: a verified word loop and integer tail.
 #![allow(clippy::cast_possible_truncation)]
 use super::{Region, Setup, bitmask, branch_target, fold, local_seed, sequence, word};
+use crate::arm64::RET;
 const MAX_STEPS: usize = 64;
 const MAX_DEPTH: usize = 2;
 
@@ -15,18 +16,18 @@ fn prefix4(
 ) -> Option<(u64, u64, usize)> {
     sequence(code, init, &[0xd2800009, 0xb900b3ff])?;
     let mut pc = start.checked_add(4)?;
-    if word(code, init.checked_add(8)?)? == 0xd65f03c0 {
+    if word(code, init.checked_add(8)?)? == RET {
         sequence(
             code,
             branch_target(code, pc)?,
-            &[0x790043ff, 0x52800028, 0x9102c3eb, 0xd65f03c0],
+            &[0x790043ff, 0x52800028, 0x9102c3eb, RET],
         )?;
         pc = pc.checked_add(4)?;
     } else {
         sequence(
             code,
             init.checked_add(8)?,
-            &[0x390083ff, 0x52800028, 0x9102c3eb, 0xd65f03c0],
+            &[0x390083ff, 0x52800028, 0x9102c3eb, RET],
         )?;
     }
     let low = word(code, pc)?;
@@ -51,7 +52,7 @@ fn prefix4(
         branch_target(code, pc.checked_add(12)?)?,
         &[
             0x52800008, 0xb869680d, 0x38696989, 0x2a0a0129, 0x4a0d0129, 0xb9000169, 0x910083eb,
-            0x52800089, 0xd65f03c0,
+            0x52800089, RET,
         ],
     )?;
     sequence(code, pc.checked_add(16)?, &[0x3707ffe8])?;
@@ -69,7 +70,7 @@ fn prefix(code: &Region<'_>, regions: &[Region<'_>], start: u64) -> Option<(u64,
                 code,
                 init,
                 &[
-                    0xd2800009, 0xf9005bff, 0x790043ff, 0x52800028, 0x9102c3eb, 0xd65f03c0,
+                    0xd2800009, 0xf9005bff, 0x790043ff, 0x52800028, 0x9102c3eb, RET,
                 ],
             )?;
             (
@@ -77,7 +78,7 @@ fn prefix(code: &Region<'_>, regions: &[Region<'_>], start: u64) -> Option<(u64,
                 12,
                 [
                     0x52800008, 0xf869680d, 0x38696989, 0xaa0a0129, 0xca0d0129, 0xf9000169,
-                    0x910083eb, 0x52800109, 0xd65f03c0,
+                    0x910083eb, 0x52800109, RET,
                 ],
             )
         }
@@ -89,16 +90,14 @@ fn prefix(code: &Region<'_>, regions: &[Region<'_>], start: u64) -> Option<(u64,
             sequence(
                 code,
                 init,
-                &[
-                    0xd280000b, 0xf9005bff, zero, 0x52800028, 0x9102c3ea, 0xd65f03c0,
-                ],
+                &[0xd280000b, 0xf9005bff, zero, 0x52800028, 0x9102c3ea, RET],
             )?;
             (
                 9,
                 12,
                 [
                     0x52800008, 0xf86b680d, 0x386b698b, 0xaa09016b, 0xca0d016b, 0xf900014b,
-                    0x910083ea, 0x5280010b, 0xd65f03c0,
+                    0x910083ea, 0x5280010b, RET,
                 ],
             )
         }
@@ -106,14 +105,14 @@ fn prefix(code: &Region<'_>, regions: &[Region<'_>], start: u64) -> Option<(u64,
             sequence(
                 code,
                 init,
-                &[0xd280000c, 0xf9005bff, 0x52800028, 0x9102c3ea, 0xd65f03c0],
+                &[0xd280000c, 0xf9005bff, 0x52800028, 0x9102c3ea, RET],
             )?;
             (
                 9,
                 11,
                 [
                     0x52800008, 0xf86c680d, 0x386c696c, 0xaa09018c, 0xca0d018c, 0xf900014c,
-                    0x910083ea, 0x5280010c, 0xd65f03c0,
+                    0x910083ea, 0x5280010c, RET,
                 ],
             )
         }
@@ -195,7 +194,7 @@ fn tail(
             end = end.max(next);
         }
         if w & 0x7c000000 == 0x14000000 {
-            let target = pc.checked_add_signed(i64::from(w & 0x03ffffff) << 38 >> 36)?;
+            let target = crate::arm64::branch_target(pc, w)?;
             word(code, target)?;
             if args == [true, true] && length.is_some() {
                 let n = length?;
@@ -214,7 +213,7 @@ fn tail(
             pc = target;
             continue;
         }
-        if w == 0xd65f03c0 {
+        if w == RET {
             depth = depth.checked_sub(1)?;
             pc = returns[depth];
             continue;
@@ -375,13 +374,7 @@ pub(super) fn extract(
     if bytes.len() < min {
         return None;
     }
-    let value = String::from_utf8(bytes).ok()?;
-    if !value
-        .chars()
-        .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
-    {
-        return None;
-    }
+    let value = crate::text::readable(bytes)?;
     Some(crate::ExtractedString {
         kind: crate::classify_string(&value),
         value,

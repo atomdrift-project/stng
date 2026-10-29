@@ -1,13 +1,31 @@
 //! Bounded def/use checks for a constant pointer copied into a call argument.
 use super::{decode_arm_mov_immediate, decode_rodata_string};
-use crate::arm64_effects;
+use crate::arm64::walk::{self, Path};
+use crate::arm64::{effects, frame};
 const MAX_CODE: usize = 8 * 1024 * 1024;
 const MAX_CANDIDATES: usize = 256;
 const MAX_HELPERS: usize = 128;
-const MAX_WORDS: usize = 128;
-const MAX_BRANCHES: usize = 8;
-const MAX_DEPTH: usize = 2;
 const WINDOW: usize = 32;
+
+/// The registers a path writes, ignoring what it saves and restores.
+#[derive(Clone, Copy)]
+struct Writes(u32);
+
+impl Path for Writes {
+    const UNION: bool = true;
+    fn step(&mut self, inst: u32) -> Option<()> {
+        self.0 |= effects::writes(inst)?;
+        Some(())
+    }
+    fn enter(&mut self, _return_pc: u64) -> Option<()> {
+        // BL writes the link register, X30.
+        self.0 |= 1 << 30;
+        Some(())
+    }
+    fn returned(&self) -> Option<u32> {
+        Some(self.0)
+    }
+}
 
 pub(super) struct Context<'a> {
     code: &'a [u8],
@@ -25,103 +43,36 @@ impl<'a> Context<'a> {
         }
     }
     fn word(&self, pc: usize) -> Option<u32> {
-        if pc & 3 != 0 {
-            return None;
-        }
-        Some(u32::from_le_bytes(
-            self.code.get(pc..pc.checked_add(4)?)?.try_into().ok()?,
-        ))
+        crate::arm64::word(self.code, pc)
     }
     fn target(&self, pc: usize, bits: u32, width: u32) -> Option<usize> {
-        let delta = i64::from(bits) << (64 - width) >> (62 - width);
-        usize::try_from(
-            self.addr
-                .checked_add(pc as u64)?
-                .checked_add_signed(delta)?
-                .checked_sub(self.addr)?,
-        )
-        .ok()
+        let to = crate::arm64::relative(self.addr.checked_add(pc as u64)?, bits, width)?;
+        usize::try_from(to.checked_sub(self.addr)?).ok()
     }
+    /// The registers the helper at `entry` may change, cached per entry.
     fn helper(&mut self, entry: usize) -> Option<u32> {
-        match self.helpers.binary_search_by_key(&entry, |r| r.0) {
-            Ok(i) => self.helpers[i].1,
-            Err(i) => {
-                if self.helpers.len() == MAX_HELPERS {
-                    return None;
-                }
-                let mut budget = MAX_WORDS;
-                let value = self.summarize(entry, 0, &mut budget).map(|writes| {
-                    // Only framed helpers touching saved GPRs need the more precise
-                    // stack check. Unsupported stores/calls/paths retain the union result.
-                    if writes & (1 << 31) != 0 && writes & 0x1ff80000 != 0 {
-                        self.addr
-                            .checked_add(entry as u64)
-                            .and_then(|address| {
-                                crate::arm64_frame::clobbers(self.code, self.addr, address)
-                            })
-                            .unwrap_or(writes)
-                    } else {
-                        writes
-                    }
-                });
-                self.helpers.insert(i, (entry, value));
-                value
-            }
-        }
-    }
-    fn summarize(&self, entry: usize, depth: usize, budget: &mut usize) -> Option<u32> {
-        if depth > MAX_DEPTH {
+        let i = match self.helpers.binary_search_by_key(&entry, |r| r.0) {
+            Ok(i) => return self.helpers[i].1,
+            Err(i) => i,
+        };
+        if self.helpers.len() == MAX_HELPERS {
             return None;
         }
-        let mut pending = [0usize; MAX_BRANCHES + 1];
-        pending[0] = entry;
-        let mut pending_len = 1;
-        let mut seen = [0usize; MAX_WORDS];
-        let mut seen_len = 0;
-        let mut branches = 0;
-        let mut writes = 0;
-        let mut returned = false;
-        while pending_len > 0 {
-            pending_len -= 1;
-            let mut pc = pending[pending_len];
-            loop {
-                if seen[..seen_len].contains(&pc) {
-                    break;
-                }
-                *budget = budget.checked_sub(1)?;
-                if seen_len == seen.len() {
-                    return None;
-                }
-                seen[seen_len] = pc;
-                seen_len += 1;
-                let w = self.word(pc)?;
-                if w == 0xd65f03c0 {
-                    returned = true;
-                    break;
-                }
-                writes |= arm64_effects::writes(w)?;
-                if w & 0xfc000000 == 0x94000000 {
-                    writes |=
-                        self.summarize(self.target(pc, w & 0x03ffffff, 26)?, depth + 1, budget)?;
-                } else if w & 0xfc000000 == 0x14000000 {
-                    branches += 1;
-                    if branches > MAX_BRANCHES {
-                        return None;
-                    }
-                    pc = self.target(pc, w & 0x03ffffff, 26)?;
-                    continue;
-                } else if let Some((bits, width)) = conditional(w) {
-                    branches += 1;
-                    if branches > MAX_BRANCHES || pending_len == pending.len() {
-                        return None;
-                    }
-                    pending[pending_len] = self.target(pc, bits, width)?;
-                    pending_len += 1;
-                }
-                pc = pc.checked_add(4)?;
-            }
+        let value = self.summarize(entry);
+        self.helpers.insert(i, (entry, value));
+        value
+    }
+    /// Every register the helper at `entry` writes. A framed helper (it moves
+    /// SP) that writes callee-saved X19..X28 may only be spilling them, so the
+    /// stack model narrows the set; where that model cannot follow, the union
+    /// stands.
+    fn summarize(&self, entry: usize) -> Option<u32> {
+        let address = self.addr.checked_add(entry as u64)?;
+        let writes = walk::walk(self.code, self.addr, address, Writes(0), 2)?;
+        if writes & (1 << 31) != 0 && writes & 0x1ff8_0000 != 0 {
+            return Some(frame::clobbers(self.code, self.addr, address).unwrap_or(writes));
         }
-        returned.then_some(writes)
+        Some(writes)
     }
     /// Establish a literal on a path from a local ADRP/ADD to a pointer copy.
     /// This does not claim that the call executes or that every incoming path
@@ -199,25 +150,16 @@ impl<'a> Context<'a> {
             let writes = if w & 0xfc000000 == 0x94000000 {
                 self.helper(self.target(pc, w & 0x03ffffff, 26)?)?
             } else {
-                arm64_effects::writes(w)?
+                effects::writes(w)?
             };
             if writes & (1 << source) != 0 {
                 return None;
             }
             // Returns are not fallthrough paths to this call.
-            if w == 0xd65f03c0 {
+            if w == crate::arm64::RET {
                 return None;
             }
         }
-        None
-    }
-}
-fn conditional(w: u32) -> Option<(u32, u32)> {
-    if w & 0xff000010 == 0x54000000 || w & 0x7e000000 == 0x34000000 {
-        Some(((w >> 5) & 0x7ffff, 19))
-    } else if w & 0x7e000000 == 0x36000000 {
-        Some(((w >> 5) & 0x3fff, 14))
-    } else {
         None
     }
 }

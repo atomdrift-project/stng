@@ -2,6 +2,7 @@
 //! The caller must first validate the literal setup and complete decoding loop.
 #![allow(clippy::cast_possible_truncation)]
 use super::Region;
+use crate::arm64::RET;
 mod immediate;
 mod loops;
 mod short_tail;
@@ -34,35 +35,12 @@ fn shifted(value: u32, kind: u32, amount: u32) -> u32 {
 }
 
 // Decode a 32-bit logical immediate, including repeated two-bit elements.
+/// A 32-bit logical immediate; 64-bit elements (N=1) are not modelled.
 fn bitmask(inst: u32) -> Option<u32> {
     if inst & (1 << 22) != 0 {
         return None;
     }
-    let s = (inst >> 10) & 63;
-    let r = (inst >> 16) & 63;
-    let len = 31u32.checked_sub(((!s) & 63).leading_zeros())?;
-    if !(1..=5).contains(&len) {
-        return None;
-    }
-    let width = 1 << len;
-    let levels = width - 1;
-    let ones = s & levels;
-    if ones == levels {
-        return None;
-    }
-    let element_mask = u32::MAX >> (32 - width);
-    let pattern = (1u32 << (ones + 1)) - 1;
-    let rotate = r & levels;
-    let element = if rotate == 0 {
-        pattern
-    } else {
-        (pattern >> rotate | pattern << (width - rotate)) & element_mask
-    };
-    let mut value = 0;
-    for shift in (0..32).step_by(width as usize) {
-        value |= element << shift;
-    }
-    Some(value)
+    u32::try_from(crate::arm64::bitmask_imm(inst)? & u64::from(u32::MAX)).ok()
 }
 
 /// Fold only pure 32-bit arithmetic followed by `ADD X0,X0,Xn; RET`.
@@ -79,15 +57,14 @@ pub(super) fn fold(code: &Region<'_>, start: u64, base: u64, seed: u32) -> Optio
         let inst = word(code, pc)?;
         pc = pc.checked_add(4)?;
         if finished {
-            return (inst == 0xd65f03c0).then_some(regs[0]?);
+            return (inst == RET).then_some(regs[0]?);
         }
         if inst & 0xfc000000 == 0x14000000 {
             tails += 1;
             if tails > MAX_TAILS {
                 return None;
             }
-            let delta = i64::from(inst & 0x03ffffff) << 38 >> 36;
-            pc = pc.checked_sub(4)?.checked_add_signed(delta)?;
+            pc = crate::arm64::branch_target(pc.checked_sub(4)?, inst)?;
             continue;
         }
         // The only 64-bit operation allowed is the final pointer addition.
@@ -221,7 +198,7 @@ fn branch_target(code: &Region<'_>, pc: u64) -> Option<u64> {
     if inst & 0xfc000000 != 0x94000000 {
         return None;
     }
-    pc.checked_add_signed(i64::from(inst & 0x03ffffff) << 38 >> 36)
+    crate::arm64::branch_target(pc, inst)
 }
 
 fn sequence(code: &Region<'_>, pc: u64, words: &[u32]) -> Option<()> {
@@ -245,7 +222,7 @@ fn base_store(code: &Region<'_>, call: u64, add: bool) -> Option<()> {
     if matches!(word(code, pc)?, 0x9102c3e8 | 0x9102c3f3) {
         pc = pc.checked_add(4)?;
     }
-    sequence(code, pc, &[0xd65f03c0])
+    sequence(code, pc, &[RET])
 }
 
 /// Recognize argument setup only; does not establish a complete XOR literal.
@@ -259,7 +236,7 @@ pub(super) fn setup(code: &Region<'_>, call: u64) -> Option<Setup> {
     // `str w8, [sp, #0xb0]; add x8, sp, #0xb0; ret`.
     let seed_call = call.checked_sub(8)?;
     let (start, seed) = if branch_target(code, seed_call)
-        .and_then(|helper| sequence(code, helper, &[0xb900b3e8, 0x9102c3e8, 0xd65f03c0]))
+        .and_then(|helper| sequence(code, helper, &[0xb900b3e8, 0x9102c3e8, RET]))
         .is_some()
     {
         let low = word(code, call.checked_sub(16)?)?;
@@ -412,15 +389,9 @@ pub(super) fn extract(
             continue;
         };
         let decoded: Vec<_> = encoded.iter().zip(key).map(|(a, b)| a ^ b).collect();
-        let Ok(value) = String::from_utf8(decoded) else {
+        let Some(value) = crate::text::readable(decoded) else {
             continue;
         };
-        if !value
-            .chars()
-            .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
-        {
-            continue;
-        }
         let Some(offset) = slice_base
             .checked_add(cipher.offset)
             .and_then(|n| n.checked_add(literal.cipher - cipher.addr))

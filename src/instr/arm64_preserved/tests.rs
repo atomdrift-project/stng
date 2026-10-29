@@ -1,5 +1,5 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
+use crate::arm64::walk::{MAX_BRANCHES, MAX_STEPS};
 use goblin::{Object, mach::Mach};
 static FILE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
     crate::test_fixture("testdata/macho/rust_heap_xor_installer_universal.macho")
@@ -156,10 +156,11 @@ fn cache_attempt_work_and_recursion_limits() {
     looped[32] = 0x94000000;
     let b: Vec<_> = looped.iter().flat_map(|w| w.to_le_bytes()).collect();
     assert!(Context::new(&b, 0x1000).helper(128).is_none());
-    let mut budget = 0;
-    assert!(ctx.summarize(32, 0, &mut budget).is_none());
-    let mut budget = 1;
-    assert_eq!(ctx.summarize(32, 0, &mut budget), Some(0));
+    // A lone RET writes nothing.
+    assert_eq!(
+        crate::arm64::walk::walk(&bytes, 0x1000, 0x1000 + 32, Writes(0), 2),
+        Some(0)
+    );
 }
 #[test]
 fn bounds_and_missing_or_malformed_literal_reject() {
@@ -228,7 +229,7 @@ fn exact_window_code_and_helper_branch_limits() {
     );
 
     // Both conditional successors are checked, including a clobber on the taken path.
-    let mut words = vec![0xd65f03c0u32; MAX_WORDS + 2];
+    let mut words = vec![0xd65f03c0u32; MAX_STEPS + 2];
     words[0] = 0x54000040; // B.EQ +8
     words[2] = 0xaa0003f5;
     let bytes: Vec<_> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
@@ -245,13 +246,13 @@ fn exact_window_code_and_helper_branch_limits() {
             count == MAX_BRANCHES
         );
     }
-    for count in [MAX_WORDS, MAX_WORDS + 1] {
+    for count in [MAX_STEPS, MAX_STEPS + 1] {
         words.fill(0xd65f03c0);
         words[..count - 1].fill(0xd503201f);
         let bytes: Vec<_> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
         assert_eq!(
             Context::new(&bytes, 0x1000).helper(0).is_some(),
-            count == MAX_WORDS
+            count == MAX_STEPS
         );
     }
 }

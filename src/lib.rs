@@ -53,8 +53,6 @@ mod validation_thresholds;
 
 // Binary format modules
 mod arm64;
-mod arm64_effects;
-mod arm64_frame;
 mod arm64_stack_xor;
 pub mod binary;
 mod binary_net;
@@ -73,6 +71,8 @@ mod pointer_xor;
 mod raw;
 mod stack_strings;
 mod swift_small_strings;
+mod text;
+mod x86;
 
 // Script deobfuscation
 pub mod script;
@@ -116,9 +116,7 @@ pub use xor::{
 };
 
 // Internal — not part of the stable public API
-pub(crate) use go::{
-    GoStringExtractor, extract_null_separated_strings, extract_varint_prefixed_strings,
-};
+pub(crate) use go::{GoStringExtractor, pclntab_strings};
 pub use overlay::extract_overlay_strings;
 pub(crate) use rust::RustStringExtractor;
 pub(crate) use stack_strings::{extract_stack_strings, extract_stack_strings_with_context};

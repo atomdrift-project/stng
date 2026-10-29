@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
 use goblin::{Object, mach::Mach};
 static SAMPLE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {
@@ -26,17 +25,8 @@ fn final_call(words: &[u32]) -> Vec<ExtractedString> {
     let bytes: Vec<_> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     let mut out = Vec::new();
     let mut seen = HashSet::new();
-    extract_arm64_inline_string(
-        bytes.len() - 4,
-        &bytes,
-        0x1000,
-        b"helloworld",
-        0x2000,
-        0x200a,
-        4,
-        &mut out,
-        &mut seen,
-    );
+    let scan = Scan::new(&bytes, 0x1000, b"helloworld", 0x2000, 4);
+    extract_arm64_inline_string(bytes.len() - 4, &scan, &mut out, &mut seen);
     out
 }
 #[test]

@@ -7,6 +7,7 @@
 
 mod arm64;
 
+use crate::x86::{callee_saved, memory, reg_move};
 use crate::{ExtractedString, StringMethod, classify_string};
 use goblin::mach::MachO;
 use iced_x86::{Decoder, DecoderOptions, Instruction, MemorySize, Mnemonic, OpKind, Register};
@@ -51,24 +52,18 @@ pub(crate) fn extract_macho(
     }
     let mut code = None;
     let mut constants = Vec::new();
-    for segment in &macho.segments {
-        if segment.name().ok() != Some("__TEXT") {
-            continue;
-        }
-        let Ok(sections) = segment.sections() else {
-            continue;
+    for (section, bytes) in crate::binary::macho_sections(macho)
+        .filter(|(section, _)| section.segname().ok() == Some("__TEXT"))
+    {
+        let region = Region {
+            addr: section.addr,
+            offset: u64::from(section.offset),
+            bytes,
         };
-        for (section, bytes) in sections {
-            let region = Region {
-                addr: section.addr,
-                offset: u64::from(section.offset),
-                bytes,
-            };
-            match section.name().ok() {
-                Some("__text") if bytes.len() <= MAX_CODE => code = Some(region),
-                Some("__const" | "__cstring") => constants.push(region),
-                _ => {}
-            }
+        match section.name().ok() {
+            Some("__text") if bytes.len() <= MAX_CODE => code = Some(region),
+            Some("__const" | "__cstring") => constants.push(region),
+            _ => {}
         }
     }
     let Some(code) = code else { return Vec::new() };
@@ -101,15 +96,9 @@ pub(crate) fn extract_macho(
             continue;
         };
         let decoded: Vec<u8> = encoded.iter().zip(key_bytes).map(|(a, b)| a ^ b).collect();
-        let Ok(value) = String::from_utf8(decoded) else {
+        let Some(value) = crate::text::readable(decoded) else {
             continue;
         };
-        if !value
-            .chars()
-            .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
-        {
-            continue;
-        }
         let Some(offset) = slice_base
             .checked_add(cipher_region.offset)
             .and_then(|n| n.checked_add(cipher - cipher_region.addr))
@@ -126,22 +115,6 @@ pub(crate) fn extract_macho(
         });
     }
     output
-}
-
-fn reg_move(i: &Instruction, dst: Register, src: Register) -> bool {
-    i.mnemonic() == Mnemonic::Mov
-        && i.op0_kind() == OpKind::Register
-        && i.op1_kind() == OpKind::Register
-        && i.op0_register() == dst
-        && i.op1_register() == src
-}
-
-fn memory(i: &Instruction, base: Register, index: Register, displacement: u64) -> bool {
-    i.memory_base() == base
-        && i.memory_index() == index
-        && i.memory_displacement64() == displacement
-        && i.memory_index_scale() == 1
-        && i.segment_prefix() == Register::None
 }
 
 fn rip_lea(i: &Instruction) -> bool {
@@ -261,11 +234,7 @@ fn read_loop(code: &Region<'_>, setup: &Setup) -> Option<(u64, usize)> {
         let disp = i.memory_displacement64();
         zeros[zero_count] = if memory(&i, setup.stack_base, NoReg, disp) {
             disp
-        } else if matches!(
-            setup.stack_reg,
-            Register::RBX | Register::R12 | Register::R13 | Register::R14 | Register::R15
-        ) && memory(&i, setup.stack_reg, NoReg, disp)
-        {
+        } else if callee_saved(setup.stack_reg) && memory(&i, setup.stack_reg, NoReg, disp) {
             setup.stack_disp.wrapping_add(disp)
         } else {
             return None;
@@ -286,10 +255,7 @@ fn read_loop(code: &Region<'_>, setup: &Setup) -> Option<(u64, usize)> {
     if first.mnemonic() == Mnemonic::Mov
         && first.op0_kind() == OpKind::Register
         && first.op1_kind() == OpKind::Memory
-        && matches!(
-            first.op0_register(),
-            Register::RBX | Register::R12 | Register::R13 | Register::R14 | Register::R15
-        )
+        && callee_saved(first.op0_register())
         && ![counter, src].contains(&first.op0_register())
         && memory(
             &first,

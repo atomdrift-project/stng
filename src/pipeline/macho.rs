@@ -1,7 +1,7 @@
 //! Mach-O: thin and universal binaries.
 
 use super::Scan;
-use super::merge_imports;
+use super::{extend_unclaimed, merge_imports};
 use crate::GoStringExtractor;
 use crate::RustStringExtractor;
 use crate::StringKind;
@@ -12,15 +12,14 @@ use crate::collect_macho_section_info;
 use crate::collect_macho_segments;
 use crate::entitlements;
 use crate::extract_macho_imports;
-use crate::extract_null_separated_strings;
 use crate::extract_raw_strings;
 use crate::extract_stack_strings_from_ranges;
-use crate::extract_varint_prefixed_strings;
 use crate::fmix_xor;
 use crate::heap_xor;
 use crate::lcg_xor;
 use crate::macho_go_skip_ranges;
 use crate::macho_has_go_sections;
+use crate::pclntab_strings;
 use crate::pointer_xor;
 use crate::swift_small_strings;
 use crate::{ExtractOptions, ExtractedString};
@@ -73,6 +72,25 @@ fn slice_decoders(
     strings
 }
 
+/// Append the section scan and the raw scan, each value once, skipping
+/// values `strings` already holds: the section-tagged copy wins.
+fn extend_with_section_scan(
+    strings: &mut Vec<ExtractedString>,
+    data: &[u8],
+    min_length: usize,
+    segments: &[String],
+    section_info: &[binary::SectionInfo],
+) {
+    let mut seen: HashSet<String> = HashSet::new();
+    let candidates: Vec<ExtractedString> =
+        scan_macho_sections(data, min_length, segments, section_info)
+            .into_iter()
+            .chain(extract_raw_strings(data, min_length, segments, &[]))
+            .filter(|s| seen.insert(s.value.clone()))
+            .collect();
+    extend_unclaimed(strings, candidates);
+}
+
 /// Strings from a thin (single-architecture) Mach-O.
 pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     let min_length = opts.min_length;
@@ -96,14 +114,10 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
         // structure-based + inline-pattern extractors already cover
         // these regions with correct boundaries.
         let skip = macho_go_skip_ranges(macho);
-        let new_raw: Vec<_> = {
-            let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-            extract_raw_strings(data, min_length, &segments, &skip)
-                .into_iter()
-                .filter(|s| !known.contains(s.value.as_str()))
-                .collect()
-        };
-        strings.extend(new_raw);
+        extend_unclaimed(
+            &mut strings,
+            extract_raw_strings(data, min_length, &segments, &skip),
+        );
     } else if binary::macho_is_rust(macho) {
         let extractor = RustStringExtractor::new(min_length);
         // Thin binary: the slice is the whole file, so no slice base.
@@ -111,16 +125,7 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
         // Same fallback an unknown Mach-O gets (see below): the Rust
         // passes only cover the literals Rust code names.
         strings.extend(opts.r2_strings.iter().flatten().cloned());
-        let extra: Vec<ExtractedString> = {
-            let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-            let mut seen: HashSet<String> = HashSet::new();
-            scan_macho_sections(data, min_length, &segments, &section_info)
-                .into_iter()
-                .chain(extract_raw_strings(data, min_length, &segments, &[]))
-                .filter(|s| !known.contains(s.value.as_str()) && seen.insert(s.value.clone()))
-                .collect()
-        };
-        strings.extend(extra);
+        extend_with_section_scan(&mut strings, data, min_length, &segments, &section_info);
     } else {
         // Unknown Mach-O (C/C++/Objective-C/asm). Use r2 if available,
         // then the targeted extractor, then an unconditional per-section
@@ -140,16 +145,7 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
         // outside any enumerated section (__LINKEDIT, padding, minimal
         // layouts). Merge by value: the section-tagged copy wins and
         // nothing already held by r2/the targeted extractor is duped.
-        let extra: Vec<ExtractedString> = {
-            let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-            let mut seen: HashSet<String> = HashSet::new();
-            scan_macho_sections(data, min_length, &segments, &section_info)
-                .into_iter()
-                .chain(extract_raw_strings(data, min_length, &segments, &[]))
-                .filter(|s| !known.contains(s.value.as_str()) && seen.insert(s.value.clone()))
-                .collect()
-        };
-        strings.extend(extra);
+        extend_with_section_scan(&mut strings, data, min_length, &segments, &section_info);
     }
     if !is_go_binary {
         // Capture opacity before adding instruction-derived stack
@@ -247,14 +243,10 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
                     .into_iter()
                     .map(|r| r.start.saturating_add(base)..r.end.saturating_add(base))
                     .collect();
-                let new_raw: Vec<_> = {
-                    let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-                    extract_raw_strings(data, min_length, &segments, &skip)
-                        .into_iter()
-                        .filter(|s| !known.contains(s.value.as_str()))
-                        .collect()
-                };
-                strings.extend(new_raw);
+                extend_unclaimed(
+                    &mut strings,
+                    extract_raw_strings(data, min_length, &segments, &skip),
+                );
             } else if binary::macho_is_rust(&macho) {
                 is_rust = true;
                 let extractor = RustStringExtractor::new(min_length);
@@ -272,13 +264,7 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
         // Also do raw scan to catch anything r2 missed
         let raw = extract_raw_strings(data, min_length, &segments, &[]);
         if is_rust {
-            let known: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-            let fresh: Vec<_> = raw
-                .into_iter()
-                .filter(|s| !known.contains(s.value.as_str()))
-                .collect();
-            drop(known);
-            strings.extend(fresh);
+            extend_unclaimed(&mut strings, raw);
         } else {
             strings.extend(raw);
         }
@@ -443,11 +429,7 @@ fn extract_macho_pclntab_strings(
     let t_pcln = std::time::Instant::now();
     // Same two encodings as the ELF pass: NUL-separated funcnametab and
     // varint-prefixed pkgnamestab.
-    let (varints, mut nulls) = crate::par::join(
-        section_bytes.len(),
-        || extract_varint_prefixed_strings(section_bytes, start as u64, min_length),
-        || extract_null_separated_strings(section_bytes, start as u64, min_length),
-    );
+    let (mut nulls, varints) = pclntab_strings(section_bytes, start as u64, min_length);
     nulls.extend(varints);
     tracing::debug!(
         "TIME: Go Mach-O __gopclntab scan took {:?} ({} symbols)",

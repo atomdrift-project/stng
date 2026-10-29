@@ -6,6 +6,7 @@
 
 mod arm64;
 
+use crate::x86::{callee_saved, memory, reg_move};
 use crate::{ExtractedString, StringMethod, classify_string};
 use goblin::mach::MachO;
 use iced_x86::{Decoder, DecoderOptions, Instruction, MemorySize, Mnemonic, OpKind, Register};
@@ -23,58 +24,44 @@ pub(crate) fn extract_macho(
     if !arm64 && macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
         return Vec::new();
     }
-    for segment in &macho.segments {
-        if segment.name().ok() != Some("__TEXT") {
+    for (section, code) in crate::binary::macho_sections(macho)
+        .filter(|(section, _)| section.segname().ok() == Some("__TEXT"))
+    {
+        if section.name().ok() != Some("__text") || code.len() > MAX_CODE {
             continue;
         }
-        let Ok(sections) = segment.sections() else {
-            continue;
-        };
-        for (section, code) in sections {
-            if section.name().ok() != Some("__text") || code.len() > MAX_CODE {
-                continue;
-            }
-            if arm64 {
-                return arm64::extract(
-                    code,
-                    section.addr,
-                    u64::from(section.offset),
-                    slice_base,
-                    min_length,
-                );
-            }
-            let mut results = Vec::new();
-            // push 1; pop rsi; mov edi, length; call allocator
-            for start in memchr::memmem::find_iter(code, b"\x6a\x01\x5e\xbf").take(MAX_CANDIDATES) {
-                if let Some(value) = decode_pair(code, section.addr, start, min_length) {
-                    let Some(offset) = slice_base
-                        .checked_add(u64::from(section.offset))
-                        .and_then(|n| n.checked_add(start as u64))
-                    else {
-                        continue;
-                    };
-                    results.push(ExtractedString {
-                        kind: classify_string(&value.0),
-                        value: value.0,
-                        data_offset: offset,
-                        data_len: value.1,
-                        method: StringMethod::XorDecode,
-                        ..Default::default()
-                    });
-                }
-            }
-            return results;
+        if arm64 {
+            return arm64::extract(
+                code,
+                section.addr,
+                u64::from(section.offset),
+                slice_base,
+                min_length,
+            );
         }
+        let mut results = Vec::new();
+        // push 1; pop rsi; mov edi, length; call allocator
+        for start in memchr::memmem::find_iter(code, b"\x6a\x01\x5e\xbf").take(MAX_CANDIDATES) {
+            if let Some(value) = decode_pair(code, section.addr, start, min_length) {
+                let Some(offset) = slice_base
+                    .checked_add(u64::from(section.offset))
+                    .and_then(|n| n.checked_add(start as u64))
+                else {
+                    continue;
+                };
+                results.push(ExtractedString {
+                    kind: classify_string(&value.0),
+                    value: value.0,
+                    data_offset: offset,
+                    data_len: value.1,
+                    method: StringMethod::XorDecode,
+                    ..Default::default()
+                });
+            }
+        }
+        return results;
     }
     Vec::new()
-}
-
-fn reg_move(i: &Instruction, dst: Register, src: Register) -> bool {
-    i.mnemonic() == Mnemonic::Mov
-        && i.op0_kind() == OpKind::Register
-        && i.op1_kind() == OpKind::Register
-        && i.op0_register() == dst
-        && i.op1_register() == src
 }
 
 fn immediate(i: &Instruction) -> Option<u64> {
@@ -87,20 +74,6 @@ fn immediate(i: &Instruction) -> Option<u64> {
         OpKind::Immediate32to64 => i.immediate32to64().cast_unsigned(),
         _ => return None,
     })
-}
-
-fn preserved(r: Register) -> bool {
-    matches!(
-        r,
-        Register::RBX | Register::R12 | Register::R13 | Register::R14 | Register::R15
-    )
-}
-
-fn memory(i: &Instruction, base: Register, offset: u64) -> bool {
-    i.memory_base() == base
-        && i.memory_index() == Register::None
-        && i.memory_displacement64() == offset
-        && i.segment_prefix() == Register::None
 }
 
 struct Array {
@@ -126,7 +99,7 @@ fn read_array(d: &mut Decoder<'_>, min_length: usize) -> Option<Array> {
         || call.mnemonic() != Mnemonic::Call
         || call.op0_kind() != OpKind::NearBranch64
         || !reg_move(&save, save.op0_register(), Register::RAX)
-        || !preserved(save.op0_register())
+        || !callee_saved(save.op0_register())
     {
         return None;
     }
@@ -166,7 +139,7 @@ fn read_array(d: &mut Decoder<'_>, min_length: usize) -> Option<Array> {
         };
         if store.mnemonic() != Mnemonic::Mov
             || store.op0_kind() != OpKind::Memory
-            || !memory(&store, base, bytes.len() as u64)
+            || !memory(&store, base, Register::None, bytes.len() as u64)
             || bytes.len() + width > len
         {
             return None;
@@ -205,7 +178,7 @@ fn decode_pair(code: &[u8], vma: u64, start: usize, min_length: usize) -> Option
     let context = s[1].op0_register();
     let byte = s[9].op0_register();
     let registers = [a.base, b.base, index, context, Register::RBX];
-    if registers.iter().any(|&r| !preserved(r))
+    if registers.iter().any(|&r| !callee_saved(r))
         || registers
             .iter()
             .enumerate()
@@ -226,12 +199,12 @@ fn decode_pair(code: &[u8], vma: u64, start: usize, min_length: usize) -> Option
         || s[9].op0_kind() != OpKind::Register
         || byte != Register::BL
         || s[9].op1_kind() != OpKind::Memory
-        || !memory(&s[9], Register::RAX, 0)
+        || !memory(&s[9], Register::RAX, Register::None, 0)
         || s[15].mnemonic() != Mnemonic::Xor
         || s[15].op0_kind() != OpKind::Memory
         || s[15].op1_kind() != OpKind::Register
         || s[15].op1_register() != byte
-        || !memory(&s[15], Register::RAX, 0)
+        || !memory(&s[15], Register::RAX, Register::None, 0)
         || s[16].mnemonic() != Mnemonic::Inc
         || s[16].op0_register() != index
         || s[17].mnemonic() != Mnemonic::Jmp
