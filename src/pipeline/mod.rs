@@ -67,7 +67,7 @@ fn scan_other(data: &[u8], opts: &ExtractOptions) -> Scan {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
     // Unknown format - use r2 if available, plus raw scan
-    strings.extend(opts.r2_strings.iter().flatten().cloned());
+    strings.extend(opts.hints.strings.iter().cloned());
     // Always do raw scan for unknown formats (r2 strings complement, not replace)
     if !data.is_empty() {
         strings.extend(extract_raw_strings(data, min_length, &[], &[]));
@@ -103,14 +103,12 @@ fn finish(
     let is_pe = matches!(object, Object::PE(_));
     let excluded_ranges = binary::code_ranges_from_sections(&section_info);
 
-    if !is_go_binary || opts.xor_key_offsets.is_some() || opts.xor_key.is_some() {
+    if !is_go_binary || opts.xor_explicit() {
         apply_xor_scan(&mut strings, data, opts, is_pe, &excluded_ranges);
     }
 
     // IPs an external disassembler recovered from `connect()` call sites.
-    if let Some(addrs) = &opts.rizin_connect_addrs {
-        strings.extend(addrs.iter().cloned());
-    }
+    strings.extend(opts.hints.connect_addrs.iter().cloned());
 
     // Section names are no longer stored per-string (callers derive them from
     // the offset when needed). PE version-info IP suppression still applies.
@@ -487,8 +485,16 @@ pub(crate) fn deduplicate_by_offset(mut strings: Vec<ExtractedString>) -> Vec<Ex
 
     // Every offset is file-relative (Mach-O section/VA offsets are rebased at the
     // source), so a file offset names exactly one location: keying the dedup on
-    // the offset alone collapses true duplicates without the section tag that a
-    // section-relative layout once needed to avoid cross-section `:0` collisions.
+    // the offset alone collapses true duplicates. The exception is strings
+    // decoded from a script blob, which all carry the blob's offset; they are
+    // kept apart, one per value.
+    let (mut derived, mut strings): (Vec<_>, Vec<_>) = strings
+        .into_iter()
+        .partition(|s| s.method == StringMethod::ScriptDecode);
     strings.dedup_by(|a, b| a.data_offset == b.data_offset);
+    derived.sort_by(|a, b| (a.data_offset, &a.value).cmp(&(b.data_offset, &b.value)));
+    derived.dedup_by(|a, b| a.data_offset == b.data_offset && a.value == b.value);
+    strings.extend(derived);
+    strings.sort_by_key(|s| s.data_offset);
     strings
 }

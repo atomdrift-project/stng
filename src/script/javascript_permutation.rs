@@ -3,6 +3,7 @@
 //! arithmetic seeds and permutation constants are recovered from source.
 use super::DeobfuscationResult;
 use super::decode_chain::{MAX_DECODED_SIZE, spend_expansion};
+use crate::script::detect::ScriptLanguage;
 use regex::Regex;
 use std::{cell::LazyCell, collections::HashMap, sync::LazyLock};
 
@@ -434,7 +435,7 @@ pub(super) fn extract(source: &str) -> Vec<DeobfuscationResult> {
                     decoded: payload,
                     offset: whole.start(),
                     chain_description: chain.into(),
-                    language: "javascript",
+                    language: ScriptLanguage::JavaScript,
                 });
             }
         }

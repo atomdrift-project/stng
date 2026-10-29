@@ -12,7 +12,7 @@ fn test_xor_brew_agent_malware() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -78,7 +78,7 @@ fn test_xor_display_multiline() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -113,7 +113,7 @@ fn test_xor_url_extraction() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -153,7 +153,7 @@ fn test_xor_shell_commands() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -212,7 +212,7 @@ fn test_xor_application_paths() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -260,7 +260,7 @@ fn test_xor_file_extensions() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -290,7 +290,7 @@ fn test_xor_crypto_wallets() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -341,7 +341,7 @@ fn test_xor_brew_agent_malware_full_sample() {
 
     // Test with explicit key
     let opts = stng::ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -398,12 +398,12 @@ fn test_xor_brew_agent_extraction_comparison() {
 
     // Extract with filtering enabled
     let opts_filtered = stng::ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(true);
 
     // Extract without filtering
     let opts_unfiltered = stng::ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted_filtered = stng::extract_strings_with_options(&data, &opts_filtered);
@@ -461,7 +461,8 @@ fn test_xor_brew_agent_auto_detection() {
 
     // No key given: the extractor must find it among the binary's own strings.
     let opts = stng::ExtractOptions::new(10)
-        .with_xor(Some(10)) // Enable XOR auto-detection
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(10) // Enable XOR auto-detection
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -489,7 +490,7 @@ fn test_c2_url_extraction_from_brew_agent() {
     let min_length = 10;
 
     // Extract strings using custom XOR key
-    let opts = ExtractOptions::new(min_length).with_xor_key(key.clone());
+    let opts = ExtractOptions::new(min_length).with_xor(stng::XorMode::Key(key.clone()));
     let results = stng::extract_strings_with_options(&data, &opts);
 
     // Look for the C2 URL

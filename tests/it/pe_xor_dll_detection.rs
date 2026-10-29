@@ -21,7 +21,7 @@ fn test_pe_xor_c6_dll_and_api_detection() {
         Ok(data) => data,
         Err(err) => panic!("Failed to read rtc.dll testdata: {err}"),
     };
-    let opts = ExtractOptions::new(10).with_xor(None);
+    let opts = ExtractOptions::new(10).with_xor(stng::XorMode::Auto);
     let results = extract_strings_with_options(&data, &opts);
 
     let xor_strings: Vec<&str> = results

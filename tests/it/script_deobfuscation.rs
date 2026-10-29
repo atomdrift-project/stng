@@ -461,13 +461,9 @@ fn test_decode_encoded_strings_surfaces_wide_payload() {
     // Exercises the public helper the CLI text path relies on: given a raw
     // string that is itself a wide-encoded base64 blob, it must recover the text.
     let blob = b64_utf16le("net user administrator P@ssw0rd /add");
-    let raw = vec![stng::ExtractedString {
-        value: blob,
-        data_offset: 0,
-        method: StringMethod::RawScan,
-        kind: Some(StringKind::Base64),
-        ..Default::default()
-    }];
+    let raw = vec![
+        stng::ExtractedString::new(blob, 0, StringMethod::RawScan).with_kind(StringKind::Base64),
+    ];
     let decoded = stng::decode_encoded_strings(&raw);
 
     assert!(
@@ -575,7 +571,7 @@ exec(base64.b64decode("cHJpbnQoJ2hlbGxvJyk="))
     for s in &script_strings {
         let json = serde_json::to_string(s).expect("Should serialize to JSON");
         assert!(
-            json.contains("ScriptDecode"),
+            json.contains("script_decode"),
             "JSON should contain ScriptDecode method"
         );
     }
@@ -615,7 +611,7 @@ fn test_classification_of_decoded_content() {
 #[test]
 fn test_detect_language_python() {
     let src = b"#!/usr/bin/env python3\nimport os\ndef main():\n    pass\n";
-    assert_eq!(stng::detect_language(src), "text");
+    assert_eq!(stng::detect_language(src), stng::Language::Text);
     // Note: detect_language returns "text" for scripts since the current API
     // doesn't expose script-specific types. The script module handles detection internally.
 }

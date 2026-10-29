@@ -10,33 +10,49 @@ use crate::{ExtractedString, StringMethod, classify_string};
 use goblin::Object;
 use goblin::mach::MachO;
 
-/// Decode one explicitly identified LCG-XOR byte range into a string fact.
-///
-/// `offset` and `length` refer to the encoded bytes in the original file.
-/// The state is updated after each byte, matching the common native loop form
-/// `plain[i] = encoded[i] ^ (state as u8) ^ mask; state = state * a % m`.
+/// A linear-congruential keystream, as native cipher loaders use it: each
+/// byte is XORed with the state's low byte and `mask`, then
+/// `state = state * multiplier % modulus`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Lcg {
+    /// The state before the first byte.
+    pub seed: u64,
+    /// The state's multiplier.
+    pub multiplier: u64,
+    /// The state's modulus.
+    pub modulus: u64,
+    /// A constant XORed into every byte.
+    pub mask: u8,
+}
+
+impl Lcg {
+    /// `encoded` XORed with this keystream.
+    fn apply(&self, encoded: &[u8]) -> Vec<u8> {
+        let mut state = self.seed;
+        encoded
+            .iter()
+            .map(|&byte| {
+                let plain = byte ^ state.to_le_bytes()[0] ^ self.mask;
+                state = state.wrapping_mul(self.multiplier) % self.modulus;
+                plain
+            })
+            .collect()
+    }
+}
+
+/// Decode the LCG-XOR bytes at `range` in `data` into a string, if they
+/// decode to readable text.
 #[must_use]
 pub fn decode_lcg_xor(
     data: &[u8],
-    offset: usize,
-    length: usize,
-    seed: u64,
-    multiplier: u64,
-    modulus: u64,
-    mask: u8,
+    range: std::ops::Range<usize>,
+    lcg: &Lcg,
 ) -> Option<ExtractedString> {
-    if length == 0 || modulus == 0 || multiplier == 0 {
+    if range.is_empty() || lcg.modulus == 0 || lcg.multiplier == 0 {
         return None;
     }
-    let end = offset.checked_add(length)?;
-    let encoded = data.get(offset..end)?;
-    let mut state = seed;
-    let mut decoded = Vec::with_capacity(length);
-    for &byte in encoded {
-        let state_byte = u8::try_from(state & 0xff).unwrap_or(0);
-        decoded.push(byte ^ state_byte ^ mask);
-        state = state.wrapping_mul(multiplier) % modulus;
-    }
+    let offset = range.start;
+    let decoded = lcg.apply(data.get(range)?);
 
     // Explicit decoding is useful only when it yields readable material. A
     // lossy conversion keeps ASCII scripts with a trailing NUL intact while
@@ -59,7 +75,7 @@ pub fn decode_lcg_xor(
         kind: classify_string(&value),
         value,
         data_offset: offset as u64,
-        data_len: u32::try_from(length).ok()?,
+        data_len: u32::try_from(decoded.len()).ok()?,
         method: StringMethod::XorDecode,
         ..Default::default()
     })
@@ -169,13 +185,13 @@ pub fn extract_macho_lcg_xor(
                 continue;
             }
             // The mask XORs every byte, so the keystream is shared by all 256.
-            let unmasked = decode_preview(
-                &encoded[..preview_len],
-                u64::from(seed_word),
+            let lcg = Lcg {
+                seed: u64::from(seed_word),
                 multiplier,
                 modulus,
-                0,
-            );
+                mask: 0,
+            };
+            let unmasked = lcg.apply(&encoded[..preview_len]);
             let mut preview = [0u8; PREVIEW_SIZE];
             let preview = &mut preview[..preview_len];
             for mask in 0..=u8::MAX {
@@ -192,18 +208,13 @@ pub fn extract_macho_lcg_xor(
                 else {
                     return Vec::new();
                 };
-                return decode_lcg_xor(
-                    data,
-                    offset,
-                    encoded.len(),
-                    u64::from(seed_word),
-                    multiplier,
-                    modulus,
-                    mask,
-                )
-                .filter(|s| s.value.len() >= min_length)
-                .into_iter()
-                .collect();
+                let Some(end) = offset.checked_add(encoded.len()) else {
+                    return Vec::new();
+                };
+                return decode_lcg_xor(data, offset..end, &Lcg { mask, ..lcg })
+                    .filter(|s| s.value.len() >= min_length)
+                    .into_iter()
+                    .collect();
             }
         }
     }
@@ -299,27 +310,19 @@ fn clock_lcg_xor(
     if encoded.len() < min_length || crate::bytes::entropy(encoded) < 6.5 {
         return None;
     }
-    let preview = decode_preview(
-        &encoded[..encoded.len().min(96)],
-        u64::from(seed),
-        u64::from(CLOCK_MULTIPLIER),
+    let lcg = Lcg {
+        seed: u64::from(seed),
+        multiplier: u64::from(CLOCK_MULTIPLIER),
         modulus,
-        0,
-    );
+        mask: 0,
+    };
+    let preview = lcg.apply(&encoded[..encoded.len().min(96)]);
     if !looks_like_script_or_command(&preview) {
         return None;
     }
     let offset = usize::try_from(slice_base.checked_add(const_offset)?.checked_add(4)?).ok()?;
-    decode_lcg_xor(
-        data,
-        offset,
-        encoded.len(),
-        u64::from(seed),
-        u64::from(CLOCK_MULTIPLIER),
-        modulus,
-        0,
-    )
-    .filter(|s| s.value.len() >= min_length)
+    decode_lcg_xor(data, offset..offset.checked_add(encoded.len())?, &lcg)
+        .filter(|s| s.value.len() >= min_length)
 }
 
 /// The clock-variant loader's LCG multiplier.
@@ -377,7 +380,7 @@ fn loads_lcg_constants(code: &[u8], x86: bool, seed: u32) -> bool {
 /// decoded bytes form a structurally valid universal Mach-O with valid slices;
 /// it does not emit strings from arbitrary one-byte-XOR guesses.
 #[must_use]
-pub fn extract_macho_xor_macho_strings(
+pub(crate) fn extract_macho_xor_macho_strings(
     macho: &MachO<'_>,
     data: &[u8],
     slice_base: u64,
@@ -577,19 +580,6 @@ fn is_valid_fat_macho(data: &[u8]) -> bool {
 fn code_contains_u32(code: &[u8], value: u32) -> bool {
     let bytes = value.to_le_bytes();
     code.windows(bytes.len()).any(|window| window == bytes)
-}
-
-fn decode_preview(encoded: &[u8], seed: u64, multiplier: u64, modulus: u64, mask: u8) -> Vec<u8> {
-    let mut state = seed;
-    encoded
-        .iter()
-        .map(|&byte| {
-            let state_byte = u8::try_from(state & 0xff).unwrap_or(0);
-            let plain = byte ^ state_byte ^ mask;
-            state = state.wrapping_mul(multiplier) % modulus;
-            plain
-        })
-        .collect()
 }
 
 fn looks_like_script_or_command(bytes: &[u8]) -> bool {

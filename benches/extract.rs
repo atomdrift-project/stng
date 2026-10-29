@@ -109,8 +109,7 @@ fn bench_extract_filtered(c: &mut Criterion) {
     for (name, path) in samples {
         let data = std::fs::read(path).expect("read sample");
         let len = data.len() as u64;
-        let mut opts = ExtractOptions::new(4);
-        opts.filter_garbage = true;
+        let opts = ExtractOptions::new(4).with_garbage_filter(true);
 
         g.throughput(Throughput::Bytes(len));
         g.bench_with_input(
@@ -149,9 +148,9 @@ fn bench_extract_xor(c: &mut Criterion) {
     for (name, path) in samples {
         let data = std::fs::read(path).expect("read sample");
         let len = data.len() as u64;
-        let mut opts = ExtractOptions::new(4);
-        opts.xor_scan = true;
-        opts.filter_garbage = true;
+        let opts = ExtractOptions::new(4)
+            .with_xor(stng::XorMode::Auto)
+            .with_garbage_filter(true);
 
         g.throughput(Throughput::Bytes(len));
         g.bench_with_input(BenchmarkId::new("xor_scan", name), &data, |b, data| {

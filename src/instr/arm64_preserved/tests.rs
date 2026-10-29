@@ -67,11 +67,9 @@ fn original_salt_and_full_pipeline_thin_fat_spans() {
             [(outer + 0x2aadfb, 9)]
         );
     }
-    let opts = crate::ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let opts = crate::ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     assert!(
         crate::extract_strings_with_options(bytes, &opts)
             .iter()

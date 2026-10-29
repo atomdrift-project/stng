@@ -331,7 +331,7 @@ pub(crate) fn scan_dotted_patterns(
                         data_offset: offset,
                         data_len: u32::try_from(end - start).unwrap_or(u32::MAX),
                         method: StringMethod::XorDecode,
-                        kind: Some(StringKind::IP),
+                        kind: Some(StringKind::Ip),
                         fragments: None,
                     });
                 }
@@ -347,7 +347,7 @@ pub(crate) fn scan_dotted_patterns(
                         data_offset: offset,
                         data_len: u32::try_from(end - start).unwrap_or(u32::MAX),
                         method: StringMethod::XorDecode,
-                        kind: Some(StringKind::IPPort),
+                        kind: Some(StringKind::IpPort),
                         fragments: None,
                     });
                 }

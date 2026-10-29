@@ -25,7 +25,8 @@ fn test_overlay_crypter_loader_xor_paths() {
     ))
     .expect("Failed to read overlay crypter loader sample");
     // Automatic XOR detection, no key hint (`with_xor(None)`).
-    let extracted = extract_strings_with_options(&data, &ExtractOptions::new(4).with_xor(None));
+    let extracted =
+        extract_strings_with_options(&data, &ExtractOptions::new(4).with_xor(stng::XorMode::Auto));
     let xor: Vec<_> = extracted
         .iter()
         .filter(|s| s.method == StringMethod::XorDecode)

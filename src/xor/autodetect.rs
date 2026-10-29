@@ -111,7 +111,7 @@ pub(super) fn decode_score(results: &[ExtractedString], key: &str) -> i32 {
         // URLs and network indicators - only count unique values
         if matches!(
             r.kind,
-            Some(StringKind::Url | StringKind::IP | StringKind::IPPort)
+            Some(StringKind::Url | StringKind::Ip | StringKind::IpPort)
         ) && scored_values.insert(value_lower.clone())
         {
             score += 50;

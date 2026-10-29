@@ -60,11 +60,9 @@ fn both_slices_decode_the_same_command_and_keep_file_offsets() {
         assert_eq!(found[0].method, StringMethod::XorDecode);
     }
 
-    let options = ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let options = ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     let all = extract_strings_with_options(&FILE, &options);
     for offset in [0x4c90, 0x14de0] {
         let found: Vec<_> = all

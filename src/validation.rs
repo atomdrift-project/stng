@@ -327,25 +327,6 @@ pub fn is_garbage(s: &str) -> bool {
     is_garbage_with_context(s, &crate::types::StringContext::empty())
 }
 
-/// Like [`is_garbage`], but takes a `kind` hint produced by the extractor.
-///
-/// When `kind` is `Some(_)`, the string was already recognised by the
-/// classifier (or labelled by a format-specific extractor — imports, stack
-/// strings, etc.) and we can skip the two most expensive steps:
-///
-/// 1. The `classify_string` re-call inside `is_fast_path_valid` (was ~9 % of
-///    stng wall time on a real profile — the classifier was being run twice
-///    per string on the garbage-filter path).
-/// 2. The `is_recognized_ioc` sweep (20+ `contains`/`starts_with` scans, was
-///    8.14 % of stng wall time).
-///
-/// The reloc/statistical checks still run, so a classified string whose bytes
-/// happen to look like a misaligned binary read can still be filtered.
-#[must_use]
-pub fn is_garbage_with_kind(s: &str, kind: Option<crate::types::StringKind>) -> bool {
-    is_garbage_with_context(s, &crate::types::StringContext::with_kind(kind))
-}
-
 /// Garbage check with full context: `kind`, `section`, and `arch`.
 ///
 /// Architecture- and section-aware rules use the context to scope

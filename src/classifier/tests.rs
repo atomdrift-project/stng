@@ -15,7 +15,7 @@ fn jwts_classify_and_lookalikes_do_not() {
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
         "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2V4YW1wbGUuYXV0aDAuY29tLyIsInN1YiI6ImF1dGgwfDEyMzQ1Njc4OTAiLCJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbS8iLCJleHAiOjE2NDE2NzgwMDB9.abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
     ] {
-        assert_eq!(classify_string(jwt), Some(StringKind::JWT), "{jwt}");
+        assert_eq!(classify_string(jwt), Some(StringKind::Jwt), "{jwt}");
     }
     // No `eyJ` header (a Go symbol's shape), two parts, too short, an
     // empty segment.
@@ -25,7 +25,7 @@ fn jwts_classify_and_lookalikes_do_not() {
         "eyJx.eyJx.eyJx",
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
     ] {
-        assert_ne!(classify_string(not_jwt), Some(StringKind::JWT), "{not_jwt}");
+        assert_ne!(classify_string(not_jwt), Some(StringKind::Jwt), "{not_jwt}");
     }
 }
 
@@ -331,13 +331,13 @@ fn test_is_shell_command_backtick_requires_content() {
 #[test]
 fn test_classify_string_ip_detection() {
     // Real IPs should be classified as IP
-    assert_eq!(classify_string("168.235.103.57"), Some(StringKind::IP));
-    assert_eq!(classify_string("192.168.1.100"), Some(StringKind::IP));
+    assert_eq!(classify_string("168.235.103.57"), Some(StringKind::Ip));
+    assert_eq!(classify_string("192.168.1.100"), Some(StringKind::Ip));
 
     // Version numbers should NOT be classified as IP
-    assert_ne!(classify_string("1.0.0.0"), Some(StringKind::IP));
-    assert_ne!(classify_string("4.0.0.0"), Some(StringKind::IP));
-    assert_ne!(classify_string("2.1.0.0"), Some(StringKind::IP));
+    assert_ne!(classify_string("1.0.0.0"), Some(StringKind::Ip));
+    assert_ne!(classify_string("4.0.0.0"), Some(StringKind::Ip));
+    assert_ne!(classify_string("2.1.0.0"), Some(StringKind::Ip));
 }
 
 #[test]
@@ -345,13 +345,13 @@ fn test_classify_string_ipv6_detection() {
     // Real IPv6 addresses carry a multi-digit hextet. classify_ip is only
     // reached for digit-leading strings (see the guard in classify_string),
     // so exercise digit-leading addresses here.
-    assert_eq!(classify_string("2001:db8::1"), Some(StringKind::IP));
-    assert_eq!(classify_string("2606:4700::1111"), Some(StringKind::IP));
+    assert_eq!(classify_string("2001:db8::1"), Some(StringKind::Ip));
+    assert_eq!(classify_string("2606:4700::1111"), Some(StringKind::Ip));
 
     // Single-digit-only colon noise (e.g. ImageMagick.Q16.msixbundle) is
     // not a credible IPv6 IOC and must not be classified as IP
-    assert_ne!(classify_string("0::c"), Some(StringKind::IP));
-    assert_ne!(classify_string("4::e"), Some(StringKind::IP));
+    assert_ne!(classify_string("0::c"), Some(StringKind::Ip));
+    assert_ne!(classify_string("4::e"), Some(StringKind::Ip));
 }
 
 #[test]
@@ -553,30 +553,30 @@ fn test_classify_string_guid() {
     // Braced COM GUID
     assert_eq!(
         classify_string("{550e8400-e29b-41d4-a716-446655440000}"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
     // Bare canonical UUID (RFC 4122 / Mythic payload_uuid)
     assert_eq!(
         classify_string("88a39a12-f279-4bb2-b102-1ee1157ad859"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
     assert_eq!(
         classify_string("550e8400-e29b-41d4-a716-446655440000"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
     // Uppercase
     assert_eq!(
         classify_string("88A39A12-F279-4BB2-B102-1EE1157AD859"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
     // Wrong shape — not classified as GUID
     assert_ne!(
         classify_string("88a39a12f2794bb2b1021ee1157ad859"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
     assert_ne!(
         classify_string("88a39a12-f279-4bb2-b102"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
 }
 

@@ -47,7 +47,7 @@ pub(super) fn should_suppress_metadata_hostname(method: StringMethod, hostname: 
             | StringMethod::Heuristic
             | StringMethod::InstructionPattern
             | StringMethod::Structure
-            | StringMethod::R2String
+            | StringMethod::RizinString
             | StringMethod::WideString
     ) && is_common_metadata_hostname(hostname)
 }

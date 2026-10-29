@@ -2,7 +2,37 @@
 
 All notable changes to stng. Versions follow [semantic versioning](README.md#versioning).
 
-## Unreleased
+## 3.0.0 (unreleased)
+
+### Breaking
+
+- `ExtractOptions` fields are private; configure it with the builders.
+  `with_xor(XorMode)` replaces `with_xor(Option<usize>)`, `with_xor_key` and
+  `with_xor_key_offsets` (`XorMode::{Off, Auto, Scan, Key}`), and
+  `with_xor_min_length` sets the minimum length. `with_hints(ExternalHints)`
+  replaces `with_r2_strings`, `with_rizin_boundaries`,
+  `with_rizin_connect_addrs` and `with_xor_key_offsets`.
+- `ExtractedString`, `StringBoundary`, `StringContext`, `OverlayInfo` and
+  `Severity` are `#[non_exhaustive]`: build strings with
+  `ExtractedString::new(value, offset, method)` and the `with_*` methods.
+- `StringKind` and `StringMethod` use Rust casing (`Ip`, `IpPort`, `Jwt`,
+  `ApiKey`, `Guid`, `CtfFlag`, `SqlInjection`, `XssPayload`, `LdapPath`,
+  `RizinString`, `RizinSymbol`) and serialize in snake_case (`"ip"`,
+  `"raw_scan"`).
+- `detect_language` returns a `Language`; `DeobfuscationResult::language` is
+  a `ScriptLanguage`, which gains `Batch` and `VbScript`.
+- `decode_lcg_xor(data, range, &Lcg)` replaces the seven-argument form.
+- `is_garbage_with_kind` is gone; use `is_garbage_with_context` with
+  `StringContext::with_kind`.
+- `script_decode` strings are located at the encoded blob they came from,
+  not past the end of the file. An auto-detected XOR key not otherwise found
+  is reported at its real offset, not 0.
+- No longer public: the `binary` module (its `is_go_binary` and
+  `is_rust_binary` remain at the crate root), `script::decode_chain`,
+  `BinaryInfo`, `StringStruct`, `detect_elf_overlay_from_elf`,
+  `extract_incremental_xor_strings`, `extract_macho_xor_macho_strings`, and
+  `stng::subprocess` (depend on `stng-process` directly).
+- `ExtractedString::source_spans` returns `impl Iterator<Item = (u64, u64)>`.
 
 ### Added
 

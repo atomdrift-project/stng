@@ -96,7 +96,7 @@ fn test_decoders_run_on_xor_strings() {
 
     // Extract with XOR key (enable garbage filter to trigger classification)
     let opts = ExtractOptions::new(4)
-        .with_xor_key(vec![0x42])
+        .with_xor(stng::XorMode::Key(vec![0x42]))
         .with_garbage_filter(true);
     let strings = extract_strings_with_options(&data, &opts);
 
@@ -141,7 +141,7 @@ fn test_xor_then_base64() {
 
     // Extract with XOR key
     let opts = ExtractOptions::new(4)
-        .with_xor_key(vec![0x42])
+        .with_xor(stng::XorMode::Key(vec![0x42]))
         .with_garbage_filter(true);
     let strings = stng::extract_strings_with_options(&data, &opts);
 
@@ -231,7 +231,7 @@ fn test_xor_then_unicode_escapes() {
 
     // Extract with XOR key
     let opts = ExtractOptions::new(4)
-        .with_xor_key(vec![0x42])
+        .with_xor(stng::XorMode::Key(vec![0x42]))
         .with_garbage_filter(true);
     let strings = stng::extract_strings_with_options(&data, &opts);
 

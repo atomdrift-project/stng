@@ -2,7 +2,8 @@
 //! user-supplied, rolling, incremental and disassembler-located keys.
 
 use crate::{
-    ExtractOptions, ExtractedString, FormatHint, StringKind, StringMethod, binary, detect, xor,
+    ExtractOptions, ExtractedString, FormatHint, StringKind, StringMethod, XorMode, binary, detect,
+    xor,
 };
 
 /// Whether the XOR scanners may run over `data`.
@@ -15,7 +16,7 @@ use crate::{
 /// them: hex-then-XOR over decoded hex strings ([`decoders`]), and script
 /// deobfuscation, which recovers the key from the code.
 pub(crate) fn scans_for_xor(data: &[u8], opts: &ExtractOptions) -> bool {
-    opts.xor_key.is_some() || (opts.format_hint != FormatHint::Text && detect::is_binary(data))
+    opts.xor_key().is_some() || (opts.format_hint != FormatHint::Text && detect::is_binary(data))
 }
 
 /// The single-byte XOR pattern scan. A key that decodes two or more strings
@@ -46,7 +47,7 @@ pub(crate) fn single_byte_xor_scan(
                 data,
                 &[key],
                 opts.xor_min_length,
-                opts.rizin_boundaries.as_deref(),
+                &opts.hints.boundaries,
                 opts.filter_garbage,
                 false,
             ));
@@ -75,9 +76,9 @@ pub(crate) fn apply_xor_scan(
     excluded_ranges: &[(usize, usize)],
 ) {
     tracing::debug!(
-        "apply_xor_scan: called (xor_scan: {}, key offsets: {})",
-        opts.xor_scan,
-        opts.xor_key_offsets.is_some()
+        mode = ?opts.xor,
+        key_offsets = opts.hints.xor_key_offsets.len(),
+        "apply_xor_scan"
     );
     if data.is_empty() || opts.is_cancelled() {
         return;
@@ -95,9 +96,8 @@ pub(crate) fn apply_xor_scan(
     // survives platform signing. Skipping XOR on these is the single biggest
     // throughput win for typical system-binary corpora. Third-party
     // Developer ID signatures are NOT matched — those CAN be signed malware.
-    // Users who passed an explicit xor_key or requested xorscan bypass this.
-    if opts.xor_key.is_none() && opts.xor_key_offsets.is_none() && binary::is_platform_signed(data)
-    {
+    // An explicit key or `XorMode::Scan` bypasses this.
+    if !opts.xor_explicit() && binary::is_platform_signed(data) {
         tracing::debug!("Skipping XOR scan: platform-signed binary");
         return;
     }
@@ -106,7 +106,7 @@ pub(crate) fn apply_xor_scan(
 
     // For PE binaries, also try rolling XOR with known plaintext patterns
     // This catches .NET malware like Redline that uses short cycling keys
-    if is_pe && (opts.xor_scan || opts.xor_key.is_some()) && data.len() <= xor::MAX_XOR_SCAN_SIZE {
+    if is_pe && data.len() <= xor::MAX_XOR_SCAN_SIZE {
         let rolling_results = xor::extract_rolling_xor_with_known_plaintext(
             data,
             opts.xor_min_length,
@@ -115,9 +115,9 @@ pub(crate) fn apply_xor_scan(
         strings.extend(rolling_results);
     }
 
-    let r2_boundaries = opts.rizin_boundaries.as_deref();
+    let boundaries = &opts.hints.boundaries;
 
-    if let Some(ref key) = opts.xor_key {
+    if let Some(key) = opts.xor_key() {
         let key_str = String::from_utf8_lossy(key);
         if let Some(ks) = strings.iter_mut().find(|s| s.value == key_str.as_ref()) {
             ks.kind = Some(StringKind::XorKey);
@@ -126,17 +126,17 @@ pub(crate) fn apply_xor_scan(
             data,
             key,
             opts.xor_min_length,
-            r2_boundaries,
+            boundaries,
             opts.filter_garbage,
             false, // User-provided key: disable early termination for complete extraction
         ));
-    } else if opts.xor_scan {
+    } else if opts.xor_scans() {
         let auto_key = if data.len() <= xor::MAX_AUTO_DETECT_SIZE {
             xor::auto_detect_xor_key(data, strings, opts.xor_min_length)
         } else {
             None
         };
-        if let Some((key, key_str, _)) = auto_key {
+        if let Some((key, key_str, key_offset)) = auto_key {
             // Mark ALL occurrences of the key string as XorKey. Fat binaries
             // contain the same string at multiple arch offsets; the value-dedup
             // in main.rs keeps whichever copy comes first, so every copy must
@@ -153,7 +153,7 @@ pub(crate) fn apply_xor_scan(
                 );
                 strings.push(ExtractedString {
                     value: key_str.clone(),
-                    data_offset: 0,
+                    data_offset: key_offset,
                     data_len: 0,
                     method: StringMethod::XorDecode,
                     kind: Some(StringKind::XorKey),
@@ -164,7 +164,7 @@ pub(crate) fn apply_xor_scan(
                 data,
                 &key,
                 opts.xor_min_length,
-                r2_boundaries,
+                boundaries,
                 opts.filter_garbage,
                 false, // Even for auto-detected keys, extract completely for final results
             ));
@@ -180,10 +180,10 @@ pub(crate) fn apply_xor_scan(
 
     // Code an external disassembler found loading an XOR key: decode the
     // file with the key at each such offset.
-    if let Some(offsets) = &opts.xor_key_offsets {
+    if opts.xor == XorMode::Scan && !opts.hints.xor_key_offsets.is_empty() {
         strings.extend(xor::extract_multikey_xor_strings(
             data,
-            offsets,
+            &opts.hints.xor_key_offsets,
             opts.xor_min_length,
         ));
     }

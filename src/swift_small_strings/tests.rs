@@ -170,11 +170,9 @@ fn output_cap_is_exact_and_instruction_prefixes_do_not_panic() {
 
 #[test]
 fn public_filtered_pipeline_preserves_specimen_small_strings() {
-    let opts = crate::ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let opts = crate::ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     let out = crate::extract_strings_with_options(*FILE, &opts);
     for (value, start, length) in [
         ("index", 0x1ee8, 16),

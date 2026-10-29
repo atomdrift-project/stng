@@ -5,7 +5,7 @@
 //! PHP webshells, and PowerShell droppers.
 
 mod batch;
-pub mod decode_chain;
+pub(crate) mod decode_chain;
 pub mod detect;
 mod javascript;
 mod javascript_permutation;
@@ -29,7 +29,7 @@ pub struct DeobfuscationResult {
     /// Human-readable description of the decode chain, e.g. "python:base64+zlib+xor(0x86)"
     pub chain_description: String,
     /// Source language
-    pub language: &'static str,
+    pub language: ScriptLanguage,
 }
 
 /// Attempt to deobfuscate a script file.
@@ -52,7 +52,7 @@ fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
             decoded,
             offset,
             chain_description: "vbscript-encode".to_string(),
-            language: "vbscript",
+            language: ScriptLanguage::VbScript,
         })
         .collect();
     let Ok(text) = std::str::from_utf8(data) else {
@@ -65,7 +65,7 @@ fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
             decoded,
             offset: 0,
             chain_description: "vbscript:paired-array-character-recipe".to_owned(),
-            language: "vbscript",
+            language: ScriptLanguage::VbScript,
         });
     }
     let mut current_text = text.to_string();
@@ -95,6 +95,8 @@ fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
             ScriptLanguage::Php => php::extract_obfuscated_payloads(&current_text),
             ScriptLanguage::PowerShell => powershell::extract_obfuscated_payloads(&current_text),
             ScriptLanguage::Lua => lua::extract_obfuscated_payloads(&current_text),
+            // Not produced by detection; decoded by their own passes.
+            ScriptLanguage::Batch | ScriptLanguage::VbScript => Vec::new(),
         };
 
         if results.is_empty() {
@@ -130,7 +132,7 @@ fn decode_captures(
     source: &str,
     patterns: &[&regex::Regex],
     steps: &[decode_chain::DecodeStep],
-    language: &'static str,
+    language: ScriptLanguage,
 ) -> Vec<DeobfuscationResult> {
     let squeeze = matches!(steps.first(), Some(decode_chain::DecodeStep::Base64));
     patterns
@@ -183,7 +185,7 @@ exec(base64.b64decode("aW1wb3J0IG9z"))
         let results = deobfuscate_script(src);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].decoded, "import os");
-        assert_eq!(results[0].language, "python");
+        assert_eq!(results[0].language, ScriptLanguage::Python);
     }
 
     #[test]
@@ -234,7 +236,10 @@ eval(atob("YWxlcnQoMSk="))
     fn test_deobfuscate_vbscript_encode_sample() {
         let src = crate::test_fixture("testdata/script/vbscript-encode.asp");
         let results = deobfuscate_script(src);
-        let decoded = results.iter().find(|r| r.language == "vbscript").unwrap();
+        let decoded = results
+            .iter()
+            .find(|r| r.language == ScriptLanguage::VbScript)
+            .unwrap();
         assert!(
             decoded
                 .decoded
@@ -248,7 +253,10 @@ eval(atob("YWxlcnQoMSk="))
         let mut src = crate::test_fixture("testdata/script/vbscript-encode.asp").to_vec();
         src.push(0xff);
         let results = deobfuscate_script(&src);
-        let decoded = results.iter().find(|r| r.language == "vbscript").unwrap();
+        let decoded = results
+            .iter()
+            .find(|r| r.language == ScriptLanguage::VbScript)
+            .unwrap();
         assert!(
             decoded
                 .decoded

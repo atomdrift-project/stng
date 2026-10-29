@@ -82,11 +82,9 @@ fn original_arm_sql_boundaries_and_public_pipeline() {
     };
     let plain = crate::rust::RustStringExtractor::new(4).extract_macho(&m, 0);
     let fat = crate::rust::RustStringExtractor::new(4).extract_macho(&m, base);
-    let options = crate::ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let options = crate::ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     let public = crate::extract_strings_with_options(bytes, &options);
     for (at, len, value) in [
         (

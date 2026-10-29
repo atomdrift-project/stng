@@ -36,11 +36,9 @@ fn specimen_and_full_payload_match_independent_native_reconstruction() {
 }
 #[test]
 fn public_string_pipeline_locates_key_with_exact_offset() {
-    let opts = ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let opts = ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     let strings = extract_strings_with_options(*FILE, &opts);
     let keys: Vec<_> = strings
         .iter()

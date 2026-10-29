@@ -9,13 +9,13 @@ use crate::StringMethod;
 use crate::binary;
 use crate::collect_elf_section_info;
 use crate::collect_elf_segments;
-use crate::detect_elf_overlay_from_elf;
 use crate::elf_go_skip_ranges;
 use crate::extract_elf_imports;
 use crate::extract_overlay_strings;
 use crate::extract_raw_strings;
 use crate::extract_stack_strings_with_context;
 use crate::extract_wide_strings;
+use crate::overlay::detect_elf_overlay_from_elf;
 use crate::pclntab_strings;
 use crate::scan_binary_ips;
 use crate::{ExtractOptions, ExtractedString};
@@ -64,13 +64,13 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         // unknown ELF gets. Before content detection this branch only
         // saw dylibs; now it sees every Rust executable, and dropping
         // the raw scan would have lost strings they used to report.
-        strings.extend(opts.r2_strings.iter().flatten().cloned());
+        strings.extend(opts.hints.strings.iter().cloned());
         let raw = extract_raw_strings(scan_data, min_length, &segments, &[]);
         let fresh = unclaimed_raw_strings(raw, &strings, min_length);
         strings.extend(fresh);
     } else {
         // Unknown ELF (C, C++, assembly, etc.) - use r2 if available + raw scan.
-        strings.extend(opts.r2_strings.iter().flatten().cloned());
+        strings.extend(opts.hints.strings.iter().cloned());
         strings.extend(extract_raw_strings(scan_data, min_length, &segments, &[]));
     }
 
@@ -181,7 +181,7 @@ fn scan_go(
     let is_go = !go_strings.is_empty();
     if !is_go {
         tracing::warn!("ELF has Go section names but no Go string structures; scanning as non-Go");
-        strings.extend(opts.r2_strings.iter().flatten().cloned());
+        strings.extend(opts.hints.strings.iter().cloned());
         strings.extend(extract_raw_strings(scan_data, min_length, segments, &[]));
     }
     let known: HashSet<&str> = go_strings.iter().map(|s| s.value.as_str()).collect();

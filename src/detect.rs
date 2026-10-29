@@ -2,18 +2,42 @@
 
 use crate::binary::{is_go_binary, is_rust_binary};
 
-/// The language `data` was written in, as far as strings are concerned:
-/// `"go"`, `"rust"`, `"text"` for text files, or `"unknown"`.
+/// What an input is, as far as string extraction is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Language {
+    /// A Go binary.
+    Go,
+    /// A Rust binary.
+    Rust,
+    /// A text file.
+    Text,
+    /// Anything else.
+    Unknown,
+}
+
+impl std::fmt::Display for Language {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Go => "go",
+            Self::Rust => "rust",
+            Self::Text => "text",
+            Self::Unknown => "unknown",
+        })
+    }
+}
+
+/// The language `data` was written in, as far as strings are concerned.
 #[must_use]
-pub fn detect_language(data: &[u8]) -> &'static str {
+pub fn detect_language(data: &[u8]) -> Language {
     if is_go_binary(data) {
-        "go"
+        Language::Go
     } else if is_rust_binary(data) {
-        "rust"
+        Language::Rust
     } else if is_text_file(data) {
-        "text"
+        Language::Text
     } else {
-        "unknown"
+        Language::Unknown
     }
 }
 

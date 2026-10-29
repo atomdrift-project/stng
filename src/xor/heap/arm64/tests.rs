@@ -192,11 +192,9 @@ fn public_arm_only_pipeline_recovers_prompt_and_benign_control_stays_clean() {
         .find(|a| a.cputype == goblin::mach::constants::cputype::CPU_TYPE_ARM64)
         .unwrap();
     let bytes = &FILE[arch.offset as usize..(arch.offset + arch.size) as usize];
-    let opts = crate::ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let opts = crate::ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     let out = crate::extract_strings_with_options(bytes, &opts);
     let found = out
         .iter()

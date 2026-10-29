@@ -93,7 +93,7 @@ fn mutated_fixtures_never_panic() {
         .unwrap_or(DEFAULT_MUTANTS);
     let filter = std::env::var("STNG_MUTANT_FILTER").unwrap_or_default();
     // Every pass on: XOR scanning, symbol tables, no garbage filter.
-    let opts = stng::ExtractOptions::new(4).with_xor(None);
+    let opts = stng::ExtractOptions::new(4).with_xor(stng::XorMode::Auto);
 
     // Panics inside rayon workers lose their location by the time they reach
     // catch_unwind, so record it from the hook.

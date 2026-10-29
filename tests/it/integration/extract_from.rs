@@ -247,8 +247,7 @@ fn test_overlay_string_offsets_are_absolute() {
 #[test]
 fn test_extract_from_elf_with_garbage_filter() {
     let data = minimal_elf_with_strings(&["valid_string", "@@##$$"]);
-    let mut opts = ExtractOptions::new(4);
-    opts.filter_garbage = true;
+    let opts = ExtractOptions::new(4).with_garbage_filter(true);
 
     let strings = extract_strings_with_options(&data, &opts);
 
@@ -260,8 +259,7 @@ fn test_extract_from_elf_with_garbage_filter() {
 #[test]
 fn test_extract_from_macho_with_garbage_filter() {
     let data = minimal_macho_with_strings(&["valid_string", "@@##$$"]);
-    let mut opts = ExtractOptions::new(4);
-    opts.filter_garbage = true;
+    let opts = ExtractOptions::new(4).with_garbage_filter(true);
 
     let strings = extract_strings_with_options(&data, &opts);
 
@@ -277,8 +275,7 @@ fn test_extract_from_pe_with_garbage_filter() {
     data[0x80..0x84].copy_from_slice(&[0x50, 0x45, 0x00, 0x00]);
     data[0x200..0x210].copy_from_slice(b"valid_string\0\0\0\0");
 
-    let mut opts = ExtractOptions::new(4);
-    opts.filter_garbage = true;
+    let opts = ExtractOptions::new(4).with_garbage_filter(true);
 
     let strings = extract_strings_with_options(&data, &opts);
     assert!(strings.iter().any(|s| s.value == "valid_string"));

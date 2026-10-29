@@ -25,11 +25,7 @@ fn fixture_bytes() -> Vec<u8> {
 }
 
 fn native_strings() -> Vec<stng::ExtractedString> {
-    let opts = ExtractOptions {
-        min_length: 4,
-        filter_garbage: false,
-        ..Default::default()
-    };
+    let opts = ExtractOptions::new(4);
     extract_strings_with_options(&fixture_bytes(), &opts)
 }
 
@@ -103,12 +99,7 @@ fn caller_provides_symbols_skips_typing_but_keeps_strings() {
     // nothing is lost; only the typing is suppressed.
     let data = std::fs::read(crate::common::path("testdata/macho/wallet_report_objc"))
         .expect("read fixture");
-    let opts = ExtractOptions {
-        min_length: 4,
-        filter_garbage: false,
-        caller_provides_symbols: true,
-        ..Default::default()
-    };
+    let opts = ExtractOptions::new(4).with_caller_provides_symbols(true);
     let strings = extract_strings_with_options(&data, &opts);
     let entry = |needle: &str| strings.iter().find(|s| s.value == needle);
 
@@ -131,11 +122,7 @@ fn from_object_matches_full_parse() {
     // double-parse optimisation is behaviour-preserving.
     let data = std::fs::read(crate::common::path("testdata/macho/wallet_report_objc"))
         .expect("read fixture");
-    let opts = ExtractOptions {
-        min_length: 4,
-        filter_garbage: false,
-        ..Default::default()
-    };
+    let opts = ExtractOptions::new(4);
 
     let via_bytes = extract_strings_with_options(&data, &opts);
     let object = stng::goblin::Object::parse(&data).expect("parse object");

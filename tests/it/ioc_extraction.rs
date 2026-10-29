@@ -4,14 +4,9 @@ use stng::{
 };
 
 fn extracted(value: &str, kind: Option<StringKind>, offset: u64) -> ExtractedString {
-    ExtractedString {
-        value: value.to_string(),
-        data_offset: offset,
-        data_len: u32::try_from(value.len()).unwrap(),
-        method: StringMethod::RawScan,
-        kind,
-        fragments: None,
-    }
+    ExtractedString::new(value.to_string(), offset, StringMethod::RawScan)
+        .with_kind(kind)
+        .with_data_len(u32::try_from(value.len()).unwrap())
 }
 
 #[test]
@@ -86,8 +81,8 @@ fn explicitly_typed_common_values_are_still_not_iocs() {
         extracted("wallet.dat", Some(StringKind::Path), 0),
         extracted("/etc/hosts", Some(StringKind::Path), 32),
         extracted("/home/builder/src/main.rs", Some(StringKind::Path), 64),
-        extracted("1.2.0.4", Some(StringKind::IP), 96),
-        extracted("192.168.1.1", Some(StringKind::IP), 128),
+        extracted("1.2.0.4", Some(StringKind::Ip), 96),
+        extracted("192.168.1.1", Some(StringKind::Ip), 128),
         extracted("crl.microsoft.com", Some(StringKind::Hostname), 160),
         extracted("github.com", Some(StringKind::Hostname), 192),
     ];
@@ -98,8 +93,8 @@ fn explicitly_typed_common_values_are_still_not_iocs() {
 #[test]
 fn exact_network_types_and_endpoints_are_canonical_and_deduplicated() {
     let strings = [
-        extracted("45.33.32.156", Some(StringKind::IP), 0),
-        extracted("45.33.32.156:443", Some(StringKind::IPPort), 32),
+        extracted("45.33.32.156", Some(StringKind::Ip), 0),
+        extracted("45.33.32.156:443", Some(StringKind::IpPort), 32),
         extracted("C2.Example.COM:8443", None, 64),
         extracted("c2.example.com.", Some(StringKind::Hostname), 96),
     ];
@@ -171,7 +166,7 @@ fn clean_system_binary_iocs_have_structural_evidence() {
                 } else {
                     let typed_network = matches!(
                         source.kind,
-                        Some(StringKind::IP | StringKind::IPPort | StringKind::Hostname)
+                        Some(StringKind::Ip | StringKind::IpPort | StringKind::Hostname)
                     );
                     let url_authority = source.value.contains("://");
                     let exact_endpoint = source

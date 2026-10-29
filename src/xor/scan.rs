@@ -11,7 +11,7 @@ mod incremental;
 mod repeating;
 mod rolling;
 
-pub use incremental::extract_incremental_xor_strings;
+pub(crate) use incremental::extract_incremental_xor_strings;
 use repeating::extract_custom_xor_strings_pattern_based_simple;
 pub(crate) use rolling::extract_rolling_xor_with_known_plaintext;
 
@@ -125,7 +125,7 @@ pub(crate) fn extract_custom_xor_strings(
         data,
         key,
         min_length,
-        None,
+        &[],
         true,
         enable_early_termination,
     )
@@ -137,7 +137,7 @@ pub(crate) fn extract_custom_xor_strings_with_hints(
     data: &[u8],
     key: &[u8],
     min_length: usize,
-    r2_hints: Option<&[crate::StringBoundary]>,
+    hints: &[crate::StringBoundary],
     apply_filters: bool,
     enable_early_termination: bool,
 ) -> Vec<ExtractedString> {
@@ -148,9 +148,9 @@ pub(crate) fn extract_custom_xor_strings_with_hints(
     // Track regions that have been successfully decoded with high quality
     let mut excluded_ranges: Vec<(usize, usize)> = Vec::new();
 
-    // Step 1: Try radare2 hints first if available
+    // Step 1: decode the disassembler's string extents first, if any.
     let mut hint_results = Vec::new();
-    if let Some(hints) = r2_hints {
+    if !hints.is_empty() {
         hint_results = extract_xor_strings_from_hints(data, key, min_length, hints, apply_filters);
 
         // Mark high-quality hint results as excluded from file-wide scanning
@@ -206,7 +206,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
         );
         candidates.sort_by_key(|s| {
             let priority = match s.kind {
-                Some(StringKind::Url | StringKind::IP | StringKind::IPPort) => 0,
+                Some(StringKind::Url | StringKind::Ip | StringKind::IpPort) => 0,
                 Some(StringKind::SuspiciousPath | StringKind::ShellCmd) => 1,
                 _ => 2,
             };
@@ -643,7 +643,7 @@ fn is_high_quality_string(s: &ExtractedString) -> bool {
     matches!(
         s.kind,
         Some(StringKind::ShellCmd | StringKind::SuspiciousPath | StringKind::Url |
-StringKind::IP)
+StringKind::Ip)
     ) || s.value.len() >= 30 // Long strings are usually significant
         || {
             // Only the short, unclassified residual reaches the (allocating) lowercase scan.

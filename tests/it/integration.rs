@@ -65,25 +65,28 @@ fn test_extract_strings_minimal_macho() {
 
 #[test]
 fn test_detect_language_empty() {
-    assert_eq!(detect_language(&[]), "unknown");
+    assert_eq!(detect_language(&[]), stng::Language::Unknown);
 }
 
 #[test]
 fn test_detect_language_text() {
     // Plain text should be detected as "text"
-    assert_eq!(detect_language(b"not a binary"), "text");
+    assert_eq!(detect_language(b"not a binary"), stng::Language::Text);
 }
 
 #[test]
 fn test_detect_language_binary_garbage() {
     // Binary garbage should be "unknown"
-    assert_eq!(detect_language(&[0x00, 0x01, 0x02, 0x03, 0x04]), "unknown");
+    assert_eq!(
+        detect_language(&[0x00, 0x01, 0x02, 0x03, 0x04]),
+        stng::Language::Unknown
+    );
 }
 
 #[test]
 fn test_detect_language_elf() {
     let data = minimal_elf_header();
-    assert_eq!(detect_language(&data), "unknown"); // No Go/Rust sections
+    assert_eq!(detect_language(&data), stng::Language::Unknown); // No Go/Rust sections
 }
 
 #[test]
@@ -109,8 +112,8 @@ fn test_is_rust_binary_invalid() {
 #[test]
 fn test_extract_options_new() {
     let opts = ExtractOptions::new(4);
-    assert_eq!(opts.min_length, 4);
-    assert!(opts.r2_strings.is_none());
+    assert_eq!(opts.min_length(), 4);
+    assert_eq!(*opts.xor(), stng::XorMode::Off);
 }
 
 #[test]
@@ -230,13 +233,7 @@ fn test_string_kind_default() {
 // Test ExtractedString
 #[test]
 fn test_extracted_string_serialization() {
-    let s = ExtractedString {
-        value: "test".to_string(),
-        data_offset: 0x1000,
-        method: StringMethod::Structure,
-        kind: None,
-        ..Default::default()
-    };
+    let s = ExtractedString::new("test".to_string(), 0x1000, StringMethod::Structure);
 
     let json = serde_json::to_string(&s).unwrap();
     assert!(json.contains("\"value\":\"test\""));

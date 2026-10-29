@@ -2,9 +2,7 @@
 //!
 //! Tests core type definitions, methods, serialization, and edge cases.
 
-use stng::{
-    ExtractedString, OverlayInfo, Severity, StringFragment, StringKind, StringMethod, StringStruct,
-};
+use stng::{ExtractedString, Severity, StringFragment, StringKind, StringMethod};
 
 // ===== ExtractedString Tests =====
 
@@ -23,8 +21,8 @@ fn test_extracted_string_default() {
 #[test]
 fn test_severity_high_security() {
     // Test all High severity kinds
-    assert_eq!(StringKind::IP.severity(), Severity::High);
-    assert_eq!(StringKind::IPPort.severity(), Severity::High);
+    assert_eq!(StringKind::Ip.severity(), Severity::High);
+    assert_eq!(StringKind::IpPort.severity(), Severity::High);
     assert_eq!(StringKind::Hostname.severity(), Severity::High);
     assert_eq!(StringKind::Url.severity(), Severity::High);
     assert_eq!(StringKind::ShellCmd.severity(), Severity::High);
@@ -44,20 +42,20 @@ fn test_severity_high_crypto() {
 
 #[test]
 fn test_severity_high_attacks() {
-    assert_eq!(StringKind::SQLInjection.severity(), Severity::High);
-    assert_eq!(StringKind::XSSPayload.severity(), Severity::High);
+    assert_eq!(StringKind::SqlInjection.severity(), Severity::High);
+    assert_eq!(StringKind::XssPayload.severity(), Severity::High);
     assert_eq!(StringKind::CommandInjection.severity(), Severity::High);
-    assert_eq!(StringKind::CTFFlag.severity(), Severity::High);
+    assert_eq!(StringKind::CtfFlag.severity(), Severity::High);
 }
 
 #[test]
 fn test_severity_high_secrets() {
-    assert_eq!(StringKind::JWT.severity(), Severity::High);
-    assert_eq!(StringKind::APIKey.severity(), Severity::High);
+    assert_eq!(StringKind::Jwt.severity(), Severity::High);
+    assert_eq!(StringKind::ApiKey.severity(), Severity::High);
     assert_eq!(StringKind::Mutex.severity(), Severity::High);
-    assert_eq!(StringKind::GUID.severity(), Severity::High);
+    assert_eq!(StringKind::Guid.severity(), Severity::High);
     assert_eq!(StringKind::RansomNote.severity(), Severity::High);
-    assert_eq!(StringKind::LDAPPath.severity(), Severity::High);
+    assert_eq!(StringKind::LdapPath.severity(), Severity::High);
 }
 
 #[test]
@@ -119,8 +117,8 @@ fn test_short_name_binary() {
 
 #[test]
 fn test_short_name_network() {
-    assert_eq!(StringKind::IP.short_name(), "ip");
-    assert_eq!(StringKind::IPPort.short_name(), "ip:port");
+    assert_eq!(StringKind::Ip.short_name(), "ip");
+    assert_eq!(StringKind::IpPort.short_name(), "ip:port");
     assert_eq!(StringKind::Hostname.short_name(), "host");
 }
 
@@ -159,20 +157,20 @@ fn test_short_name_crypto() {
 
 #[test]
 fn test_short_name_attacks() {
-    assert_eq!(StringKind::CTFFlag.short_name(), "ctf_flag");
-    assert_eq!(StringKind::SQLInjection.short_name(), "sqli");
-    assert_eq!(StringKind::XSSPayload.short_name(), "xss");
+    assert_eq!(StringKind::CtfFlag.short_name(), "ctf_flag");
+    assert_eq!(StringKind::SqlInjection.short_name(), "sqli");
+    assert_eq!(StringKind::XssPayload.short_name(), "xss");
     assert_eq!(StringKind::CommandInjection.short_name(), "cmdi");
 }
 
 #[test]
 fn test_short_name_secrets() {
-    assert_eq!(StringKind::JWT.short_name(), "jwt");
-    assert_eq!(StringKind::APIKey.short_name(), "api_key");
+    assert_eq!(StringKind::Jwt.short_name(), "jwt");
+    assert_eq!(StringKind::ApiKey.short_name(), "api_key");
     assert_eq!(StringKind::Mutex.short_name(), "mutex");
-    assert_eq!(StringKind::GUID.short_name(), "guid");
+    assert_eq!(StringKind::Guid.short_name(), "guid");
     assert_eq!(StringKind::RansomNote.short_name(), "ransom");
-    assert_eq!(StringKind::LDAPPath.short_name(), "ldap");
+    assert_eq!(StringKind::LdapPath.short_name(), "ldap");
 }
 
 #[test]
@@ -186,57 +184,12 @@ fn test_short_name_macho() {
 
 // ===== FunctionMetadata Tests =====
 
-// ===== OverlayInfo Tests =====
-
-#[test]
-fn test_overlay_info_construction() {
-    let overlay = OverlayInfo {
-        start_offset: 0x10000,
-        size: 0x5000,
-    };
-
-    assert_eq!(overlay.start_offset, 0x10000);
-    assert_eq!(overlay.size, 0x5000);
-}
-
-#[test]
-fn test_overlay_info_clone() {
-    let overlay = OverlayInfo {
-        start_offset: 0x20000,
-        size: 0x8000,
-    };
-
-    let cloned = overlay;
-    assert_eq!(overlay.start_offset, cloned.start_offset);
-    assert_eq!(overlay.size, cloned.size);
-}
-
-#[test]
-fn test_overlay_info_equality() {
-    let overlay1 = OverlayInfo {
-        start_offset: 1000,
-        size: 500,
-    };
-
-    let overlay2 = OverlayInfo {
-        start_offset: 1000,
-        size: 500,
-    };
-
-    assert_eq!(overlay1, overlay2);
-}
-
 // ===== Serialization Tests =====
 
 #[test]
 fn test_extracted_string_serialization() {
-    let s = ExtractedString {
-        value: "test_value".to_string(),
-        data_offset: 0x1234,
-        method: StringMethod::Structure,
-        kind: Some(StringKind::FuncName),
-        ..Default::default()
-    };
+    let s = ExtractedString::new("test_value".to_string(), 0x1234, StringMethod::Structure)
+        .with_kind(StringKind::FuncName);
 
     let json = serde_json::to_string(&s).unwrap();
     assert!(json.contains("test_value"));
@@ -245,11 +198,7 @@ fn test_extracted_string_serialization() {
 
 #[test]
 fn test_extracted_string_serialization_skip_none() {
-    let s = ExtractedString {
-        value: "test".to_string(),
-        data_offset: 100,
-        ..Default::default()
-    };
+    let s = ExtractedString::new("test".to_string(), 100, stng::StringMethod::RawScan);
 
     let json = serde_json::to_string(&s).unwrap();
     // None fields should be skipped
@@ -262,13 +211,8 @@ fn test_extracted_string_serialization_skip_none() {
 
 #[test]
 fn test_extracted_string_data_len_roundtrip() {
-    let s = ExtractedString {
-        value: "Hi".to_string(),
-        data_offset: 0x40,
-        data_len: 4, // UTF-16LE source extent, 2× the value
-        method: StringMethod::WideString,
-        ..Default::default()
-    };
+    // UTF-16LE source extent, 2× the value
+    let s = ExtractedString::new("Hi", 0x40, StringMethod::WideString).with_data_len(4);
 
     let json = serde_json::to_string(&s).unwrap();
     // A recorded extent is serialized...
@@ -279,60 +223,6 @@ fn test_extracted_string_data_len_roundtrip() {
     assert_eq!(back.source_spans().collect::<Vec<_>>(), vec![(0x40, 4)]);
 }
 
-// ===== StringStruct Tests =====
-
-#[test]
-fn test_string_struct_construction() {
-    let s = StringStruct {
-        struct_offset: 0x1000,
-        ptr: 0x2000,
-        len: 42,
-    };
-
-    assert_eq!(s.struct_offset, 0x1000);
-    assert_eq!(s.ptr, 0x2000);
-    assert_eq!(s.len, 42);
-}
-
-#[test]
-fn test_string_struct_equality() {
-    let s1 = StringStruct {
-        struct_offset: 100,
-        ptr: 200,
-        len: 10,
-    };
-
-    let s2 = StringStruct {
-        struct_offset: 100,
-        ptr: 200,
-        len: 10,
-    };
-
-    assert_eq!(s1, s2);
-}
-
-#[test]
-fn test_string_struct_hash() {
-    use std::collections::HashSet;
-
-    let s1 = StringStruct {
-        struct_offset: 100,
-        ptr: 200,
-        len: 10,
-    };
-
-    let s2 = StringStruct {
-        struct_offset: 100,
-        ptr: 200,
-        len: 10,
-    };
-
-    let mut set = HashSet::new();
-    set.insert(s1);
-    assert!(set.contains(&s2)); // Should find duplicate
-}
-
-// ===== ExtractedString with Fragments Tests =====
 // Note: StringFragment is not exported in the public API, so we can't test it directly here.
 // Fragment handling is tested indirectly through stack string extraction tests.
 
@@ -340,19 +230,14 @@ fn test_string_struct_hash() {
 
 #[test]
 fn test_extracted_string_with_all_fields() {
-    let s = ExtractedString {
-        value: "complex_string".to_string(),
-        data_offset: 0x5000,
-        // A fragmented stack string carries its spans in `fragments`, so the
-        // contiguous `data_len` is left unrecorded (0).
-        data_len: 0,
-        method: StringMethod::StackString,
-        kind: Some(StringKind::StackString),
-        fragments: Some(Box::new(vec![StringFragment {
+    // A fragmented stack string carries its spans in `fragments`, so the
+    // contiguous `data_len` is left unrecorded (0).
+    let s = ExtractedString::new("complex_string", 0x5000, StringMethod::StackString)
+        .with_kind(StringKind::StackString)
+        .with_fragments(vec![StringFragment {
             offset: 0x5000,
             length: 14,
-        }])),
-    };
+        }]);
 
     assert_eq!(s.value, "complex_string");
     assert_eq!(s.data_offset, 0x5000);

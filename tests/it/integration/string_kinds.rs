@@ -41,7 +41,7 @@ fn test_ip_detection() {
     assert!(
         strings
             .iter()
-            .any(|s| s.value == "192.168.1.1:8080" && s.kind == Some(StringKind::IPPort)),
+            .any(|s| s.value == "192.168.1.1:8080" && s.kind == Some(StringKind::IpPort)),
         "{strings:?}"
     );
 }

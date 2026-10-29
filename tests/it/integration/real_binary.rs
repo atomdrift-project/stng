@@ -22,7 +22,10 @@ fn test_detect_language_real_binary() {
 
     let lang = detect_language(&data);
     // Real system binary is typically C/unknown
-    assert!(["unknown", "c", "rust", "go"].contains(&lang));
+    assert!(matches!(
+        lang,
+        stng::Language::Unknown | stng::Language::Rust | stng::Language::Go
+    ));
 }
 
 #[test]

@@ -21,7 +21,7 @@ fn test_fat_binary_detect_language() {
 
     let lang = detect_language(&data);
     // System binaries are typically C/unknown
-    assert_eq!(lang, "unknown");
+    assert_eq!(lang, stng::Language::Unknown);
 }
 
 #[test]

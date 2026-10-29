@@ -120,7 +120,7 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
         strings.extend(extractor.extract_macho(macho, 0));
         // Same fallback an unknown Mach-O gets (see below): the Rust
         // passes only cover the literals Rust code names.
-        strings.extend(opts.r2_strings.iter().flatten().cloned());
+        strings.extend(opts.hints.strings.iter().cloned());
         extend_with_section_scan(&mut strings, data, min_length, &segments, &section_info);
     } else {
         // Unknown Mach-O (C/C++/Objective-C/asm). Use r2 if available,
@@ -131,7 +131,7 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
         // strings — and any IOC fragments split across literals — are
         // lost whenever r2 is unavailable. ELF and Go already always run
         // a raw scan for the same reason.
-        strings.extend(opts.r2_strings.iter().flatten().cloned());
+        strings.extend(opts.hints.strings.iter().cloned());
         let extractor = RustStringExtractor::new(min_length);
         // Thin binary: the slice is the whole file, so no slice base.
         strings.extend(extractor.extract_macho(macho, 0));
@@ -256,7 +256,7 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
     // slices get it too, after their structure pass: that pass only
     // covers the literals Rust code names (see the thin branch).
     if !is_go {
-        strings.extend(opts.r2_strings.iter().flatten().cloned());
+        strings.extend(opts.hints.strings.iter().cloned());
         // Also do raw scan to catch anything r2 missed
         let raw = extract_raw_strings(data, min_length, &segments, &[]);
         if is_rust {

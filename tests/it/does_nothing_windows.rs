@@ -31,12 +31,14 @@ fn load_sample() -> Vec<u8> {
 fn test_no_xor_ip_false_positive() {
     let data = load_sample();
 
-    let opts = ExtractOptions::new(4).with_xor(Some(8));
+    let opts = ExtractOptions::new(4)
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(8);
     let extracted = extract_strings_with_options(&data, &opts);
 
     let xor_ips: Vec<&str> = extracted
         .iter()
-        .filter(|s| s.method == StringMethod::XorDecode && s.kind == Some(StringKind::IP))
+        .filter(|s| s.method == StringMethod::XorDecode && s.kind == Some(StringKind::Ip))
         .map(|s| s.value.as_str())
         .collect();
 
@@ -50,7 +52,9 @@ fn test_no_xor_ip_false_positive() {
 fn test_no_incremental_xor_false_positives() {
     let data = load_sample();
 
-    let opts = ExtractOptions::new(4).with_xor(Some(8));
+    let opts = ExtractOptions::new(4)
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(8);
     let extracted = extract_strings_with_options(&data, &opts);
 
     let xor_decoded: Vec<&str> = extracted
@@ -147,7 +151,7 @@ fn test_no_jwt_false_positive_from_go_symbol() {
 
     let jwts: Vec<&str> = extracted
         .iter()
-        .filter(|s| s.kind == Some(StringKind::JWT))
+        .filter(|s| s.kind == Some(StringKind::Jwt))
         .map(|s| s.value.as_str())
         .collect();
 

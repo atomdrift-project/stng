@@ -124,14 +124,14 @@ pub(crate) fn append_script_deobfuscation(
         let payload_decoded = decode_encoded_strings(&payload_strings);
         payload_strings.extend(payload_decoded);
 
-        // Mark all strings as ScriptDecode with provenance.
-        // Use a high base offset to avoid collisions with raw-scan strings from
-        // the original file during deduplication.
-        let base_offset = data.len() as u64 + 1 + result.offset as u64;
+        // Each string is located at the encoded blob it was decoded from;
+        // deduplication keys these derived strings on their value too.
         for s in &mut payload_strings {
             s.method = StringMethod::ScriptDecode;
             s.kind = classifier::classify_string(&s.value);
-            s.rebase(base_offset);
+            s.data_offset = result.offset as u64;
+            s.data_len = 0;
+            s.fragments = None;
         }
 
         strings.extend(payload_strings);

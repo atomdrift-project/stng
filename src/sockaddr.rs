@@ -455,7 +455,7 @@ fn scan_sockaddr_in(
             value: ip_str,
             data_offset: i as u64,
             method: StringMethod::RawScan,
-            kind: Some(StringKind::IPPort),
+            kind: Some(StringKind::IpPort),
             ..Default::default()
         });
     }

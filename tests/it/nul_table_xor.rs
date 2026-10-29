@@ -72,7 +72,8 @@ fn test_short_nul_terminated_paths_under_printable_key() {
         (".text", TEXT_OFFSET, 0x401000, DECODE_LOOP, 0x6), // SHF_ALLOC | SHF_EXECINSTR
         (".rodata", RODATA_OFFSET, 0x402000, &rodata, 0x2), // SHF_ALLOC
     ]);
-    let results = extract_strings_with_options(&elf, &ExtractOptions::new(4).with_xor(None));
+    let results =
+        extract_strings_with_options(&elf, &ExtractOptions::new(4).with_xor(stng::XorMode::Auto));
     let xor: Vec<_> = results
         .iter()
         .filter(|s| s.method == StringMethod::XorDecode)

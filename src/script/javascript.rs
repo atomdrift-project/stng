@@ -7,6 +7,7 @@
 //! - `eval("...".split("").reverse().join(""))`
 //! - `eval(rot([...].map(c => String.fromCharCode(c)).join(""), n))`
 
+use crate::script::detect::ScriptLanguage;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -64,7 +65,7 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
         source,
         &[&EVAL_ATOB_RE, &EVAL_BUFFER_B64_RE],
         &[DecodeStep::Base64],
-        "javascript",
+        ScriptLanguage::JavaScript,
     ));
     results.extend(try_eval_charcode(source));
     results.extend(try_charcode_array(source));
@@ -87,7 +88,7 @@ fn try_eval_charcode(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: payload,
                 offset,
                 chain_description: "javascript:charcodes".to_string(),
-                language: "javascript",
+                language: ScriptLanguage::JavaScript,
             })
         })
         .collect()
@@ -171,7 +172,7 @@ fn try_charcode_array(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: payload,
                 offset: whole.start(),
                 chain_description: format!("javascript:charcode-array+{chain}"),
-                language: "javascript",
+                language: ScriptLanguage::JavaScript,
             })
         })
         .collect()
@@ -194,7 +195,7 @@ fn try_eval_reverse(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: result.payload,
                 offset,
                 chain_description: format!("javascript:{}", result.chain_description),
-                language: "javascript",
+                language: ScriptLanguage::JavaScript,
             })
         })
         .collect()

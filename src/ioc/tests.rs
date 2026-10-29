@@ -88,12 +88,12 @@ fn ipv6_endpoint_is_canonical_and_deduplicated_with_plain_ip() {
     let values = [
         string(
             "[2606:4700:4700:0:0:0:0:1111]:443",
-            Some(StringKind::IPPort),
+            Some(StringKind::IpPort),
             StringMethod::RawScan,
         ),
         string(
             "2606:4700:4700::1111",
-            Some(StringKind::IP),
+            Some(StringKind::Ip),
             StringMethod::RawScan,
         ),
     ];
@@ -164,10 +164,10 @@ fn malformed_endpoints_and_url_lookalikes_are_rejected() {
         string("foo.rs:65536", None, StringMethod::RawScan),
         string(
             "1.2.3.4:abc",
-            Some(StringKind::IPPort),
+            Some(StringKind::IpPort),
             StringMethod::RawScan,
         ),
-        string("1.2.0.4", Some(StringKind::IP), StringMethod::RawScan),
+        string("1.2.0.4", Some(StringKind::Ip), StringMethod::RawScan),
         string(
             "http://192.168.1.1/admin",
             Some(StringKind::Url),

@@ -131,11 +131,9 @@ fn output_truncation_and_unsupported_cpu_are_rejected() {
 }
 #[test]
 fn public_pipeline_preserves_full_prompt_in_universal_specimen() {
-    let opts = crate::ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let opts = crate::ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     let out = crate::extract_strings_with_options(*FILE, &opts);
     let s = out
         .iter()

@@ -44,8 +44,8 @@ fn test_string_method_debug() {
         StringMethod::InstructionPattern,
         StringMethod::RawScan,
         StringMethod::Heuristic,
-        StringMethod::R2String,
-        StringMethod::R2Symbol,
+        StringMethod::RizinString,
+        StringMethod::RizinSymbol,
     ];
     for method in methods {
         let s = format!("{method:?}");
@@ -57,29 +57,16 @@ fn test_string_method_debug() {
 fn test_extract_options_builder_pattern() {
     let opts = ExtractOptions::new(5)
         .with_garbage_filter(true)
-        .with_xor(Some(12));
-    assert_eq!(opts.min_length, 5);
-    assert!(opts.filter_garbage);
-    assert!(opts.xor_scan);
-    assert_eq!(opts.xor_min_length, 12);
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(12);
+    assert_eq!(opts.min_length(), 5);
+    assert_eq!(*opts.xor(), stng::XorMode::Auto);
 }
 
 #[test]
 fn test_extracted_string_equality() {
-    let s1 = ExtractedString {
-        value: "test".to_string(),
-        data_offset: 0x1000,
-        method: StringMethod::Structure,
-        kind: None,
-        ..Default::default()
-    };
-    let s2 = ExtractedString {
-        value: "test".to_string(),
-        data_offset: 0x1000,
-        method: StringMethod::Structure,
-        kind: None,
-        ..Default::default()
-    };
+    let s1 = ExtractedString::new("test".to_string(), 0x1000, StringMethod::Structure);
+    let s2 = ExtractedString::new("test".to_string(), 0x1000, StringMethod::Structure);
     // Clone check
     let s3 = s1.clone();
     assert_eq!(s1.value, s2.value);

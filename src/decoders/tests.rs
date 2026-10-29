@@ -543,7 +543,7 @@ fn test_decoded_ip_classification() {
     )]);
     if !results.is_empty() {
         assert_eq!(results[0].value, "192.168.1.1");
-        assert_eq!(results[0].kind, Some(StringKind::IP));
+        assert_eq!(results[0].kind, Some(StringKind::Ip));
     }
 }
 

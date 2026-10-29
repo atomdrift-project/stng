@@ -112,7 +112,7 @@ fn test_cli_decodes_vbscript_encoder_in_binary_classified_asp() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("ScriptDecode"));
+    assert!(stdout.contains("script_decode"));
     assert!(stdout.contains("wscript.shell"));
 }
 

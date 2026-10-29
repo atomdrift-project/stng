@@ -12,7 +12,7 @@ fn test_self_binary_detection() {
     // Test against our own binary
     let data = rust_binary();
 
-    assert_eq!(detect_language(&data), "rust");
+    assert_eq!(detect_language(&data), stng::Language::Rust);
     assert!(is_rust_binary(&data));
     let strings = extract_strings(&data, 4);
     assert!(!strings.is_empty(), "Self binary should have strings");

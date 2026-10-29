@@ -77,7 +77,7 @@ pub(crate) fn extract_java_class_strings(
     }
     strings.extend(rest);
 
-    if opts.xor_scan || opts.xor_key.is_some() || opts.xor_key_offsets.is_some() {
+    if *opts.xor() != crate::XorMode::Off {
         apply_xor_scan(&mut strings, data, opts, false, &[]);
     }
     let decoded = decode_encoded_strings(&strings);

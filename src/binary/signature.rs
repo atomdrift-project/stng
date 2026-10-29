@@ -20,7 +20,7 @@
 /// to opt out of scanning. Signatures are not verified, so a binary carrying a
 /// copied platform signature blob still passes.
 #[must_use]
-pub fn is_platform_signed(data: &[u8]) -> bool {
+pub(crate) fn is_platform_signed(data: &[u8]) -> bool {
     signature_blobs(data).iter().any(|blob| {
         let has = |name: &[u8]| memchr::memmem::find(blob, name).is_some();
         let apple = has(b"Apple Code Signing Certification Authority")

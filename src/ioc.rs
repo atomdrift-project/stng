@@ -349,7 +349,7 @@ pub fn extract_iocs(strings: &[ExtractedString]) -> Vec<Ioc> {
         }
 
         let typed_host = extracted.kind == Some(StringKind::Hostname);
-        let typed_ip = matches!(extracted.kind, Some(StringKind::IP | StringKind::IPPort));
+        let typed_ip = matches!(extracted.kind, Some(StringKind::Ip | StringKind::IpPort));
 
         // Avoid hostname/PSL parsing for the overwhelmingly common ordinary
         // string. An exact host:port is structural evidence on its own. A bare

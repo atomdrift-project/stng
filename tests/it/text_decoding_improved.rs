@@ -4,10 +4,7 @@ use stng::{ExtractedString, StringKind, StringMethod, classify_string};
 
 /// What stng's decoders make of `value` with `method`.
 fn decoded(value: &str, method: StringMethod) -> Vec<String> {
-    let input = ExtractedString {
-        value: value.into(),
-        ..Default::default()
-    };
+    let input = ExtractedString::new(value, 0, stng::StringMethod::RawScan);
     stng::decode_encoded_strings(&[input])
         .into_iter()
         .filter(|s| s.method == method)
@@ -160,7 +157,7 @@ fn test_jwt_token_classification() {
     // JWT should be classified as JWT, not just base64
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123";
     let kind = classify_string(jwt);
-    assert_eq!(kind, Some(StringKind::JWT));
+    assert_eq!(kind, Some(StringKind::Jwt));
 }
 
 #[test]

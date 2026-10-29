@@ -7,11 +7,9 @@ use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 
 #[test]
 fn both_native_go_architectures_keep_exact_tags_and_multiline_plist() {
-    let opts = ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let opts = ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     for (name, sha, iv, ciphertext, plist) in [
         (
             "go_reflection_tags_minirat.macho",

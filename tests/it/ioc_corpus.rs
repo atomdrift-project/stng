@@ -120,7 +120,7 @@ fn existing_testdata_ioc_manifest_is_exact() {
     ];
     let brew_options = || {
         ExtractOptions::new(10)
-            .with_xor_key(BREW_AGENT_KEY.to_vec())
+            .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
             .with_garbage_filter(true)
     };
     assert_exact(
@@ -363,7 +363,9 @@ fn existing_testdata_ioc_manifest_is_exact() {
         (
             "clean Windows",
             crate::common::path("testdata/pe/does-nothing-windows-amd64.exe"),
-            ExtractOptions::new(10).with_xor(Some(10)),
+            ExtractOptions::new(10)
+                .with_xor(stng::XorMode::Auto)
+                .with_xor_min_length(10),
         ),
         (
             "hello Windows",

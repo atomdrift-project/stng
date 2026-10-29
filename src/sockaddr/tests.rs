@@ -31,7 +31,7 @@ fn test_sockaddr_in_little_endian() {
         "Should find 192.168.1.50:8080 in sockaddr_in"
     );
     assert_eq!(found.unwrap().data_offset, 270);
-    assert_eq!(found.unwrap().kind, Some(StringKind::IPPort));
+    assert_eq!(found.unwrap().kind, Some(StringKind::IpPort));
 }
 
 #[test]

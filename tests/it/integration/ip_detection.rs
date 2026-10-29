@@ -37,7 +37,7 @@ fn test_real_ip_classified_as_ip() {
     assert!(ip_string.is_some(), "Real IP should be extracted");
     assert_eq!(
         ip_string.unwrap().kind,
-        Some(StringKind::IP),
+        Some(StringKind::Ip),
         "Real IP should be classified as IP"
     );
 }
@@ -54,7 +54,7 @@ fn test_version_number_not_ip() {
     if let Some(s) = version_string {
         assert_ne!(
             s.kind,
-            Some(StringKind::IP),
+            Some(StringKind::Ip),
             "Version number 1.0.0.0 should NOT be classified as IP"
         );
     }
@@ -71,7 +71,7 @@ fn test_version_pattern_x_y_0_0_not_ip() {
     if let Some(s) = version_string {
         assert_ne!(
             s.kind,
-            Some(StringKind::IP),
+            Some(StringKind::Ip),
             "Version number 4.5.0.0 should NOT be classified as IP"
         );
     }
@@ -98,7 +98,7 @@ fn test_ip_has_high_severity() {
 fn test_ip_severity_higher_priority_than_url() {
     // IPs should sort before URLs when prioritizing notable items
     // This tests the severity ordering used in main.rs Notable section
-    let ip_severity = StringKind::IP.severity();
+    let ip_severity = StringKind::Ip.severity();
     let url_severity = StringKind::Url.severity();
 
     // Both are High, but we test the ordering logic in main.rs

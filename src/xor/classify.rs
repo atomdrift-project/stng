@@ -629,7 +629,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Verdict {
         {
             // Likely an IP address, allow through
             let kind = *classified;
-            if matches!(kind, Some(StringKind::IP | StringKind::IPPort)) {
+            if matches!(kind, Some(StringKind::Ip | StringKind::IpPort)) {
                 return Verdict::Keep(kind);
             }
         }
@@ -649,8 +649,8 @@ pub(crate) fn classify_xor_string(s: &str) -> Verdict {
             Some(
                 StringKind::SuspiciousPath
                     | StringKind::ShellCmd
-                    | StringKind::IP
-                    | StringKind::IPPort
+                    | StringKind::Ip
+                    | StringKind::IpPort
                     | StringKind::Url
             )
         ) {
@@ -695,8 +695,8 @@ pub(crate) fn classify_xor_string(s: &str) -> Verdict {
 
     match kind {
         Some(
-            StringKind::IP
-            | StringKind::IPPort
+            StringKind::Ip
+            | StringKind::IpPort
             | StringKind::Url
             | StringKind::SuspiciousPath
             | StringKind::UnicodeEscaped

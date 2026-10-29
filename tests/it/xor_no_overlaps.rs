@@ -39,7 +39,7 @@ fn test_no_overlapping_xor_strings() {
 
     // Extract with XOR key
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -106,7 +106,7 @@ fn test_null_region_filtering() {
     ];
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -132,7 +132,7 @@ fn test_brew_agent_no_overlaps() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -238,7 +238,8 @@ fn test_auto_detected_xor_key_in_output() {
 
     // Extract with auto-detection enabled (no explicit key)
     let opts = ExtractOptions::new(10)
-        .with_xor(Some(10))
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(10)
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);

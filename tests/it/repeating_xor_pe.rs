@@ -220,7 +220,7 @@ fn recovers_odd_periods() {
 fn xor_scan_surfaces_the_key() {
     let key = hex("5564ee586f83b8022fcd6064d450a4c0981ffb2d8dedf7ffad4560962406e943");
     let enc = xor(*PE, &key);
-    let opts = stng::ExtractOptions::new(4).with_xor(None);
+    let opts = stng::ExtractOptions::new(4).with_xor(stng::XorMode::Auto);
     let strings = stng::extract_strings_with_options(&enc, &opts);
     let found: Vec<_> = strings
         .iter()

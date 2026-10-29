@@ -2,6 +2,7 @@
 mod constants;
 mod prometheus;
 use super::DeobfuscationResult;
+use crate::script::detect::ScriptLanguage;
 const MAX_SOURCE: usize = 1024 * 1024;
 /// `n` as an integer when it is whole and every integer up to it is exactly
 /// representable (|n| <= 2^53). NaN, infinities and fractions give `None`, so
@@ -69,7 +70,7 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
         decoded: recovered.source,
         offset: 0,
         chain_description: "lua:static-constants+prometheus-strings".to_string(),
-        language: "lua",
+        language: ScriptLanguage::Lua,
     }]
 }
 #[cfg(test)]

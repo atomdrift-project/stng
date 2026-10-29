@@ -23,7 +23,7 @@ fn test_multibyte_xor_basic() {
 
     // Extract with custom XOR key
     let opts = ExtractOptions::new(4)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -66,7 +66,7 @@ fn test_multibyte_xor_with_newlines() {
     }
 
     let opts = ExtractOptions::new(4)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -97,7 +97,7 @@ fn test_multibyte_xor_real_malware() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(4)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -168,7 +168,7 @@ fn test_multibyte_xor_offsets() {
     }
 
     let opts = ExtractOptions::new(4)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -219,7 +219,7 @@ fn test_multibyte_xor_independent_cycling() {
     }
 
     let opts = ExtractOptions::new(4)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -265,7 +265,7 @@ fn test_multibyte_xor_min_length() {
 
     // Default min_length should filter out short strings
     let opts = ExtractOptions::new(4)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(false);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);

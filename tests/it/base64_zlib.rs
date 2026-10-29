@@ -96,12 +96,8 @@ fn base64_zlib_is_filetype_agnostic() {
 fn base64_zlib_public_decoder_recovers_unicode_source_exactly() {
     let payload = "# 日本語 🦀\nprint('café')\n";
     let encoded = encode(payload);
-    let source = ExtractedString {
-        value: encoded.clone(),
-        data_offset: 4096,
-        data_len: u32::try_from(encoded.len()).unwrap(),
-        ..Default::default()
-    };
+    let source = ExtractedString::new(encoded.clone(), 4096, stng::StringMethod::RawScan)
+        .with_data_len(u32::try_from(encoded.len()).unwrap());
     let strings = stng::decode_encoded_strings(&[source]);
     let decoded = strings
         .iter()

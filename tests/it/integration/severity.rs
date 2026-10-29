@@ -12,8 +12,8 @@ fn test_all_kinds_have_severity() {
         Some(StringKind::Import),
         Some(StringKind::Export),
         Some(StringKind::Url),
-        Some(StringKind::IP),
-        Some(StringKind::IPPort),
+        Some(StringKind::Ip),
+        Some(StringKind::IpPort),
         Some(StringKind::EnvVar),
         Some(StringKind::Path),
         Some(StringKind::SuspiciousPath),
@@ -44,8 +44,8 @@ fn test_all_kinds_have_severity() {
 fn test_high_severity_kinds() {
     assert_eq!(StringKind::ShellCmd.severity(), Severity::High);
     assert_eq!(StringKind::SuspiciousPath.severity(), Severity::High);
-    assert_eq!(StringKind::IP.severity(), Severity::High);
-    assert_eq!(StringKind::IPPort.severity(), Severity::High);
+    assert_eq!(StringKind::Ip.severity(), Severity::High);
+    assert_eq!(StringKind::IpPort.severity(), Severity::High);
     assert_eq!(StringKind::Base64.severity(), Severity::High);
     assert_eq!(StringKind::HexEncoded.severity(), Severity::High);
     assert_eq!(StringKind::UnicodeEscaped.severity(), Severity::High);

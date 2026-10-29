@@ -40,10 +40,6 @@
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("stng requires a 64-bit target");
 
-/// Explicit native-tool lifetime protection; extraction itself starts no processes.
-#[cfg(unix)]
-pub use stng_process as subprocess;
-
 // Core: options, the pipeline, and the types and checks every pass shares
 mod extraction;
 mod ioc;
@@ -55,7 +51,7 @@ mod validation;
 
 // Binary formats and their building blocks
 mod arm64;
-pub mod binary;
+mod binary;
 mod bytes;
 mod cfml;
 mod detect;
@@ -90,36 +86,34 @@ mod fuzzy_base64;
 pub use binary::{is_go_binary, is_rust_binary};
 pub use classifier::classify_string;
 pub use decoders::decode_spaced_ascii;
-pub use detect::{detect_language, is_text_file};
+pub use detect::{Language, detect_language, is_text_file};
 pub use ioc::{
     Ioc, IocKind, IocOccurrence, IpEvidence, KeyAlgorithm, KeyMetadata, MAX_IOC_OCCURRENCES,
     canonicalize_hostname, canonicalize_ioc_path, decode_key_material, encode_key_material,
     extract_iocs, is_external_ip,
 };
-pub use overlay::{detect_elf_overlay, detect_elf_overlay_from_elf};
+pub use overlay::detect_elf_overlay;
 pub use types::{
-    Arch, BinaryInfo, ExtractedString, OverlayInfo, Severity, StringBoundary, StringContext,
-    StringFragment, StringKind, StringMethod, StringStruct,
+    Arch, ExtractedString, OverlayInfo, Severity, StringBoundary, StringContext, StringFragment,
+    StringKind, StringMethod,
 };
-pub use xor::lcg::{
-    decode_lcg_xor, decode_xor_fat_macho, extract_macho_lcg_xor, extract_macho_xor_macho_strings,
-};
+pub use xor::lcg::{Lcg, decode_lcg_xor, decode_xor_fat_macho, extract_macho_lcg_xor};
 
-pub use xor::{
-    MAX_XOR_SCAN_SIZE, RepeatingXorKey, extract_incremental_xor_strings, recover_repeating_xor_pe,
-};
+pub use xor::{MAX_XOR_SCAN_SIZE, RepeatingXorKey, recover_repeating_xor_pe};
 
 // Internal — not part of the stable public API
 pub(crate) use go::{GoStringExtractor, pclntab_strings};
 pub use overlay::extract_overlay_strings;
 pub(crate) use rust::RustStringExtractor;
 pub(crate) use stack_strings::{extract_stack_strings, extract_stack_strings_with_context};
-pub use validation::{is_garbage, is_garbage_with_context, is_garbage_with_kind};
+pub use validation::{is_garbage, is_garbage_with_context};
 
-// Re-export goblin so library clients can parse binaries themselves
+/// The goblin stng parses with, so a caller can parse once and hand the
+/// object to [`extract_strings_from_object`]. Its version is part of stng's
+/// API: a goblin release that breaks its API is a stng major release.
 pub use goblin;
 use goblin::Object;
-pub use options::{ExtractOptions, FormatHint};
+pub use options::{ExternalHints, ExtractOptions, FormatHint, XorMode};
 pub use pipeline::decode::decode_encoded_strings;
 
 // Import internal modules for use in this file
@@ -261,7 +255,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
     } else {
         // Unknown format - use r2 if available, plus raw scan
         let mut strings = Vec::new();
-        strings.extend(opts.r2_strings.iter().flatten().cloned());
+        strings.extend(opts.hints.strings.iter().cloned());
 
         // Check if this looks like a PE (MZ header) even if goblin failed to parse
         let is_pe = data.len() >= 2 && data[0] == 0x4D && data[1] == 0x5A;
@@ -299,7 +293,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         strings.extend(extract_stack_strings(data, opts.min_length));
 
         // Trigger XOR scan even for unknown formats if requested
-        if opts.xor_scan || opts.xor_key.is_some() || opts.xor_key_offsets.is_some() {
+        if opts.xor != XorMode::Off {
             apply_xor_scan(&mut strings, data, opts, is_pe, &[]);
         }
 
@@ -308,7 +302,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
         // whatever the input size, so it needs no size gate; text is skipped
         // as `apply_xor_scan` skips it. Only the key is surfaced; the decoded
         // image is binary, for callers of `recover_repeating_xor_pe`.
-        if opts.xor_scan
+        if opts.xor_scans()
             && scans_for_xor(data, opts)
             && let Some(key) = xor::recover_repeating_xor_pe(data)
         {

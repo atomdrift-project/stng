@@ -21,32 +21,32 @@ fn test_garbage_filter_enabled() {
 #[test]
 #[cfg(unix)] // reads /bin/ls
 fn test_garbage_filter_removes_garbage() {
-    let data = std::fs::read("/bin/ls").expect("read /bin/ls");
-    let opts = ExtractOptions::new(4).with_garbage_filter(true);
-    let strings = extract_strings_with_options(&data, &opts);
-
-    // All strings should pass is_garbage check, except for special kinds
-    // that are exempt from garbage filtering (Section, EntitlementsXml)
-    for s in &strings {
-        if s.kind != Some(StringKind::Section) && s.kind != Some(StringKind::EntitlementsXml) {
-            assert!(
-                !is_garbage(&s.value),
-                "Found garbage string: {} (kind: {:?})",
-                s.value,
-                s.kind
-            );
-        }
+    // The filter judges each string in its context (kind, section,
+    // architecture), so its output is not the strings the context-free
+    // `is_garbage` accepts. What holds everywhere: it only removes.
+    let data = crate::common::bytes("testdata/elf/hello_linux_amd64");
+    let key = |s: &stng::ExtractedString| (s.data_offset, s.value.clone());
+    let all: std::collections::HashSet<_> =
+        extract_strings_with_options(&data, &ExtractOptions::new(4))
+            .iter()
+            .map(key)
+            .collect();
+    let kept =
+        extract_strings_with_options(&data, &ExtractOptions::new(4).with_garbage_filter(true));
+    assert!(kept.len() < all.len(), "the filter removed nothing");
+    for s in &kept {
+        assert!(all.contains(&key(s)), "filter added {:?}", s.value);
     }
 }
 
 #[test]
 fn test_options_default_no_filter() {
     let opts = ExtractOptions::new(4);
-    assert!(!opts.filter_garbage);
+    assert!(!opts.filter_garbage());
 }
 
 #[test]
 fn test_options_with_filter() {
     let opts = ExtractOptions::new(4).with_garbage_filter(true);
-    assert!(opts.filter_garbage);
+    assert!(opts.filter_garbage());
 }

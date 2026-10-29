@@ -120,13 +120,13 @@ pub(super) fn classify_ip(s: &str) -> Option<StringKind> {
             && port > 0
             && is_ipv4(ip_part)
         {
-            return Some(StringKind::IPPort);
+            return Some(StringKind::IpPort);
         }
     }
 
     // Plain IPv4
     if is_ipv4(s) {
-        return Some(StringKind::IP);
+        return Some(StringKind::Ip);
     }
 
     // IPv6 (contains multiple colons, hex chars)
@@ -158,7 +158,7 @@ pub(super) fn classify_ip(s: &str) -> Option<StringKind> {
             .split(':')
             .any(|group| group.len() >= 2 && group.bytes().all(|b| b.is_ascii_hexdigit()));
         if valid_ipv6 && has_substantial_hextet && s.len() >= 3 {
-            return Some(StringKind::IP);
+            return Some(StringKind::Ip);
         }
     }
 
@@ -337,7 +337,7 @@ pub(super) fn classify_api_key(s: &str) -> Option<StringKind> {
     if s.starts_with("AKIA") && len >= 20 {
         let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
         if alnum_count * 100 / len >= 90 {
-            return Some(StringKind::APIKey);
+            return Some(StringKind::ApiKey);
         }
     }
 
@@ -348,7 +348,7 @@ pub(super) fn classify_api_key(s: &str) -> Option<StringKind> {
             .filter(|b| b.is_ascii_alphanumeric() || *b == b'_')
             .count();
         if alnum_count * 100 / len >= 90 {
-            return Some(StringKind::APIKey);
+            return Some(StringKind::ApiKey);
         }
     }
 
@@ -359,7 +359,7 @@ pub(super) fn classify_api_key(s: &str) -> Option<StringKind> {
             .filter(|b| b.is_ascii_alphanumeric() || *b == b'_')
             .count();
         if alnum_count * 100 / len >= 90 {
-            return Some(StringKind::APIKey);
+            return Some(StringKind::ApiKey);
         }
     }
 
@@ -370,7 +370,7 @@ pub(super) fn classify_api_key(s: &str) -> Option<StringKind> {
             .filter(|b| b.is_ascii_alphanumeric() || *b == b'-')
             .count();
         if alnum_count * 100 / len >= 90 {
-            return Some(StringKind::APIKey);
+            return Some(StringKind::ApiKey);
         }
     }
 

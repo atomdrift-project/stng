@@ -33,7 +33,7 @@ fn test_3cx_libffmpeg_xor_config() {
     let data = std::fs::read(sample_path).expect("Failed to read 3CX sample");
 
     // Analyst workflow: supply the known single-byte key.
-    let opts = ExtractOptions::new(6).with_xor_key(vec![0x7a]);
+    let opts = ExtractOptions::new(6).with_xor(stng::XorMode::Key(vec![0x7a]));
     let extracted = stng::extract_strings_with_options(&data, &opts);
 
     let xor_strings: Vec<&str> = extracted

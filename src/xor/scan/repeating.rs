@@ -246,7 +246,7 @@ pub(super) fn plausible_letters(s: &str, kind: Option<StringKind>, strict: bool)
     let alpha = s.chars().filter(|c| c.is_alphabetic()).count();
     let network = matches!(
         kind,
-        Some(StringKind::Url | StringKind::IP | StringKind::IPPort)
+        Some(StringKind::Url | StringKind::Ip | StringKind::IpPort)
     );
     if network || alpha < 3 || !s.is_ascii() || is_locale_string(s) {
         return true;

@@ -37,12 +37,12 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_TOOL_OUTPUT: u64 = 512 * 1024 * 1024;
 #[must_use]
 pub(crate) fn is_available() -> bool {
-    get_tool().is_some()
+    tool_path().is_some()
 }
 pub(crate) fn flush_cache(file_path: &str) -> Result<(), std::io::Error> {
     R2Cache::new()?.clear(file_path)
 }
-fn get_tool() -> Option<&'static Path> {
+fn tool_path() -> Option<&'static Path> {
     TOOL.get_or_init(|| resolve_tool("rizin").or_else(|| resolve_tool("r2")))
         .as_deref()
 }
@@ -121,7 +121,7 @@ pub(crate) fn extract_string_boundaries(
     path: &str,
     use_cache: bool,
 ) -> Option<Vec<StringBoundary>> {
-    let tool = get_tool()?;
+    let tool = tool_path()?;
     let file_size = std::fs::metadata(path).ok()?.len();
     if file_size > 10 * 1024 * 1024 {
         return None;
@@ -131,13 +131,15 @@ pub(crate) fn extract_string_boundaries(
         .ok()
         .map(|json| {
             json.iter()
-                .map(|s| StringBoundary {
-                    offset: s.paddr,
-                    length: if s.length > 0 {
-                        s.length
-                    } else {
-                        s.string.len()
-                    },
+                .map(|s| {
+                    StringBoundary::new(
+                        s.paddr,
+                        if s.length > 0 {
+                            s.length
+                        } else {
+                            s.string.len()
+                        },
+                    )
                 })
                 .collect()
         })
@@ -164,7 +166,7 @@ pub(crate) fn extract_strings(
     min_length: usize,
     use_cache: bool,
 ) -> Option<Vec<ExtractedString>> {
-    let tool = get_tool()?;
+    let tool = tool_path()?;
     let file_size = std::fs::metadata(path).ok()?.len();
     let is_large_file = file_size > 10 * 1024 * 1024;
     let path_owned = path.to_string();
@@ -193,23 +195,17 @@ pub(crate) fn extract_strings(
                 if let Some(decoded) = stng::decode_spaced_ascii(&s.string) {
                     if decoded.len() >= min_length && seen.insert(decoded.clone()) {
                         let kind = classify_string(&decoded);
-                        strings.push(ExtractedString {
-                            value: decoded,
-                            data_offset: s.paddr,
-                            method: StringMethod::SpacedAscii,
-                            kind,
-                            ..Default::default()
-                        });
+                        strings.push(
+                            ExtractedString::new(decoded, s.paddr, StringMethod::SpacedAscii)
+                                .with_kind(kind),
+                        );
                     }
                 } else {
                     let kind = classify_string(&s.string);
-                    strings.push(ExtractedString {
-                        value: s.string,
-                        data_offset: s.paddr,
-                        method: StringMethod::R2String,
-                        kind,
-                        ..Default::default()
-                    });
+                    strings.push(
+                        ExtractedString::new(s.string, s.paddr, StringMethod::RizinString)
+                            .with_kind(kind),
+                    );
                 }
             }
         }
@@ -227,13 +223,10 @@ pub(crate) fn extract_strings(
                     "FILE" => StringKind::FilePath,
                     _ => StringKind::Ident,
                 });
-                strings.push(ExtractedString {
-                    value: s.name,
-                    data_offset: s.paddr,
-                    method: StringMethod::R2Symbol,
-                    kind,
-                    ..Default::default()
-                });
+                strings.push(
+                    ExtractedString::new(s.name, s.paddr, StringMethod::RizinSymbol)
+                        .with_kind(kind),
+                );
             }
         }
     }
@@ -292,13 +285,13 @@ fn spawn_tool_command(tool: &Path, path: &str, cmd: &str, use_cache: bool) -> Op
 struct ToolChild {
     child: std::process::Child,
     #[cfg(unix)]
-    watchdog: stng::subprocess::Watchdog,
+    watchdog: stng_process::Watchdog,
 }
 
 impl ToolChild {
     fn spawn(command: &mut Command, timeout: Duration) -> std::io::Result<Self> {
         #[cfg(unix)]
-        let watchdog = stng::subprocess::Watchdog::arm(command, timeout)?;
+        let watchdog = stng_process::Watchdog::arm(command, timeout)?;
         Ok(Self {
             child: command.spawn()?,
             #[cfg(unix)]
@@ -309,7 +302,7 @@ impl ToolChild {
     fn has_exited(&mut self) -> std::io::Result<bool> {
         #[cfg(unix)]
         {
-            stng::subprocess::exited_unreaped(&self.child)
+            stng_process::exited_unreaped(&self.child)
         }
         #[cfg(not(unix))]
         {
@@ -419,7 +412,7 @@ fn vaddr_to_paddr(vaddr: u64, sections: &[R2Section]) -> Option<u64> {
 /// File offsets of XOR keys: the operand of each `lea` within 256 bytes of a
 /// `xor` instruction, mapped from its virtual address to the file.
 fn xor_key_offsets(path: &str, use_cache: bool) -> Vec<u64> {
-    let Some(tool) = get_tool() else {
+    let Some(tool) = tool_path() else {
         return Vec::new();
     };
     let sections: Vec<R2Section> = run_tool_command_with_cache(tool, path, "iSj", use_cache)
@@ -513,7 +506,7 @@ pub(crate) fn extract_connect_addrs(
     data: &[u8],
     use_cache: bool,
 ) -> Vec<ExtractedString> {
-    let Some(tool) = get_tool() else {
+    let Some(tool) = tool_path() else {
         return Vec::new();
     };
     if data.len() > 10 * 1024 * 1024 {
@@ -550,17 +543,11 @@ fn sockaddr_to_string(sockaddr: &SockaddrIn) -> ExtractedString {
         sockaddr.ip[0], sockaddr.ip[1], sockaddr.ip[2], sockaddr.ip[3]
     );
     let (value, kind) = if sockaddr.port > 0 {
-        (format!("{ip}:{}", sockaddr.port), Some(StringKind::IPPort))
+        (format!("{ip}:{}", sockaddr.port), Some(StringKind::IpPort))
     } else {
-        (ip, Some(StringKind::IP))
+        (ip, Some(StringKind::Ip))
     };
-    ExtractedString {
-        value,
-        data_offset: sockaddr.offset,
-        method: StringMethod::InstructionPattern,
-        kind,
-        ..Default::default()
-    }
+    ExtractedString::new(value, sockaddr.offset, StringMethod::InstructionPattern).with_kind(kind)
 }
 
 fn scan_binary_for_connect_addrs(data: &[u8]) -> Vec<ExtractedString> {
@@ -742,7 +729,7 @@ const MAX_ANALYSIS_SIZE: usize = 10 * 1024 * 1024;
 ///   that pass understands;
 /// - XOR key locations, when `xorscan` asks for them.
 pub(crate) fn attach(
-    mut opts: ExtractOptions,
+    opts: ExtractOptions,
     data: &[u8],
     xor: bool,
     xorscan: bool,
@@ -754,7 +741,7 @@ pub(crate) fn attach(
     let Some(path) = input.path().to_str() else {
         return opts;
     };
-    let min_length = opts.min_length;
+    let min_length = opts.min_length();
     let strings = !stng::is_go_binary(data);
     let connect = data.len() <= MAX_ANALYSIS_SIZE
         && Object::parse(data)
@@ -771,19 +758,12 @@ pub(crate) fn attach(
             keys.and_then(|h| h.join().ok()),
         )
     });
-    if let Some(strings) = strings {
-        opts = opts.with_r2_strings(strings);
-    }
-    if let Some(boundaries) = boundaries {
-        opts = opts.with_rizin_boundaries(boundaries);
-    }
-    if let Some(connect) = connect {
-        opts = opts.with_rizin_connect_addrs(connect);
-    }
-    if let Some(keys) = keys {
-        opts = opts.with_xor_key_offsets(keys);
-    }
-    opts
+    let mut hints = stng::ExternalHints::default();
+    hints.strings = strings.unwrap_or_default();
+    hints.boundaries = boundaries.unwrap_or_default();
+    hints.connect_addrs = connect.unwrap_or_default();
+    hints.xor_key_offsets = keys.unwrap_or_default();
+    opts.with_hints(hints)
 }
 
 /// Whether `object` could be an ARM binary (32- or 64-bit), including

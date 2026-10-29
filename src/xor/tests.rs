@@ -265,7 +265,7 @@ fn test_xaml_margin_not_detected_as_ip() {
     assert!(
         !results
             .iter()
-            .any(|r| r.value == "12.32.12.2" && r.kind == Some(StringKind::IP)),
+            .any(|r| r.value == "12.32.12.2" && r.kind == Some(StringKind::Ip)),
         "XAML margin commas must not produce false IP via XOR key 0x02. Results: {results:?}"
     );
 }

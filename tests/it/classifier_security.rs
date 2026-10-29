@@ -8,27 +8,27 @@ use stng::{StringKind, classify_string};
 fn test_jwt_detection() {
     // Valid JWT structure: header.payload.signature (3 base64 parts separated by dots)
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
-    assert_eq!(classify_string(jwt), Some(StringKind::JWT));
+    assert_eq!(classify_string(jwt), Some(StringKind::Jwt));
 
     // Another valid JWT
     let jwt2 = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2V4YW1wbGUuYXV0aDAuY29tLyIsInN1YiI6ImF1dGgwfDEyMzQ1Njc4OTAiLCJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbS8iLCJleHAiOjE2NDE2NzgwMDB9.abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    assert_eq!(classify_string(jwt2), Some(StringKind::JWT));
+    assert_eq!(classify_string(jwt2), Some(StringKind::Jwt));
 }
 
 /// Test JWT rejection for non-JWT base64
 #[test]
 fn test_jwt_rejection() {
     // Not enough parts (only 2 dots)
-    assert_ne!(classify_string("aaa.bbb"), Some(StringKind::JWT));
+    assert_ne!(classify_string("aaa.bbb"), Some(StringKind::Jwt));
 
     // Too many parts
-    assert_ne!(classify_string("a.b.c.d"), Some(StringKind::JWT));
+    assert_ne!(classify_string("a.b.c.d"), Some(StringKind::Jwt));
 
     // Parts too short
-    assert_ne!(classify_string("a.b.c"), Some(StringKind::JWT));
+    assert_ne!(classify_string("a.b.c"), Some(StringKind::Jwt));
 
     // Not base64-like
-    assert_ne!(classify_string("hello.world.test"), Some(StringKind::JWT));
+    assert_ne!(classify_string("hello.world.test"), Some(StringKind::Jwt));
 }
 
 /// Test API key detection (AWS, GitHub, Stripe, etc.)
@@ -37,41 +37,41 @@ fn test_api_key_detection() {
     // AWS access keys (starts with AKIA, 20+ chars, >90% alphanumeric)
     assert_eq!(
         classify_string("AKIAIOSFODNN7EXAMPLE"),
-        Some(StringKind::APIKey)
+        Some(StringKind::ApiKey)
     );
     assert_eq!(
         classify_string("AKIATESTKEYEXAMPLE12"),
-        Some(StringKind::APIKey)
+        Some(StringKind::ApiKey)
     );
 
     // GitHub personal access tokens (ghp_ prefix, 36+ chars, >90% alphanumeric or _)
     assert_eq!(
         classify_string("ghp_1234567890abcdefghijklmnopqrstuvwxyzAB"),
-        Some(StringKind::APIKey)
+        Some(StringKind::ApiKey)
     );
     assert_eq!(
         classify_string("ghp_examplekeywithlongenoughstring12345678"),
-        Some(StringKind::APIKey)
+        Some(StringKind::ApiKey)
     );
 
     // Stripe keys (sk_live_ or pk_live_, 20+ chars, >90% alphanumeric or _)
     assert_eq!(
         classify_string("sk_live_1234567890abcdefghijklmnop"),
-        Some(StringKind::APIKey)
+        Some(StringKind::ApiKey)
     );
     assert_eq!(
         classify_string("pk_live_abcdefghijklmnopqrstuvwx"),
-        Some(StringKind::APIKey)
+        Some(StringKind::ApiKey)
     );
 
     // Slack tokens (starts with xox, 30+ chars, >90% alphanumeric or -)
     assert_eq!(
         classify_string("xoxb-1234567890-abcdefghijklmn"),
-        Some(StringKind::APIKey)
+        Some(StringKind::ApiKey)
     ); // 30 chars
     assert_eq!(
         classify_string("xoxp-12345678901234567890123456"),
-        Some(StringKind::APIKey)
+        Some(StringKind::ApiKey)
     ); // 32 chars
 }
 
@@ -79,21 +79,21 @@ fn test_api_key_detection() {
 #[test]
 fn test_api_key_rejection() {
     // AKIA but too short (needs 20+ chars)
-    assert_ne!(classify_string("AKIA12345"), Some(StringKind::APIKey));
+    assert_ne!(classify_string("AKIA12345"), Some(StringKind::ApiKey));
 
     // ghp_ but too short (needs 36+ chars)
-    assert_ne!(classify_string("ghp_short"), Some(StringKind::APIKey));
+    assert_ne!(classify_string("ghp_short"), Some(StringKind::ApiKey));
 
     // sk_live_ but too short (needs 20+ chars)
-    assert_ne!(classify_string("sk_live_short"), Some(StringKind::APIKey));
+    assert_ne!(classify_string("sk_live_short"), Some(StringKind::ApiKey));
 
     // xox but too short (needs 30+ chars)
-    assert_ne!(classify_string("xoxb-1234"), Some(StringKind::APIKey));
+    assert_ne!(classify_string("xoxb-1234"), Some(StringKind::ApiKey));
 
     // sk_test_ is not detected (only sk_live_ and pk_live_)
     assert_ne!(
         classify_string("sk_test_abcdefghijklmnopqrstuvwx"),
-        Some(StringKind::APIKey)
+        Some(StringKind::ApiKey)
     );
 }
 
@@ -157,24 +157,24 @@ fn test_sql_injection_detection() {
     // Classic SQL injection patterns (requires ' OR ' or 1'='1 patterns)
     assert_eq!(
         classify_string("' OR '1'='1"),
-        Some(StringKind::SQLInjection)
+        Some(StringKind::SqlInjection)
     );
     assert_eq!(
         classify_string("' OR 'x'='x"),
-        Some(StringKind::SQLInjection)
+        Some(StringKind::SqlInjection)
     );
 
     // admin'-- pattern
-    assert_eq!(classify_string("admin'--"), Some(StringKind::SQLInjection));
+    assert_eq!(classify_string("admin'--"), Some(StringKind::SqlInjection));
 
     // UNION-based injections (requires UNION + SELECT)
     assert_eq!(
         classify_string("' UNION SELECT NULL--"),
-        Some(StringKind::SQLInjection)
+        Some(StringKind::SqlInjection)
     );
     assert_eq!(
         classify_string("1 UNION ALL SELECT user"),
-        Some(StringKind::SQLInjection)
+        Some(StringKind::SqlInjection)
     );
 }
 
@@ -184,16 +184,16 @@ fn test_sql_injection_rejection() {
     // Normal SQL queries shouldn't trigger
     assert_ne!(
         classify_string("SELECT * FROM users"),
-        Some(StringKind::SQLInjection)
+        Some(StringKind::SqlInjection)
     );
     assert_ne!(
         classify_string("WHERE id = 1"),
-        Some(StringKind::SQLInjection)
+        Some(StringKind::SqlInjection)
     );
 
     // Single quotes alone shouldn't trigger
-    assert_ne!(classify_string("it's"), Some(StringKind::SQLInjection));
-    assert_ne!(classify_string("don't"), Some(StringKind::SQLInjection));
+    assert_ne!(classify_string("it's"), Some(StringKind::SqlInjection));
+    assert_ne!(classify_string("don't"), Some(StringKind::SqlInjection));
 }
 
 /// Test XSS (Cross-Site Scripting) payload detection
@@ -202,31 +202,31 @@ fn test_xss_payload_detection() {
     // Script tag injections (requires both <script> and </script>)
     assert_eq!(
         classify_string("<script>alert('XSS')</script>"),
-        Some(StringKind::XSSPayload)
+        Some(StringKind::XssPayload)
     );
     assert_eq!(
         classify_string("<script>alert(1)</script>"),
-        Some(StringKind::XSSPayload)
+        Some(StringKind::XssPayload)
     );
 
     // Event handler injections (requires onerror= and alert()
     assert_eq!(
         classify_string("<img src=x onerror=alert(1)>"),
-        Some(StringKind::XSSPayload)
+        Some(StringKind::XssPayload)
     );
     assert_eq!(
         classify_string("onerror=alert(document.cookie)"),
-        Some(StringKind::XSSPayload)
+        Some(StringKind::XssPayload)
     );
 
     // JavaScript protocol (starts with javascript:)
     assert_eq!(
         classify_string("javascript:alert('XSS')"),
-        Some(StringKind::XSSPayload)
+        Some(StringKind::XssPayload)
     );
     assert_eq!(
         classify_string("javascript:alert(document.domain)"),
-        Some(StringKind::XSSPayload)
+        Some(StringKind::XssPayload)
     );
 }
 
@@ -236,19 +236,19 @@ fn test_xss_rejection() {
     // Normal script tags with actual code
     assert_ne!(
         classify_string("<script src=\"app.js\"></script>"),
-        Some(StringKind::XSSPayload)
+        Some(StringKind::XssPayload)
     );
 
     // Normal JavaScript
     assert_ne!(
         classify_string("function test() { return 1; }"),
-        Some(StringKind::XSSPayload)
+        Some(StringKind::XssPayload)
     );
 
     // Normal HTML
     assert_ne!(
         classify_string("<div>Hello World</div>"),
-        Some(StringKind::XSSPayload)
+        Some(StringKind::XssPayload)
     );
 }
 
@@ -396,21 +396,21 @@ fn test_guid_detection() {
     // Standard GUID format
     assert_eq!(
         classify_string("{12345678-1234-1234-1234-123456789ABC}"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
     assert_eq!(
         classify_string("{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
     assert_eq!(
         classify_string("{00000000-0000-0000-0000-000000000000}"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
 
     // Mixed case
     assert_eq!(
         classify_string("{AbCdEfGh-1234-5678-90ab-cdef12345678}"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
 }
 
@@ -420,27 +420,27 @@ fn test_guid_rejection() {
     // Wrong number of dashes
     assert_ne!(
         classify_string("{12345678-1234-1234-123456789ABC}"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
 
     // Wrong length
-    assert_ne!(classify_string("{123-456-789}"), Some(StringKind::GUID));
+    assert_ne!(classify_string("{123-456-789}"), Some(StringKind::Guid));
 
     // Bare canonical UUIDs (no braces) are also recognized — used by
     // Mythic agent payload_uuid, RFC 4122 IDs, systemd, etc.
     assert_eq!(
         classify_string("12345678-1234-1234-1234-123456789ABC"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
 
     // Not hex characters
     assert_ne!(
         classify_string("{GGGGGGGG-1234-1234-1234-123456789ABC}"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
     assert_ne!(
         classify_string("GGGGGGGG-1234-1234-1234-123456789ABC"),
-        Some(StringKind::GUID)
+        Some(StringKind::Guid)
     );
 }
 
@@ -450,25 +450,25 @@ fn test_ctf_flag_detection() {
     // Standard CTF formats
     assert_eq!(
         classify_string("CTF{this_is_a_flag_12345}"),
-        Some(StringKind::CTFFlag)
+        Some(StringKind::CtfFlag)
     );
     assert_eq!(
         classify_string("flag{test_flag_here}"),
-        Some(StringKind::CTFFlag)
+        Some(StringKind::CtfFlag)
     );
     assert_eq!(
         classify_string("FLAG{UPPERCASE_FLAG}"),
-        Some(StringKind::CTFFlag)
+        Some(StringKind::CtfFlag)
     );
 
     // Competition-specific formats
     assert_eq!(
         classify_string("picoCTF{beginner_flag_2024}"),
-        Some(StringKind::CTFFlag)
+        Some(StringKind::CtfFlag)
     );
     assert_eq!(
         classify_string("HTB{hack_the_box_flag}"),
-        Some(StringKind::CTFFlag)
+        Some(StringKind::CtfFlag)
     );
 }
 
@@ -478,17 +478,17 @@ fn test_ctf_flag_rejection() {
     // Missing closing brace
     assert_ne!(
         classify_string("CTF{incomplete_flag"),
-        Some(StringKind::CTFFlag)
+        Some(StringKind::CtfFlag)
     );
 
     // Wrong prefix
     assert_ne!(
         classify_string("TEST{not_a_flag}"),
-        Some(StringKind::CTFFlag)
+        Some(StringKind::CtfFlag)
     );
 
     // No braces
-    assert_ne!(classify_string("CTF_no_braces"), Some(StringKind::CTFFlag));
+    assert_ne!(classify_string("CTF_no_braces"), Some(StringKind::CtfFlag));
 }
 
 /// Test email detection edge cases

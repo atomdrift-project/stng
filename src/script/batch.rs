@@ -12,6 +12,7 @@
 //! only closed, acyclic label/assignment carriers are reordered; general
 //! control flow, `call` double expansion, and `set /a` arithmetic are unsupported.
 
+use crate::script::detect::ScriptLanguage;
 use std::collections::HashMap;
 
 use super::DeobfuscationResult;
@@ -576,7 +577,7 @@ pub fn expand_batch_variables(data: &[u8]) -> Option<DeobfuscationResult> {
         } else {
             "batch:set-expansion".to_string()
         },
-        language: "batch",
+        language: ScriptLanguage::Batch,
     })
 }
 

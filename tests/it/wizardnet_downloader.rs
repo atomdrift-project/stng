@@ -18,7 +18,9 @@ fn load_sample() -> Vec<u8> {
 fn test_no_xor_ip_false_positives_from_xaml_margins() {
     let data = load_sample();
 
-    let opts = ExtractOptions::new(4).with_xor(Some(8));
+    let opts = ExtractOptions::new(4)
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(8);
     let extracted = stng::extract_strings_with_options(&data, &opts);
 
     // These "IPs" are XAML Margin values (e.g. "30,10,30,0") where comma XOR 0x02 = period.
@@ -26,7 +28,7 @@ fn test_no_xor_ip_false_positives_from_xaml_margins() {
 
     let xor_ips: Vec<&str> = extracted
         .iter()
-        .filter(|s| s.method == StringMethod::XorDecode && s.kind == Some(StringKind::IP))
+        .filter(|s| s.method == StringMethod::XorDecode && s.kind == Some(StringKind::Ip))
         .map(|s| s.value.as_str())
         .collect();
 

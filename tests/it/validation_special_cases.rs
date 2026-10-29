@@ -24,8 +24,8 @@ fn test_shell_commands_with_redirections() {
         }
 
         let opts = ExtractOptions::new(4)
-            .with_xor(Some(4))
-            .with_xor_key(key.to_vec())
+            .with_xor_min_length(4)
+            .with_xor(stng::XorMode::Key(key.to_vec()))
             .with_garbage_filter(true);
 
         let extracted = stng::extract_strings_with_options(&xored, &opts);
@@ -60,8 +60,8 @@ fn test_shell_commands_with_garbage_prefix() {
         }
 
         let opts = ExtractOptions::new(4)
-            .with_xor(Some(4))
-            .with_xor_key(key.to_vec())
+            .with_xor_min_length(4)
+            .with_xor(stng::XorMode::Key(key.to_vec()))
             .with_garbage_filter(true);
 
         let extracted = stng::extract_strings_with_options(&xored, &opts);
@@ -87,8 +87,8 @@ fn test_locale_strings_pass_filter() {
         }
 
         let opts = ExtractOptions::new(4)
-            .with_xor(Some(4))
-            .with_xor_key(key.to_vec())
+            .with_xor_min_length(4)
+            .with_xor(stng::XorMode::Key(key.to_vec()))
             .with_garbage_filter(true);
 
         let extracted = stng::extract_strings_with_options(&xored, &opts);
@@ -110,8 +110,8 @@ fn test_xml_tags_pass_filter() {
         }
 
         let opts = ExtractOptions::new(4)
-            .with_xor(Some(4))
-            .with_xor_key(key.to_vec())
+            .with_xor_min_length(4)
+            .with_xor(stng::XorMode::Key(key.to_vec()))
             .with_garbage_filter(true);
 
         let extracted = stng::extract_strings_with_options(&xored, &opts);
@@ -133,8 +133,8 @@ fn test_heredoc_patterns() {
         }
 
         let opts = ExtractOptions::new(4)
-            .with_xor(Some(4))
-            .with_xor_key(key.to_vec())
+            .with_xor_min_length(4)
+            .with_xor(stng::XorMode::Key(key.to_vec()))
             .with_garbage_filter(true);
 
         let extracted = stng::extract_strings_with_options(&xored, &opts);
@@ -160,8 +160,8 @@ fn test_stderr_redirection_patterns() {
         }
 
         let opts = ExtractOptions::new(4)
-            .with_xor(Some(4))
-            .with_xor_key(key.to_vec())
+            .with_xor_min_length(4)
+            .with_xor(stng::XorMode::Key(key.to_vec()))
             .with_garbage_filter(true);
 
         let extracted = stng::extract_strings_with_options(&xored, &opts);

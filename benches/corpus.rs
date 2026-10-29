@@ -29,7 +29,7 @@ fn opts(name: &str) -> ExtractOptions {
         "symbols_provided" => ExtractOptions::new(4)
             .with_garbage_filter(true)
             .with_caller_provides_symbols(true)
-            .with_xor(None),
+            .with_xor(stng::XorMode::Auto),
         "default" => ExtractOptions::new(4),
         other => panic!("unknown --opts {other}: want symbols_provided or default"),
     }

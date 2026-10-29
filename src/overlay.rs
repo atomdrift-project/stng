@@ -23,7 +23,10 @@ pub fn detect_elf_overlay(data: &[u8]) -> Option<OverlayInfo> {
 /// Prefer this over `detect_elf_overlay` when you already have an `Elf`
 /// object — it skips the redundant `goblin::elf::Elf::parse` call.
 #[must_use]
-pub fn detect_elf_overlay_from_elf(elf: &goblin::elf::Elf<'_>, data: &[u8]) -> Option<OverlayInfo> {
+pub(crate) fn detect_elf_overlay_from_elf(
+    elf: &goblin::elf::Elf<'_>,
+    data: &[u8],
+) -> Option<OverlayInfo> {
     // Find the highest file offset used by any program or section header
     // Start with the ELF header size as minimum (64 bytes for 64-bit, 52 for 32-bit)
     let header_size = if elf.is_64 { 64u64 } else { 52u64 };
@@ -131,8 +134,8 @@ fn overlay_kind(value: &str, otherwise: StringKind) -> StringKind {
             | StringKind::Base85
             | StringKind::CryptoWallet
             | StringKind::MiningPool
-            | StringKind::IP
-            | StringKind::IPPort
+            | StringKind::Ip
+            | StringKind::IpPort
             | StringKind::Hostname
             | StringKind::Url
             | StringKind::Email
@@ -141,9 +144,9 @@ fn overlay_kind(value: &str, otherwise: StringKind) -> StringKind {
             | StringKind::SuspiciousPath
             | StringKind::XorKey
             | StringKind::HexEncoded
-            | StringKind::APIKey
-            | StringKind::JWT
-            | StringKind::CTFFlag),
+            | StringKind::ApiKey
+            | StringKind::Jwt
+            | StringKind::CtfFlag),
         ) => kind,
         _ => otherwise,
     }

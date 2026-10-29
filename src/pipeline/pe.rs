@@ -108,7 +108,7 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     let split = crate::par::splits(data.len());
     let [
         us_strings,
-        r2_strings,
+        hint_strings,
         wide_strings,
         net_strings,
         raw_strings,
@@ -117,7 +117,7 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         split,
         [
             &|| dotnet::extract_us_heap_strings(pe, data, min_length),
-            &|| opts.r2_strings.clone().unwrap_or_default(),
+            &|| opts.hints.strings.clone(),
             // UTF-16 literals are NUL-terminated, never packed like `&str`
             // data, so the wide scan covers Rust's `.rdata` too. Go's skipped
             // sections hold pclntab tables that only decode to UTF-16 noise.
@@ -137,12 +137,12 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     );
 
     strings.extend(us_strings);
-    strings.extend(r2_strings);
+    strings.extend(hint_strings);
     strings.extend(wide_strings);
     strings.extend(net_strings);
     strings.extend(raw_strings);
     strings.extend(stack_strings);
-    if opts.xor_scan && opts.xor_key.is_none() && !is_go_binary && !opts.is_cancelled() {
+    if opts.xor_scans() && !is_go_binary && !opts.is_cancelled() {
         strings.extend(xor::pe_decoder::extract(pe, data, min_length));
     }
 
@@ -233,7 +233,7 @@ pub(crate) fn suppress_version_info_ips(strings: &mut [ExtractedString], pe: &go
     }
 
     for s in strings.iter_mut() {
-        if matches!(s.kind, Some(StringKind::IP | StringKind::IPPort))
+        if matches!(s.kind, Some(StringKind::Ip | StringKind::IpPort))
             && version_strings.iter().any(|v| v == &s.value)
         {
             tracing::debug!(ip = ?s.value, "Suppressing version-info false positive IP");

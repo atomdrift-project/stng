@@ -9,6 +9,7 @@
 //! - `exec(codecs.decode("...", "rot_13"))`
 //! - `exec(marshal.loads(base64.b64decode("...")))`
 
+use crate::script::detect::ScriptLanguage;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -99,13 +100,13 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
         source,
         &[&EXEC_B64_RE],
         &[DecodeStep::Base64],
-        "python",
+        ScriptLanguage::Python,
     ));
     results.extend(super::decode_captures(
         source,
         &[&EXEC_ZLIB_B64_RE],
         &[DecodeStep::Base64, DecodeStep::Zlib],
-        "python",
+        ScriptLanguage::Python,
     ));
     results.extend(try_exec_fromhex(source));
     results.extend(try_exec_chr_array(source));
@@ -113,7 +114,7 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
         source,
         &[&EXEC_ROT13_DOUBLE_RE, &EXEC_ROT13_SINGLE_RE],
         &[DecodeStep::Rot13],
-        "python",
+        ScriptLanguage::Python,
     ));
 
     // Try aliased-import pattern (complex, like tahmin-uygulamasi)
@@ -135,7 +136,7 @@ fn try_exec_fromhex(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: result.payload,
                 offset,
                 chain_description: format!("python:{}", result.chain_description),
-                language: "python",
+                language: ScriptLanguage::Python,
             })
         })
         .collect()
@@ -156,7 +157,7 @@ fn try_exec_chr_array(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: payload,
                 offset,
                 chain_description: "python:charcodes".to_string(),
-                language: "python",
+                language: ScriptLanguage::Python,
             })
         })
         .collect()
@@ -229,7 +230,7 @@ fn try_aliased_import_chain(source: &str) -> Vec<DeobfuscationResult> {
             decoded: result.payload,
             offset: 0,
             chain_description: format!("python:{}", result.chain_description),
-            language: "python",
+            language: ScriptLanguage::Python,
         });
     }
 
@@ -359,7 +360,7 @@ exec(compile(result, '<>', 'exec'))
         // The decode may fail if the blob doesn't actually decode, which is fine —
         // we test pattern detection + decode separately
         assert!(
-            results.is_empty() || results[0].language == "python",
+            results.is_empty() || results[0].language == ScriptLanguage::Python,
             "Should either find a result or gracefully produce none for invalid blob"
         );
     }

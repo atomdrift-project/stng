@@ -19,7 +19,11 @@ fn test_detect_language_go() {
     let data = go_binary();
 
     let lang = detect_language(&data);
-    assert_eq!(lang, "go", "Go binary should be detected as 'go'");
+    assert_eq!(
+        lang,
+        stng::Language::Go,
+        "Go binary should be detected as 'go'"
+    );
 }
 
 #[test]

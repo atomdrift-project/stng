@@ -11,7 +11,7 @@ fn test_detect_language_plain_text() {
                  The content is all printable and has no binary markers.";
     assert_eq!(
         detect_language(data),
-        "text",
+        stng::Language::Text,
         "ASCII text should be detected as 'text'"
     );
 }
@@ -20,7 +20,7 @@ fn test_detect_language_plain_text() {
 fn test_detect_language_empty() {
     assert_eq!(
         detect_language(&[]),
-        "unknown",
+        stng::Language::Unknown,
         "Empty data should be 'unknown'"
     );
 }
@@ -30,7 +30,7 @@ fn test_detect_language_all_zeros() {
     let data = vec![0u8; 512];
     assert_eq!(
         detect_language(&data),
-        "unknown",
+        stng::Language::Unknown,
         "All-zero bytes should be 'unknown'"
     );
 }
@@ -41,7 +41,7 @@ fn test_detect_language_elf_no_language_markers() {
     let data = minimal_elf_header();
     assert_eq!(
         detect_language(&data),
-        "unknown",
+        stng::Language::Unknown,
         "ELF without language markers should be 'unknown'"
     );
 }
@@ -184,7 +184,7 @@ fn test_detect_language_with_real_go_binary() {
     let data = std::fs::read(path).expect("Failed to read test binary");
     assert_eq!(
         detect_language(&data),
-        "go",
+        stng::Language::Go,
         "hello_linux_amd64 should be detected as 'go' via .gopclntab marker"
     );
 }

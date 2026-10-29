@@ -8,6 +8,7 @@
 //! - `iex` with string `.replace()` deobfuscation
 //! - GzipStream compressed payloads
 
+use crate::script::detect::ScriptLanguage;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -85,7 +86,7 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
         source,
         &[&IEX_ENCODING_B64_RE],
         &[DecodeStep::Base64],
-        "powershell",
+        ScriptLanguage::PowerShell,
     );
     let covered_offsets: std::collections::BTreeSet<usize> =
         iex_results.iter().map(|r| r.offset).collect();
@@ -134,7 +135,7 @@ fn try_encoded_command(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: result.payload,
                 offset,
                 chain_description: format!("powershell:{}", result.chain_description),
-                language: "powershell",
+                language: ScriptLanguage::PowerShell,
             })
         })
         .collect()
@@ -156,7 +157,7 @@ fn try_convert_b64(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: result.payload,
                 offset,
                 chain_description: format!("powershell:{}", result.chain_description),
-                language: "powershell",
+                language: ScriptLanguage::PowerShell,
             })
         })
         .collect()
@@ -177,7 +178,7 @@ fn try_char_array(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: payload,
                 offset,
                 chain_description: "powershell:charcodes".to_string(),
-                language: "powershell",
+                language: ScriptLanguage::PowerShell,
             })
         })
         .collect()
@@ -196,7 +197,7 @@ fn try_iex_reverse(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: result.payload,
                 offset,
                 chain_description: format!("powershell:{}", result.chain_description),
-                language: "powershell",
+                language: ScriptLanguage::PowerShell,
             })
         })
         .collect()
@@ -242,7 +243,7 @@ fn try_iex_replace(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: result,
                 offset,
                 chain_description: "powershell:replace".to_string(),
-                language: "powershell",
+                language: ScriptLanguage::PowerShell,
             })
         })
         .collect()

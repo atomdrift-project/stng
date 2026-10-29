@@ -228,11 +228,9 @@ fn rejects_unknown_registers_wrong_merges_and_incomplete_output() {
 #[test]
 fn public_arm_only_pipeline_and_changed_key_bytes() {
     let (bytes, _) = arm_slice();
-    let options = crate::ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let options = crate::ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     let out = crate::extract_strings_with_options(bytes, &options);
     for row in rows()
         .iter()
@@ -264,11 +262,9 @@ fn original_nine_small_names_and_public_pipeline() {
     let code = code();
     let constants = constants();
     let (bytes, base) = arm_slice();
-    let options = crate::ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let options = crate::ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     let public = crate::extract_strings_with_options(bytes, &options);
     let mut count = 0;
     for row in rows()

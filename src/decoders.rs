@@ -154,7 +154,7 @@ fn decode_hex_variants(s: &ExtractedString) -> Vec<ExtractedString> {
                 &decoded,
                 &[key],
                 10,
-                None,
+                &[],
                 true,
                 false,
             ));

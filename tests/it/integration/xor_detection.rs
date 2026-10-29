@@ -113,7 +113,9 @@ fn test_arm64_elf_xor_url() {
     let key: u8 = 0x5A;
     let binary = minimal_arm64_elf_with_xor(plaintext, key);
 
-    let opts = ExtractOptions::new(8).with_xor(Some(10));
+    let opts = ExtractOptions::new(8)
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(10);
     let strings = extract_strings_with_options(&binary, &opts);
 
     let xor_strings: Vec<_> = strings
@@ -137,13 +139,15 @@ fn test_macho_xor_ip_address() {
     let key: u8 = 0x77;
     let binary = minimal_macho_with_xor(plaintext, key);
 
-    let opts = ExtractOptions::new(8).with_xor(Some(8));
+    let opts = ExtractOptions::new(8)
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(8);
     let strings = extract_strings_with_options(&binary, &opts);
 
     let xor_strings: Vec<_> = strings
         .iter()
         .filter(|s| s.method == StringMethod::XorDecode)
-        .filter(|s| s.kind == Some(StringKind::IP) || s.kind == Some(StringKind::IPPort))
+        .filter(|s| s.kind == Some(StringKind::Ip) || s.kind == Some(StringKind::IpPort))
         .collect();
 
     assert!(
@@ -162,7 +166,9 @@ fn test_pe_amd64_xor_url() {
     let key: u8 = 0x3D;
     let binary = minimal_pe_amd64_with_xor(plaintext, key);
 
-    let opts = ExtractOptions::new(8).with_xor(Some(10));
+    let opts = ExtractOptions::new(8)
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(10);
     let strings = extract_strings_with_options(&binary, &opts);
 
     let xor_strings: Vec<_> = strings
@@ -187,7 +193,9 @@ fn test_xor_user_agent_pattern() {
     let key: u8 = 0x42;
     let data = minimal_arm64_elf_with_xor(plaintext, key);
 
-    let opts = ExtractOptions::new(10).with_xor(Some(10));
+    let opts = ExtractOptions::new(10)
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(10);
     let results = extract_strings_with_options(&data, &opts);
 
     // Mozilla pattern should be found and context extracted
@@ -208,7 +216,9 @@ fn test_xor_detection_shows_key() {
     let key: u8 = 0x42;
     let binary = minimal_arm64_elf_with_xor(plaintext, key);
 
-    let opts = ExtractOptions::new(8).with_xor(Some(10));
+    let opts = ExtractOptions::new(8)
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(10);
     let strings = extract_strings_with_options(&binary, &opts);
 
     let xor_strings: Vec<_> = strings

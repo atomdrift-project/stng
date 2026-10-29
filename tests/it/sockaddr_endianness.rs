@@ -118,7 +118,7 @@ fn pe_le_rejects_big_endian_sockaddr_in_false_positives() {
 
     let ip_ports: Vec<&str> = strings
         .iter()
-        .filter(|s| matches!(s.kind, Some(StringKind::IPPort)))
+        .filter(|s| matches!(s.kind, Some(StringKind::IpPort)))
         .map(|s| s.value.as_str())
         .collect();
 

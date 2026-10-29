@@ -47,12 +47,12 @@ stng --xorscan malware.bin    # slow multi-byte XOR search
 | `data_offset` | Where its source starts in the input file (in a fat Mach-O, the whole file). |
 | `data_len` | Bytes of source, when they differ from `value`'s length: the encoded token for a decoded string, two bytes a character for UTF-16. Omitted otherwise. |
 | `fragments` | For a string assembled from pieces (stack strings), each piece's `offset` and `length`. Omitted otherwise. |
-| `method` | How it was found: `RawScan`, `WideString`, `Structure` (Go/Rust `{ptr, len}`), `InstructionPattern`, `XorDecode`, `Base64Decode`, `ScriptDecode`, and others listed in `stng::StringMethod`. |
-| `kind` | What it is, or `null`: `Url`, `IP`, `Path`, `ShellCmd`, `Base64`, `XorKey`, and others listed in `stng::StringKind`. |
+| `method` | How it was found: `raw_scan`, `wide_string`, `structure` (Go/Rust `{ptr, len}`), `instruction_pattern`, `xor_decode`, `base64_decode`, `script_decode`, and the rest of `stng::StringMethod` in snake_case. |
+| `kind` | What it is, or `null`: `url`, `ip`, `path`, `shell_cmd`, `base64`, `xor_key`, and the rest of `stng::StringKind` in snake_case. |
 
-Strings decoded from a script's payload (`ScriptDecode`) have offsets past
-the end of the file: the input's length plus one, plus their position in the
-decoded payload. New `method` and `kind` values may appear in minor releases.
+Strings decoded from a script's payload (`script_decode`) are located at the
+encoded blob they came from, so several can share an offset. New `method` and
+`kind` values may appear in minor releases.
 
 ## As a library
 
@@ -77,7 +77,7 @@ public API.
 Base64-encoded zlib text is decompressed automatically, including literals
 embedded in scripts or binary files. The decoder verifies the zlib checksum
 and limits both decoded input and inflated output to 10 MiB. UTF-8 and UTF-16LE
-text use `Base64Decode`; source offsets and lengths still identify the encoded
+text use the `base64_decode` method; source offsets and lengths still identify the encoded
 token. No sample code is executed.
 
 ## Versioning

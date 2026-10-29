@@ -29,7 +29,7 @@ fn configs() -> [(&'static str, ExtractOptions); 2] {
             ExtractOptions::new(4)
                 .with_garbage_filter(true)
                 .with_caller_provides_symbols(true)
-                .with_xor(None),
+                .with_xor(stng::XorMode::Auto),
         ),
         ("default", ExtractOptions::new(4)),
     ]

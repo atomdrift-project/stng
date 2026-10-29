@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Represents a string structure found in binary (pointer + length pair).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StringStruct {
+pub(crate) struct StringStruct {
     /// Offset in the section where this structure was found
     pub struct_offset: u64,
     /// Virtual address of the string data
@@ -19,11 +19,20 @@ pub struct StringStruct {
 /// Where a string lies in the file, as reported by an external disassembler
 /// (rizin `izzj`): used to aim XOR decoding at known string extents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct StringBoundary {
     /// File offset of the string's first byte.
     pub offset: u64,
     /// Length in bytes.
     pub length: usize,
+}
+
+impl StringBoundary {
+    /// A string of `length` bytes at file offset `offset`.
+    #[must_use]
+    pub fn new(offset: u64, length: usize) -> Self {
+        Self { offset, length }
+    }
 }
 
 /// Represents a fragment of a multi-part string (e.g., stack strings from multiple instructions)
@@ -37,6 +46,7 @@ pub struct StringFragment {
 
 /// An extracted string with metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ExtractedString {
     /// The string value
     pub value: String,
@@ -76,27 +86,41 @@ fn is_zero_u32(v: &u32) -> bool {
     *v == 0
 }
 
-/// Iterator over a string's source byte spans — see
-/// [`ExtractedString::source_spans`].
-#[derive(Debug, Clone)]
-pub enum SourceSpans<'a> {
-    /// The single contiguous extent of a normal string.
-    Single(std::iter::Once<(u64, u64)>),
-    /// The scattered fragments of a `StackString`.
-    Fragments(std::slice::Iter<'a, StringFragment>),
-}
-
-impl Iterator for SourceSpans<'_> {
-    type Item = (u64, u64);
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            SourceSpans::Single(it) => it.next(),
-            SourceSpans::Fragments(it) => it.next().map(|f| (f.offset, f.length as u64)),
+impl ExtractedString {
+    /// `value`, found at file offset `data_offset` by `method`, with no kind
+    /// and a source as long as `value`. Adjust with the `with_*` methods.
+    #[must_use]
+    pub fn new(value: impl Into<String>, data_offset: u64, method: StringMethod) -> Self {
+        Self {
+            value: value.into(),
+            data_offset,
+            method,
+            ..Self::default()
         }
     }
-}
 
-impl ExtractedString {
+    /// The same string, classified as `kind` (a kind, or `None` to clear it).
+    #[must_use]
+    pub fn with_kind(mut self, kind: impl Into<Option<StringKind>>) -> Self {
+        self.kind = kind.into();
+        self
+    }
+
+    /// The same string, whose source is `len` bytes (when that differs from
+    /// `value`'s length: an encoded token, UTF-16).
+    #[must_use]
+    pub fn with_data_len(mut self, len: u32) -> Self {
+        self.data_len = len;
+        self
+    }
+
+    /// The same string, assembled from the source `fragments`.
+    #[must_use]
+    pub fn with_fragments(mut self, fragments: Vec<StringFragment>) -> Self {
+        self.fragments = Some(Box::new(fragments));
+        self
+    }
+
     /// The source byte spans this string was recovered from, as `(offset,
     /// len)` pairs: the scattered `fragments` for a `StackString`, otherwise
     /// its single contiguous extent. `len` is `data_len` when the extractor
@@ -106,15 +130,15 @@ impl ExtractedString {
     /// encoding — consumers must use it rather than deriving a span from
     /// `value.len()`, which is the decoded length and undercounts UTF-16LE /
     /// base64 / other re-encoded strings.
-    #[must_use]
-    pub fn source_spans(&self) -> SourceSpans<'_> {
-        match self.fragments.as_deref() {
-            Some(frags) => SourceSpans::Fragments(frags.iter()),
-            None => SourceSpans::Single(std::iter::once((
-                self.data_offset,
-                u64::from(self.contiguous_source_len()),
-            ))),
-        }
+    pub fn source_spans(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        let single = self
+            .fragments
+            .is_none()
+            .then(|| (self.data_offset, u64::from(self.contiguous_source_len())));
+        self.fragments
+            .iter()
+            .flat_map(|fragments| fragments.iter().map(|f| (f.offset, f.length as u64)))
+            .chain(single)
     }
 
     /// Move this string's source location by `delta` bytes: its offset and
@@ -283,16 +307,17 @@ impl Arch {
 /// section-aware filters can scope themselves correctly.
 ///
 /// All fields are optional with `None`-as-"unknown" semantics — every
-/// existing caller of `is_garbage` / `is_garbage_with_kind` keeps its
+/// existing caller of `is_garbage` keeps its
 /// behavior because the empty context is treated as "no info, apply
 /// the heuristics globally".  Callers that DO know the arch or
 /// section can construct a richer context to suppress filters that
 /// don't apply to their input (e.g. an ARM binary skips the x86
 /// save-sequence filter; a `.rodata` string skips it too).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct StringContext {
     /// Semantic kind from the extractor (URL, Path, Section, …).
-    /// Same role as the `kind` parameter on `is_garbage_with_kind`.
+    /// What the extractor already recognised the string as, if anything.
     pub kind: Option<StringKind>,
     /// Whether the string lives in an executable (code) section, when
     /// known. `Some(false)` lets code-only rules (the x86 save-sequence
@@ -313,7 +338,6 @@ impl StringContext {
     }
 
     /// Convenience: build a context carrying only a kind hint.
-    /// Equivalent to the legacy `is_garbage_with_kind(s, kind)` call.
     #[must_use]
     pub fn with_kind(kind: Option<StringKind>) -> Self {
         Self {
@@ -327,6 +351,7 @@ impl StringContext {
 ///
 /// Indicates the extraction technique, which affects confidence and context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum StringMethod {
     /// Found via language string layout (pointer+length or tagged inline bytes)
@@ -338,9 +363,9 @@ pub enum StringMethod {
     /// Found via heuristic pattern matching (Rust packed strings)
     Heuristic,
     /// Found via radare2 string analysis (iz command)
-    R2String,
+    RizinString,
     /// Found via radare2 symbol analysis (is command)
-    R2Symbol,
+    RizinSymbol,
     /// Found via UTF-16LE wide string scan (Windows)
     WideString,
     /// Found via space-padded ASCII decoding (.NET metadata format)
@@ -410,8 +435,8 @@ impl StringMethod {
             | Self::CfmlDecode => 3,
 
             // High: rich metadata sources
-            Self::R2String
-            | Self::R2Symbol
+            Self::RizinString
+            | Self::RizinSymbol
             | Self::WideString
             | Self::SpacedAscii
             | Self::CodeSignature
@@ -438,8 +463,8 @@ impl StringMethod {
             | Self::Base64ObfuscatedDecode => 3,
 
             // High: decoded content and rich sources
-            Self::R2String
-            | Self::R2Symbol
+            Self::RizinString
+            | Self::RizinSymbol
             | Self::WideString
             | Self::XorDecode
             | Self::Base64Decode
@@ -467,6 +492,7 @@ impl StringMethod {
 /// Classifies strings by their purpose and security relevance.
 /// None means the string has no specific classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum StringKind {
     /// Function or method name
@@ -497,9 +523,9 @@ pub enum StringKind {
     Export,
     // Security-focused classifications
     /// IP address (v4 or v6)
-    IP,
+    Ip,
     /// IP:port or host:port combination
-    IPPort,
+    IpPort,
     /// Hostname (domain name like evil.com)
     Hostname,
     /// Shell command (pipes, redirects, common commands)
@@ -546,27 +572,27 @@ pub enum StringKind {
     /// Tor/Onion address (.onion domain)
     TorAddress,
     /// CTF competition flag (CTF{...}, flag{...}, etc.)
-    CTFFlag,
+    CtfFlag,
     /// SQL injection payload
-    SQLInjection,
+    SqlInjection,
     /// XSS (Cross-Site Scripting) payload
-    XSSPayload,
+    XssPayload,
     /// Command injection pattern
     CommandInjection,
     /// JWT (JSON Web Token)
-    JWT,
+    Jwt,
     /// API key or secret (AWS, GitHub, Stripe, etc.)
-    APIKey,
+    ApiKey,
     /// Windows mutex or synchronization object name
     Mutex,
     /// GUID (Globally Unique Identifier)
-    GUID,
+    Guid,
     /// Cryptographic hash (MD5, SHA1, SHA256, SHA512)
     Hash,
     /// Ransomware-related string (ransom note, file extension, etc.)
     RansomNote,
     /// LDAP/Active Directory distinguished name
-    LDAPPath,
+    LdapPath,
     /// Overlay data in UTF-16LE encoding (common in malware configs)
     OverlayWide,
     /// Stack-constructed string (common in malware)
@@ -585,6 +611,7 @@ pub enum StringKind {
 ///
 /// Used to prioritize and highlight critical findings in security analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum Severity {
     /// Critical IOCs: IPs, URLs, shell commands, suspicious paths
     High = 0,
@@ -615,21 +642,21 @@ impl StringKind {
                 | Self::Path
                 | Self::FilePath
                 | Self::Email
-                | Self::IP
-                | Self::IPPort
+                | Self::Ip
+                | Self::IpPort
                 | Self::Hash
-                | Self::GUID
-                | Self::JWT
-                | Self::APIKey
+                | Self::Guid
+                | Self::Jwt
+                | Self::ApiKey
                 | Self::Registry
                 | Self::CryptoWallet
                 | Self::MiningPool
                 | Self::TorAddress
                 | Self::ShellCmd
                 | Self::SuspiciousPath
-                | Self::CTFFlag
+                | Self::CtfFlag
                 | Self::Mutex
-                | Self::LDAPPath
+                | Self::LdapPath
                 | Self::HexEncoded
                 | Self::UnicodeEscaped
                 | Self::UrlEncoded
@@ -637,8 +664,8 @@ impl StringKind {
                 | Self::PythonCode
                 | Self::JavaScriptCode
                 | Self::PhpCode
-                | Self::SQLInjection
-                | Self::XSSPayload
+                | Self::SqlInjection
+                | Self::XssPayload
                 | Self::CommandInjection
                 | Self::RansomNote
                 | Self::EnvVar
@@ -649,8 +676,8 @@ impl StringKind {
     #[must_use]
     pub fn severity(self) -> Severity {
         match self {
-            Self::IP
-            | Self::IPPort
+            Self::Ip
+            | Self::IpPort
             | Self::Hostname
             | Self::Url
             | Self::ShellCmd
@@ -672,17 +699,17 @@ impl StringKind {
             | Self::MiningPool
             | Self::Email
             | Self::TorAddress
-            | Self::CTFFlag
-            | Self::SQLInjection
-            | Self::XSSPayload
+            | Self::CtfFlag
+            | Self::SqlInjection
+            | Self::XssPayload
             | Self::CommandInjection
-            | Self::JWT
-            | Self::APIKey
+            | Self::Jwt
+            | Self::ApiKey
             | Self::Mutex
-            | Self::GUID
+            | Self::Guid
             | Self::Hash
             | Self::RansomNote
-            | Self::LDAPPath => Severity::High,
+            | Self::LdapPath => Severity::High,
 
             Self::Path
             | Self::FilePath
@@ -726,8 +753,8 @@ impl StringKind {
             Self::Section => "section",
             Self::Import => "import",
             Self::Export => "export",
-            Self::IP => "ip",
-            Self::IPPort => "ip:port",
+            Self::Ip => "ip",
+            Self::IpPort => "ip:port",
             Self::Hostname => "host",
             Self::ShellCmd => "shell",
             Self::SuspiciousPath => "sus",
@@ -751,16 +778,16 @@ impl StringKind {
             Self::MiningPool => "miner",
             Self::Email => "email",
             Self::TorAddress => "tor",
-            Self::CTFFlag => "ctf_flag",
-            Self::SQLInjection => "sqli",
-            Self::XSSPayload => "xss",
+            Self::CtfFlag => "ctf_flag",
+            Self::SqlInjection => "sqli",
+            Self::XssPayload => "xss",
             Self::CommandInjection => "cmdi",
-            Self::JWT => "jwt",
-            Self::APIKey => "api_key",
+            Self::Jwt => "jwt",
+            Self::ApiKey => "api_key",
             Self::Mutex => "mutex",
-            Self::GUID => "guid",
+            Self::Guid => "guid",
             Self::RansomNote => "ransom",
-            Self::LDAPPath => "ldap",
+            Self::LdapPath => "ldap",
             Self::AppleScript => "applescript",
             Self::PythonCode => "python",
             Self::JavaScriptCode => "javascript",
@@ -772,7 +799,7 @@ impl StringKind {
 
 /// Binary information needed for string extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BinaryInfo {
+pub(crate) struct BinaryInfo {
     /// A 64-bit binary.
     pub is_64bit: bool,
     /// Little-endian byte order.
@@ -784,7 +811,7 @@ pub struct BinaryInfo {
 impl BinaryInfo {
     /// Create `BinaryInfo` from ELF header information
     #[must_use]
-    pub fn from_elf(is_64bit: bool, is_little_endian: bool) -> Self {
+    pub(crate) fn from_elf(is_64bit: bool, is_little_endian: bool) -> Self {
         Self {
             is_64bit,
             is_little_endian,
@@ -794,7 +821,7 @@ impl BinaryInfo {
 
     /// Create `BinaryInfo` from Mach-O (always little-endian on modern systems)
     #[must_use]
-    pub fn from_macho(is_64bit: bool) -> Self {
+    pub(crate) fn from_macho(is_64bit: bool) -> Self {
         Self {
             is_64bit,
             is_little_endian: true, // All modern Mach-O is LE
@@ -804,7 +831,7 @@ impl BinaryInfo {
 
     /// Create `BinaryInfo` from PE (always little-endian)
     #[must_use]
-    pub fn from_pe(is_64bit: bool) -> Self {
+    pub(crate) fn from_pe(is_64bit: bool) -> Self {
         Self {
             is_64bit,
             is_little_endian: true, // PE is always LE
@@ -818,6 +845,7 @@ impl BinaryInfo {
 /// Overlay data is commonly used by malware to hide payloads or configuration.
 /// This struct identifies data appended beyond the normal ELF/PE structure boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct OverlayInfo {
     /// Offset where the overlay data begins
     pub start_offset: u64,
@@ -971,4 +999,99 @@ mod tests {
         assert!(info32.is_little_endian);
         assert_eq!(info32.ptr_size, 4);
     }
+
+    // ===== OverlayInfo Tests =====
+
+    #[test]
+    fn test_overlay_info_construction() {
+        let overlay = OverlayInfo {
+            start_offset: 0x10000,
+            size: 0x5000,
+        };
+
+        assert_eq!(overlay.start_offset, 0x10000);
+        assert_eq!(overlay.size, 0x5000);
+    }
+
+    #[test]
+    fn test_overlay_info_clone() {
+        let overlay = OverlayInfo {
+            start_offset: 0x20000,
+            size: 0x8000,
+        };
+
+        let cloned = overlay;
+        assert_eq!(overlay.start_offset, cloned.start_offset);
+        assert_eq!(overlay.size, cloned.size);
+    }
+
+    #[test]
+    fn test_overlay_info_equality() {
+        let overlay1 = OverlayInfo {
+            start_offset: 1000,
+            size: 500,
+        };
+
+        let overlay2 = OverlayInfo {
+            start_offset: 1000,
+            size: 500,
+        };
+
+        assert_eq!(overlay1, overlay2);
+    }
+
+    // ===== StringStruct Tests =====
+
+    #[test]
+    fn test_string_struct_construction() {
+        let s = StringStruct {
+            struct_offset: 0x1000,
+            ptr: 0x2000,
+            len: 42,
+        };
+
+        assert_eq!(s.struct_offset, 0x1000);
+        assert_eq!(s.ptr, 0x2000);
+        assert_eq!(s.len, 42);
+    }
+
+    #[test]
+    fn test_string_struct_equality() {
+        let s1 = StringStruct {
+            struct_offset: 100,
+            ptr: 200,
+            len: 10,
+        };
+
+        let s2 = StringStruct {
+            struct_offset: 100,
+            ptr: 200,
+            len: 10,
+        };
+
+        assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn test_string_struct_hash() {
+        use std::collections::HashSet;
+
+        let s1 = StringStruct {
+            struct_offset: 100,
+            ptr: 200,
+            len: 10,
+        };
+
+        let s2 = StringStruct {
+            struct_offset: 100,
+            ptr: 200,
+            len: 10,
+        };
+
+        let mut set = HashSet::new();
+        set.insert(s1);
+        assert!(set.contains(&s2)); // Should find duplicate
+    }
+
+    // ===== ExtractedString with Fragments Tests =====
 }

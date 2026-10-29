@@ -14,12 +14,7 @@ static FIXTURE: std::sync::LazyLock<&str> =
 
 fn extract(caller_provides_symbols: bool) -> Vec<stng::ExtractedString> {
     let data = std::fs::read(*FIXTURE).expect("read PE fixture");
-    let opts = ExtractOptions {
-        min_length: 4,
-        filter_garbage: false,
-        caller_provides_symbols,
-        ..Default::default()
-    };
+    let opts = ExtractOptions::new(4).with_caller_provides_symbols(caller_provides_symbols);
     extract_strings_with_options(&data, &opts)
 }
 

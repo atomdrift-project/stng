@@ -809,11 +809,9 @@ fn runtime_rejects_missing_constants_and_bad_text_without_suppressing_other_lite
 #[test]
 fn public_pipeline_recovers_297_arm_ids_without_an_x86_slice() {
     let (bytes, _) = arm_slice();
-    let opts = crate::ExtractOptions {
-        caller_provides_symbols: true,
-        filter_garbage: true,
-        ..Default::default()
-    };
+    let opts = crate::ExtractOptions::new(4)
+        .with_garbage_filter(true)
+        .with_caller_provides_symbols(true);
     let out = crate::extract_strings_with_options(bytes, &opts);
     let rows = rows();
     for i in (1..596).step_by(2).filter(|i| *i != 91) {

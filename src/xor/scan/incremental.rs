@@ -79,7 +79,7 @@ pub(super) fn find_incremental_anchors(data: &[u8]) -> Vec<(usize, usize, u8)> {
 ///
 /// It uses known plaintext patterns to derive candidate seeds, then validates
 /// by checking if the pattern decodes correctly.
-pub fn extract_incremental_xor_strings(
+pub(crate) fn extract_incremental_xor_strings(
     data: &[u8],
     min_length: usize,
     excluded_ranges: &[(usize, usize)],

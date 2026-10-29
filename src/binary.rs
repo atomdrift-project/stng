@@ -10,7 +10,7 @@ pub(crate) use language::{
     pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
 };
 pub use language::{is_go_binary, is_rust_binary};
-pub use signature::is_platform_signed;
+pub(crate) use signature::is_platform_signed;
 
 use goblin::mach::MachO;
 
@@ -21,7 +21,7 @@ use goblin::mach::MachO;
 /// the scanned-byte count by 60-80% on normal binaries with near-zero risk
 /// of missing legitimate hits.
 #[must_use]
-pub fn code_ranges_from_sections(sections: &[SectionInfo]) -> Vec<(usize, usize)> {
+pub(crate) fn code_ranges_from_sections(sections: &[SectionInfo]) -> Vec<(usize, usize)> {
     merge_overlapping(
         sections
             .iter()
@@ -87,7 +87,7 @@ pub(crate) fn pe_section_name(name: &[u8; 8]) -> std::borrow::Cow<'_, str> {
 
 /// Section metadata including name, size, type, and byte range.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SectionInfo {
+pub(crate) struct SectionInfo {
     /// Section name as the header gives it (`.text`, `__cstring`, …).
     pub name: String,
     /// File offset of section payload (where raw bytes begin).
@@ -107,7 +107,7 @@ impl SectionInfo {
     /// saturated — this can only happen for inputs larger than 4 GiB, which
     /// we don't support for loading into memory.
     #[must_use]
-    pub fn range(&self) -> (usize, usize) {
+    pub(crate) fn range(&self) -> (usize, usize) {
         let start = usize::try_from(self.file_offset).unwrap_or(usize::MAX);
         let size = usize::try_from(self.size).unwrap_or(usize::MAX);
         let end = start.saturating_add(size);
@@ -165,7 +165,7 @@ pub(crate) fn collect_macho_segments(macho: &MachO<'_>) -> Vec<String> {
 /// across segments (`__TEXT,__const` and `__DATA_CONST,__const`), so this is a
 /// list, not a map keyed by name.
 #[must_use]
-pub fn collect_macho_section_info(macho: &MachO<'_>) -> Vec<SectionInfo> {
+pub(crate) fn collect_macho_section_info(macho: &MachO<'_>) -> Vec<SectionInfo> {
     use goblin::mach::constants::S_ATTR_SOME_INSTRUCTIONS;
     let mut sections = Vec::new();
 
@@ -205,7 +205,7 @@ pub(crate) fn collect_elf_segments(elf: &goblin::elf::Elf<'_>) -> Vec<String> {
 
 /// Section metadata of an ELF binary, in section-header order.
 #[must_use]
-pub fn collect_elf_section_info(elf: &goblin::elf::Elf<'_>) -> Vec<SectionInfo> {
+pub(crate) fn collect_elf_section_info(elf: &goblin::elf::Elf<'_>) -> Vec<SectionInfo> {
     use goblin::elf::section_header::{SHF_EXECINSTR, SHF_WRITE};
     let mut sections = Vec::new();
 
@@ -228,7 +228,7 @@ pub fn collect_elf_section_info(elf: &goblin::elf::Elf<'_>) -> Vec<SectionInfo> 
 
 /// Section metadata of a PE binary, in section-table order.
 #[must_use]
-pub fn collect_pe_section_info(pe: &goblin::pe::PE<'_>) -> Vec<SectionInfo> {
+pub(crate) fn collect_pe_section_info(pe: &goblin::pe::PE<'_>) -> Vec<SectionInfo> {
     use goblin::pe::section_table::{IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE};
     let mut sections = Vec::new();
 

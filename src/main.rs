@@ -192,7 +192,7 @@ fn parse_integer(input: &str) -> Result<u64> {
     }
 }
 
-fn parse_lcg_parameters(input: &str) -> Result<(u64, u64, u64, u8, usize, usize)> {
+fn parse_lcg_parameters(input: &str) -> Result<(stng::Lcg, std::ops::Range<usize>)> {
     let fields: Vec<_> = input.split(',').map(str::trim).collect();
     if fields.len() != 6 {
         anyhow::bail!("--xor-lcg expects seed,multiplier,modulus,mask,offset,length");
@@ -209,11 +209,20 @@ fn parse_lcg_parameters(input: &str) -> Result<(u64, u64, u64, u8, usize, usize)
     if modulus == 0 || multiplier == 0 || length == 0 {
         anyhow::bail!("LCG multiplier, modulus, and length must be nonzero");
     }
-    Ok((seed, multiplier, modulus, mask, offset, length))
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| anyhow::anyhow!("LCG offset + length overflows"))?;
+    let lcg = stng::Lcg {
+        seed,
+        multiplier,
+        modulus,
+        mask,
+    };
+    Ok((lcg, offset..end))
 }
 
 /// Get binary format and architecture string (e.g., "ELF arm32", "PE x64", "Mach-O arm64")
-fn get_binary_format(data: &[u8]) -> String {
+fn binary_format(data: &[u8]) -> String {
     use stng::goblin::Object;
 
     match Object::parse(data) {
@@ -380,13 +389,14 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         for line in content.split_inclusive('\n') {
             let trimmed = line.trim();
             if trimmed.len() >= cli.min_length {
-                strings.push(stng::ExtractedString {
-                    value: trimmed.to_string(),
-                    data_offset: byte_offset + (line.len() - line.trim_start().len()) as u64,
-                    method: stng::StringMethod::RawScan,
-                    kind: stng::classify_string(trimmed),
-                    ..Default::default()
-                });
+                strings.push(
+                    stng::ExtractedString::new(
+                        trimmed.to_string(),
+                        byte_offset + (line.len() - line.trim_start().len()) as u64,
+                        stng::StringMethod::RawScan,
+                    )
+                    .with_kind(stng::classify_string(trimmed)),
+                );
             }
             byte_offset += line.len() as u64;
         }
@@ -404,12 +414,16 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
             let payload_opts = stng::ExtractOptions::new(cli.min_length);
             let payload_strings =
                 stng::extract_strings_with_options(result.decoded.as_bytes(), &payload_opts);
-            let base_offset = data.len() as u64 + 1 + result.offset as u64;
-            for mut s in payload_strings {
-                s.method = stng::StringMethod::ScriptDecode;
-                s.kind = stng::classify_string(&s.value);
-                s.data_offset += base_offset;
-                strings.push(s);
+            for s in payload_strings {
+                // Located at the encoded blob it was decoded from.
+                strings.push(
+                    stng::ExtractedString::new(
+                        s.value.clone(),
+                        result.offset as u64,
+                        stng::StringMethod::ScriptDecode,
+                    )
+                    .with_kind(stng::classify_string(&s.value)),
+                );
             }
         }
 
@@ -452,26 +466,23 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     // Extract strings with options
     let mut opts = stng::ExtractOptions::new(cli.min_length).with_garbage_filter(!cli.unfiltered);
 
-    // Handle custom XOR key if provided
-    let custom_xor_key: Option<Vec<u8>> = if let Some(ref xor_key_str) = cli.xor {
-        let xor_key = parse_xor_key(xor_key_str)?;
-        opts = opts.with_xor_key(xor_key.clone());
-        Some(xor_key)
-    } else if !cli.no_xor {
-        // Auto-detection mode
-        opts = opts.with_xor(Some(cli.xor_min_length));
-        None
-    } else {
-        None
+    // A given key wins; --xorscan also decodes with keys rizin finds loaded
+    // by code.
+    let custom_xor_key = cli.xor.as_deref().map(parse_xor_key).transpose()?;
+    let xorscan = cli.xorscan && custom_xor_key.is_none() && !cli.no_xor;
+    let mode = match &custom_xor_key {
+        Some(key) => stng::XorMode::Key(key.clone()),
+        None if cli.no_xor => stng::XorMode::Off,
+        None if xorscan => stng::XorMode::Scan,
+        None => stng::XorMode::Auto,
     };
-    // --xorscan: decode with XOR keys rizin finds loaded by code.
-    let xorscan = cli.xorscan && cli.xor.is_none() && !cli.no_xor;
+    if !matches!(mode, stng::XorMode::Key(_)) {
+        opts = opts.with_xor_min_length(cli.xor_min_length);
+    }
+    opts = opts.with_xor(mode);
     if use_r2 {
-        let xor = opts.xor_scan || opts.xor_key.is_some() || xorscan;
+        let xor = *opts.xor() != stng::XorMode::Off;
         opts = cli::rizin::attach(opts, &data, xor, xorscan, !cli.no_cache);
-    } else if xorscan {
-        // No disassembler, so no key locations; still an explicit XOR scan.
-        opts = opts.with_xor_key_offsets(Vec::new());
     }
 
     // Show brief status message only if we'll actually scan (file is within size limits)
@@ -486,8 +497,8 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     let mut strings = stng::extract_strings_with_options(&data, &opts);
 
     if let Some(parameters) = cli.xor_lcg.as_deref() {
-        let (seed, multiplier, modulus, mask, offset, length) = parse_lcg_parameters(parameters)?;
-        let decoded = stng::decode_lcg_xor(&data, offset, length, seed, multiplier, modulus, mask)
+        let (lcg, range) = parse_lcg_parameters(parameters)?;
+        let decoded = stng::decode_lcg_xor(&data, range, &lcg)
             .ok_or_else(|| anyhow::anyhow!("LCG-XOR parameters did not decode a readable range"))?;
         strings.push(decoded);
     }
@@ -497,9 +508,14 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
 
     // Deduplicate: when multiple strings at same offset, keep only the longest
     use std::collections::HashMap;
-    let mut offset_map: HashMap<u64, Vec<usize>> = HashMap::new();
+    // Strings decoded from one script blob share its offset; each is its own.
+    let mut offset_map: HashMap<(u64, Option<&str>), Vec<usize>> = HashMap::new();
     for (idx, s) in strings.iter().enumerate() {
-        offset_map.entry(s.data_offset).or_default().push(idx);
+        let derived = (s.method == stng::StringMethod::ScriptDecode).then_some(s.value.as_str());
+        offset_map
+            .entry((s.data_offset, derived))
+            .or_default()
+            .push(idx);
     }
 
     let mut keep_indices = HashSet::new();
@@ -563,7 +579,7 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         // Print header with format info
         let filename =
             terminal_safe(&path.file_name().unwrap_or_default().to_string_lossy()).into_owned();
-        let format = get_binary_format(&data);
+        let format = binary_format(&data);
         let size = data.len();
         let mut hasher = Sha256::new();
         hasher.update(&data);
@@ -653,7 +669,7 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
 
         // Sort notable items by priority: IPs first, then shell/suspicious, then base64, then URLs
         notable.sort_by_key(|s| match s.kind {
-            Some(stng::StringKind::IP | stng::StringKind::IPPort) => 0,
+            Some(stng::StringKind::Ip | stng::StringKind::IpPort) => 0,
             Some(stng::StringKind::ShellCmd | stng::StringKind::SuspiciousPath) => 1,
             Some(stng::StringKind::Base64) => 2,
             Some(stng::StringKind::Overlay | stng::StringKind::OverlayWide) => 3,
@@ -767,7 +783,7 @@ fn safe_path(path: &Path) -> String {
 }
 
 /// Get terminal width, defaulting to 120 if unavailable
-fn get_terminal_width() -> usize {
+fn terminal_width() -> usize {
     terminal_size::terminal_size()
         .map(|(terminal_size::Width(w), _)| w as usize)
         .unwrap_or(120)
@@ -894,7 +910,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
                 Severity::High => (RED, RED),
                 Severity::Medium => (CYAN, CYAN),
                 Severity::Low => (GREEN, GREEN),
-                Severity::Info => ("", DIM),
+                _ => ("", DIM),
             }
         }
     } else {
@@ -1028,7 +1044,7 @@ fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
     // Calculate available width for string content
     // Prefix format: "  " (2) + offset (8) + " " (1) + method (8) + " " (1) + classification (12) + " " (1) = 33 chars
     let prefix_width = 33;
-    let term_width = get_terminal_width();
+    let term_width = terminal_width();
     let available_width = if term_width > prefix_width + 20 {
         term_width - prefix_width
     } else {

@@ -17,7 +17,7 @@ fn test_xor_finds_both_volume_variants() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -67,7 +67,7 @@ fn test_xor_no_garbage_suffixes() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -97,7 +97,7 @@ fn test_xor_no_byte_range_overlaps() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -137,7 +137,7 @@ fn test_xor_finds_malware_indicators() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -171,7 +171,7 @@ fn test_xor_classification() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -201,7 +201,7 @@ fn test_xor_null_termination() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -235,7 +235,7 @@ fn test_xor_strings_starting_with_key_first_byte() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -266,7 +266,7 @@ fn test_xor_string_count_is_plausible() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -290,8 +290,8 @@ fn test_xor_minimum_length_respected() {
 
     let min_len = 25;
     let opts = ExtractOptions::new(4) // General min length
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
-        .with_xor(Some(min_len)) // Specific XOR min length
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
+        .with_xor_min_length(min_len) // Specific XOR min length
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -326,7 +326,7 @@ fn test_c2_url_extraction_from_fixture() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -354,7 +354,7 @@ fn test_direct_c2_extraction() {
     .expect("Failed to read fixture");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
-    let opts = ExtractOptions::new(10).with_xor_key(key.to_vec());
+    let opts = ExtractOptions::new(10).with_xor(stng::XorMode::Key(key.to_vec()));
     let results = stng::extract_strings_with_options(&data, &opts);
 
     // Look for C2
@@ -373,7 +373,7 @@ fn test_brew_agent_comprehensive_extraction() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(BREW_AGENT_KEY.to_vec())
+        .with_xor(stng::XorMode::Key(BREW_AGENT_KEY.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -526,7 +526,7 @@ fn xor_decoded_strings_report_the_classifiers_kind() {
         data.extend(p.bytes().map(|b| b ^ key));
         data.extend([key; 16]); // NUL terminator and padding, encoded
     }
-    let opts = ExtractOptions::new(4).with_xor_key(vec![key]);
+    let opts = ExtractOptions::new(4).with_xor(stng::XorMode::Key(vec![key]));
     let strings = stng::extract_strings_with_options(&data, &opts);
     for p in plain {
         let found = strings

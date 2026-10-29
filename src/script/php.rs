@@ -6,6 +6,7 @@
 //! - `eval(gzuncompress(base64_decode("...")))`
 //! - `eval(str_rot13("..."))`
 
+use crate::script::detect::ScriptLanguage;
 use base64::Engine;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -59,19 +60,19 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
         source,
         &[&EVAL_GZUNCOMPRESS_B64_RE],
         &[DecodeStep::Base64, DecodeStep::Zlib],
-        "php",
+        ScriptLanguage::Php,
     ));
     results.extend(super::decode_captures(
         source,
         &[&EVAL_B64_RE],
         &[DecodeStep::Base64],
-        "php",
+        ScriptLanguage::Php,
     ));
     results.extend(super::decode_captures(
         source,
         &[&EVAL_ROT13_DOUBLE_RE, &EVAL_ROT13_SINGLE_RE],
         &[DecodeStep::Rot13],
-        "php",
+        ScriptLanguage::Php,
     ));
 
     results
@@ -99,7 +100,7 @@ fn try_eval_gzinflate_b64(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: payload,
                 offset,
                 chain_description: "php:base64+gzinflate".to_string(),
-                language: "php",
+                language: ScriptLanguage::Php,
             })
         })
         .collect()

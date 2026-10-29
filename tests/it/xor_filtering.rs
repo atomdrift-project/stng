@@ -21,8 +21,8 @@ fn test_xor_extraction(test_strings: &[&str], test_name: &str) {
 
     // Extract with filtering enabled
     let opts = ExtractOptions::new(4)
-        .with_xor(Some(4)) // Set XOR min_length to 4 (default is 10)
-        .with_xor_key(key.to_vec())
+        .with_xor_min_length(4) // Set XOR min_length to 4 (default is 10)
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(true); // Important: testing WITH filtering
 
     let extracted = stng::extract_strings_with_options(&data, &opts);

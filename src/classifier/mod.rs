@@ -193,7 +193,7 @@ const INDICATORS: &[Detector] = &[
     |s| {
         (LDAP_INDICATORS.is_match(s)
             && (s.contains("LDAP://") || (s.contains("CN=") && s.contains("DC="))))
-        .then_some(StringKind::LDAPPath)
+        .then_some(StringKind::LdapPath)
     },
     |s| (s.starts_with("Global\\") || s.starts_with("Local\\")).then_some(StringKind::Mutex),
     ransom_note,
@@ -270,7 +270,7 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
 /// `CTF{...}`, `flag{...}`, `picoCTF{...}` and friends.
 fn ctf_flag(s: &str) -> Option<StringKind> {
     let opens = ["CTF{", "flag{", "FLAG{", "picoCTF{", "HTB{"];
-    (s.ends_with('}') && opens.iter().any(|p| s.starts_with(p))).then_some(StringKind::CTFFlag)
+    (s.ends_with('}') && opens.iter().any(|p| s.starts_with(p))).then_some(StringKind::CtfFlag)
 }
 
 /// A braced registry GUID or a canonical 8-4-4-4-12 UUID (Mythic payload
@@ -285,7 +285,7 @@ fn guid(s: &str) -> Option<StringKind> {
         && memchr::memchr_iter(b'-', b).count() == 4
         && (30..=32).contains(&hex());
     let canonical = s.len() == 36 && [8, 13, 18, 23].iter().all(|&i| b[i] == b'-') && hex() == 32;
-    (braced || canonical).then_some(StringKind::GUID)
+    (braced || canonical).then_some(StringKind::Guid)
 }
 
 /// Three base64url segments. Every real JWT header encodes `{"...`, which is
@@ -300,7 +300,7 @@ fn jwt(s: &str) -> Option<StringKind> {
         && s.starts_with("eyJ")
         && s.matches('.').count() == 2
         && s.split('.').all(segment))
-    .then_some(StringKind::JWT)
+    .then_some(StringKind::Jwt)
 }
 
 fn sql_injection(s: &str) -> Option<StringKind> {
@@ -310,7 +310,7 @@ fn sql_injection(s: &str) -> Option<StringKind> {
             || s.contains("1'='1")
             || (union && s.contains("SELECT"))
             || s.contains("admin'--")))
-    .then_some(StringKind::SQLInjection)
+    .then_some(StringKind::SqlInjection)
 }
 
 fn xss(s: &str) -> Option<StringKind> {
@@ -318,7 +318,7 @@ fn xss(s: &str) -> Option<StringKind> {
         && ((s.contains("<script>") && s.contains("</script>"))
             || (s.contains("onerror=") && s.contains("alert("))
             || s.starts_with("javascript:")))
-    .then_some(StringKind::XSSPayload)
+    .then_some(StringKind::XssPayload)
 }
 
 /// A shouted ransom demand, or a well-known ransomware file extension or

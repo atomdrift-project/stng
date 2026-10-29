@@ -3,8 +3,9 @@
 //! Identifies Python, JavaScript, PHP, and PowerShell scripts from text content.
 //! Only called after `is_text_file()` returns true.
 
-/// Detected script language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A scripting language stng deobfuscates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ScriptLanguage {
     /// Lua.
     Lua,
@@ -16,11 +17,14 @@ pub enum ScriptLanguage {
     Php,
     /// PowerShell.
     PowerShell,
+    /// Windows batch (cmd.exe).
+    Batch,
+    /// VBScript, including VBScript.Encode.
+    VbScript,
 }
 
 impl ScriptLanguage {
-    /// The language's lowercase name: `"python"`, `"javascript"`, `"php"` or
-    /// `"powershell"`.
+    /// The language's lowercase name, such as `"python"` or `"vbscript"`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -29,7 +33,15 @@ impl ScriptLanguage {
             Self::JavaScript => "javascript",
             Self::Php => "php",
             Self::PowerShell => "powershell",
+            Self::Batch => "batch",
+            Self::VbScript => "vbscript",
         }
+    }
+}
+
+impl std::fmt::Display for ScriptLanguage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

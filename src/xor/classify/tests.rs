@@ -155,7 +155,7 @@ fn repetitive_auth_text_yields_no_xor_strings() {
     }
     let opts = crate::ExtractOptions::new(6)
         .with_garbage_filter(true)
-        .with_xor(None);
+        .with_xor(crate::XorMode::Auto);
     let strings = crate::extract_strings_with_options(data.as_bytes(), &opts);
     let xor_count = strings
         .iter()

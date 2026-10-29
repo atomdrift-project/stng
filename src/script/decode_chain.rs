@@ -43,17 +43,15 @@ pub(crate) fn spend_expansion(n: usize) -> bool {
 }
 
 /// Maximum recursion depth for nested obfuscation.
-pub const MAX_DECODE_DEPTH: usize = 3;
+pub(crate) const MAX_DECODE_DEPTH: usize = 3;
 
 /// A single step in a decode chain.
 #[derive(Debug, Clone)]
-pub enum DecodeStep {
+pub(crate) enum DecodeStep {
     /// Standard base64 decoding
     Base64,
     /// Zlib inflate (raw deflate stream)
     Zlib,
-    /// Gzip decompression
-    Gzip,
     /// Single-byte XOR with a known key
     Xor(u8),
     /// ROT13 on ASCII letters
@@ -78,7 +76,6 @@ impl std::fmt::Display for DecodeStep {
             Self::Rot(n) => write!(f, "rot{n}"),
             Self::Base64 => write!(f, "base64"),
             Self::Zlib => write!(f, "zlib"),
-            Self::Gzip => write!(f, "gzip"),
             Self::Xor(key) => write!(f, "xor(0x{key:02x})"),
             Self::Rot13 => write!(f, "rot13"),
             Self::Utf16Le => write!(f, "utf16le"),
@@ -91,7 +88,7 @@ impl std::fmt::Display for DecodeStep {
 
 /// Result of successfully applying a decode chain.
 #[derive(Debug, Clone)]
-pub struct DecodeResult {
+pub(crate) struct DecodeResult {
     /// The decoded payload as a UTF-8 string
     pub payload: String,
     /// Human-readable description of the decode chain, e.g. "base64+zlib+xor(0x86)"
@@ -101,7 +98,7 @@ pub struct DecodeResult {
 /// Apply a sequence of decode steps to a byte buffer.
 ///
 /// Returns `None` if any step fails or the result is not valid UTF-8.
-pub fn apply_chain(input: &[u8], steps: &[DecodeStep]) -> Option<DecodeResult> {
+pub(crate) fn apply_chain(input: &[u8], steps: &[DecodeStep]) -> Option<DecodeResult> {
     if input.is_empty() || steps.is_empty() {
         return None;
     }
@@ -159,7 +156,6 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
                 .ok()
         }
         DecodeStep::Zlib => inflate(flate2::read::ZlibDecoder::new(input)),
-        DecodeStep::Gzip => inflate(flate2::read::GzDecoder::new(input)),
         DecodeStep::Xor(key) => Some(input.iter().map(|b| b ^ key).collect()),
         DecodeStep::Rot13 => apply_step(input, &DecodeStep::Rot(13)),
         // Only ASCII letters change, so every byte maps to one byte.

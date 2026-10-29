@@ -15,7 +15,9 @@ fn test_bin_ls_clean() {
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
 
-    let opts = ExtractOptions::new(10).with_xor(Some(10));
+    let opts = ExtractOptions::new(10)
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(10);
 
     let strings = extract_strings_with_options(&data, &opts);
 
@@ -109,7 +111,9 @@ fn test_bin_cat_clean() {
 
     let data = fs::read(bin_path).expect("Failed to read /bin/cat");
 
-    let opts = ExtractOptions::new(10).with_xor(Some(10));
+    let opts = ExtractOptions::new(10)
+        .with_xor(stng::XorMode::Auto)
+        .with_xor_min_length(10);
 
     let strings = extract_strings_with_options(&data, &opts);
 

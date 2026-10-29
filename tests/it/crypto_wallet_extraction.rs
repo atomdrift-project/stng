@@ -7,7 +7,7 @@ fn test_crypto_wallet_paths_from_brew_agent() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -72,7 +72,7 @@ fn test_wallet_keyword_detection() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -99,7 +99,7 @@ fn test_crypto_terms_detection() {
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
     let opts = ExtractOptions::new(10)
-        .with_xor_key(key.to_vec())
+        .with_xor(stng::XorMode::Key(key.to_vec()))
         .with_garbage_filter(true);
 
     let extracted = stng::extract_strings_with_options(&data, &opts);
