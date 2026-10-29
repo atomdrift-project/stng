@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 /// Real-world test for multi-byte XOR extraction using actual malware sample
 use stng::{ExtractOptions, StringMethod};
 
@@ -9,10 +7,6 @@ fn test_xor_brew_agent_malware() {
     let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
 
     // Skip if sample doesn't exist
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found at {sample_path}");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read malware sample");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -28,8 +22,6 @@ fn test_xor_brew_agent_malware() {
         .filter(|s| s.method == StringMethod::XorDecode)
         .map(|s| s.value.as_str())
         .collect();
-
-    println!("Found {} XOR-decoded strings", xor_strings.len());
 
     // Test 1: osascript command (shell execution)
     assert!(
@@ -75,18 +67,12 @@ fn test_xor_brew_agent_malware() {
         "Should find at least 10 XOR-decoded strings, found {}",
         xor_strings.len()
     );
-
-    println!("✓ All malware analysis checks passed");
 }
 
 #[test]
 fn test_xor_display_multiline() {
     // Verify that multi-line XOR strings are properly decoded
     let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
-
-    if !std::path::Path::new(sample_path).exists() {
-        return;
-    }
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -116,19 +102,12 @@ fn test_xor_display_multiline() {
         "Multi-line string should have at least 2 lines, found {}",
         lines.len()
     );
-
-    println!("✓ Found multi-line XOR string with {} lines", lines.len());
 }
 
 #[test]
 fn test_xor_url_extraction() {
     // Test that we correctly extract URLs, specifically http://46.30.191.141
     let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
-
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found");
-        return;
-    }
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -163,19 +142,12 @@ fn test_xor_url_extraction() {
         has_proper_url,
         "Should find at least one string containing http:// or https://"
     );
-
-    println!("✓ URL extraction tests passed");
 }
 
 #[test]
 fn test_xor_shell_commands() {
     // Test that we extract shell commands correctly with natural endpoints
     let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
-
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found");
-        return;
-    }
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -229,19 +201,12 @@ fn test_xor_shell_commands() {
         .iter()
         .any(|s| s.contains("screencapture") || s.contains("creencapture"));
     assert!(has_screencapture, "Should find screencapture command");
-
-    println!("✓ Shell command extraction tests passed");
 }
 
 #[test]
 fn test_xor_application_paths() {
     // Test that we extract application and wallet paths correctly
     let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
-
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found");
-        return;
-    }
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -284,19 +249,12 @@ fn test_xor_application_paths() {
         .iter()
         .any(|s| s.contains("discord") && s.contains("Local Storage"));
     assert!(has_discord, "Should find Discord Local Storage path");
-
-    println!("✓ Application path extraction tests passed");
 }
 
 #[test]
 fn test_xor_file_extensions() {
     // Test that we correctly extract strings ending with file extensions
     let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
-
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found");
-        return;
-    }
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -321,19 +279,12 @@ fn test_xor_file_extensions() {
     // Test 2: .sqlite database
     let has_sqlite = xor_strings.iter().any(|s| s.contains(".sqlite"));
     assert!(has_sqlite, "Should find strings with .sqlite extension");
-
-    println!("✓ File extension extraction tests passed");
 }
 
 #[test]
 fn test_xor_crypto_wallets() {
     // Test that we extract cryptocurrency wallet paths
     let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
-
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found");
-        return;
-    }
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -377,10 +328,6 @@ fn test_xor_crypto_wallets() {
         wallet_count >= 5,
         "Should find at least 5 wallet-related strings, found {wallet_count}"
     );
-
-    println!(
-        "✓ Cryptocurrency wallet extraction tests passed - found {wallet_count} wallet references"
-    );
 }
 
 #[test]
@@ -388,11 +335,6 @@ fn test_xor_brew_agent_malware_full_sample() {
     // Test against full brew_agent binary with explicit key
     // Validates comprehensive extraction of critical malware indicators
     let sample_path = crate::common::path("testdata/malware/brew_agent");
-
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found at {sample_path}");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read malware sample");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -409,11 +351,6 @@ fn test_xor_brew_agent_malware_full_sample() {
         .filter(|s| s.method == StringMethod::XorDecode)
         .map(|s| s.value.as_str())
         .collect();
-
-    println!(
-        "Full sample extraction found {} XOR strings",
-        xor_strings.len()
-    );
 
     // Test critical indicators that identify the malware
     assert!(
@@ -449,22 +386,12 @@ fn test_xor_brew_agent_malware_full_sample() {
         "Should find at least 100 XOR strings, found {}",
         xor_strings.len()
     );
-
-    println!(
-        "✓ Full sample extraction passed all tests - found {} malware indicators",
-        xor_strings.len()
-    );
 }
 
 #[test]
 fn test_xor_brew_agent_extraction_comparison() {
     // Verify extraction quality with and without garbage filtering
     let sample_path = crate::common::path("testdata/malware/brew_agent");
-
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read malware sample");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -492,12 +419,6 @@ fn test_xor_brew_agent_extraction_comparison() {
         .filter(|s| s.method == StringMethod::XorDecode)
         .map(|s| s.value.as_str())
         .collect();
-
-    println!(
-        "Extraction comparison: {} unfiltered strings → {} filtered strings",
-        xor_unfiltered.len(),
-        xor_filtered.len()
-    );
 
     // These critical indicators MUST be found in filtered results
     let critical_indicators = [
@@ -532,28 +453,13 @@ fn test_xor_brew_agent_extraction_comparison() {
         "Filtered extraction should still find 100+ strings, found {}",
         xor_filtered.len()
     );
-
-    println!(
-        "✓ Extraction comparison test passed - {} critical indicators preserved through filtering",
-        critical_indicators.len()
-    );
 }
 
 #[test]
 fn test_xor_brew_agent_auto_detection() {
-    // Test automatic XOR key detection WITHOUT providing the key explicitly
-    // This validates that auto-detection works (or documents why it doesn't)
-    let sample_path = crate::common::path("testdata/malware/brew_agent");
+    let data = crate::common::bytes("testdata/malware/brew_agent");
 
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found");
-        return;
-    }
-
-    let data = std::fs::read(sample_path).expect("Failed to read malware sample");
-
-    // Enable XOR scanning WITHOUT providing a key
-    // The extractor will try to auto-detect the key from high-entropy strings in the binary
+    // No key given: the extractor must find it among the binary's own strings.
     let opts = stng::ExtractOptions::new(10)
         .with_xor(Some(10)) // Enable XOR auto-detection
         .with_garbage_filter(true);
@@ -566,56 +472,15 @@ fn test_xor_brew_agent_auto_detection() {
         .filter(|s| s.method == StringMethod::XorDecode)
         .collect();
 
-    println!(
-        "Auto-detection attempt: found {} XOR strings (no key provided)",
-        xor_strings.len()
-    );
-
-    // Note: This particular malware sample doesn't embed the XOR key as a discoverable
-    // high-entropy string in the binary. The key (fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf) must be
-    // known externally or derived through other means (e.g., reverse engineering, memory analysis).
-    // This is defensive design - requiring explicit key specification ensures accurate extraction.
-
-    if xor_strings.is_empty() {
-        println!("✓ Analysis of Auto-Detection Limitation:");
-        println!();
-        println!("  The XOR key 'fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf' IS in the binary at 0x235ad");
-        println!();
-        println!("  Why auto-detection doesn't work here:");
-        println!("    • Mach-O binaries are successfully parsed by goblin/Object");
-        println!("    • They use extract_from_object() path, NOT the unknown format path");
-        println!("    • Auto-detection code is only invoked for unparseable formats");
-        println!("    • Result: Key is extracted normally but never tested as XOR key");
-        println!();
-        println!("  IMPROVEMENTS IMPLEMENTED:");
-        println!("    ✓ Added score_xor_key_candidate() scoring function");
-        println!("    ✓ Scores based on: low repetition, high diversity, high entropy");
-        println!("    ✓ Changed from 'last 5 by offset' to 'top 10 by quality score'");
-        println!("    ✓ XOR key scores 220+ while random strings score ~200");
-        println!();
-        println!("  For recognized formats like this Mach-O:");
-        println!("    → The key must be provided explicitly via with_xor_key()");
-        println!("    → Future improvement: Apply scoring to extract_from_object path");
-    } else {
-        // If auto-detection did find something, verify quality
-        let has_c2 = xor_strings
-            .iter()
-            .any(|s| s.value.to_lowercase().contains("46.30.191"));
-
-        let has_electrum = xor_strings
-            .iter()
-            .any(|s| s.value.to_lowercase().contains("electrum"));
-
-        let found_count = [has_c2, has_electrum].iter().filter(|&&b| b).count();
-
-        println!("✓ Auto-detection succeeded! Found {found_count} critical indicators");
+    for indicator in ["46.30.191", "electrum"] {
         assert!(
-            found_count > 0,
-            "Should find indicators if auto-detection succeeded"
+            xor_strings
+                .iter()
+                .any(|s| s.value.to_lowercase().contains(indicator)),
+            "auto-detected key should recover {indicator:?}"
         );
     }
 }
-// Minimal test to verify C2 URL extraction issue
 
 #[test]
 fn test_c2_url_extraction_from_brew_agent() {
@@ -632,21 +497,5 @@ fn test_c2_url_extraction_from_brew_agent() {
         .iter()
         .find(|s| s.value.contains("46.30.191.141") || s.data_offset == 0x211b0);
 
-    if c2_url.is_none() {
-        // Debug: show what's near that offset
-        println!("C2 URL NOT FOUND at offset 0x211b0!");
-        println!("\nStrings near 0x211b0:");
-        for s in results
-            .iter()
-            .filter(|s| s.data_offset >= 0x211a0 && s.data_offset <= 0x211d0)
-        {
-            println!("  0x{:x}: {:?} ({:?})", s.data_offset, s.value, s.kind);
-        }
-    }
-
-    let s = c2_url.expect("C2 URL should be extracted");
-    println!("Found C2 URL:");
-    println!("  Offset: 0x{:x}", s.data_offset);
-    println!("  Value: {:?}", s.value);
-    println!("  Kind: {:?}", s.kind);
+    assert!(c2_url.is_some(), "C2 URL should be extracted");
 }

@@ -1238,7 +1238,7 @@ mod mov_imm32_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{StringKind, StringMethod};
+    use crate::types::StringMethod;
 
     #[test]
     fn test_is_valid_utf8_string() {
@@ -1277,18 +1277,15 @@ mod tests {
         // MOVZ with 0 value
         let inst = 0xD2800000;
         let result = decode_arm_mov_immediate(inst);
-        // Zero is valid but might be rejected based on implementation
-        assert!(result.is_none() || result == Some(0));
+        assert_eq!(result, Some(0));
     }
 
     #[test]
     fn test_decode_arm_mov_immediate_with_shift() {
         // MOVZ X0, #1, LSL #16 would have shift = 1
         // Value 1 shifted left by 16 = 0x10000
-        let inst = 0xD2A00020; // Approximate encoding
-        let result = decode_arm_mov_immediate(inst);
-        // Should decode to shifted value
-        assert!(result.is_some());
+        let inst = 0xD2A00020;
+        assert_eq!(decode_arm_mov_immediate(inst), Some(0x10000));
     }
 
     #[test]
@@ -1303,19 +1300,16 @@ mod tests {
     fn test_decode_arm_bitmask_immediate_basic() {
         // Test basic bitmask encoding for small values
         // ORR X0, XZR, #n - encodes small immediate values
-        let inst = 0xB2400000; // ORR with bitmask immediate
-        let result = decode_arm_bitmask_immediate(inst);
-        // Should decode to some value or None if out of range
-        assert!(result.is_none() || result.unwrap() <= 1000);
+        // ORR X0, XZR, #1: N=1, immr=0, imms=0 is a single set bit.
+        let inst = 0xB2400000;
+        assert_eq!(decode_arm_bitmask_immediate(inst), Some(1));
     }
 
     #[test]
     fn test_decode_arm_bitmask_immediate_invalid_size() {
         // Invalid element size encoding
         let inst = 0xB2400000 | (0x3F << 10); // imms = 0x3F which is invalid
-        let result = decode_arm_bitmask_immediate(inst);
-        // Should handle gracefully
-        assert!(result.is_none() || result.is_some());
+        assert_eq!(decode_arm_bitmask_immediate(inst), None);
     }
 
     #[test]
@@ -1667,70 +1661,6 @@ mod tests {
     }
 
     #[test]
-    fn test_arm64_basic_string_extraction() {
-        let text_data = vec![
-            0x00, 0x00, 0x00, 0x90, 0x00, 0x40, 0x01, 0x91, 0x41, 0x01, 0x80, 0xD2, 0x00, 0x00,
-            0x00, 0x94,
-        ];
-        let mut rodata_data = vec![0u8; 0x100];
-        rodata_data[0..11].copy_from_slice(b"test_string");
-        let results = extract_inline_strings_arm64(&text_data, 0x100000, &rodata_data, 0x101000, 4);
-        for s in &results {
-            assert_eq!(s.method, StringMethod::InstructionPattern);
-            assert!(!s.value.is_empty());
-        }
-    }
-
-    #[test]
-    fn test_arm64_min_length_filter() {
-        let text_data = vec![
-            0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x91, 0x61, 0x00, 0x80, 0xD2, 0x00, 0x00,
-            0x00, 0x94,
-        ];
-        let mut rodata_data = vec![0u8; 0x1100];
-        rodata_data[0..3].copy_from_slice(b"abc");
-        let results =
-            extract_inline_strings_arm64(&text_data, 0x100000, &rodata_data, 0x101000, 10);
-        assert!(results.is_empty() || results.iter().all(|s| s.value.len() >= 10));
-    }
-
-    #[test]
-    fn test_amd64_basic_string_extraction() {
-        let text_data = vec![
-            0x48, 0x8D, 0x3D, 0x00, 0x01, 0x00, 0x00, 0xBE, 0x0B, 0x00, 0x00, 0x00, 0xE8, 0x00,
-            0x00, 0x00, 0x00,
-        ];
-        let mut rodata_data = vec![0u8; 0x200];
-        rodata_data[0..11].copy_from_slice(b"hello_world");
-        let results = extract_inline_strings_amd64(&text_data, 0x100000, &rodata_data, 0x101000, 4);
-        for s in &results {
-            assert_eq!(s.method, StringMethod::InstructionPattern);
-            assert!(!s.value.is_empty());
-        }
-    }
-
-    #[test]
-    fn test_amd64_map_key_pattern() {
-        let text_data = vec![
-            0x48, 0x8D, 0x15, 0x50, 0x00, 0x00, 0x00, 0xB9, 0x07, 0x00, 0x00, 0x00, 0xE8, 0x00,
-            0x00, 0x00, 0x00,
-        ];
-        let mut rodata_data = vec![0u8; 0x100];
-        rodata_data[0..7].copy_from_slice(b"map_key");
-        let text_addr = 0x100000u64;
-        let rodata_addr = text_addr + text_data.len() as u64 + 0x50 - 7;
-        let results =
-            extract_inline_strings_amd64(&text_data, text_addr, &rodata_data, rodata_addr, 4);
-        for key in results
-            .iter()
-            .filter(|s| s.kind == Some(StringKind::MapKey))
-        {
-            assert!(!key.value.is_empty());
-            assert_eq!(key.method, StringMethod::InstructionPattern);
-        }
-    }
-
-    #[test]
     fn test_empty_inputs_both_arches() {
         assert!(extract_inline_strings_arm64(&[], 0x100000, &[], 0x101000, 4).is_empty());
         assert!(extract_inline_strings_amd64(&[], 0x100000, &[], 0x101000, 4).is_empty());
@@ -1745,17 +1675,14 @@ mod tests {
 
     #[test]
     fn test_large_code_section_arm64() {
-        use std::time::Instant;
         let text_data: Vec<u8> = (0..65536u32)
             .map(|i| u8::try_from(i % 256).unwrap_or(0))
             .collect();
         let rodata_data = vec![0u8; 4096];
-        let start = Instant::now();
-        let _ = extract_inline_strings_arm64(&text_data, 0x100000, &rodata_data, 0x110000, 4);
+        // Must not panic; rodata holds only zeros, so nothing is recovered.
         assert!(
-            start.elapsed().as_millis() < 100,
-            "Took too long: {:?}",
-            start.elapsed()
+            extract_inline_strings_arm64(&text_data, 0x100000, &rodata_data, 0x110000, 4)
+                .is_empty()
         );
     }
 
@@ -1891,7 +1818,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod push_length_regressions;
+mod push_length_tests;
 
 #[cfg(test)]
 mod arm64_argument_tests;

@@ -1,14 +1,8 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use stng::{ExtractOptions, StringKind};
 
 #[test]
 fn test_kworker_character_assembly_detection() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - kworker malware sample not found at {sample_path}");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read kworker sample");
 
@@ -16,8 +10,6 @@ fn test_kworker_character_assembly_detection() {
     let extracted = stng::extract_strings_with_options(&data, &opts);
 
     // Collect all strings for analysis
-    println!("\n=== KWorker Malware Analysis ===");
-    println!("Total strings extracted: {}", extracted.len());
 
     // Print suspicious strings (high severity)
     let suspicious: Vec<_> = extracted
@@ -29,22 +21,12 @@ fn test_kworker_character_assembly_detection() {
         })
         .collect();
 
-    println!("\nSuspicious strings found: {}", suspicious.len());
-    for s in &suspicious {
-        println!("  [{:?}] 0x{:x}: {}", s.kind, s.data_offset, s.value);
-    }
-
     // Print stack strings (character-by-character constructions)
     let stack_strings: Vec<_> = extracted
         .iter()
         .filter(|s| s.kind == Some(StringKind::StackString))
         .map(|s| s.value.as_str())
         .collect();
-
-    println!("\nStack-constructed strings found: {}", stack_strings.len());
-    for s in &stack_strings {
-        println!("  - {s}");
-    }
 
     // Test expectations:
     // The kworker malware uses character-by-character assembly for critical strings.
@@ -65,7 +47,6 @@ fn test_kworker_character_assembly_detection() {
             || extracted.iter().any(|s| s.value.contains(keyword))
         {
             found_proc_parts += 1;
-            println!("\n✓ Found process name keyword: {keyword}");
         }
     }
 
@@ -77,7 +58,6 @@ fn test_kworker_character_assembly_detection() {
             || extracted.iter().any(|s| s.value.contains(keyword))
         {
             found_persistence += 1;
-            println!("✓ Found persistence keyword: {keyword}");
         }
     }
 
@@ -89,7 +69,6 @@ fn test_kworker_character_assembly_detection() {
             || extracted.iter().any(|s| s.value.contains(keyword))
         {
             found_tmp += 1;
-            println!("✓ Found tmp file keyword: {keyword}");
         }
     }
 
@@ -99,15 +78,8 @@ fn test_kworker_character_assembly_detection() {
     for keyword in &c2_keywords {
         if extracted.iter().any(|s| s.value.contains(keyword)) {
             found_c2 += 1;
-            println!("✓ Found C2 keyword: {keyword}");
         }
     }
-
-    println!("\n=== Detection Summary ===");
-    println!("Process name components: {found_proc_parts}/3");
-    println!("Persistence paths: {found_persistence}/4");
-    println!("Temporary files: {found_tmp}/3");
-    println!("C2 indicators: {found_c2}/4");
 
     // Verify we find evidence of character-by-character construction
     // At minimum, we should detect some suspicious activity patterns
@@ -126,10 +98,6 @@ fn test_kworker_character_assembly_detection() {
 #[test]
 fn test_kworker_missing_strings_utf16_url() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - kworker malware sample not found at {sample_path}");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read kworker sample");
 
@@ -143,9 +111,6 @@ fn test_kworker_missing_strings_utf16_url() {
         .windows(utf16le_marker.len())
         .any(|window| window == utf16le_marker);
 
-    println!("\n=== UTF-16LE URL Detection ===");
-    println!("Found UTF-16LE 'htp' pattern: {found_utf16_htp}");
-
     // Note: The URL appears to be "htp://cunilos.aemrg" not "http://"
     // The second 't' is missing from the rodata section
     assert!(
@@ -155,23 +120,13 @@ fn test_kworker_missing_strings_utf16_url() {
 }
 
 #[test]
+#[ignore = "known gap: byte-assembled persistence strings are not recovered (REDFLAGS_AUDIT P6.13)"]
 fn test_kworker_missing_persistence_strings() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - kworker malware sample not found at {sample_path}");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read kworker sample");
     let opts = ExtractOptions::new(3); // Lower threshold to catch short fragments
     let extracted = stng::extract_strings_with_options(&data, &opts);
-
-    println!("\n=== Missing Persistence Strings Analysis ===");
-    println!("Total extracted with min_length=3: {}", extracted.len());
-
-    // Look for persistence-related strings that SHOULD be there but may not be extracted properly
-    let all_values: Vec<String> = extracted.iter().map(|s| s.value.clone()).collect();
-    println!("\nAll extracted values: {all_values:?}");
 
     // These strings are expected to be found (either fully or as components):
     let expected_components = vec![
@@ -185,105 +140,25 @@ fn test_kworker_missing_persistence_strings() {
     ];
 
     for (component, description) in &expected_components {
-        let found = extracted.iter().any(|s| s.value.contains(component));
-        println!(
-            "  {}: {} ({})",
-            if found { "✓" } else { "✗" },
-            component,
-            description
+        assert!(
+            extracted.iter().any(|s| s.value.contains(component)),
+            "{component:?} ({description}) not extracted"
         );
     }
-}
-
-#[test]
-fn test_kworker_stack_string_assembly_patterns() {
-    let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - kworker malware sample not found at {sample_path}");
-        return;
-    }
-
-    let data = std::fs::read(sample_path).expect("Failed to read kworker sample");
-    let opts = ExtractOptions::new(2); // Very low threshold to catch byte pairs
-    let extracted = stng::extract_strings_with_options(&data, &opts);
-
-    println!("\n=== Stack String Assembly Patterns ===");
-
-    // Look for 2-byte immediate patterns that could be part of character-by-character assembly
-    // Pattern: mov instructions with ASCII-decodable immediates
-    let mut two_byte_immediates = Vec::new();
-    for window in data.windows(2) {
-        let byte1 = window[0];
-        let byte2 = window[1];
-
-        if byte1.is_ascii_graphic() && byte2.is_ascii_graphic() {
-            two_byte_immediates.push((byte1 as char, byte2 as char));
-        }
-    }
-
-    println!(
-        "Found {} potential 2-byte ASCII sequences",
-        two_byte_immediates.len()
-    );
-
-    // Check for specific patterns we know should exist:
-    // "kw" from "[kworker]"
-    let has_kw = data.windows(2).any(|w| w == b"kw");
-    // "or" from "worker" or "profile"
-    let has_or = data.windows(2).any(|w| w == b"or");
-    // "ba" from "bashrc"
-    let has_ba = data.windows(2).any(|w| w == b"ba");
-
-    println!("2-byte patterns found:");
-    println!("  'kw': {}", if has_kw { "✓" } else { "✗" });
-    println!("  'or': {}", if has_or { "✓" } else { "✗" });
-    println!("  'ba': {}", if has_ba { "✓" } else { "✗" });
-
-    // Print some extracted short strings
-    let short_strings: Vec<_> = extracted
-        .iter()
-        .filter(|s| s.value.len() >= 2 && s.value.len() <= 4)
-        .map(|s| s.value.as_str())
-        .collect();
-
-    println!("\nShort extracted strings (2-4 chars): {short_strings:?}");
 }
 
 #[test]
 fn test_kworker_utf16_url_content() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - kworker malware sample not found at {sample_path}");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read kworker sample");
     let opts = ExtractOptions::new(4);
     let extracted = stng::extract_strings_with_options(&data, &opts);
 
-    println!("\n=== UTF-16LE URL Detection Results ===");
-
-    // Look for the URL we detected
-    let url_strings: Vec<_> = extracted
-        .iter()
-        .filter(|s| {
-            s.value.contains("htp") || s.value.contains("cunilos") || s.value.contains("aemrg")
-        })
-        .collect();
-
-    println!("Found {} URL-related strings:", url_strings.len());
-    for s in &url_strings {
-        println!(
-            "  0x{:x}: {} (method: {:?})",
-            s.data_offset, s.value, s.method
-        );
-    }
-
     // Verify we found the actual URL
     let has_url = extracted
         .iter()
         .any(|s| s.value.contains("htp:/cunilos.aemrg"));
-    println!("\nFull URL detected: {}", if has_url { "✓" } else { "✗" });
 
     // The actual string should be the full UTF-16LE decoded URL
     assert!(has_url, "Should extract the full UTF-16LE encoded URL");

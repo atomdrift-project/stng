@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for macOS code signature and entitlements extraction.
 //!
 //! These tests verify that we correctly extract and categorize:
@@ -7,7 +6,6 @@
 //! - Application identifiers and individual entitlement keys
 
 use std::fs;
-use std::path::Path;
 use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
 fn macho_arch_count(data: &[u8]) -> usize {
@@ -19,21 +17,14 @@ fn macho_arch_count(data: &[u8]) -> usize {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "reads an Apple-signed system binary"
+)]
 fn test_codesig_base64_categorization() {
     let bin_path = "/bin/ls";
 
-    if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {bin_path} not found");
-        return;
-    }
-
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
-
-    // Skip if it's an ELF binary (Mach-O specific test)
-    if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
-        return;
-    }
 
     let opts = ExtractOptions::new(10);
     let strings = extract_strings_with_options(&data, &opts);
@@ -92,11 +83,6 @@ fn test_codesig_base64_categorization() {
 fn test_entitlements_extraction_brew_agent() {
     let sample_path = crate::common::path("testdata/malware/brew_agent");
 
-    if !Path::new(sample_path).exists() {
-        eprintln!("Skipping test: {sample_path} not found");
-        return;
-    }
-
     let data = fs::read(sample_path).expect("Failed to read brew_agent");
     let opts = ExtractOptions::new(10);
     let strings = extract_strings_with_options(&data, &opts);
@@ -153,13 +139,12 @@ fn test_entitlements_extraction_brew_agent() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "reads an Apple-signed system binary"
+)]
 fn test_entitlements_extraction_securityd() {
     let bin_path = "/usr/libexec/securityd_system";
-
-    if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {bin_path} not found");
-        return;
-    }
 
     let data = fs::read(bin_path).expect("Failed to read securityd_system");
     let opts = ExtractOptions::new(10);
@@ -231,21 +216,14 @@ fn test_entitlements_extraction_securityd() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "reads an Apple-signed system binary"
+)]
 fn test_linkedit_section_enrichment() {
     let bin_path = "/bin/ls";
 
-    if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {bin_path} not found");
-        return;
-    }
-
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
-
-    // Skip if it's an ELF binary (Mach-O specific test)
-    if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
-        return;
-    }
 
     let opts = ExtractOptions::new(10);
     let strings = extract_strings_with_options(&data, &opts);
@@ -274,21 +252,14 @@ fn test_linkedit_section_enrichment() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "reads an Apple-signed system binary"
+)]
 fn test_codesig_hash_format() {
     let bin_path = "/bin/ls";
 
-    if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {bin_path} not found");
-        return;
-    }
-
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
-
-    // Skip if it's an ELF binary (Mach-O specific test)
-    if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
-        return;
-    }
 
     let opts = ExtractOptions::new(10);
     let strings = extract_strings_with_options(&data, &opts);
@@ -341,13 +312,12 @@ fn test_codesig_hash_format() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "reads an Apple-signed system binary"
+)]
 fn test_entitlements_vs_codesign_count() {
     let bin_path = "/usr/libexec/securityd_system";
-
-    if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {bin_path} not found");
-        return;
-    }
 
     let data = fs::read(bin_path).expect("Failed to read securityd_system");
     let opts = ExtractOptions::new(10);
@@ -385,22 +355,15 @@ fn test_entitlements_vs_codesign_count() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "reads an Apple-signed system binary"
+)]
 fn test_no_entitlements_in_clean_binaries() {
     // Some system binaries like /bin/ls don't have entitlements
     let bin_path = "/bin/ls";
 
-    if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {bin_path} not found");
-        return;
-    }
-
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
-
-    // Skip if it's an ELF binary (Mach-O specific test)
-    if data.len() >= 4 && data[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-        eprintln!("Skipping Mach-O specific test: {bin_path} is an ELF binary");
-        return;
-    }
 
     let opts = ExtractOptions::new(10);
     let strings = extract_strings_with_options(&data, &opts);
@@ -421,11 +384,6 @@ fn test_no_entitlements_in_clean_binaries() {
 #[test]
 fn test_entitlements_offset_accuracy() {
     let sample_path = crate::common::path("testdata/malware/brew_agent");
-
-    if !Path::new(sample_path).exists() {
-        eprintln!("Skipping test: {sample_path} not found");
-        return;
-    }
 
     let data = fs::read(sample_path).expect("Failed to read brew_agent");
     let opts = ExtractOptions::new(10);
@@ -462,13 +420,12 @@ fn test_entitlements_offset_accuracy() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "reads an Apple-signed system binary"
+)]
 fn test_codesig_hashes_are_sha1() {
     let bin_path = "/bin/cat";
-
-    if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {bin_path} not found");
-        return;
-    }
 
     let data = fs::read(bin_path).expect("Failed to read /bin/cat");
     let opts = ExtractOptions::new(10);
@@ -482,7 +439,6 @@ fn test_codesig_hashes_are_sha1() {
         .collect();
 
     if codesig_hashes.is_empty() {
-        eprintln!("Skipping hash verification: no code signature hashes found in /bin/cat");
         return;
     }
 

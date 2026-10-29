@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration test for a clean Go Windows PE that should trigger zero IOC detections.
 //!
 //! `does-nothing-windows-amd64.exe` is a Go PE x64 built against klog/logr that
@@ -19,34 +18,18 @@
 //! doesn't currently reach the library-level classifier in a way this test can
 //! observe, so it's covered here via the CLI integration test.
 
-use std::path::Path;
-use std::process::Command;
 use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
 static SAMPLE_PATH: std::sync::LazyLock<&str> =
     std::sync::LazyLock::new(|| crate::common::path("testdata/pe/does-nothing-windows-amd64.exe"));
 
-fn load_sample() -> Option<Vec<u8>> {
-    if !Path::new(*SAMPLE_PATH).exists() {
-        eprintln!("Skipping - sample not found at {}", *SAMPLE_PATH);
-        return None;
-    }
-    Some(std::fs::read(*SAMPLE_PATH).expect("Failed to read does-nothing-windows-amd64.exe"))
-}
-
-fn r2_available() -> bool {
-    Command::new("r2")
-        .arg("-v")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+fn load_sample() -> Vec<u8> {
+    std::fs::read(*SAMPLE_PATH).expect("Failed to read does-nothing-windows-amd64.exe")
 }
 
 #[test]
 fn test_no_xor_ip_false_positive() {
-    let Some(data) = load_sample() else {
-        return;
-    };
+    let data = load_sample();
 
     let opts = ExtractOptions::new(4).with_xor(Some(8));
     let extracted = extract_strings_with_options(&data, &opts);
@@ -65,9 +48,7 @@ fn test_no_xor_ip_false_positive() {
 
 #[test]
 fn test_no_incremental_xor_false_positives() {
-    let Some(data) = load_sample() else {
-        return;
-    };
+    let data = load_sample();
 
     let opts = ExtractOptions::new(4).with_xor(Some(8));
     let extracted = extract_strings_with_options(&data, &opts);
@@ -88,9 +69,7 @@ fn test_no_incremental_xor_false_positives() {
 
 #[test]
 fn test_no_email_false_positives_from_go_module_paths() {
-    let Some(data) = load_sample() else {
-        return;
-    };
+    let data = load_sample();
 
     let opts = ExtractOptions::new(4);
     let extracted = extract_strings_with_options(&data, &opts);
@@ -124,19 +103,12 @@ fn test_no_email_false_positives_from_go_module_paths() {
 }
 
 #[test]
-fn test_no_hex_false_positive_from_runtime_poison_pattern_via_cli() {
-    if !Path::new(*SAMPLE_PATH).exists() {
-        return;
-    }
-    if !r2_available() {
-        eprintln!("Skipping - r2 not available");
-        return;
-    }
-
+#[ignore = "requires rizin; `make test` runs it when rizin or r2 is installed"]
+fn rizin_no_hex_false_positive_from_runtime_poison_pattern() {
     // The hex false positive is produced by radare2's string extraction path,
     // which the CLI wires up end-to-end. Invoke the built binary and scan its
     // JSON output.
-    let output = Command::new(env!("CARGO_BIN_EXE_stng"))
+    let output = crate::stng()
         .arg("--json")
         .arg(*SAMPLE_PATH)
         .output()
@@ -166,9 +138,7 @@ fn test_no_hex_false_positive_from_runtime_poison_pattern_via_cli() {
 
 #[test]
 fn test_no_jwt_false_positive_from_go_symbol() {
-    let Some(data) = load_sample() else {
-        return;
-    };
+    let data = load_sample();
 
     let opts = ExtractOptions::new(4);
     let extracted = extract_strings_with_options(&data, &opts);

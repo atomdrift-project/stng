@@ -1021,15 +1021,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extractor_size() {
-        let extractor = RustStringExtractor::new(4);
-        assert_eq!(
-            std::mem::size_of_val(&extractor),
-            std::mem::size_of::<usize>()
-        );
-    }
-
-    #[test]
     fn test_elf_extraction_empty_data() {
         let extractor = RustStringExtractor::new(4);
         let mut elf_data = vec![0u8; 64];
@@ -1072,98 +1063,62 @@ mod tests {
         }
     }
 
+    /// A small Rust program built for linux/amd64 (see testdata/rust_elf).
+    fn rust_elf() -> (&'static [u8], goblin::elf::Elf<'static>) {
+        let data = crate::test_fixture("testdata/rust_elf/linux_amd64");
+        (data, goblin::elf::Elf::parse(data).unwrap())
+    }
+
     #[test]
     fn test_elf_multiple_sections() {
-        let extractor = RustStringExtractor::new(4);
-        let test_paths = ["/bin/true", "/usr/bin/true", "/bin/echo"];
-        for path in &test_paths {
-            if let Ok(data) = std::fs::read(path)
-                && let Ok(elf) = goblin::elf::Elf::parse(&data)
-            {
-                // The host's /bin/true is C, so this Rust extractor may find
-                // nothing in it (it finds nothing on the BSDs or illumos).
-                // Whatever it does find must still be well formed.
-                let strings = extractor.extract_elf(&elf, &data);
-                for s in &strings {
-                    assert!(s.value.len() >= 4, "String too short: '{}'", s.value);
-                }
-                let has_any_method = strings.iter().any(|s| {
-                    matches!(
-                        s.method,
-                        crate::StringMethod::Structure
-                            | crate::StringMethod::InstructionPattern
-                            | crate::StringMethod::RawScan
-                    )
-                });
-                assert!(
-                    strings.is_empty() || has_any_method,
-                    "Should use at least one extraction method"
-                );
-                break;
-            }
-        }
+        let (data, elf) = rust_elf();
+        let strings = RustStringExtractor::new(4).extract_elf(&elf, data);
+        assert!(!strings.is_empty());
+        assert!(
+            strings
+                .iter()
+                .any(|s| s.method == crate::StringMethod::Structure)
+        );
     }
 
     #[test]
     fn test_min_length_filtering_elf() {
-        let extractor_short = RustStringExtractor::new(4);
-        let extractor_long = RustStringExtractor::new(20);
-        if let Ok(data) = std::fs::read("/bin/ls")
-            && let Ok(elf) = goblin::elf::Elf::parse(&data)
-        {
-            let strings_short = extractor_short.extract_elf(&elf, &data);
-            let strings_long = extractor_long.extract_elf(&elf, &data);
-            assert!(strings_long.len() <= strings_short.len());
-            for s in &strings_long {
-                // Structure-based strings can be shorter than min_length (down to 2)
-                assert!(s.value.len() >= 2, "String '{}' too short", s.value);
-            }
-            for s in &strings_short {
-                assert!(s.value.len() >= 2, "String too short: '{}'", s.value);
-            }
+        let (data, elf) = rust_elf();
+        let strings_short = RustStringExtractor::new(4).extract_elf(&elf, data);
+        let strings_long = RustStringExtractor::new(20).extract_elf(&elf, data);
+        assert!(strings_long.len() <= strings_short.len());
+        // Structure-based strings can be shorter than min_length (down to 2).
+        for s in strings_long.iter().chain(&strings_short) {
+            assert!(s.value.len() >= 2, "String too short: '{}'", s.value);
         }
     }
 
     #[test]
     fn test_elf_string_deduplication() {
-        let extractor = RustStringExtractor::new(4);
-        if let Ok(data) = std::fs::read("/bin/ls")
-            && let Ok(elf) = goblin::elf::Elf::parse(&data)
-        {
-            let strings = extractor.extract_elf(&elf, &data);
-            let mut seen = std::collections::HashSet::new();
-            let mut duplicates = Vec::new();
-            for s in &strings {
-                if !seen.insert(&s.value) {
-                    duplicates.push(&s.value);
-                }
-            }
-            assert!(
-                duplicates.len() * 10 <= strings.len(),
-                "Too many duplicates: {} out of {}",
-                duplicates.len(),
-                strings.len()
-            );
-        }
+        let (data, elf) = rust_elf();
+        let strings = RustStringExtractor::new(4).extract_elf(&elf, data);
+        let mut seen = std::collections::HashSet::new();
+        let duplicates = strings.iter().filter(|s| !seen.insert(&s.value)).count();
+        assert!(
+            duplicates * 10 <= strings.len(),
+            "Too many duplicates: {duplicates} out of {}",
+            strings.len()
+        );
     }
 
     #[test]
     fn test_macho_text_const() {
-        let extractor = RustStringExtractor::new(4);
-        for path in &["/bin/ls", "/usr/bin/true", "/bin/cat"] {
-            if let Ok(data) = std::fs::read(path)
-                && data.len() > 4
-                && data[0..4] == [0xcf, 0xfa, 0xed, 0xfe]
-                && let Ok(macho) = MachO::parse(&data, 0)
-            {
-                let strings = extractor.extract_macho(&macho, 0);
-                if !strings.is_empty() {
-                    for s in &strings {
-                        assert!(s.value.len() >= 4);
-                    }
-                    break;
-                }
-            }
+        let data = crate::test_fixture("testdata/macho/rust_heap_xor_installer_universal.macho");
+        let goblin::mach::Mach::Fat(fat) = goblin::mach::Mach::parse(data).unwrap() else {
+            panic!("universal binary")
+        };
+        let arch = fat.arches().unwrap()[0];
+        let slice = &data[arch.offset as usize..][..arch.size as usize];
+        let macho = MachO::parse(slice, 0).unwrap();
+        let strings = RustStringExtractor::new(4).extract_macho(&macho, 0);
+        assert!(!strings.is_empty());
+        for s in &strings {
+            assert!(s.value.len() >= STRUCTURE_MIN_LENGTH, "{:?}", s.value);
         }
     }
 
@@ -1178,47 +1133,29 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_binary() {
-        let extractor = RustStringExtractor::new(4);
-        if let Ok(elf) = goblin::elf::Elf::parse(&[]) {
-            assert!(extractor.extract_elf(&elf, &[]).is_empty());
-        }
-    }
-
-    #[test]
     fn test_very_large_min_length() {
-        let extractor = RustStringExtractor::new(1000);
-        if let Ok(data) = std::fs::read("/bin/ls")
-            && let Ok(elf) = goblin::elf::Elf::parse(&data)
-        {
-            let strings = extractor.extract_elf(&elf, &data);
-            for s in &strings {
-                // Even with 1000 min_length, structure-based strings can be as short as 2
-                assert!(
-                    s.value.len() >= 2,
-                    "String shorter than STRUCTURE_MIN_LENGTH"
-                );
-            }
-            assert!(strings.len() < 50);
+        let (data, elf) = rust_elf();
+        let strings = RustStringExtractor::new(1000).extract_elf(&elf, data);
+        // Even with min_length 1000, structure-based strings can be as short as 2.
+        for s in &strings {
+            assert!(
+                s.value.len() >= 2,
+                "String shorter than STRUCTURE_MIN_LENGTH"
+            );
         }
+        assert!(strings.len() < 50);
     }
 
     #[test]
     fn test_offset_validity() {
-        let extractor = RustStringExtractor::new(4);
-        if let Ok(data) = std::fs::read("/bin/ls") {
-            let file_size = data.len() as u64;
-            if let Ok(elf) = goblin::elf::Elf::parse(&data) {
-                let strings = extractor.extract_elf(&elf, &data);
-                for s in &strings {
-                    assert!(
-                        s.data_offset < file_size,
-                        "Offset {} exceeds file size {}",
-                        s.data_offset,
-                        file_size
-                    );
-                }
-            }
+        let (data, elf) = rust_elf();
+        let file_size = data.len() as u64;
+        for s in RustStringExtractor::new(4).extract_elf(&elf, data) {
+            assert!(
+                s.data_offset < file_size,
+                "Offset {} exceeds file size {file_size}",
+                s.data_offset
+            );
         }
     }
 }

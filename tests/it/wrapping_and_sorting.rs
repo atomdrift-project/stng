@@ -1,11 +1,9 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for string wrapping and sorting functionality
 
 use std::fs;
-use std::process::Command;
 
 fn run_stng(args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_stng"))
+    let output = crate::stng()
         .args(args)
         .output()
         .expect("failed to execute stng");
@@ -14,7 +12,7 @@ fn run_stng(args: &[&str]) -> String {
 }
 
 fn run_stng_stderr(args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_stng"))
+    let output = crate::stng()
         .args(args)
         .output()
         .expect("failed to execute stng");
@@ -25,9 +23,8 @@ fn run_stng_stderr(args: &[&str]) -> String {
 #[test]
 fn test_text_file_offset_sorting() {
     // Create a temporary text file with known content
-    let test_file = "/tmp/stng_test_sorting.txt";
     let content = "First line\nSecond line\nThird line with more content\n";
-    fs::write(test_file, content).expect("failed to write test file");
+    let test_file = crate::common::temp_file("sorting.txt", content);
 
     let output = run_stng(&[test_file]);
 
@@ -64,9 +61,8 @@ fn test_text_file_offset_sorting() {
 #[test]
 fn test_string_wrapping_long_lines() {
     // Create a file with a very long line
-    let test_file = "/tmp/stng_test_wrapping.txt";
     let long_line = "A".repeat(200);
-    fs::write(test_file, &long_line).expect("failed to write test file");
+    let test_file = crate::common::temp_file("wrapping.txt", &long_line);
 
     let output = run_stng(&[test_file]);
 
@@ -91,12 +87,11 @@ fn test_string_wrapping_long_lines() {
 #[test]
 fn test_offset_calculation_multiline() {
     // Create a file with multiple lines of known lengths
-    let test_file = "/tmp/stng_test_offsets.txt";
     // Line 1: "AAAA\n" = 5 bytes (offset 0)
     // Line 2: "BBBBBBBB\n" = 9 bytes (offset 5)
     // Line 3: "CCCC\n" = 5 bytes (offset 14 = 0xe)
     let content = "AAAA\nBBBBBBBB\nCCCC\n";
-    fs::write(test_file, content).expect("failed to write test file");
+    let test_file = crate::common::temp_file("offsets.txt", content);
 
     let output = run_stng(&[test_file]);
 
@@ -128,10 +123,9 @@ fn test_offset_calculation_multiline() {
 #[test]
 fn test_utf8_wrapping() {
     // Create a file with UTF-8 characters to ensure proper byte boundary handling
-    let test_file = "/tmp/stng_test_utf8.txt";
     // Each emoji is 4 bytes in UTF-8
     let content = "🔥".repeat(50); // 200 bytes
-    fs::write(test_file, content).expect("failed to write test file");
+    let test_file = crate::common::temp_file("utf8.txt", content);
 
     let output = run_stng(&[test_file]);
 
@@ -148,11 +142,10 @@ fn test_utf8_wrapping() {
 
 #[test]
 fn test_empty_file() {
-    let test_file = "/tmp/stng_test_empty.txt";
-    fs::write(test_file, "").expect("failed to write test file");
+    let test_file = crate::common::temp_file("empty.txt", "");
 
     // Run command and capture both stdout and stderr
-    let output_result = Command::new(env!("CARGO_BIN_EXE_stng"))
+    let output_result = crate::stng()
         .arg(test_file)
         .output()
         .expect("failed to execute stng");
@@ -173,9 +166,8 @@ fn test_empty_file() {
 #[test]
 fn test_single_long_line_wrapping() {
     // Create a file with a single very long line to test wrapping
-    let test_file = "/tmp/stng_test_single_long.txt";
     let long_line = "X".repeat(300);
-    fs::write(test_file, long_line).expect("failed to write test file");
+    let test_file = crate::common::temp_file("single_long.txt", long_line);
 
     let output = run_stng(&[test_file]);
 
@@ -219,9 +211,8 @@ fn test_single_long_line_wrapping() {
 
 #[test]
 fn test_sorting_preserves_all_strings() {
-    let test_file = "/tmp/stng_test_count.txt";
     let content = "line1\nline2\nline3\nline4\nline5\n";
-    fs::write(test_file, content).expect("failed to write test file");
+    let test_file = crate::common::temp_file("count.txt", content);
 
     let output = run_stng(&[test_file]);
 
@@ -246,9 +237,8 @@ fn test_sorting_preserves_all_strings() {
 
 #[test]
 fn test_flat_mode_sorting() {
-    let test_file = "/tmp/stng_test_flat.txt";
     let content = "First\nSecond\nThird\n";
-    fs::write(test_file, content).expect("failed to write test file");
+    let test_file = crate::common::temp_file("flat.txt", content);
 
     let output = run_stng(&["--flat", test_file]);
 

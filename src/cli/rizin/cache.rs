@@ -293,7 +293,6 @@ fn sanitize_command_for_filename(cmd: &str) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -332,17 +331,12 @@ mod tests {
     }
 }
 
-/// Moved from `tests/` when this module moved from the library to the CLI.
+/// Each test gets a private cache directory; none touches the user's cache.
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod behavior_tests {
     use super::*;
-    /// Comprehensive tests for r2 cache functionality
-    /// Covers src/r2/cache.rs (~245 lines, 0% → 80% coverage)
     use std::fs;
     use std::path::PathBuf;
-
-    // Re-export cache types for testing
 
     // Helper to create a unique temporary file path
     fn temp_file_path(prefix: &str) -> PathBuf {
@@ -640,7 +634,7 @@ mod behavior_tests {
     fn test_cache_nonexistent_file() {
         let (cache, cache_dir) = test_cache("nonexistent_cache");
 
-        let fake_path = "/tmp/nonexistent_file_12345678.bin";
+        let fake_path = "/nonexistent/cache_test.bin";
 
         // Get should return None
         let result = cache.get(fake_path, "isj");

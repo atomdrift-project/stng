@@ -1,14 +1,8 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use stng::{ExtractOptions, StringKind};
 
 #[test]
 fn test_stack_strings_poolrat() {
     let sample_path = crate::common::path("testdata/malware/poolrat");
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - malware sample not found at {sample_path}");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read malware sample");
 
@@ -20,11 +14,6 @@ fn test_stack_strings_poolrat() {
         .filter(|s| s.kind == Some(StringKind::StackString))
         .map(|s| s.value.as_str())
         .collect();
-
-    println!("Found {} stack strings", stack_strings.len());
-    for s in &stack_strings {
-        println!("  - {s}");
-    }
 
     // Verify User-Agent extraction (byte-by-byte stack construction)
     // "Mozilla/5.0 (Windows NT 6.1; Trident/6.0)"

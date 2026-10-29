@@ -12,8 +12,6 @@
 //! This binary requires no radare2/rizin: the boundaries come entirely from
 //! stng's own instruction-pattern analysis.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use stng::{ExtractOptions, StringKind, extract_strings_with_options};
 
 static SAMPLE: std::sync::LazyLock<&str> =
@@ -27,10 +25,6 @@ fn load_strings() -> Vec<stng::ExtractedString> {
 
 #[test]
 fn pe_inline_shell_command_recovered_without_r2() {
-    if !std::path::Path::new(*SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {}", *SAMPLE);
-        return;
-    }
     let strings = load_strings();
 
     // Each MBR-wipe variant must appear as its own bounded string (not merely

@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 
 /// Integration test against rtc.dll — a PE binary that uses XOR 0xC6 to hide

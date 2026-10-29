@@ -9,7 +9,6 @@
 //! STNG_GOLDEN_DUMP=dir cargo test --test it golden  # write full output to dir, skip the check
 //! scripts/golden-diff [rev]                      # diff full output against rev
 //! ```
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
@@ -20,14 +19,13 @@ use stng::{ExtractOptions, ExtractedString};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 const MANIFEST: &str = "tests/golden.tsv";
-const FIXTURES: &str = "testdata";
 
-/// The option sets under test: what filefacts passes for code, and the plain
-/// library default.
+/// The option sets under test: a caller that parses symbols itself and wants
+/// filtered output, and the plain library default.
 fn configs() -> [(&'static str, ExtractOptions); 2] {
     [
         (
-            "filefacts",
+            "symbols_provided",
             ExtractOptions::new(4)
                 .with_garbage_filter(true)
                 .with_caller_provides_symbols(true)
@@ -35,31 +33,6 @@ fn configs() -> [(&'static str, ExtractOptions); 2] {
         ),
         ("default", ExtractOptions::new(4)),
     ]
-}
-
-/// Fixture paths relative to the crate root, without any `.gz` suffix.
-fn fixtures() -> Vec<String> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else {
-                out.push(path);
-            }
-        }
-    }
-    let mut paths = Vec::new();
-    walk(&Path::new(ROOT).join(FIXTURES), &mut paths);
-    let mut rels: Vec<String> = paths
-        .iter()
-        .map(|p| {
-            let rel = p.strip_prefix(ROOT).unwrap().to_str().unwrap();
-            rel.strip_suffix(".gz").unwrap_or(rel).to_owned()
-        })
-        .collect();
-    rels.sort();
-    rels
 }
 
 /// One JSON line per string, ordered by offset then content, so the text is
@@ -105,7 +78,7 @@ fn write_dump(dir: &Path, config: &str, rel: &str, lines: &[String]) {
 fn output_matches_golden_manifest() {
     let dump = std::env::var_os("STNG_GOLDEN_DUMP").map(PathBuf::from);
     let mismatch_dir = Path::new(ROOT).join("target/golden/actual");
-    let fixtures = fixtures();
+    let fixtures = crate::common::fixtures();
     let configs = configs();
 
     let jobs: Vec<(&str, &ExtractOptions, &str)> = configs

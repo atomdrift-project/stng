@@ -1,21 +1,8 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for language and file type detection (detect.rs, binary.rs detection functions).
 
-use std::path::Path;
+use crate::common::minimal_elf_header;
 use stng::script::detect::{ScriptLanguage, detect_script_language};
 use stng::{detect_language, is_go_binary, is_rust_binary, is_text_file};
-
-fn minimal_elf_header() -> Vec<u8> {
-    let mut data = vec![0u8; 512];
-    data[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
-    data[4] = 2; // 64-bit
-    data[5] = 1; // little-endian
-    data[6] = 1; // version
-    data[16..18].copy_from_slice(&[2, 0]); // ET_EXEC
-    data[18..20].copy_from_slice(&[0x3E, 0]); // EM_X86_64
-    data[20..24].copy_from_slice(&[1, 0, 0, 0]); // EV_CURRENT
-    data
-}
 
 #[test]
 fn test_detect_language_plain_text() {
@@ -194,9 +181,6 @@ fn test_is_rust_binary_false_for_text() {
 #[test]
 fn test_detect_language_with_real_go_binary() {
     let path = crate::common::path("testdata/elf/hello_linux_amd64");
-    if !Path::new(path).exists() {
-        return; // Skip if fixture not available
-    }
     let data = std::fs::read(path).expect("Failed to read test binary");
     assert_eq!(
         detect_language(&data),
@@ -208,9 +192,6 @@ fn test_detect_language_with_real_go_binary() {
 #[test]
 fn test_is_go_binary_true_for_real_go_binary() {
     let path = crate::common::path("testdata/elf/hello_linux_amd64");
-    if !Path::new(path).exists() {
-        return;
-    }
     let data = std::fs::read(path).expect("Failed to read test binary");
     assert!(
         is_go_binary(&data),
@@ -221,9 +202,6 @@ fn test_is_go_binary_true_for_real_go_binary() {
 #[test]
 fn test_is_rust_binary_false_for_go_binary() {
     let path = crate::common::path("testdata/elf/hello_linux_amd64");
-    if !Path::new(path).exists() {
-        return;
-    }
     let data = std::fs::read(path).expect("Failed to read test binary");
     assert!(
         !is_rust_binary(&data),

@@ -1,11 +1,9 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! CLI integration tests for stng.
 
-use std::path::Path;
 use std::process::Command;
 
 fn stng_cmd() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_stng"))
+    crate::stng()
 }
 
 #[test]
@@ -86,20 +84,12 @@ fn test_cli_detect_language_unknown() {
 
 #[test]
 fn test_cli_json_output() {
-    // Use a real binary like /bin/ls if available
-    let binary_path = if Path::new("/bin/ls").exists() {
-        "/bin/ls".to_string()
-    } else if Path::new("/usr/bin/ls").exists() {
-        "/usr/bin/ls".to_string()
-    } else {
-        // Skip on systems without ls
-        return;
-    };
+    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     let output = stng_cmd()
         .arg("--json")
         .arg("--no-r2")
-        .arg(&binary_path)
+        .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
 
@@ -128,18 +118,12 @@ fn test_cli_decodes_vbscript_encoder_in_binary_classified_asp() {
 
 #[test]
 fn test_cli_simple_output() {
-    let binary_path = if Path::new("/bin/ls").exists() {
-        "/bin/ls".to_string()
-    } else if Path::new("/usr/bin/ls").exists() {
-        "/usr/bin/ls".to_string()
-    } else {
-        return;
-    };
+    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     let output = stng_cmd()
         .arg("--simple")
         .arg("--no-r2")
-        .arg(&binary_path)
+        .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
 
@@ -152,17 +136,13 @@ fn test_cli_simple_output() {
 
 #[test]
 fn test_cli_min_length() {
-    let binary_path = if Path::new("/bin/ls").exists() {
-        "/bin/ls".to_string()
-    } else {
-        return;
-    };
+    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     // Run with min_length 4 (default)
     let output_default = stng_cmd()
         .arg("--json")
         .arg("--no-r2")
-        .arg(&binary_path)
+        .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
 
@@ -172,7 +152,7 @@ fn test_cli_min_length() {
         .arg("20")
         .arg("--json")
         .arg("--no-r2")
-        .arg(&binary_path)
+        .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
 
@@ -193,17 +173,13 @@ fn test_cli_min_length() {
 
 #[test]
 fn test_cli_unfiltered() {
-    let binary_path = if Path::new("/bin/ls").exists() {
-        "/bin/ls".to_string()
-    } else {
-        return;
-    };
+    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     // Run without --unfiltered
     let output1 = stng_cmd()
         .arg("--json")
         .arg("--no-r2")
-        .arg(&binary_path)
+        .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
 
@@ -212,7 +188,7 @@ fn test_cli_unfiltered() {
         .arg("--json")
         .arg("--no-r2")
         .arg("--unfiltered")
-        .arg(&binary_path)
+        .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
 
@@ -230,16 +206,12 @@ fn test_cli_unfiltered() {
 
 #[test]
 fn test_cli_flat_output() {
-    let binary_path = if Path::new("/bin/ls").exists() {
-        "/bin/ls".to_string()
-    } else {
-        return;
-    };
+    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     let output = stng_cmd()
         .arg("--flat")
         .arg("--no-r2")
-        .arg(&binary_path)
+        .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
 
@@ -252,16 +224,12 @@ fn test_cli_flat_output() {
 
 #[test]
 fn test_cli_no_r2() {
-    let binary_path = if Path::new("/bin/ls").exists() {
-        "/bin/ls".to_string()
-    } else {
-        return;
-    };
+    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     let output = stng_cmd()
         .arg("--no-r2")
         .arg("--json")
-        .arg(&binary_path)
+        .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
 
@@ -455,13 +423,7 @@ fn test_cli_simple_mode_trims_newlines() {
 
 #[test]
 fn test_cli_interesting_flag() {
-    let binary_path = if std::path::Path::new("/bin/ls").exists() {
-        "/bin/ls"
-    } else if std::path::Path::new("/usr/bin/ls").exists() {
-        "/usr/bin/ls"
-    } else {
-        return;
-    };
+    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     let output = stng_cmd()
         .arg("--interesting")
@@ -484,13 +446,7 @@ fn test_cli_interesting_flag() {
 
 #[test]
 fn test_cli_no_xor_flag() {
-    let binary_path = if std::path::Path::new("/bin/ls").exists() {
-        "/bin/ls"
-    } else if std::path::Path::new("/usr/bin/ls").exists() {
-        "/usr/bin/ls"
-    } else {
-        return;
-    };
+    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     let output = stng_cmd()
         .arg("--no-xor")
@@ -534,13 +490,7 @@ fn test_cli_debug_flag_does_not_crash() {
 
 #[test]
 fn test_cli_xor_min_length_respected() {
-    let binary_path = if std::path::Path::new("/bin/ls").exists() {
-        "/bin/ls"
-    } else if std::path::Path::new("/usr/bin/ls").exists() {
-        "/usr/bin/ls"
-    } else {
-        return;
-    };
+    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     let output = stng_cmd()
         .arg("--json")
@@ -560,12 +510,8 @@ fn test_cli_xor_min_length_respected() {
 /// rizin's connect()-site scan recovers Kimwolf's C2 sockaddr, which stng's
 /// own passes do not; the CLI runs rizin and hands the result to extraction.
 #[test]
+#[ignore = "requires rizin; `make test` runs it when rizin or r2 is installed"]
 fn rizin_recovers_kimwolf_connect_address() {
-    let rizin = Command::new("rizin").arg("-v").output();
-    if !rizin.is_ok_and(|o| o.status.success()) {
-        eprintln!("skipping: rizin is not installed");
-        return;
-    }
     let output = stng_cmd()
         .args(["--json", "--no-cache"])
         .arg(crate::common::path("testdata/malware/kimwolf_installer"))

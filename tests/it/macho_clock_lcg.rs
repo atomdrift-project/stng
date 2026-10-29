@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Regression for a Mach-O LCG-XOR command whose modulus comes from HH:MM:SS.
 //! The specimen is inspected as inert data; no command or script is run.
 use goblin::{

@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Native (no-radare2) PE import recovery.
 //!
 //! PE import names live behind RVA tables in the import directory, not as

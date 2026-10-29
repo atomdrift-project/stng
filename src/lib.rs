@@ -1031,7 +1031,7 @@ fn should_deobfuscate_script(data: &[u8], strings: &[ExtractedString]) -> bool {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use stng::{extract_strings_with_options, ExtractOptions};
 ///
 /// let data = std::fs::read("/bin/ls").unwrap();

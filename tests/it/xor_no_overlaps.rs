@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Test to ensure XOR extraction doesn't produce overlapping strings
 ///
 /// When scanning for XOR strings, we should avoid extracting multiple
@@ -142,8 +141,6 @@ fn test_brew_agent_no_overlaps() {
         .iter()
         .filter(|s| s.method == StringMethod::XorDecode)
         .collect();
-
-    println!("Found {} XOR strings in brew_agent", xor_strings.len());
 
     // Check for overlaps
     for (i, s1) in xor_strings.iter().enumerate() {

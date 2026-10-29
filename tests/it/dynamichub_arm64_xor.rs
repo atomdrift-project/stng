@@ -1,14 +1,8 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use stng::{ExtractOptions, StringKind, StringMethod};
 
 #[test]
 fn test_dynamichub_arm64_stack_xor_system_arg() {
     let sample_path = crate::common::path("testdata/malware/dynamichub/DynamicHub");
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - DynamicHub sample not found at {sample_path}");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("failed to read DynamicHub sample");
     let opts = ExtractOptions::new(4);

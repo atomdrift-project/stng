@@ -14,10 +14,8 @@ mod common;
 
 use rayon::prelude::*;
 use std::panic::{self, AssertUnwindSafe};
-use std::path::Path;
 use std::sync::Mutex;
 
-const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 const DEFAULT_MUTANTS: u64 = 4;
 
 /// xorshift64*: a deterministic stream, so a failing (fixture, seed) pair
@@ -87,24 +85,6 @@ fn mutate(data: &[u8], seed: u64) -> Vec<u8> {
     out
 }
 
-fn fixtures() -> Vec<String> {
-    fn walk(dir: &Path, out: &mut Vec<String>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else {
-                let rel = path.strip_prefix(ROOT).unwrap().to_str().unwrap();
-                out.push(rel.strip_suffix(".gz").unwrap_or(rel).to_owned());
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(&Path::new(ROOT).join("testdata"), &mut out);
-    out.sort();
-    out
-}
-
 #[test]
 fn mutated_fixtures_never_panic() {
     let mutants: u64 = std::env::var("STNG_MUTANTS")
@@ -129,7 +109,7 @@ fn mutated_fixtures_never_panic() {
         WHERE.lock().unwrap().push(format!("{at}: {msg}"));
     }));
 
-    let jobs: Vec<(String, u64)> = fixtures()
+    let jobs: Vec<(String, u64)> = common::fixtures()
         .into_iter()
         .filter(|rel| rel.contains(&filter))
         .flat_map(|rel| (0..mutants).map(move |seed| (rel.clone(), seed)))

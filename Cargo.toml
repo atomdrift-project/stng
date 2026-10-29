@@ -245,7 +245,7 @@ manual_let_else = "warn"                 # match/if-let that diverges → let-el
 match_same_arms = "warn"                 # merge identical match arms
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports"] }
 sha2 = "0.11"
 
 [[bench]]

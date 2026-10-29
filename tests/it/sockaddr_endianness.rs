@@ -8,12 +8,7 @@
 //! Windows/PE) and a true little-endian one (which must still be reported), as
 //! well as several registry strings.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::cast_possible_truncation
-)]
+#![allow(clippy::cast_possible_truncation)]
 
 use stng::{ExtractOptions, StringKind, classify_string, extract_strings_with_options};
 

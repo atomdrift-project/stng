@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Go function names from Mach-O `__gopclntab`.
 //!
 //! ELF and PE Go binaries have always yielded their `pkg.Function` names from

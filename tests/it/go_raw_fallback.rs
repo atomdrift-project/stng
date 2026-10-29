@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for Go binary raw scan fallback.
 //!
 //! Go shared libraries (cgo) often lack .gopclntab and store strings in

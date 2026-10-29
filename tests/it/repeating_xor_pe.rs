@@ -1,7 +1,5 @@
 //! Whole-file repeating-XOR PE recovery (`stng::recover_repeating_xor_pe`).
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use stng::recover_repeating_xor_pe;
 
 /// MSVC console PE32+ (AMD64), 10 KiB.
@@ -278,7 +276,6 @@ fn cost_is_independent_of_size() {
     };
     let small = fastest(&noise(91, 4 << 10));
     let big = fastest(&noise(91, 64 << 20));
-    eprintln!("recover_repeating_xor_pe: {small:?}/call on 4 KiB, {big:?}/call on 64 MiB");
     // Work proportional to the input would make 64 MiB 16384 times slower.
     assert!(big < small * 4, "{small:?} on 4 KiB, {big:?} on 64 MiB");
 }

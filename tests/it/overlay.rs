@@ -1,25 +1,16 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for ELF overlay/appended data detection (overlay.rs).
 
-use std::path::Path;
 use stng::{StringKind, detect_elf_overlay, extract_overlay_strings};
 
-fn read_hello_linux() -> Option<Vec<u8>> {
-    let path = crate::common::path("testdata/elf/hello_linux_amd64");
-    if Path::new(path).exists() {
-        Some(std::fs::read(path).expect("Failed to read hello_linux_amd64"))
-    } else {
-        None
-    }
+fn read_hello_linux() -> Vec<u8> {
+    crate::common::bytes("testdata/elf/hello_linux_amd64")
 }
 
 // ── detect_elf_overlay ──────────────────────────────────────────────────────
 
 #[test]
 fn test_no_overlay_on_clean_elf() {
-    let Some(data) = read_hello_linux() else {
-        return;
-    };
+    let data = read_hello_linux();
     assert!(
         detect_elf_overlay(&data).is_none(),
         "Unmodified ELF binary should have no overlay"
@@ -28,9 +19,7 @@ fn test_no_overlay_on_clean_elf() {
 
 #[test]
 fn test_overlay_detected_when_data_appended() {
-    let Some(mut data) = read_hello_linux() else {
-        return;
-    };
+    let mut data = read_hello_linux();
     // 200 bytes of payload — well above the 16-byte minimum threshold
     let payload = b"AppendedPayloadData: injected content 1234567890.".repeat(4);
     data.extend_from_slice(&payload);
@@ -44,9 +33,7 @@ fn test_overlay_detected_when_data_appended() {
 
 #[test]
 fn test_overlay_size_and_start_offset_accurate() {
-    let Some(mut data) = read_hello_linux() else {
-        return;
-    };
+    let mut data = read_hello_linux();
     let original_size = data.len();
 
     let payload = b"OverlaySizeCheckPayload0123456789"; // 32 bytes, well above threshold
@@ -69,9 +56,7 @@ fn test_overlay_size_and_start_offset_accurate() {
 
 #[test]
 fn test_overlay_below_16_byte_threshold_not_reported() {
-    let Some(mut data) = read_hello_linux() else {
-        return;
-    };
+    let mut data = read_hello_linux();
     // 10 bytes — below the minimum of 16 (avoids false positives from alignment padding)
     data.extend_from_slice(b"ShortData1");
 
@@ -83,9 +68,7 @@ fn test_overlay_below_16_byte_threshold_not_reported() {
 
 #[test]
 fn test_overlay_exactly_16_bytes_is_detected() {
-    let Some(mut data) = read_hello_linux() else {
-        return;
-    };
+    let mut data = read_hello_linux();
     data.extend_from_slice(b"Exactly16BytesOK"); // exactly 16 bytes
 
     assert!(
@@ -117,9 +100,7 @@ fn test_detect_overlay_returns_none_for_empty() {
 
 #[test]
 fn test_extract_overlay_strings_clean_elf_is_empty() {
-    let Some(data) = read_hello_linux() else {
-        return;
-    };
+    let data = read_hello_linux();
     let strings = extract_overlay_strings(&data, 4);
     assert!(
         strings.is_empty(),
@@ -129,9 +110,7 @@ fn test_extract_overlay_strings_clean_elf_is_empty() {
 
 #[test]
 fn test_extract_overlay_strings_with_appended_payload() {
-    let Some(mut data) = read_hello_linux() else {
-        return;
-    };
+    let mut data = read_hello_linux();
     // Long enough printable content to produce extractable strings
     let payload =
         b"OverlayPayloadContent: injected_string_value_for_test_extraction_here".repeat(3);
@@ -146,9 +125,7 @@ fn test_extract_overlay_strings_with_appended_payload() {
 
 #[test]
 fn test_overlay_string_offsets_are_in_overlay_region() {
-    let Some(mut data) = read_hello_linux() else {
-        return;
-    };
+    let mut data = read_hello_linux();
     let original_size = data.len() as u64;
 
     let payload =
@@ -173,9 +150,7 @@ fn test_overlay_string_offsets_are_in_overlay_region() {
 
 #[test]
 fn test_overlay_generic_strings_have_overlay_kind() {
-    let Some(mut data) = read_hello_linux() else {
-        return;
-    };
+    let mut data = read_hello_linux();
     let payload =
         b"GenericOverlayText: this content should be classified as generic overlay kind".repeat(3);
     data.extend_from_slice(&payload);
@@ -194,9 +169,7 @@ fn test_overlay_generic_strings_have_overlay_kind() {
 
 #[test]
 fn test_overlay_url_ioc_preserves_classification() {
-    let Some(mut data) = read_hello_linux() else {
-        return;
-    };
+    let mut data = read_hello_linux();
     // A URL embedded in overlay data should be classified as Url, not generic Overlay
     let padding = b"\x00".repeat(20); // ensure some separation
     let url = b"http://malware.example.com/payload/download";
@@ -226,9 +199,6 @@ fn test_overlay_url_ioc_preserves_classification() {
 fn test_extract_overlay_strings_non_elf_returns_empty() {
     // PE data — no ELF overlay possible
     let path = crate::common::path("testdata/pe/hello_windows.exe");
-    if !Path::new(path).exists() {
-        return;
-    }
     let data = std::fs::read(path).expect("Failed to read hello_windows.exe");
     let strings = extract_overlay_strings(&data, 4);
     assert!(

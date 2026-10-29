@@ -7,13 +7,14 @@
 use flate2::read::GzDecoder;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// Absolute path of the sample at `rel` (relative to the crate root, without
 /// `.gz`), inflating it on first use. Plain files that were never compressed
-/// resolve to themselves. Missing samples resolve to a path that does not
-/// exist, so tests that skip absent fixtures keep doing so.
+/// resolve to themselves. A missing sample panics: every fixture is tracked,
+/// so absence is a broken test, never a reason to skip.
 pub(crate) fn path(rel: &str) -> &'static str {
     let plain = Path::new(ROOT).join(rel);
     let packed = Path::new(ROOT).join(format!("{rel}.gz"));
@@ -23,10 +24,79 @@ pub(crate) fn path(rel: &str) -> &'static str {
             &packed,
             &Path::new(ROOT).join("target/testdata").join(rel),
         )
-    } else {
+    } else if plain.exists() {
         plain
+    } else {
+        panic!("missing test fixture: {rel}");
     };
     Box::leak(resolved.to_string_lossy().into_owned().into_boxed_str())
+}
+
+/// Writes `contents` to a file private to this test process and returns its
+/// path. Files live under the target directory and are removed by
+/// `cargo clean`.
+pub(crate) fn temp_file(name: &str, contents: impl AsRef<[u8]>) -> &'static str {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let path = scratch_dir().join(format!(
+        "{}-{}-{name}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&path, contents).expect("write temp file");
+    Box::leak(path.to_string_lossy().into_owned().into_boxed_str())
+}
+
+/// A directory under `target/` for files tests create.
+pub(crate) fn scratch_dir() -> PathBuf {
+    let dir = Path::new(ROOT).join("target/tmp/stng-tests");
+    std::fs::create_dir_all(&dir).expect("create test scratch directory");
+    dir
+}
+
+/// Every sample under `testdata/`, relative to the crate root and without
+/// any `.gz` suffix, sorted. Provenance notes, expected-output files and the
+/// sources the samples were built from are not samples.
+pub(crate) fn fixtures() -> Vec<String> {
+    fn is_sample(rel: &str) -> bool {
+        !(rel.ends_with(".md")
+            || rel.ends_with("_expected.json")
+            || rel.ends_with(".go")
+            || rel.ends_with("/go.mod")
+            || rel.contains("/src/")
+            || rel.contains("/build/"))
+    }
+    fn walk(dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read testdata") {
+            let path = entry.expect("testdata entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else {
+                let rel = path.strip_prefix(ROOT).expect("under crate root");
+                let rel = rel.to_str().expect("UTF-8 fixture path");
+                let rel = rel.strip_suffix(".gz").unwrap_or(rel);
+                if is_sample(rel) {
+                    out.push(rel.to_owned());
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&Path::new(ROOT).join("testdata"), &mut out);
+    out.sort();
+    out
+}
+
+/// A 512-byte 64-bit little-endian x86-64 ELF header with no sections.
+pub(crate) fn minimal_elf_header() -> Vec<u8> {
+    let mut data = vec![0u8; 512];
+    data[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+    data[4] = 2; // 64-bit
+    data[5] = 1; // little-endian
+    data[6] = 1; // version
+    data[16..18].copy_from_slice(&[2, 0]); // ET_EXEC
+    data[18..20].copy_from_slice(&[0x3E, 0]); // EM_X86_64
+    data[20..24].copy_from_slice(&[1, 0, 0, 0]); // EV_CURRENT
+    data
 }
 
 /// Bytes as lowercase hex, for comparing digests.

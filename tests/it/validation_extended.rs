@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Extended validation tests for edge cases and special patterns.
 //!
 //! These tests complement the existing validation tests in src/validation.rs

@@ -325,45 +325,6 @@ fn decode_base64_fuzzy(input: &str) -> Option<String> {
     None
 }
 
-#[cfg(test)]
-mod fragment_tests {
-    use super::*;
-
-    /// A payload split across several literals leaves each piece with an
-    /// arbitrary length mod 4. Padding cannot rescue a remainder of 1, so
-    /// before the prefix fallback the whole chunk was lost.
-    #[test]
-    fn recovers_leading_fragment_of_split_payload() {
-        use base64::Engine;
-        let payload = "import os\nimport threading\nfrom urllib.request import urlopen\n\
-                       hook = \"https://discord.com/api/webhooks/1088/abc\"\n";
-        let full = base64::engine::general_purpose::STANDARD.encode(payload);
-        // Cut so the fragment length is 1 past a multiple of four -- the case
-        // no padding can make legal.
-        let mut cut = full.len() - 8;
-        while cut % 4 != 1 {
-            cut -= 1;
-        }
-        let fragment = &full[..cut];
-        assert_eq!(fragment.len() % 4, 1);
-        let out = decode_base64_fuzzy(fragment).expect("leading fragment should decode");
-        assert!(out.contains("import os"), "got: {out:.60}");
-        assert!(out.contains("discord.com/api/webhooks"));
-    }
-
-    /// The fallback must not turn arbitrary text into a "decoded" string just
-    /// because trimming it produced a length divisible by four.
-    #[test]
-    fn truncation_does_not_manufacture_decodings() {
-        for v in [
-            "the quick brown fox jumps over the lazy dog and keeps running onwards",
-            "/usr/local/share/doc/example/README.markdown.and.more.text.here.txt",
-        ] {
-            assert!(decode_base64_fuzzy(v).is_none(), "should not decode: {v}");
-        }
-    }
-}
-
 /// Check if decoded string looks meaningful (not garbage)
 fn is_meaningful_decoded(s: &str) -> bool {
     if s.len() < 10 {
@@ -428,24 +389,18 @@ mod tests {
         let input = "ZnVuY3Rpb24gcG93ZXJzaGVsbCAtY29tbWFuZCBpbnZva2' + 'A' + 'ZS1leHByZXNzaW9u";
         let result = try_deobfuscate_js_base64(input);
 
-        // May not decode if requirements not met, that's OK
-        if let Some(decoded) = result {
-            assert!(
-                decoded.to_lowercase().contains("function")
-                    || decoded.to_lowercase().contains("powershell")
-            );
-        }
+        let decoded = result.expect("split base64 should decode");
+        assert!(decoded.contains("powershell"), "{decoded:?}");
     }
 
     #[test]
+    #[ignore = "known gap: whitespace joins surrounding words into the segment (REDFLAGS_AUDIT P6.12)"]
     fn test_fuzzy_extract() {
         // Must have >= MIN_BASE64_SEGMENT (32 chars) and decode to meaningful content (>= 10 chars, >= 60% printable)
         // "function powershell script code" in base64
         let input = "xxx ZnVuY3Rpb24gcG93ZXJzaGVsbCBzY3JpcHQgY29kZQ== yyy";
-        let result = try_fuzzy_extract(input);
-        // May not decode if is_meaningful_decoded requirements not met
-        // Just verify no panic
-        let _ = result;
+        let decoded = try_fuzzy_extract(input).expect("embedded base64 should decode");
+        assert!(decoded.contains("powershell script"), "{decoded:?}");
     }
 
     #[test]
@@ -458,5 +413,44 @@ mod tests {
         assert!(!is_base64_like("not base64!!!", 0.8));
         assert!(!is_base64_like("short", 0.8));
         assert!(!is_base64_like("SGVsbG8gV29ybGQhCg==", 0.8)); // Too short (20 chars < 32)
+    }
+}
+
+#[cfg(test)]
+mod fragment_tests {
+    use super::*;
+
+    /// A payload split across several literals leaves each piece with an
+    /// arbitrary length mod 4. Padding cannot rescue a remainder of 1, so
+    /// before the prefix fallback the whole chunk was lost.
+    #[test]
+    fn recovers_leading_fragment_of_split_payload() {
+        use base64::Engine;
+        let payload = "import os\nimport threading\nfrom urllib.request import urlopen\n\
+                       hook = \"https://discord.com/api/webhooks/1088/abc\"\n";
+        let full = base64::engine::general_purpose::STANDARD.encode(payload);
+        // Cut so the fragment length is 1 past a multiple of four -- the case
+        // no padding can make legal.
+        let mut cut = full.len() - 8;
+        while cut % 4 != 1 {
+            cut -= 1;
+        }
+        let fragment = &full[..cut];
+        assert_eq!(fragment.len() % 4, 1);
+        let out = decode_base64_fuzzy(fragment).expect("leading fragment should decode");
+        assert!(out.contains("import os"), "got: {out:.60}");
+        assert!(out.contains("discord.com/api/webhooks"));
+    }
+
+    /// The fallback must not turn arbitrary text into a "decoded" string just
+    /// because trimming it produced a length divisible by four.
+    #[test]
+    fn truncation_does_not_manufacture_decodings() {
+        for v in [
+            "the quick brown fox jumps over the lazy dog and keeps running onwards",
+            "/usr/local/share/doc/example/README.markdown.and.more.text.here.txt",
+        ] {
+            assert!(decode_base64_fuzzy(v).is_none(), "should not decode: {v}");
+        }
     }
 }

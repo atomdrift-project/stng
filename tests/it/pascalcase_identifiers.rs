@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Regression test: PascalCase symbol names must not be filtered as chaotic.
 //!
 //! Pre-fix, the chaotic-pattern detector inside `is_garbage` rejected

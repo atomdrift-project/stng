@@ -1,6 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
-use std::path::Path;
 use stng::{
     ExtractOptions, ExtractedString, IocKind, StringKind, StringMethod, extract_iocs,
     extract_strings_with_options,
@@ -145,12 +142,9 @@ fn malformed_network_shapes_never_emit() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "reads Unix system binaries")]
 fn clean_system_binary_iocs_have_structural_evidence() {
     for path in ["/bin/ls", "/bin/cat"] {
-        if !Path::new(path).exists() {
-            eprintln!("Skipping: {path} not found");
-            continue;
-        }
         let data = std::fs::read(path).unwrap();
         let strings = extract_strings_with_options(&data, &ExtractOptions::new(10));
         let iocs = extract_iocs(&strings);

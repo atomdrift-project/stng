@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Go string literals stored as `{ptr, len}` pairs rather than passed to a call.
 //!
 //! A non-escaping `[]string` of constants is built on the stack: on arm64 each

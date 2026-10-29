@@ -2550,16 +2550,7 @@ mod tests {
         ];
 
         for (s, desc) in test_cases {
-            if !is_garbage(s) {
-                eprintln!(
-                    "FAILED: {} - String: {:?}, len={}, chars={}",
-                    desc,
-                    s,
-                    s.len(),
-                    s.chars().count()
-                );
-            }
-            assert!(is_garbage(s), "{}", desc);
+            assert!(is_garbage(s), "{desc}: {s:?}");
         }
     }
 
@@ -3462,39 +3453,6 @@ mod dotnet_tests {
             "non-x86 arch must override code section"
         );
     }
-
-    // ─── arch parsing ────────────────────────────────────────────────
-
-    #[test]
-    fn test_arch_from_name() {
-        use crate::types::Arch;
-        assert_eq!(Arch::from_name("x86_64"), Some(Arch::X86_64));
-        assert_eq!(Arch::from_name("amd64"), Some(Arch::X86_64));
-        assert_eq!(Arch::from_name("x64"), Some(Arch::X86_64));
-        assert_eq!(Arch::from_name("aarch64"), Some(Arch::Aarch64));
-        assert_eq!(Arch::from_name("arm64"), Some(Arch::Aarch64));
-        assert_eq!(Arch::from_name("arm"), Some(Arch::Arm));
-        assert_eq!(Arch::from_name("riscv64"), Some(Arch::RiscV64));
-        assert_eq!(Arch::from_name("mips"), Some(Arch::Mips));
-        assert_eq!(Arch::from_name("powerpc"), Some(Arch::PowerPc));
-        assert_eq!(Arch::from_name("wasm"), Some(Arch::Wasm));
-        // Unknown returns None so callers fall back to the empty context
-        assert_eq!(Arch::from_name("alpha"), None);
-        assert_eq!(Arch::from_name(""), None);
-    }
-
-    #[test]
-    fn test_arch_is_x86_family() {
-        use crate::types::Arch;
-        assert!(Arch::X86.is_x86_family());
-        assert!(Arch::X86_64.is_x86_family());
-        assert!(!Arch::Aarch64.is_x86_family());
-        assert!(!Arch::Arm.is_x86_family());
-        assert!(!Arch::Mips.is_x86_family());
-        assert!(!Arch::Wasm.is_x86_family());
-    }
-
-    // ─── is_code_section ─────────────────────────────────────────────
 }
 
 #[cfg(test)]

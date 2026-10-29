@@ -10,10 +10,6 @@ use regex::Regex;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-#[cfg(test)]
-#[path = "decoders_zlib_test.rs"]
-mod zlib_tests;
-
 #[allow(clippy::expect_used)]
 static QUOTED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]"#).expect("static regex"));
@@ -2184,3 +2180,6 @@ mod rot13_base64_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod zlib_tests;

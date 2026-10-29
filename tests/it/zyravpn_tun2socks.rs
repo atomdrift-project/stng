@@ -14,8 +14,6 @@
 //! 5. Tightly packed Go string pools surface as one concatenated megastring
 //!    when individual `{ptr,len}` boundaries are missed.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use stng::{ExtractedString, extract_strings};
 
 static SAMPLE: std::sync::LazyLock<&str> =
@@ -36,10 +34,6 @@ fn values(strings: &[ExtractedString]) -> Vec<&str> {
 
 #[test]
 fn issue1_buildinfo_no_varint_prefix() {
-    if !std::path::Path::new(*SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {}", *SAMPLE);
-        return;
-    }
     let strings = load_strings();
     let vals = values(&strings);
 
@@ -77,10 +71,6 @@ fn issue1_buildinfo_no_varint_prefix() {
 
 #[test]
 fn issue2_stack_strings_assemble_win32_apis() {
-    if !std::path::Path::new(*SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {}", *SAMPLE);
-        return;
-    }
     let strings = load_strings();
     let vals = values(&strings);
 
@@ -112,10 +102,6 @@ fn issue2_stack_strings_assemble_win32_apis() {
 
 #[test]
 fn issue3_no_x86_register_garbage() {
-    if !std::path::Path::new(*SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {}", *SAMPLE);
-        return;
-    }
     let strings = load_strings();
     let vals = values(&strings);
 
@@ -140,10 +126,6 @@ fn issue3_no_x86_register_garbage() {
 
 #[test]
 fn issue4_no_mid_string_funcname_fragments() {
-    if !std::path::Path::new(*SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {}", *SAMPLE);
-        return;
-    }
     let strings = load_strings();
     let vals = values(&strings);
 
@@ -185,10 +167,6 @@ fn issue4_no_mid_string_funcname_fragments() {
 
 #[test]
 fn issue5_no_concatenated_megastrings() {
-    if !std::path::Path::new(*SAMPLE).exists() {
-        eprintln!("skipping — sample missing at {}", *SAMPLE);
-        return;
-    }
     let strings = load_strings();
     let vals = values(&strings);
 

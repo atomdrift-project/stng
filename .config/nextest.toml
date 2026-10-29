@@ -1,0 +1,5 @@
+# rayon_saturation compares wall-clock time on one thread against many, so it
+# needs the machine to itself: reserve every test slot while it runs.
+[[profile.default.overrides]]
+filter = 'binary(rayon_saturation)'
+threads-required = 'num-test-threads'

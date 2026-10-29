@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Tests for validation::is_garbage() special cases
 /// These ensure that important malware indicators aren't filtered out
 use stng::ExtractOptions;
@@ -33,14 +32,6 @@ fn test_shell_commands_with_redirections() {
         let found = extracted
             .iter()
             .any(|s| s.value.contains(expected_substring));
-
-        if !found {
-            println!("Failed to find '{expected_substring}' in command '{cmd}'");
-            println!(
-                "Extracted strings: {:?}",
-                extracted.iter().map(|s| &s.value).collect::<Vec<_>>()
-            );
-        }
 
         assert!(
             found,
@@ -189,25 +180,7 @@ fn test_c2_url_not_garbage() {
     // The actual C2 URL from brew_agent malware
     let c2_url = "http://46.30.191.141n;uJ";
 
-    println!("\nTesting: {c2_url:?}");
     let result = is_garbage(c2_url);
-    println!("is_garbage() returned: {result}");
 
     assert!(!result, "C2 URL should NOT be marked as garbage");
-}
-
-#[test]
-fn test_competing_garbage_string() {
-    // The garbage string at offset -1 from C2
-    let garbage = "fWWz^/21MU6.Tw";
-
-    println!("\nTesting: {garbage:?}");
-    let result = is_garbage(garbage);
-    println!("is_garbage() returned: {result}");
-
-    // This one might be garbage
-    println!(
-        "Garbage string result: {}",
-        if result { "GARBAGE" } else { "NOT GARBAGE" }
-    );
 }

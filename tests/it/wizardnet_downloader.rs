@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration test for WizardNet Downloader.dll (PE x86).
 //!
 //! Validates that stng does not produce false positives on this sample:
@@ -11,20 +10,13 @@ use stng::{ExtractOptions, StringKind, StringMethod};
 static SAMPLE_PATH: std::sync::LazyLock<&str> =
     std::sync::LazyLock::new(|| crate::common::path("testdata/malware/wizardnet_downloader.dll"));
 
-fn load_sample() -> Option<Vec<u8>> {
-    let path = std::path::Path::new(*SAMPLE_PATH);
-    if !path.exists() {
-        eprintln!("Skipping - sample not found at {}", *SAMPLE_PATH);
-        return None;
-    }
-    Some(std::fs::read(path).expect("Failed to read sample"))
+fn load_sample() -> Vec<u8> {
+    std::fs::read(*SAMPLE_PATH).expect("Failed to read sample")
 }
 
 #[test]
 fn test_no_xor_ip_false_positives_from_xaml_margins() {
-    let Some(data) = load_sample() else {
-        return;
-    };
+    let data = load_sample();
 
     let opts = ExtractOptions::new(4).with_xor(Some(8));
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -48,9 +40,7 @@ fn test_no_xor_ip_false_positives_from_xaml_margins() {
 
 #[test]
 fn test_no_base64_false_positives_from_cert_timestamps() {
-    let Some(data) = load_sample() else {
-        return;
-    };
+    let data = load_sample();
 
     let opts = ExtractOptions::new(4);
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -74,9 +64,7 @@ fn test_no_base64_false_positives_from_cert_timestamps() {
 
 #[test]
 fn test_no_base64_false_positives_from_x86_code() {
-    let Some(data) = load_sample() else {
-        return;
-    };
+    let data = load_sample();
 
     let opts = ExtractOptions::new(4);
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -96,9 +84,7 @@ fn test_no_base64_false_positives_from_x86_code() {
 
 #[test]
 fn test_no_php_false_positives_from_reloc_section() {
-    let Some(data) = load_sample() else {
-        return;
-    };
+    let data = load_sample();
 
     let opts = ExtractOptions::new(4);
     let extracted = stng::extract_strings_with_options(&data, &opts);
@@ -120,9 +106,7 @@ fn test_no_php_false_positives_from_reloc_section() {
 
 #[test]
 fn test_legitimate_strings_still_extracted() {
-    let Some(data) = load_sample() else {
-        return;
-    };
+    let data = load_sample();
 
     let opts = ExtractOptions::new(4);
     let extracted = stng::extract_strings_with_options(&data, &opts);

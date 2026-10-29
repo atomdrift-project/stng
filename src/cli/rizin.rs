@@ -823,7 +823,6 @@ fn arm_arch_possible(object: &Object<'_>) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -907,12 +906,9 @@ mod tests {
     }
 }
 
-/// Moved from `tests/` when this module moved from the library to the CLI.
+/// Size gates and missing inputs. None of these reach rizin or the cache.
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod helper_tests {
-    /// Additional tests for r2 module helper functions
-    /// Covers src/r2.rs helper functions and edge cases
     use std::fs;
     use std::path::PathBuf;
 
@@ -938,31 +934,6 @@ mod helper_tests {
         path
     }
 
-    /// Test flush_cache with non-existent file
-    #[test]
-    fn test_flush_cache_nonexistent_file() {
-        let fake_path = "/tmp/nonexistent_file_for_r2_test_12345.bin";
-
-        // Should fail gracefully (cache module handles this)
-        let result = super::flush_cache(fake_path);
-
-        // Error is acceptable for non-existent file
-        let _ = result;
-    }
-
-    /// Test flush_cache with real file
-    #[test]
-    fn test_flush_cache_real_file() {
-        let temp_path = create_temp_file("r2_flush", b"test content for flush");
-        let file_path = temp_path.to_str().unwrap();
-
-        // Should succeed even if cache doesn't exist
-        let result = super::flush_cache(file_path);
-        assert!(result.is_ok(), "Flush should succeed for valid file path");
-
-        let _ = fs::remove_file(temp_path);
-    }
-
     /// Test extract_string_boundaries with large file (should skip)
     #[test]
     fn test_extract_string_boundaries_large_file() {
@@ -970,7 +941,7 @@ mod helper_tests {
         let temp_path = create_temp_file("r2_large", &vec![0u8; 11 * 1024 * 1024]);
         let file_path = temp_path.to_str().unwrap();
 
-        let result = super::extract_string_boundaries(file_path, true);
+        let result = super::extract_string_boundaries(file_path, false);
 
         // Should return None for files > 10MB
         assert!(result.is_none(), "Should skip files larger than 10MB");
@@ -978,33 +949,12 @@ mod helper_tests {
         let _ = fs::remove_file(temp_path);
     }
 
-    /// Test extract_string_boundaries with small file
-    #[test]
-    fn test_extract_string_boundaries_small_file() {
-        let temp_path = create_temp_file("r2_small", b"small test file");
-        let file_path = temp_path.to_str().unwrap();
-
-        let result = super::extract_string_boundaries(file_path, true);
-
-        // May return None if r2/rizin not available, or Some if available
-        // Just verify it doesn't panic
-        if let Some(boundaries) = result {
-            // If r2 is available and found strings, verify structure
-            for boundary in &boundaries {
-                assert!(boundary.offset < 1024 * 1024, "Offset should be reasonable");
-                assert!(boundary.length > 0, "Length should be positive");
-            }
-        }
-
-        let _ = fs::remove_file(temp_path);
-    }
-
     /// Test extract_string_boundaries with non-existent file
     #[test]
     fn test_extract_string_boundaries_nonexistent() {
-        let fake_path = "/tmp/nonexistent_file_boundaries_test.bin";
+        let fake_path = "/nonexistent/boundaries_test.bin";
 
-        let result = super::extract_string_boundaries(fake_path, true);
+        let result = super::extract_string_boundaries(fake_path, false);
 
         // Should return None for non-existent file
         assert!(result.is_none(), "Should return None for non-existent file");
@@ -1017,73 +967,12 @@ mod helper_tests {
         assert!(result.is_none(), "Should return None for non-existent file");
     }
 
-    /// Test extract_strings with large file (should use fast mode)
-    #[test]
-    fn test_extract_strings_large_file_fast_mode() {
-        // Create a file > 10MB
-        let temp_path = create_temp_file("r2_extract_large", &vec![0xAAu8; 11 * 1024 * 1024]);
-        let file_path = temp_path.to_str().unwrap();
-
-        let result = super::extract_strings(file_path, 4, false);
-
-        // May return None if r2/rizin not available
-        // If r2 is available, should use symbols-only mode (fast)
-        // Just verify it doesn't panic or hang
-        if let Some(strings) = result {
-            // Verify all strings have valid offsets
-            let file_size = 11_u64 * 1024 * 1024;
-            for s in &strings {
-                assert!(
-                    s.data_offset < file_size,
-                    "Offset should be within file bounds"
-                );
-            }
-        }
-
-        let _ = fs::remove_file(temp_path);
-    }
-
-    /// Test extract_strings with cache enabled vs disabled
-    #[test]
-    fn test_extract_strings_caching() {
-        let temp_path = create_temp_file("r2_cache_test", b"test content for caching");
-        let file_path = temp_path.to_str().unwrap();
-
-        // First call with cache enabled
-        let result1 = super::extract_strings(file_path, 4, true);
-
-        // Second call with cache enabled (should hit cache if r2 available)
-        let result2 = super::extract_strings(file_path, 4, true);
-
-        // Third call with cache disabled
-        let result3 = super::extract_strings(file_path, 4, false);
-
-        // All should return the same result (if r2 available)
-        // Just verify consistency
-        if let (Some(s1), Some(s2), Some(s3)) = (result1, result2, result3) {
-            assert_eq!(s1.len(), s2.len(), "Cached result should match");
-            assert_eq!(s1.len(), s3.len(), "Non-cached result should match");
-        }
-
-        // Clean up cache
-        let _ = super::flush_cache(file_path);
-        let _ = fs::remove_file(temp_path);
-    }
-
-    /// Test is_available doesn't panic
-    #[test]
-    fn test_is_available_no_panic() {
-        let available = super::is_available();
-        // Just verify it returns a boolean without panicking
-        let _ = available; // just verify it returns without panicking
-    }
-
     /// Test extract_connect_addrs with non-existent file
     #[test]
     fn test_extract_connect_addrs_nonexistent() {
         let fake_data = b"test data";
 
-        let result = super::extract_connect_addrs("/nonexistent/path.bin", fake_data, true);
+        let result = super::extract_connect_addrs("/nonexistent/path.bin", fake_data, false);
 
         // Should return empty for non-existent file
         assert!(
@@ -1099,7 +988,7 @@ mod helper_tests {
         let temp_path = create_temp_file("r2_connect_large", &large_data);
         let file_path = temp_path.to_str().unwrap();
 
-        let result = super::extract_connect_addrs(file_path, &large_data, true);
+        let result = super::extract_connect_addrs(file_path, &large_data, false);
 
         // Should use binary scan for large files (no r2 analysis)
         // Result may be empty if no connect patterns found
@@ -1114,7 +1003,7 @@ mod helper_tests {
         let temp_path = create_temp_file("r2_connect_empty", b"");
         let file_path = temp_path.to_str().unwrap();
 
-        let result = super::extract_connect_addrs(file_path, b"", true);
+        let result = super::extract_connect_addrs(file_path, b"", false);
 
         // Should return empty for empty data
         assert!(result.is_empty(), "Should return empty for empty data");

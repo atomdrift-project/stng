@@ -1,11 +1,9 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Regressions through the public decoder, library extraction and CLI paths.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use flate2::{Compression, write::ZlibEncoder};
 use std::{
     fs,
     io::Write,
-    process::Command,
     sync::atomic::{AtomicUsize, Ordering},
 };
 use stng::{ExtractOptions, ExtractedString, StringMethod};
@@ -30,7 +28,7 @@ fn cli_strings(source: &str) -> Vec<ExtractedString> {
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     fs::write(&path, source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_stng"))
+    let output = crate::stng()
         .args([
             "--json",
             "--unfiltered",

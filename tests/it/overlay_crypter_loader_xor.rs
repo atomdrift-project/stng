@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Real-world test for a Linux overlay crypter stub (see
 //! `testdata/xor/overlay_crypter_loader_xor.md`).
 //!

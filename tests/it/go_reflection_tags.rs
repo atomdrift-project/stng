@@ -1,9 +1,4 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::cast_possible_truncation
-)]
+#![allow(clippy::cast_possible_truncation)]
 //! Independent native-analysis offsets and digests, through the filtered public
 //! pipeline, with external disassembly and caching disabled.
 

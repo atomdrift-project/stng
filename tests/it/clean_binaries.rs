@@ -1,24 +1,17 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration tests for clean system binaries that should have minimal false positives.
 //!
 //! These tests verify that legitimate binaries without obfuscation don't trigger
 //! false positive detections for XOR, base85, URL encoding, etc.
 
 use std::fs;
-use std::path::Path;
 use stng::{ExtractOptions, StringKind, extract_strings_with_options};
 
 /// Test that /bin/ls has no obfuscated content.
 /// This is a clean system binary that should not trigger XOR or encoding detections.
 #[test]
+#[cfg_attr(windows, ignore = "reads a Unix system binary")]
 fn test_bin_ls_clean() {
     let bin_path = "/bin/ls";
-
-    // Skip test if /bin/ls doesn't exist on this system
-    if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {bin_path} not found");
-        return;
-    }
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
 
@@ -52,19 +45,6 @@ fn test_bin_ls_clean() {
         .filter(|s| s.kind == Some(StringKind::Base64))
         .count();
 
-    // /bin/ls should have ZERO XOR false positives
-    if xor_count > 0 {
-        eprintln!("Found {xor_count} XOR strings in /bin/ls:");
-        for s in strings
-            .iter()
-            .filter(|s| s.method == stng::StringMethod::XorDecode)
-        {
-            eprintln!(
-                "  offset={} kind={:?} value={:?}",
-                s.data_offset, s.kind, s.value
-            );
-        }
-    }
     assert_eq!(
         xor_count, 0,
         "Clean binary should have NO XOR strings, found {xor_count}"
@@ -109,19 +89,6 @@ fn test_bin_ls_clean() {
         })
         .count();
 
-    if base64_count > 0 {
-        eprintln!("Found {base64_count} base64 strings in /bin/ls:");
-        for s in strings
-            .iter()
-            .filter(|s| s.kind == Some(StringKind::Base64))
-        {
-            eprintln!(
-                "  offset=0x{:x} method={:?} value={:?}",
-                s.data_offset, s.method, s.value
-            );
-        }
-    }
-
     // All base64 should be code signature hashes (in __LINKEDIT)
     assert_eq!(
         base64_count, codesig_base64_count,
@@ -136,13 +103,9 @@ fn test_bin_ls_clean() {
 
 /// Test that /bin/cat has no obfuscated content.
 #[test]
+#[cfg_attr(windows, ignore = "reads a Unix system binary")]
 fn test_bin_cat_clean() {
     let bin_path = "/bin/cat";
-
-    if !Path::new(bin_path).exists() {
-        eprintln!("Skipping test: {bin_path} not found");
-        return;
-    }
 
     let data = fs::read(bin_path).expect("Failed to read /bin/cat");
 
@@ -167,11 +130,6 @@ fn test_bin_cat_clean() {
 #[test]
 fn test_vget_sample_no_base85() {
     let sample_path = crate::common::path("testdata/malware/vget_sample");
-
-    if !Path::new(sample_path).exists() {
-        eprintln!("Skipping test: {sample_path} not found");
-        return;
-    }
 
     let data = fs::read(sample_path).expect("Failed to read vget_sample");
 

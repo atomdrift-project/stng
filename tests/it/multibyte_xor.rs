@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 /// Tests for multi-byte XOR string extraction
 ///
 /// This tests the pattern-free brute-force scanning approach for multi-byte XOR,
@@ -94,10 +92,6 @@ fn test_multibyte_xor_real_malware() {
     let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
 
     // Skip if sample doesn't exist (e.g., in CI)
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping real malware test - sample not found");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read test sample");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -293,9 +287,6 @@ fn test_multibyte_xor_min_length() {
 
     // Should find a long string (exact match may vary due to overlap detection)
     let has_long_string = xor_strings.iter().any(|s| s.len() >= 10);
-    if !has_long_string {
-        eprintln!("XOR strings found: {xor_strings:?}");
-    }
     assert!(
         has_long_string,
         "Should find at least one string >= 10 chars"

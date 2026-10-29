@@ -1,13 +1,10 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Test that /etc/passwd entries are not misclassified
 
 use std::fs;
-use std::process::Command;
 
 #[test]
 fn test_passwd_entries_not_misclassified() {
     // Create a test file with passwd-style entries
-    let test_file = "/tmp/stng_test_passwd.txt";
     let content = r"_assetcache:*:235:235:Asset Cache Service:/var/empty:/usr/bin/false
 _mobileasset:*:253:253:MobileAsset User:/var/ma:/usr/bin/false
 _datadetectors:*:257:257:DataDetectors:/var/db/datadetectors:/usr/bin/false
@@ -16,10 +13,10 @@ _biome:*:289:289:Biome:/var/db/biome:/usr/bin/false
 _terminusd:*:295:295:Terminus:/var/db/terminus:/usr/bin/false
 _nsurlsessiond:*:242:242:NSURLSession Daemon:/var/db/nsurlsessiond:/usr/bin/false
 ";
-    fs::write(test_file, content).expect("failed to write test file");
+    let test_file = crate::common::temp_file("passwd.txt", content);
 
     // Run stng on the file
-    let output = Command::new(env!("CARGO_BIN_EXE_stng"))
+    let output = crate::stng()
         .arg(test_file)
         .output()
         .expect("failed to execute stng");
@@ -53,16 +50,15 @@ _nsurlsessiond:*:242:242:NSURLSession Daemon:/var/db/nsurlsessiond:/usr/bin/fals
 #[test]
 fn test_real_applescript_still_detected() {
     // Create a test file with real AppleScript
-    let test_file = "/tmp/stng_test_applescript.txt";
     let content = r#"tell application "Finder"
 set myVar to 10
 do shell script "ls -la"
 path to desktop folder
 "#;
-    fs::write(test_file, content).expect("failed to write test file");
+    let test_file = crate::common::temp_file("applescript.txt", content);
 
     // Run stng on the file
-    let output = Command::new(env!("CARGO_BIN_EXE_stng"))
+    let output = crate::stng()
         .arg(test_file)
         .output()
         .expect("failed to execute stng");

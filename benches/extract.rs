@@ -12,18 +12,15 @@
     missing_docs,
     reason = "criterion_group! generates an undocumented pub fn"
 )]
+#![allow(clippy::expect_used, reason = "a missing sample is a broken benchmark")]
 
 #[path = "../tests/common/mod.rs"]
 mod common;
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::time::Duration;
 use stng::ExtractOptions;
-
-/// Load a testdata file, returning None if it doesn't exist (CI may lack large fixtures).
-fn load(path: &str) -> Option<Vec<u8>> {
-    std::fs::read(path).ok()
-}
 
 // ---------------------------------------------------------------------------
 // Full extraction pipeline
@@ -73,7 +70,7 @@ fn bench_extract(c: &mut Criterion) {
     ];
 
     for (name, path) in samples {
-        let Some(data) = load(path) else { continue };
+        let data = std::fs::read(path).expect("read sample");
         let len = data.len() as u64;
 
         g.throughput(Throughput::Bytes(len));
@@ -110,7 +107,7 @@ fn bench_extract_filtered(c: &mut Criterion) {
     ];
 
     for (name, path) in samples {
-        let Some(data) = load(path) else { continue };
+        let data = std::fs::read(path).expect("read sample");
         let len = data.len() as u64;
         let mut opts = ExtractOptions::new(4);
         opts.filter_garbage = true;
@@ -150,7 +147,7 @@ fn bench_extract_xor(c: &mut Criterion) {
     ];
 
     for (name, path) in samples {
-        let Some(data) = load(path) else { continue };
+        let data = std::fs::read(path).expect("read sample");
         let len = data.len() as u64;
         let mut opts = ExtractOptions::new(4);
         opts.xor_scan = true;
@@ -174,9 +171,7 @@ fn bench_validation(c: &mut Criterion) {
     let mut g = c.benchmark_group("validation");
 
     // Extract strings from a sample first, then benchmark is_garbage on them
-    let Some(data) = load(crate::common::path("testdata/malware/poolrat")) else {
-        return;
-    };
+    let data = crate::common::bytes("testdata/malware/poolrat");
     let strings = stng::extract_strings(&data, 4);
 
     // Collect a representative batch of extracted string values

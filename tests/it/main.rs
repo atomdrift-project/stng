@@ -1,10 +1,22 @@
 //! The integration tests, as one binary: every file here is a module, so the
 //! crate links once rather than once per file. `hostile_input` and
-//! `test_rayon_saturation` stay separate: one installs a process-wide panic
+//! `rayon_saturation` stay separate: one installs a process-wide panic
 //! hook, the other times itself against an otherwise idle machine.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 #[path = "../common/mod.rs"]
 mod common;
+
+/// The `stng` command, with `HOME` and `XDG_CACHE_HOME` pointing into the
+/// target directory so a test run never touches the user's rizin cache.
+fn stng() -> std::process::Command {
+    let home = common::scratch_dir().join("home");
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_stng"));
+    cmd.env("HOME", &home)
+        .env("XDG_CACHE_HOME", home.join(".cache"));
+    cmd
+}
 
 mod base64_zlib;
 mod byte_offsets;
@@ -13,13 +25,11 @@ mod clean_binaries;
 mod cli;
 mod codesig_precision;
 mod crypto_wallet_extraction;
-mod debug_extraction;
 mod detect;
 mod does_nothing_windows;
 mod double_obfuscation;
 mod dynamichub_arm64_xor;
 mod fuzzy_base64;
-mod gitlab_runner;
 mod go_raw_fallback;
 mod go_reflection_tags;
 mod go_stored_string_table;

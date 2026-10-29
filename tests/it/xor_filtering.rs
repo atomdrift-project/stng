@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Tests for XOR string filtering logic
 ///
 /// These tests ensure that legitimate XOR-decoded malware strings
@@ -34,31 +33,16 @@ fn test_xor_extraction(test_strings: &[&str], test_name: &str) {
         .map(|s| s.value.as_str())
         .collect();
 
-    // Debug: print all extracted strings if we didn't find any XOR ones
-    if xor_strings.is_empty() && !test_strings.is_empty() {
-        eprintln!("{test_name}: No XOR strings found. All extracted strings:");
-        for s in &extracted {
-            eprintln!("  {:?} (method: {:?})", s.value, s.method);
-        }
-    }
-
-    // XOR filtering is complex and may filter some strings due to overlap detection or trimming
-    // Just verify we extracted SOME strings as a sanity check
-    assert!(
-        !extracted.is_empty() || test_strings.is_empty(),
-        "{test_name}: Should extract some strings. Found: {extracted:?}"
-    );
-
-    // Log any missing strings but don't fail the test
     for expected in test_strings {
-        let found = xor_strings.iter().any(|s| s.contains(expected));
-        if !found {
-            eprintln!("{test_name}: Warning - expected string not found: {expected:?}");
-        }
+        assert!(
+            xor_strings.iter().any(|s| s.contains(expected)),
+            "{test_name}: {expected:?} not recovered; XOR strings: {xor_strings:?}"
+        );
     }
 }
 
 #[test]
+#[ignore = "known gap: known-key XOR drops or truncates some strings (REDFLAGS_AUDIT P6.11)"]
 fn test_applescript_strings_not_filtered() {
     // AppleScript commands from real malware
     let applescript_strings = vec![
@@ -77,6 +61,7 @@ fn test_applescript_strings_not_filtered() {
 }
 
 #[test]
+#[ignore = "known gap: known-key XOR drops or truncates some strings (REDFLAGS_AUDIT P6.11)"]
 fn test_xml_plist_strings_not_filtered() {
     let xml_strings = vec![
         ">ProgramArguments</key>",
@@ -117,14 +102,6 @@ fn test_file_paths_not_filtered() {
     ];
 
     test_xor_extraction(&path_strings, "File paths");
-}
-
-#[test]
-fn test_locale_strings_not_filtered() {
-    // Locales are semicolon-separated in the actual malware
-    // Skip this test - the garbage filter validation is very strict and may filter
-    // semicolon-separated strings. The core XOR extraction logic works correctly.
-    // TODO: Investigate if we should special-case locale strings in is_garbage
 }
 
 #[test]

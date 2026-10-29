@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Comprehensive tests for types.rs
 //!
 //! Tests core type definitions, methods, serialization, and edge cases.

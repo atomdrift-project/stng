@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for double-layer obfuscation: Encoding + XOR
 //!
 //! This tests the automatic detection and decoding of data that has been:
@@ -39,9 +38,6 @@ fn test_hex_case_sensitivity() {
     let kind_lower = classify_string(lowercase_hex);
     let kind_upper = classify_string(uppercase_hex);
 
-    println!("Lowercase hex ({}): {:?}", lowercase_hex.len(), kind_lower);
-    println!("Uppercase hex ({}): {:?}", uppercase_hex.len(), kind_upper);
-
     assert_eq!(kind_lower, Some(StringKind::HexEncoded));
     assert_eq!(kind_upper, Some(StringKind::HexEncoded));
 }
@@ -53,19 +49,6 @@ fn test_all_encoding_classifications() {
     let hex_str = "687474703A2F2F6576696C2E636F6D2F6D616C776172652E7368";
     let url_str = "%3Cscript%3Ealert%28%27XSS%27%29%3C%2Fscript%3E";
     let unicode_str = "\\x48\\x65\\x6c\\x6c\\x6f\\x20\\x57\\x6f\\x72\\x6c\\x64";
-
-    println!(
-        "Base64 ({}): {:?}",
-        base64_str.len(),
-        classify_string(base64_str)
-    );
-    println!("Hex ({}): {:?}", hex_str.len(), classify_string(hex_str));
-    println!("URL ({}): {:?}", url_str.len(), classify_string(url_str));
-    println!(
-        "Unicode ({}): {:?}",
-        unicode_str.len(),
-        classify_string(unicode_str)
-    );
 
     assert_eq!(classify_string(base64_str), Some(StringKind::Base64));
     assert_eq!(classify_string(hex_str), Some(StringKind::HexEncoded));
@@ -84,13 +67,6 @@ fn test_base64_length_requirements() {
 
     let kind_short = classify_string(short_base64);
     let kind_long = classify_string(long_base64);
-
-    println!(
-        "Short base64 ({} chars): {:?}",
-        short_base64.len(),
-        kind_short
-    );
-    println!("Long base64 ({} chars): {:?}", long_base64.len(), kind_long);
 
     // Both should be classified as Base64
     assert_eq!(
@@ -124,17 +100,6 @@ fn test_decoders_run_on_xor_strings() {
         .with_garbage_filter(true);
     let strings = extract_strings_with_options(&data, &opts);
 
-    println!("Found {} strings total", strings.len());
-    for s in &strings {
-        println!(
-            "  {:?} {:?} @ {}: {}",
-            s.method,
-            s.kind,
-            s.data_offset,
-            &s.value[..s.value.len().min(40)]
-        );
-    }
-
     // Check for XOR-decoded string
     let xor_decoded: Vec<_> = strings
         .iter()
@@ -147,12 +112,6 @@ fn test_decoders_run_on_xor_strings() {
         .iter()
         .filter(|s| s.kind == Some(StringKind::Base64))
         .collect();
-
-    println!("\nXOR-decoded strings: {}", xor_decoded.len());
-    println!(
-        "XOR-decoded strings classified as Base64: {}",
-        base64_classified.len()
-    );
 
     assert!(
         !base64_classified.is_empty(),

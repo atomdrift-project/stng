@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Recognising an ordinary Rust executable as Rust.
 //!
 //! ELF (and Mach-O) Rust detection used to key on a `rust`-named section. Only

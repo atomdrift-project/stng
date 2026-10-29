@@ -1,5 +1,4 @@
 //! Regression coverage for the CAFEBABE JVM/Mach-O magic collision.
-#![allow(clippy::panic)]
 
 use stng::{ExtractOptions, extract_strings_with_options};
 

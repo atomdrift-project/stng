@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
 use goblin::{Object, mach::Mach};
 static FILE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {

@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Real-world test for the 3CX supply-chain implant (`libffmpeg.dylib`).
 //!
 //! The macOS payload hides its command-and-control configuration behind a
@@ -30,10 +29,6 @@ fn test_3cx_libffmpeg_xor_config() {
     let sample_path = crate::common::path("testdata/xor/libffmpeg_3cx_x64_xor");
 
     // Skip if sample doesn't exist (large real-world binary may be omitted).
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - 3CX sample not found at {sample_path}");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read 3CX sample");
 
@@ -46,8 +41,6 @@ fn test_3cx_libffmpeg_xor_config() {
         .filter(|s| s.method == StringMethod::XorDecode)
         .map(|s| s.value.as_str())
         .collect();
-
-    println!("Recovered {} XOR-decoded strings", xor_strings.len());
 
     // The regression this guards against: NUL-padded C2 records were dropped
     // wholesale (0/10 recovered) before padding-aware run segmentation.

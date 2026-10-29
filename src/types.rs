@@ -827,8 +827,34 @@ pub struct OverlayInfo {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+
+    #[test]
+    fn test_arch_from_name() {
+        assert_eq!(Arch::from_name("x86_64"), Some(Arch::X86_64));
+        assert_eq!(Arch::from_name("amd64"), Some(Arch::X86_64));
+        assert_eq!(Arch::from_name("x64"), Some(Arch::X86_64));
+        assert_eq!(Arch::from_name("aarch64"), Some(Arch::Aarch64));
+        assert_eq!(Arch::from_name("arm64"), Some(Arch::Aarch64));
+        assert_eq!(Arch::from_name("arm"), Some(Arch::Arm));
+        assert_eq!(Arch::from_name("riscv64"), Some(Arch::RiscV64));
+        assert_eq!(Arch::from_name("mips"), Some(Arch::Mips));
+        assert_eq!(Arch::from_name("powerpc"), Some(Arch::PowerPc));
+        assert_eq!(Arch::from_name("wasm"), Some(Arch::Wasm));
+        // Unknown returns None so callers fall back to the empty context
+        assert_eq!(Arch::from_name("alpha"), None);
+        assert_eq!(Arch::from_name(""), None);
+    }
+
+    #[test]
+    fn test_arch_is_x86_family() {
+        assert!(Arch::X86.is_x86_family());
+        assert!(Arch::X86_64.is_x86_family());
+        assert!(!Arch::Aarch64.is_x86_family());
+        assert!(!Arch::Arm.is_x86_family());
+        assert!(!Arch::Mips.is_x86_family());
+        assert!(!Arch::Wasm.is_x86_family());
+    }
 
     #[test]
     fn source_spans_use_recorded_extent_then_fall_back_then_fragments() {
@@ -944,49 +970,5 @@ mod tests {
         assert!(!info32.is_64bit);
         assert!(info32.is_little_endian);
         assert_eq!(info32.ptr_size, 4);
-    }
-
-    #[test]
-    fn test_string_kind_equality() {
-        let none: Option<StringKind> = None;
-        assert_eq!(none, None);
-        assert_ne!(Some(StringKind::Import), None);
-        assert_ne!(Some(StringKind::Import), Some(StringKind::Export));
-    }
-
-    #[test]
-    fn test_string_method_equality() {
-        assert_eq!(StringMethod::Structure, StringMethod::Structure);
-        assert_ne!(StringMethod::Structure, StringMethod::RawScan);
-    }
-
-    #[test]
-    fn test_extracted_string_clone() {
-        let s = ExtractedString {
-            value: "test".to_string(),
-            data_offset: 100,
-            method: StringMethod::Structure,
-            kind: None,
-            ..Default::default()
-        };
-
-        let cloned = s.clone();
-        assert_eq!(s.value, cloned.value);
-        assert_eq!(s.data_offset, cloned.data_offset);
-        assert_eq!(s.method, cloned.method);
-    }
-
-    #[test]
-    fn test_string_struct_clone() {
-        let s = StringStruct {
-            struct_offset: 100,
-            ptr: 200,
-            len: 10,
-        };
-
-        let cloned = s.clone();
-        assert_eq!(s.struct_offset, cloned.struct_offset);
-        assert_eq!(s.ptr, cloned.ptr);
-        assert_eq!(s.len, cloned.len);
     }
 }

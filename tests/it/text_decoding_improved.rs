@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for improved text file decoding with embedded base64 extraction
 
 use stng::{ExtractedString, StringKind, StringMethod, classify_string};
@@ -282,22 +281,4 @@ fn test_case_sensitivity() {
 
     assert_eq!(decoded_lower, ["Hello World!"]);
     assert_eq!(decoded_lower, decoded_upper);
-}
-
-#[test]
-fn test_non_utf8_decoded_content() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-
-    // Base64 that decodes to binary (non-UTF8) should be handled
-    let binary_b64 = "AAECAwQFBgcICQ=="; // Binary data
-    let decoded = BASE64.decode(binary_b64).unwrap();
-
-    // Should decode successfully even if not valid UTF-8
-    assert!(!decoded.is_empty());
-
-    // Attempting to convert to UTF-8 should fail gracefully
-    let result = String::from_utf8(decoded);
-    // This may or may not be valid UTF-8, but shouldn't panic
-    let _ = result;
 }

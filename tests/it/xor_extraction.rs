@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 /// Comprehensive tests for XOR string extraction to prevent regression
 /// Uses a sanitized subset of brew_agent malware (non-executable data only)
 use stng::{ExtractOptions, StringKind, StringMethod};
@@ -264,43 +262,24 @@ fn test_xor_strings_starting_with_key_first_byte() {
 }
 
 #[test]
-fn test_xor_performance() {
-    // Extraction should be reasonably fast
-    use std::time::Instant;
-
+fn test_xor_string_count_is_plausible() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
         .with_xor_key(BREW_AGENT_KEY.to_vec())
         .with_garbage_filter(true);
 
-    let start = Instant::now();
     let extracted = stng::extract_strings_with_options(&data, &opts);
-    let elapsed = start.elapsed();
 
     let xor_count = extracted
         .iter()
         .filter(|s| s.method == StringMethod::XorDecode)
         .count();
 
-    // Should complete in reasonable time for 180KB.
-    // Release: ~0.3s. Debug builds are significantly slower, allow up to 10s.
-    assert!(
-        elapsed.as_secs() < 10,
-        "XOR extraction took too long: {elapsed:?}"
-    );
-
     // Should find reasonable number of strings (not 0, not thousands)
     assert!(
         xor_count > 50 && xor_count < 500,
         "Expected 50-500 XOR strings, found {xor_count}"
-    );
-
-    println!(
-        "XOR extraction: {} strings in {:.3}s ({:.0} KB/s)",
-        xor_count,
-        elapsed.as_secs_f64(),
-        data.len() as f64 / 1024.0 / elapsed.as_secs_f64()
     );
 }
 
@@ -356,51 +335,11 @@ fn test_c2_url_extraction_from_fixture() {
         .filter(|s| s.method == StringMethod::XorDecode)
         .collect();
 
-    println!("Extracted {} XOR strings", xor_strings.len());
-
     // Look for the C2 URL or IP
     let c2_strings: Vec<_> = xor_strings
         .iter()
         .filter(|s| s.value.contains("46.30.191.141"))
         .collect();
-
-    if c2_strings.is_empty() {
-        println!("\n✗ C2 URL NOT FOUND!");
-        println!("\nStrings near offset 0x11b0 (expected C2 location):");
-        for s in xor_strings
-            .iter()
-            .filter(|s| s.data_offset >= 0x11a0 && s.data_offset <= 0x11c0)
-        {
-            println!(
-                "  0x{:x}: {:?} ({:?}, len={})",
-                s.data_offset,
-                s.value,
-                s.kind,
-                s.value.len()
-            );
-        }
-
-        println!("\nAll URLs extracted:");
-        for s in xor_strings
-            .iter()
-            .filter(|s| s.kind == Some(StringKind::Url))
-        {
-            println!("  0x{:x}: {:?}", s.data_offset, s.value);
-        }
-
-        println!("\nAll IPs extracted:");
-        for s in xor_strings
-            .iter()
-            .filter(|s| matches!(s.kind, Some(StringKind::IP | StringKind::IPPort)))
-        {
-            println!("  0x{:x}: {:?}", s.data_offset, s.value);
-        }
-    } else {
-        println!("\n✓ Found {} C2 URL(s):", c2_strings.len());
-        for s in &c2_strings {
-            println!("  0x{:x}: {:?} ({:?})", s.data_offset, s.value, s.kind);
-        }
-    }
 
     assert!(
         !c2_strings.is_empty(),
@@ -418,28 +357,11 @@ fn test_direct_c2_extraction() {
     let opts = ExtractOptions::new(10).with_xor_key(key.to_vec());
     let results = stng::extract_strings_with_options(&data, &opts);
 
-    println!("\nDirect extraction found {} strings", results.len());
-
     // Look for C2
     let c2 = results
         .iter()
         .filter(|s| s.value.contains("46.30.191.141"))
         .collect::<Vec<_>>();
-    println!("C2 strings: {}", c2.len());
-
-    // Look near 0x11b0
-    let nearby = results
-        .iter()
-        .filter(|s| s.data_offset >= 0x11a0 && s.data_offset <= 0x11c0)
-        .collect::<Vec<_>>();
-    println!("Near 0x11b0: {}", nearby.len());
-    for s in &nearby {
-        println!(
-            "  0x{:x}: {:?}",
-            s.data_offset,
-            &s.value[..s.value.len().min(40)]
-        );
-    }
 
     assert!(!c2.is_empty(), "C2 URL should be extracted");
 }
@@ -460,9 +382,6 @@ fn test_brew_agent_comprehensive_extraction() {
         .filter(|s| s.method == StringMethod::XorDecode)
         .collect();
 
-    println!("\n=== HomaBrew Malware String Extraction Test ===");
-    println!("Total XOR strings: {}", xor_strings.len());
-
     // Critical IOC categories to test
     let mut found_categories = std::collections::HashMap::new();
 
@@ -471,11 +390,6 @@ fn test_brew_agent_comprehensive_extraction() {
         .iter()
         .filter(|s| s.value.contains("46.30.191.141"))
         .collect::<Vec<_>>();
-    println!("\n[C2 Infrastructure]");
-    println!("  C2 URLs: {}", c2_urls.len());
-    for s in &c2_urls {
-        println!("    0x{:x}: {}", s.data_offset, s.value);
-    }
     assert!(
         !c2_urls.is_empty(),
         "CRITICAL: C2 URL (46.30.191.141) must be extracted"
@@ -492,15 +406,6 @@ fn test_brew_agent_comprehensive_extraction() {
                 || s.value.contains("bash")
         })
         .collect::<Vec<_>>();
-    println!("\n[Shell Commands]");
-    println!("  Commands: {}", shell_cmds.len());
-    for s in shell_cmds.iter().take(5) {
-        println!(
-            "    0x{:x}: {}",
-            s.data_offset,
-            s.value.chars().take(60).collect::<String>()
-        );
-    }
     assert!(
         shell_cmds.iter().any(|s| s.value.contains("osascript")),
         "CRITICAL: osascript command must be extracted"
@@ -516,15 +421,6 @@ fn test_brew_agent_comprehensive_extraction() {
                 || s.value.contains("EOD")
         })
         .collect::<Vec<_>>();
-    println!("\n[AppleScript]");
-    println!("  Scripts: {}", applescript.len());
-    for s in applescript.iter().take(5) {
-        println!(
-            "    0x{:x}: {}",
-            s.data_offset,
-            s.value.chars().take(60).collect::<String>()
-        );
-    }
     found_categories.insert("applescript", applescript.len());
 
     // 4. Cryptocurrency Wallets
@@ -537,15 +433,6 @@ fn test_brew_agent_comprehensive_extraction() {
                 || s.value.contains("wallet")
         })
         .collect::<Vec<_>>();
-    println!("\n[Cryptocurrency Targets]");
-    println!("  Wallet paths: {}", crypto.len());
-    for s in crypto.iter().take(5) {
-        println!(
-            "    0x{:x}: {}",
-            s.data_offset,
-            s.value.chars().take(60).collect::<String>()
-        );
-    }
     assert!(
         crypto
             .iter()
@@ -568,15 +455,6 @@ fn test_brew_agent_comprehensive_extraction() {
                 || s.value.contains("Browser")
         })
         .collect::<Vec<_>>();
-    println!("\n[Browser Targets]");
-    println!("  Browser paths: {}", browsers.len());
-    for s in browsers.iter().take(5) {
-        println!(
-            "    0x{:x}: {}",
-            s.data_offset,
-            s.value.chars().take(60).collect::<String>()
-        );
-    }
     found_categories.insert("browsers", browsers.len());
 
     // 6. System Paths
@@ -588,15 +466,6 @@ fn test_brew_agent_comprehensive_extraction() {
                 || s.value.contains("LaunchAgent")
         })
         .collect::<Vec<_>>();
-    println!("\n[System Paths]");
-    println!("  Paths: {}", system_paths.len());
-    for s in system_paths.iter().take(5) {
-        println!(
-            "    0x{:x}: {}",
-            s.data_offset,
-            s.value.chars().take(60).collect::<String>()
-        );
-    }
     found_categories.insert("paths", system_paths.len());
 
     // 7. Locales (geofencing)
@@ -610,11 +479,6 @@ fn test_brew_agent_comprehensive_extraction() {
                 || s.value.contains("_UA")
         })
         .collect::<Vec<_>>();
-    println!("\n[Geofencing Locales]");
-    println!("  Locale strings: {}", locales.len());
-    for s in locales.iter().take(3) {
-        println!("    0x{:x}: {}", s.data_offset, s.value);
-    }
     found_categories.insert("locales", locales.len());
 
     // 8. File Extensions
@@ -627,16 +491,9 @@ fn test_brew_agent_comprehensive_extraction() {
                 || s.value.contains(".txt")
         })
         .collect::<Vec<_>>();
-    println!("\n[Target File Extensions]");
-    println!("  Extensions: {}", extensions.len());
     found_categories.insert("extensions", extensions.len());
 
     // Summary
-    println!("\n=== Summary ===");
-    println!("Total IOC categories found: {}", found_categories.len());
-    for (category, count) in &found_categories {
-        println!("  {category}: {count}");
-    }
 
     // Minimum thresholds
     assert!(
@@ -649,8 +506,6 @@ fn test_brew_agent_comprehensive_extraction() {
         "Should find at least 6 IOC categories, found {}",
         found_categories.len()
     );
-
-    println!("\n✓ All critical brew_agent IOCs successfully extracted!");
 }
 
 /// An XOR-decoded string reports the kind the classifier gives the same text

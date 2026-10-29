@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
-
 use stng::{
     ExtractOptions, Ioc, IocKind, KeyAlgorithm, KeyMetadata, StringMethod, extract_iocs,
     extract_strings_with_options,
@@ -264,7 +262,7 @@ fn existing_testdata_ioc_manifest_is_exact() {
     );
 
     // Kimwolf's sockaddr C2 comes from rizin's connect() scan, which the
-    // CLI runs: see `rizin_recovers_kimwolf_connect_address` in cli_tests.rs.
+    // CLI runs: see `rizin_recovers_kimwolf_connect_address` in cli.rs.
     assert_exact(
         "vget",
         crate::common::path("testdata/malware/vget_sample"),

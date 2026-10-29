@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration test for Go credential stealer sample.
 //!
 //! Validates that structure-based and instruction-pattern extraction finds
@@ -11,10 +10,6 @@ use stng::ExtractOptions;
 #[test]
 fn test_sample_stealer_short_strings() {
     let sample_path = crate::common::path("testdata/malware/sample-stealer");
-    if !std::path::Path::new(sample_path).exists() {
-        eprintln!("Skipping - sample not found at {sample_path}");
-        return;
-    }
 
     let data = std::fs::read(sample_path).expect("Failed to read sample");
 

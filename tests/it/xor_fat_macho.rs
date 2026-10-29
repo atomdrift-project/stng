@@ -1,9 +1,4 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::cast_possible_truncation
-)]
+#![allow(clippy::cast_possible_truncation)]
 //! Static specimen and malformed-table regressions; never execute the payload.
 
 use sha2::{Digest, Sha256};

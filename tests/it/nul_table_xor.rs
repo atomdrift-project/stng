@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! A table of short NUL-terminated paths under a printable single-byte key.
 //!
 //! Modeled on a static musl crypter stub (sha256 a3c64998…): `decode_str`

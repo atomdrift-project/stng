@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Test XOR extraction of cryptocurrency wallet paths from real malware
 use stng::{ExtractOptions, StringMethod};
 
@@ -18,8 +17,6 @@ fn test_crypto_wallet_paths_from_brew_agent() {
         .filter(|s| s.method == StringMethod::XorDecode)
         .map(|s| s.value.as_str())
         .collect();
-
-    println!("Found {} XOR-decoded strings", xor_strings.len());
 
     // Key wallet indicators found in DPRK malware
     // Note: Some short variants (e.g., "Wallets/Electrum" alone) may be filtered
@@ -49,27 +46,12 @@ fn test_crypto_wallet_paths_from_brew_agent() {
 
         if found {
             found_count += 1;
-            println!("✓ Found: {wallet_path} ({description})");
         } else {
             missing.push((wallet_path, description));
-            eprintln!("✗ Missing: {wallet_path} ({description})");
         }
     }
 
     // Print summary
-    println!("\n=== Summary ===");
-    println!(
-        "Found {}/{} expected wallet paths",
-        found_count,
-        expected_wallets.len()
-    );
-
-    if !missing.is_empty() {
-        eprintln!("\nMissing {} wallet paths:", missing.len());
-        for (path, desc) in &missing {
-            eprintln!("  - {path} ({desc})");
-        }
-    }
 
     // We should find at least 75% of the expected wallet paths
     let success_rate = (found_count * 100) / expected_wallets.len();
@@ -80,8 +62,6 @@ fn test_crypto_wallet_paths_from_brew_agent() {
         found_count,
         expected_wallets.len()
     );
-
-    println!("✓ Test passed with {success_rate}% success rate");
 }
 
 #[test]
@@ -104,22 +84,12 @@ fn test_wallet_keyword_detection() {
         .map(|s| s.value.as_str())
         .collect();
 
-    println!(
-        "Found {} strings containing 'wallet':",
-        wallet_strings.len()
-    );
-    for s in wallet_strings.iter().take(10) {
-        println!("  - {s}");
-    }
-
     // Should find at least 10 wallet-related strings
     assert!(
         wallet_strings.len() >= 10,
         "Should find at least 10 wallet strings, found {}",
         wallet_strings.len()
     );
-
-    println!("✓ Wallet keyword detection test passed");
 }
 
 #[test]
@@ -152,8 +122,5 @@ fn test_crypto_terms_detection() {
             term,
             xor_strings.len()
         );
-        println!("✓ Found strings containing '{term}'");
     }
-
-    println!("✓ Crypto terms detection test passed");
 }

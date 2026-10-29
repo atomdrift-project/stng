@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Native (no-radare2) Mach-O string fidelity.
 //!
 //! `wallet_report_objc` is an Objective-C wallet-stealer specimen whose

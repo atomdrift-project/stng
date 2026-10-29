@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for text file encoding detection and decoding.
 //!
 //! Ensures that text files with encoded content (hex, base64, URL-encoding, etc.)

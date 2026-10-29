@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Tests for import/export symbol extraction (imports.rs).
 //!
 //! ELF import extraction is exercised via `extract_from_elf` which calls
@@ -6,20 +5,13 @@
 //! on macOS system binaries. Deduplication correctness is verified through
 //! the full `extract_strings` pipeline.
 
-use std::path::Path;
 use stng::{
     ExtractOptions, StringKind, StringMethod, extract_strings, extract_strings_with_options, goblin,
 };
 
-fn macho_binary_path() -> Option<&'static str> {
-    // Prefer /bin/ls which on macOS is always Mach-O
-    if Path::new("/bin/ls").exists() {
-        Some("/bin/ls")
-    } else if Path::new("/usr/bin/ls").exists() {
-        Some("/usr/bin/ls")
-    } else {
-        None // Not macOS or unusual layout
-    }
+/// A universal C program that links libSystem dynamically.
+fn macho_binary_path() -> &'static str {
+    crate::common::path("testdata/macho/charge0x_installer_universal.macho")
 }
 
 // ── Mach-O imports (macOS system binaries) ──────────────────────────────────
@@ -27,14 +19,8 @@ fn macho_binary_path() -> Option<&'static str> {
 #[test]
 fn test_macho_binary_has_import_strings() {
     // /bin/ls on macOS dynamically links libSystem — should have Import kind strings
-    let Some(binary_path) = macho_binary_path() else {
-        return;
-    };
-    let data = std::fs::read(binary_path).expect("Failed to read ls binary");
-    // Skip if this happens to be an ELF binary (e.g. Linux /bin/ls)
-    if !matches!(goblin::Object::parse(&data), Ok(goblin::Object::Mach(_))) {
-        return;
-    }
+    let binary_path = macho_binary_path();
+    let data = std::fs::read(binary_path).expect("read Mach-O fixture");
 
     let strings = extract_strings(&data, 4);
     let imports: Vec<_> = strings
@@ -44,21 +30,15 @@ fn test_macho_binary_has_import_strings() {
 
     assert!(
         !imports.is_empty(),
-        "Mach-O /bin/ls should have Import kind strings from dylib; \
-         found {} total strings",
+        "Mach-O should have Import kind strings from dylib; found {} total strings",
         strings.len()
     );
 }
 
 #[test]
 fn test_macho_import_strings_have_nonempty_values() {
-    let Some(binary_path) = macho_binary_path() else {
-        return;
-    };
-    let data = std::fs::read(binary_path).expect("Failed to read ls binary");
-    if !matches!(goblin::Object::parse(&data), Ok(goblin::Object::Mach(_))) {
-        return;
-    }
+    let binary_path = macho_binary_path();
+    let data = std::fs::read(binary_path).expect("read Mach-O fixture");
 
     let strings = extract_strings(&data, 4);
     for s in strings
@@ -78,13 +58,8 @@ fn test_macho_import_strings_added_from_symbol_table_use_structure_method() {
     // Imports that exist only in the symbol table (not found by raw scan) should
     // have Structure method. Those already found by raw scan get kind upgraded to
     // Import but keep their original method.
-    let Some(binary_path) = macho_binary_path() else {
-        return;
-    };
-    let data = std::fs::read(binary_path).expect("Failed to read ls binary");
-    if !matches!(goblin::Object::parse(&data), Ok(goblin::Object::Mach(_))) {
-        return;
-    }
+    let binary_path = macho_binary_path();
+    let data = std::fs::read(binary_path).expect("read Mach-O fixture");
 
     let strings = extract_strings(&data, 4);
     let structure_imports: Vec<_> = strings
@@ -107,13 +82,8 @@ fn test_macho_import_strings_added_from_symbol_table_use_structure_method() {
 
 #[test]
 fn test_macho_import_strings_have_library_field() {
-    let Some(binary_path) = macho_binary_path() else {
-        return;
-    };
-    let data = std::fs::read(binary_path).expect("Failed to read ls binary");
-    if !matches!(goblin::Object::parse(&data), Ok(goblin::Object::Mach(_))) {
-        return;
-    }
+    let binary_path = macho_binary_path();
+    let data = std::fs::read(binary_path).expect("read Mach-O fixture");
 
     let strings = extract_strings(&data, 4);
     let imports: Vec<_> = strings
@@ -138,9 +108,6 @@ fn test_elf_extraction_completes_without_panic() {
     // Go ELF binaries are statically linked so may have no dynamic imports,
     // but the extraction pipeline must complete and return strings.
     let path = crate::common::path("testdata/elf/hello_linux_amd64");
-    if !Path::new(path).exists() {
-        return;
-    }
     let data = std::fs::read(path).expect("Failed to read hello_linux_amd64");
     let Ok(goblin::Object::Elf(_)) = goblin::Object::parse(&data) else {
         return;
@@ -157,9 +124,6 @@ fn test_elf_extraction_completes_without_panic() {
 fn test_elf_import_export_strings_have_nonempty_values_when_present() {
     // If the ELF has dynamic symbols, they must have non-empty names.
     let path = crate::common::path("testdata/elf/hello_linux_amd64");
-    if !Path::new(path).exists() {
-        return;
-    }
     let data = std::fs::read(path).expect("Failed to read hello_linux_amd64");
     let Ok(goblin::Object::Elf(_)) = goblin::Object::parse(&data) else {
         return;
@@ -191,9 +155,6 @@ fn test_full_pipeline_deduplicates_by_offset() {
     // The full extract_strings pipeline applies deduplicate_by_offset at the end.
     // No two strings in the output should share the same data_offset.
     let path = crate::common::path("testdata/elf/hello_linux_amd64");
-    if !Path::new(path).exists() {
-        return;
-    }
     let data = std::fs::read(path).expect("Failed to read hello_linux_amd64");
 
     let strings = extract_strings(&data, 4);
@@ -212,9 +173,6 @@ fn test_full_pipeline_deduplicates_by_offset() {
 #[test]
 fn test_full_pipeline_pe_deduplicates_by_offset() {
     let path = crate::common::path("testdata/pe/hello_windows.exe");
-    if !Path::new(path).exists() {
-        return;
-    }
     let data = std::fs::read(path).expect("Failed to read hello_windows.exe");
 
     let strings = extract_strings(&data, 4);

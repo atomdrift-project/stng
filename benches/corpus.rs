@@ -5,7 +5,7 @@
 //! process pays.
 //!
 //! ```text
-//! cargo bench --bench corpus -- [--threads 1,4,8] [--iters 3] [--opts filefacts|default] PATH...
+//! cargo bench --bench corpus -- [--threads 1,4,8] [--iters 3] [--opts symbols_provided|default] PATH...
 //! ```
 //!
 //! PATHs are files or directories (walked recursively); `.gz` files are
@@ -26,12 +26,12 @@ const COLD_FILE: &str = "testdata/pe/msvc_console_amd64.exe.gz";
 
 fn opts(name: &str) -> ExtractOptions {
     match name {
-        "filefacts" => ExtractOptions::new(4)
+        "symbols_provided" => ExtractOptions::new(4)
             .with_garbage_filter(true)
             .with_caller_provides_symbols(true)
             .with_xor(None),
         "default" => ExtractOptions::new(4),
-        other => panic!("unknown --opts {other}: want filefacts or default"),
+        other => panic!("unknown --opts {other}: want symbols_provided or default"),
     }
 }
 
@@ -107,7 +107,7 @@ fn cold_start(threads: usize, opts_name: &str) -> (u128, u128) {
 fn main() {
     let mut threads = vec![1, 4, 8];
     let mut iters = 3usize;
-    let mut opts_name = "filefacts".to_owned();
+    let mut opts_name = "symbols_provided".to_owned();
     let mut paths = Vec::new();
     let mut cold_child_mode = false;
     let mut args = std::env::args().skip(1);

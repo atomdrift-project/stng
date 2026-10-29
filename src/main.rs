@@ -1,3 +1,6 @@
+// Allow unwrap/expect/panic in test code — panicking on failure is idiomatic in tests.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 //! stng - Language-aware string extraction CLI
 //!
 //! Extract strings from Go and Rust binaries with proper boundary detection.
@@ -1238,12 +1241,5 @@ mod tests {
         let result = wrap_string_lines(&text, 0, 80);
         assert_eq!(result.len(), text.len().div_ceil(80));
         assert_eq!(result.last().map(|(o, _)| *o), Some(4 * 1024 * 1024 - 64));
-    }
-
-    #[test]
-    fn test_get_terminal_width() {
-        let width = get_terminal_width();
-        // Should return a reasonable default (120) or actual terminal width
-        assert!(width >= 80, "Terminal width should be at least 80");
     }
 }

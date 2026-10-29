@@ -634,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_detect_xor_key() {
+    fn auto_detect_needs_more_than_one_short_hit() {
         // Create test data with a known XOR key (realistic DPRK-style key)
         let plaintext = b"http://evil.com/malware.exe";
         let key_string = "fYztZORL5VNS7nC"; // 15 chars, high entropy
@@ -682,23 +682,9 @@ mod tests {
         // Auto-detect should find the right key
         let detected = auto_detect_xor_key(&xored, &candidates, 10);
 
-        // The test is a bit more lenient now - just check that a key with high confidence is detected
-        // The score threshold (>= 100) means we need actual IOCs, not just garbage strings
-        // In this test, with only 27 bytes of XOR'd URL, the extraction is small
-        // So this test may not detect anything if classification doesn't mark it as URL
-        //
-        // For now, we'll just check that IF a key is detected, it extracts a URL-like string
-        if let Some((_detected_key, detected_str, _offset)) = detected {
-            // At minimum, the detected string should contain the URL we're trying to find
-            assert!(
-                detected_str.contains("http")
-                    || detected_str.contains("evil")
-                    || detected_str.contains(".com"),
-                "Should extract meaningful strings from the key, got: '{detected_str}'"
-            );
-        }
-        // Note: We don't assert that a key MUST be detected, because the extraction
-        // logic may not classify the extracted URL correctly for this small test case
+        // One short URL is below the evidence threshold; detection on a
+        // real sample is covered by tests/it/xor_realworld.rs.
+        assert_eq!(detected, None);
     }
 
     #[test]
@@ -953,25 +939,14 @@ mod tests {
                     || (r.value.contains("eep 3") && !r.value.contains("sleep 3"))
             });
 
-            if !found_open_cmd || !found_sleep || found_truncated {
-                eprintln!("\nStrings found in region 0x4b100-0x4b200:");
-                for r in &in_region {
-                    eprintln!(
-                        "  0x{:05x} {:?}",
-                        r.data_offset,
-                        &r.value[..r.value.len().min(60)]
-                    );
-                }
-            }
-
-            assert!(found_sleep, "Should find 'sleep 3' command in region");
+            assert!(found_sleep, "no 'sleep 3' in region: {in_region:?}");
             assert!(
                 found_open_cmd,
-                "Should find full 'open -a /bin/bash' command at 0x4b115"
+                "no full 'open -a /bin/bash' command at 0x4b115: {in_region:?}"
             );
             assert!(
                 !found_truncated,
-                "Should NOT find truncated 'eep 3' without 'sleep'"
+                "truncated 'eep 3' without 'sleep': {in_region:?}"
             );
         }
     }
@@ -1014,12 +989,10 @@ mod tests {
             let results = extract_custom_xor_strings(&data, key, 10, false);
 
             // These garbage strings should NOT be extracted
-            let found = results.iter().any(|r| r.value == *garbage);
-            if found {
-                eprintln!(
-                    "WARNING: Garbage string '{garbage}' was extracted (may need better filtering)"
-                );
-            }
+            assert!(
+                !results.iter().any(|r| r.value == *garbage),
+                "garbage {garbage:?} was extracted"
+            );
         }
     }
 

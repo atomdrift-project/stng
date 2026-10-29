@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Integration test for ThreadRacer CPU benchmarking tool (PE x64, Bitsum LLC).
 //!
 //! Validates that stng does not produce false positives from VS_VERSION_INFO:

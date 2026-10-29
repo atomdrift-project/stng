@@ -13,7 +13,6 @@
 //! These tests pin the routing: an `Object::Unknown` input must
 //! exercise the same raw-scan + decoder pipeline that a parse-error
 //! input does, regardless of `is_text_file`'s byte-percentage verdict.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use stng::{ExtractOptions, extract_strings_with_options};
 
