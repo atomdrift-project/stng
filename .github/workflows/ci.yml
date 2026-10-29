@@ -27,6 +27,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # The emulated and VM-built platforms (build.yml's `slow` wave) take up to
+  # 75 minutes and are best-effort, so they run nightly and on demand rather
+  # than on every push.
+  schedule:
+    - cron: "17 6 * * *"
 
 permissions: {}
 
@@ -43,7 +48,6 @@ jobs:
   # Cheapest job, highest value. A `[patch]` entry pointing at a sibling
   # checkout is easy to commit by accident while a cross-repo change is in
   # flight. Shipping one would build a release nobody else can reproduce.
-  # Mirrors scripts/pre-commit.
   guard:
     name: guard
     runs-on: ubuntu-24.04
@@ -56,13 +60,13 @@ jobs:
           persist-credentials: false
 
       - name: Reject local path overrides
-        # Same regex as scripts/pre-commit; the `[^#]` lets commented-out
-        # patches through. Keep the two in sync.
+        run: scripts/check-overrides
+
+      - name: Install toolchain
         run: |
-          if grep -nE '^[[:space:]]*[^#].*path[[:space:]]*=[[:space:]]*"\.\.' Cargo.toml; then
-            echo "::error file=Cargo.toml::local path override committed - push the dep and pin a git rev instead"
-            exit 1
-          fi
+          rustup toolchain install 1.97 --profile minimal --component rustfmt,clippy --no-self-update
+          rustup default 1.97
+          rustc --version --verbose
 
       - name: Cache cargo home
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -75,23 +79,40 @@ jobs:
           key: cargo-home-guard-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-home-guard-${{ runner.os }}-
 
-      - run: cargo fmt --all --check
+      - name: Install cargo-machete
+        run: cargo install cargo-machete --locked --version 0.9.2
 
-      # Matches `make lint` exactly, so a clean local run means a clean CI run.
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      # The library alone, as its users build it: nothing outside src/cli and
-      # src/main.rs may reach for a `cli`-only dependency.
-      - run: cargo clippy --locked --no-default-features --lib -- -D warnings
-
-      # The public API's docs: broken or private links fail here.
-      - run: cargo doc --locked --no-deps
-        env:
-          RUSTDOCFLAGS: -D warnings
+      # The same checks as a local `make lint`: rustfmt, clippy on the
+      # workspace and on the library alone (no `cli` dependencies), rustdoc
+      # with warnings denied, and unused dependencies.
+      - run: make lint
 
       # A `--locked` build fails outright on a stale lockfile, but this catches
       # the subtler case of a lockfile that resolves but wasn't committed.
       - name: Cargo.lock unchanged
         run: git diff --exit-code Cargo.lock
+
+  # Advisories, licences, banned crates and allowed sources (deny.toml).
+  deny:
+    name: deny
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          rustup toolchain install 1.97 --profile minimal --no-self-update
+          rustup default 1.97
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.20.2
+
+      - run: cargo deny --locked check
 
   # Not gated on `guard`: serializing the builds behind clippy would only add
   # wall clock.
@@ -106,4 +127,7 @@ jobs:
       contents: read
     with:
       profile: release
+      # `fast` for pushes and PRs; everything for the nightly and manual runs.
+      # (An empty wave runs both; `'' || x` would always pick x, hence the inversion.)
+      wave: ${{ github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' && 'fast' || '' }}
     # No secrets passed. CI never touches the signing identity.

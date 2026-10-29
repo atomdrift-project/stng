@@ -20,19 +20,9 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Analysis and profiling files
-*_REPORT.md
+# Local working notes and agent settings
 *_AUDIT.md
-*_SUMMARY.md
-*_ANALYSIS.md
-*PERFORMANCE*.md
-*OPTIMIZATION*.md
-*IMPROVEMENTS*.md
-CLAUDE_*.md
-XOR_*.md
-COVERAGE_*.md
-CRYPTO_*.md
-MEMORY_*.md
+.claude/
 
 # Profiling and performance analysis data
 dhat-*.json

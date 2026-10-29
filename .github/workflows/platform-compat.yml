@@ -12,7 +12,6 @@ on:
         description: Published v* release tag to test.
         type: string
         required: true
-        default: v1.8.0
       platform:
         description: Run all probes or retry one platform.
         type: choice

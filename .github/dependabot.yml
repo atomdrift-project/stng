@@ -1,5 +1,6 @@
-# Keeps the SHA-pinned actions current. One grouped PR a week instead of one
-# per action; the `# vX.Y.Z` comment beside each pin is updated with it.
+# Keeps the SHA-pinned actions and the Cargo dependencies current, one grouped
+# PR a week for each. For actions, the `# vX.Y.Z` comment beside each pin is
+# updated with it.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -8,4 +9,11 @@ updates:
       interval: weekly
     groups:
       actions:
+        patterns: ["*"]
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
         patterns: ["*"]

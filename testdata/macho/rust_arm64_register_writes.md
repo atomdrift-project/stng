@@ -14,11 +14,10 @@ outlined helpers in `rust_heap_xor_installer_universal.macho` (original SHA-256
 `78371a85a51dee581823243272525e119ce88255e2ad75bc5980870681999970`). They represent
 21,138 recorded instruction occurrences, deduplicated by word. Expected masks
 were derived from Rizin disassembly operands before the native effect decoder
-was implemented. The readable source artifact is
-`/var/tmp/triage40/review/macho-rust-heap-xor/arm-register-write-oracle.json`.
-No sample instructions were executed.
+was implemented. No sample instructions
+were executed.
 
 This is a write-footprint oracle, not evidence of register preservation or
-control-flow reachability. `src/pointer_xor/arm64/effects.rs` compares every
+control-flow reachability. `src/arm64/effects.rs` compares every
 record and separately tests register fields, SP/zero-register distinctions,
 writeback modes, pair destinations, and rejection of unsupported encodings.

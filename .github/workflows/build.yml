@@ -132,8 +132,8 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup default stable
+          rustup toolchain install 1.97 --profile minimal --no-self-update
+          rustup default 1.97
           rustup target add "$TARGET"
           rustc --version --verbose
 
@@ -698,7 +698,7 @@ jobs:
 
   # DragonFlyBSD is a diagnostic target, not part of normal CI or releases.
   # Rust supports it only at Tier 3, and the newest vmactions/DPorts environment
-  # currently provides rustc 1.85.1 while Scan requires 1.94. Keep the job
+  # currently provides rustc 1.85.1 while stng requires 1.97. Keep the job
   # available for an explicit compatibility probe when the OS toolchain catches
   # up, without spending runner time or producing a known-missing release asset.
   dragonfly:
@@ -839,8 +839,8 @@ jobs:
             cargo --version --verbose
             df -h . /
             installed="$(rustc --version | awk '{print $2}')"
-            if dpkg --compare-versions "$installed" lt 1.94; then
-              echo "::error::GNU/Hurd provides rustc $installed; stng requires Rust 1.94 or newer"
+            if dpkg --compare-versions "$installed" lt 1.97; then
+              echo "::error::GNU/Hurd provides rustc $installed; stng requires Rust 1.97 or newer"
               exit 1
             fi
             export CARGO_HOME="$PWD/.native-cargo"
@@ -1002,11 +1002,9 @@ jobs:
     timeout-minutes: 150
     permissions:
       contents: read
-    # Only `native` (macOS + Linux, arm64/x86-64) is release-blocking; every
-    # other target ships when it builds and is reported missing by publish's
-    # inventory otherwise. Windows ARM64 is wired up but dispatch-only
-    # (`-f target=aarch64-pc-windows-msvc`).
-    continue-on-error: true
+    # Release-blocking alongside `native` and x86_64 musl: Windows is a
+    # first-class platform, so the suite runs here too. Windows ARM64 is
+    # wired up but dispatch-only (`-f target=aarch64-pc-windows-msvc`).
     strategy:
       fail-fast: false
       matrix:
@@ -1024,8 +1022,8 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup default stable
+          rustup toolchain install 1.97 --profile minimal --no-self-update
+          rustup default 1.97
           rustup target add "$TARGET"
           rustc --version --verbose
 
@@ -1043,6 +1041,9 @@ jobs:
           TARGET: ${{ matrix.target }}
           PROFILE: ${{ inputs.profile }}
         run: cargo build --locked --profile "$PROFILE" --target "$TARGET" --bin stng
+
+      - name: Test
+        run: cargo test --locked --workspace
 
       - name: Inspect
         env:
@@ -1084,7 +1085,9 @@ jobs:
     timeout-minutes: 150
     permissions:
       contents: read
-    continue-on-error: true
+    # The portable x86_64 Linux artifact is release-blocking; the other
+    # architectures ship when they build.
+    continue-on-error: ${{ matrix.target != 'x86_64-unknown-linux-musl' }}
     strategy:
       fail-fast: false
       matrix:

@@ -32,10 +32,9 @@
 # None of that is reachable from a pull_request trigger: tags on this repo can
 # only be pushed by someone who already has write access.
 #
-# To require a human before anything is published, create a `release`
-# environment (Settings -> Environments) with a required reviewer and add
-# `environment: release` to the publish job. The build still runs; only the
-# upload waits.
+# Both publish jobs run in the `release` environment. Give it a required
+# reviewer (Settings -> Environments) and nothing is published until a human
+# approves; the build still runs, only the upload waits.
 
 name: release
 
@@ -366,7 +365,7 @@ jobs:
     needs: [verify, build-fast]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # Add `environment: release` here to gate the upload on a human approval.
+    environment: release
     permissions:
       contents: write      # create the release, upload assets
       id-token: write      # OIDC identity for provenance signing
@@ -401,7 +400,7 @@ jobs:
     if: ${{ always() && needs.publish.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # Add `environment: release` here to gate the upload on a human approval.
+    environment: release
     permissions:
       contents: write      # create the release, upload assets
       id-token: write      # OIDC identity for provenance signing

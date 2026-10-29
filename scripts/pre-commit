@@ -2,8 +2,7 @@
 # stng pre-commit hook.
 #
 # Refuses the commit unless:
-#   1. Cargo.toml has no dependency or [patch] path that leaves the repo,
-#      which would pin against a sibling working tree.
+#   1. Cargo.toml has no local path override (scripts/check-overrides).
 #   2. `make test` passes.
 #   3. `make lint` passes.
 #
@@ -15,40 +14,7 @@ repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
 # 1. No local overrides in Cargo.toml.
-#
-# A dependency or [patch] entry whose path leaves the repo (absolute, ~, or
-# through ..) pins against a sibling checkout and must never land in a
-# commit. Paths inside the repo, such as crates/stng-process, and [patch]
-# entries sourced from git are part of the build and pass. Target paths under
-# [lib]/[[bin]] are not dependencies and are ignored.
-echo "Checking Cargo.toml for local overrides..."
-overrides=$(awk '
-	/^[[:space:]]*#/ { next }
-	/^[[:space:]]*\[/ {
-		section = $0
-		sub(/^[[:space:]]*\[+/, "", section)
-		sub(/\]+.*$/, "", section)
-		next
-	}
-	section ~ /(^|\.)(dev-|build-)?dependencies(\.|$)/ || section ~ /^patch/ {
-		if (!match($0, /(^|[{,[:space:]])path[[:space:]]*=[[:space:]]*"[^"]*"/)) {
-			next
-		}
-		value = substr($0, RSTART, RLENGTH)
-		sub(/^[^"]*"/, "", value)
-		sub(/"$/, "", value)
-		if (value ~ /^[\/~]/ || value ~ /(^|\/)\.\.(\/|$)/) {
-			printf "  %d: %s\n", NR, $0
-		}
-	}
-' Cargo.toml)
-
-if [ -n "$overrides" ]; then
-	echo "Error: Cargo.toml contains local overrides; remove before committing:" >&2
-	echo "$overrides" >&2
-	exit 1
-fi
-echo "✓ No local overrides"
+scripts/check-overrides
 echo ""
 
 # 2. Tests.

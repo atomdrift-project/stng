@@ -21,9 +21,8 @@ metadata. It considers at most eight candidates and retains at most 32 MiB per
 file. It performs no second section scan or key search. Both standalone and
 archive-member analysis paths use this recovery.
 
-Independent manual XOR and the native API produce identical bytes; the audit,
-all three decompilations, and function coverage are preserved in
-`/var/tmp/triage40/review/macho-30c990/`. Regression coverage now includes original specimen/output hashes, public key
+Independent manual XOR and the native API produce identical bytes. Regression
+coverage includes original specimen/output hashes, public key
 provenance, malformed tables/slices, truncation, arbitrary keys and size limits
 in stng; Cleave additionally tests candidate/output budgets, deduplication,
 conservative nesting and standalone/archive recursive analysis.

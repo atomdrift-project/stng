@@ -12,10 +12,8 @@ Expected masks were derived from independently recorded Rizin instruction
 operands. The generator first pins the ARM slice hash and checks each recorded
 instruction's bytes against the original. It does not execute specimen code.
 
-Readable evidence and generator:
-`/var/tmp/triage40/review/macho-rust-heap-xor/arm-framed-register-write-oracle.json`
-and `build-framed-write-oracle.py` in the same directory. The four disassembly
-batches are `arm-framed-callees.jsonl` and `arm-framed-callees-{2,3,4}.jsonl`.
+The oracle's generator and its four Rizin disassembly batches are not part
+of the repository.
 
 This fixture tests write footprints, including UMULH and conditional selects.
 It does not establish framed-call preservation, imported ABI contracts, or

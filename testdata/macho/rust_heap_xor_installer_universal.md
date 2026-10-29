@@ -27,7 +27,7 @@ Evidence spans cover the encoded instructions in the original outer file.
 
 ## Pointer-derived constant XOR
 
-The separate `pointer_xor` recognizer recovers the constant scheme used by
+The separate `xor::pointer` recognizer recovers the constant scheme used by
 the extension IDs and upload URLs. An eight-byte setup signature gates a
 strict instruction grammar: key base and seed setup, stack initialization,
 complete qword XOR loop, and a matching literal length at the next call.
@@ -87,16 +87,16 @@ Cache version 21 invalidates output produced before this section fix.
 
 ## Regression tests
 
-- `src/heap_xor/tests.rs`: 7 tests pin the original specimen and independent
+- `src/xor/heap/tests.rs`: 7 tests pin the original specimen and independent
   prompt digest, full instruction provenance, every loop/helper instruction,
   malformed arrays, text, truncation, code/candidate budgets and public extraction.
-- `src/pointer_xor/tests.rs`: 8 tests compare all 298 independently reconstructed
+- `src/xor/pointer/tests.rs`: 8 tests compare all 298 independently reconstructed
   extension-ID rows and key helpers (`rust_pointer_xor_expected.json`), the three
   endpoint literals, setup/loop mutations, helper grammar, consumer lengths,
   region bounds, malformed text and code/candidate limits.
 - `src/rust/triage_tests.rs`: checks both Rust slice-header segment names and
   an unsupported-segment negative, plus all six SQL literals and exact spans.
-- `src/instr/push_length_regressions.rs`: tests the full positive imm8 range,
+- `src/instr/amd64/push_length_tests.rs`: tests the full positive imm8 range,
   extended registers, optional stack LEA, clobbers, negative/zero lengths, gaps
   and truncation.
 
@@ -116,7 +116,7 @@ currently unsupported ARM64 pointer-derived decoding path; it does not imply
 that the current extractor recovers these ARM64 literals.
 
 The native ARM64 key folder now has seven tests in
-`src/pointer_xor/arm64/tests.rs`, including all 596 oracle rows and mutation
+`src/xor/pointer/arm64/tests.rs`, including all 596 oracle rows and mutation
 of each executed key-helper instruction. The folder has fixed register state,
 a 40-instruction limit, and at most two tail branches. Literal setup/loop
 recognition and runtime integration remain pending; current extraction
@@ -155,7 +155,7 @@ restores X22; checking only direct caller writes would miss this distinction.
 
 ## ARM64 complete qword-loop checkpoint
 
-`src/pointer_xor/arm64/loops.rs` validates all 298 extension-ID decoding loops:
+`src/xor/pointer/arm64/loops.rs` validates all 298 extension-ID decoding loops:
 296 outlined loops with three copy/consumer arrangements, plus two inline
 frame-relative loops. The grammar checks the full XOR body, exact iteration
 bound/stride/back edge, copied destination versus consumer pointer, and exact
@@ -238,7 +238,7 @@ compatibility/password prompt. Its SHA-256 is
 the thin instruction span starts at `0x28fa0` and covers 1468 bytes. The
 original universal specimen remains in stng testdata. Cache version is 37.
 
-`src/heap_xor/arm64.rs` recognizes complete constant array initialization and
+`src/xor/heap/arm64.rs` recognizes complete constant array initialization and
 the checked-index byte-XOR loop with its outlined helpers. Work is bounded by
 8 MiB of code, 128 candidate attempts, 4096 bytes per array and at most
 `2*length+8` initializer instructions. Recovery needs no external tools or
@@ -267,7 +267,7 @@ checkpoint does not claim complete extraction or final taxonomy validation.
 
 ## Native ARM64 immediate qword names
 
-`src/pointer_xor/arm64/immediate.rs` now recovers the reviewed one-iteration
+`src/xor/pointer/arm64/immediate.rs` now recovers the reviewed one-iteration
 qword form: four MOV/MOVK immediates plus one constant-section byte form the
 ciphertext, which is XORed with the independently folded eight-byte key. Exact
 initializer, loop flag, outlined helper, stack store and matching consumer-length
@@ -294,7 +294,7 @@ caller-dependent seed and wider corpus coverage remain open.
 
 ## Native ARM64 short integer tails
 
-`src/pointer_xor/arm64/short_tail.rs` now handles all 68 reviewed nine-to-eleven-
+`src/xor/pointer/arm64/short_tail.rs` now handles all 68 reviewed nine-to-eleven-
 byte name occurrences. It verifies the qword-loop prefix, folds the key with the
 existing bounded folder, and evaluates the short integer tail with four
 registers, eleven output bytes, two nested calls and at most 64 instructions.
@@ -362,7 +362,7 @@ previously required an adjacent length instruction and recognized only the
 64-bit MOVZ form. `arm-credential-literal-refs.jsonl` records the original code;
 every instruction was checked against the retained ARM slice.
 
-`src/instr.rs` now accepts zero-extending W lengths and the precise independent
+`src/instr/` now accepts zero-extending W lengths and the precise independent
 stack-result setup. Immediate decoding rejects reserved W lanes, MOVK, and ORR
 from a live register. Stored string headers also accept W lengths. Inline
 candidates no longer survive intervening calls, branches, argument-register

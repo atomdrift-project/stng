@@ -9,7 +9,7 @@ OUT_DIR = out
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release check-cargo install install-precommit test test-unit lint fix fmt clean ci help bench-path bench-build sampled-benchmark heap-build heap-benchmark cut-release
+.PHONY: all build debug release check-cargo install install-precommit test test-unit lint fix fmt clean ci deny help bench-path bench-build sampled-benchmark heap-build heap-benchmark cut-release
 
 # Default target
 all: build
@@ -30,6 +30,7 @@ help: ## Show this help
 	@echo "  fix         - Auto-fix clippy lints, then format with rustfmt"
 	@echo "  lint        - Run code formatting and linting checks"
 	@echo "  ci          - Run all CI checks (test + lint)"
+	@echo "  deny        - Check advisories, licences and dependency sources"
 	@echo "  clean       - Clean all build artifacts"
 	@echo "  sampled-benchmark BENCH_PATH=... - CPU profile with samply"
 	@echo "  heap-benchmark BENCH_PATH=...    - Heap profile with jemalloc"
@@ -138,9 +139,9 @@ lint: ## Run code formatting and linting checks
 	@echo "✓ Formatting passed"
 	@echo ""
 	@echo "Running clippy with workspace lints..."
-	@cargo clippy --workspace --all-targets --all-features -- -D warnings
-	@cargo clippy --no-default-features --lib -- -D warnings
-	@RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --quiet
+	@cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+	@cargo clippy --locked --no-default-features --lib -- -D warnings
+	@RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --quiet
 	@echo "✓ Clippy passed"
 	@echo ""
 	@echo "Checking for unused dependencies..."
@@ -152,24 +153,14 @@ lint: ## Run code formatting and linting checks
 	@echo ""
 	@echo "✓ All lints passed"
 
+deny: ## Check advisories, licences and dependency sources (deny.toml)
+	@cargo deny --locked check
+
 ci: test lint ## Run all CI checks (test + lint)
 	@echo "✓ All CI checks passed"
 
-# Cut a release: set the version everywhere it is recorded, prove the result
-# builds the way CI will, and commit + tag it as one unit.
-#
-#     make cut-release VERSION=1.2.3
-#
-# The version lives in three places that must agree — Cargo.toml, Cargo.lock,
-# and the tag — and release.yml rejects the build when any pair disagrees.
-# Doing it by hand cost four failed release runs in one day: a tag ahead of
-# Cargo.toml, then Cargo.toml ahead of Cargo.lock, each discovered ~40 minutes
-# into a matrix that `cargo check --locked` disproves in seconds.
-#
-# Pushing stays manual on purpose. That is the step that spends an hour of CI
-# and publishes artifacts people download, so it gets a human; everything this
-# target does is local and revertible with `git reset --hard HEAD~1` plus
-# `git tag -d`.
+# Set the version in Cargo.toml, Cargo.lock and a tag together, verify the
+# build CI will run, then commit and tag. Pushing stays manual.
 cut-release: ## Bump version + lockfile, verify, commit and tag (VERSION=x.y.z)
 	@test -n "$(VERSION)" || { echo "usage: make cut-release VERSION=x.y.z" >&2; exit 1; }
 	@printf '%s\n' "$(VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$$' \

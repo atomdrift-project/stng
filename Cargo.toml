@@ -6,7 +6,7 @@ edition = "2024"
 # the MSRV-aware resolver, so this also caps dependency versions.
 rust-version = "1.97"
 authors = ["The Atomdrift Project"]
-description = "Language-aware advanced string extraction binaries"
+description = "strings(1) for malware analysis: decodes obfuscated strings and understands Go and Rust binaries"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/atomdrift-project/stng"
@@ -36,12 +36,7 @@ aho-corasick = "1.1"
 clap = { version = "4.6", features = ["derive"], optional = true }
 anyhow = { version = "1.0", optional = true }
 dirs = { version = "6.0", optional = true }
-# Hashing. 0.11 does ARM/x86 hardware SHA acceleration automatically, so it
-# replaces the old `asm` feature without the sha2-asm dependency that pulled
-# in. sha2-asm ships GAS-syntax .S files MSVC's assembler cannot build, and
-# because cargo unifies features across the graph, enabling `asm` here broke
-# the x86_64-pc-windows-msvc build for every crate sharing this sha2. Matches
-# cleave and fletch, both on 0.11.
+# Rizin cache keys. No `asm` feature: its assembly does not build with MSVC.
 sha2 = { version = "0.11", optional = true }
 terminal_size = { version = "0.4", optional = true }
 
@@ -75,21 +70,12 @@ iced-x86 = { version = "1.21", default-features = false, features = ["std", "dec
 
 # Logging (modern structured logging with tracing)
 tracing = "0.1"
-# `default-features = false` drops the `tracing-log` bridge. With it on,
-# `SubscriberInitExt::init()` installs a global `log` facade that funnels every
-# upstream `log!()` through the tracing dispatcher and env-filter; goblin's
-# permissive PE import walker warns per malformed lookup-table entry, and a
-# forged import directory turns that into a CPU livelock. scan already asks for
-# this, but Cargo unifies features across the graph, so a default-features
-# dependency here re-arms the bridge for the whole binary.
+# No default features: the `tracing-log` bridge would route goblin's
+# per-entry import warnings through us, a CPU livelock on forged import tables.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi", "smallvec", "std"], optional = true }
 
-# Use jemalloc on unix systems where it isn't already the system allocator.
-# FreeBSD/DragonFlyBSD/NetBSD ship jemalloc as the default (NetBSD's libc malloc
-# is jemalloc-derived); bundling a second copy causes TSD assertion failures in
-# jails, and on NetBSD tikv-jemalloc-sys's configure script fails outright. OpenBSD's jemalloc version string
-# format is incompatible with tikv-jemalloc-sys's configure script. illumos
-# and Solaris ship libumem (a comparable arena allocator).
+# jemalloc where the system allocator is not already jemalloc (the BSDs) or
+# libumem (illumos, Solaris), and where tikv-jemalloc-sys builds (not OpenBSD).
 [target.'cfg(all(unix, not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd", target_os = "illumos", target_os = "solaris"))))'.dependencies]
 tikv-jemallocator = { version = "0.7", optional = true }
 
@@ -138,12 +124,9 @@ required-features = ["cli"]
 [profile.release]
 lto = true
 codegen-units = 1
-debug = true
 
-# Distribution profile, used by release.yml for every shipped binary. `release`
-# already builds with fat LTO and one codegen unit; this drops the debuginfo it
-# keeps for profiling, which is most of the binary's size and of no use to
-# someone downloading it.
+# Distribution profile, used by release.yml for every shipped binary: release,
+# with the standard library's debuginfo stripped too.
 [profile.release-lto]
 inherits = "release"
 strip = "debuginfo"
@@ -197,7 +180,7 @@ suspicious = { level = "warn", priority = -1 }
 # Performance - real performance issues
 perf = { level = "warn", priority = -1 }
 
-# Style and complexity (inherited from cleave/litmus)
+# Style and complexity
 style = { level = "warn", priority = -1 }
 complexity = { level = "warn", priority = -1 }
 
@@ -226,7 +209,7 @@ large_futures = "warn"
 debug_assert_with_mut_call = "deny"
 exit = "warn"
 
-# Cast safety — inherited from litmus; catch silent data loss on narrowing/sign-changing casts
+# Cast safety: catch silent data loss on narrowing or sign-changing casts
 cast_possible_truncation = "warn"   # e.g. u64 as u32 may silently drop high bits
 cast_sign_loss = "warn"             # e.g. -1i64 as usize wraps to usize::MAX
 

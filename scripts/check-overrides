@@ -1,0 +1,40 @@
+#!/bin/sh
+# Fail if Cargo.toml has a dependency or [patch] path that leaves the repo
+# (absolute, ~, or through ..): it pins against a sibling working tree, so
+# nobody else can reproduce the build. Paths inside the repo, such as
+# crates/stng-process, and [patch] entries sourced from git pass. Target
+# paths under [lib]/[[bin]] are not dependencies and are ignored.
+#
+# Run by scripts/pre-commit and by CI.
+
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+echo "Checking Cargo.toml for local overrides..."
+overrides=$(awk '
+	/^[[:space:]]*#/ { next }
+	/^[[:space:]]*\[/ {
+		section = $0
+		sub(/^[[:space:]]*\[+/, "", section)
+		sub(/\]+.*$/, "", section)
+		next
+	}
+	section ~ /(^|\.)(dev-|build-)?dependencies(\.|$)/ || section ~ /^patch/ {
+		if (!match($0, /(^|[{,[:space:]])path[[:space:]]*=[[:space:]]*"[^"]*"/)) {
+			next
+		}
+		value = substr($0, RSTART, RLENGTH)
+		sub(/^[^"]*"/, "", value)
+		sub(/"$/, "", value)
+		if (value ~ /^[\/~]/ || value ~ /(^|\/)\.\.(\/|$)/) {
+			printf "  %d: %s\n", NR, $0
+		}
+	}
+' Cargo.toml)
+
+if [ -n "$overrides" ]; then
+	echo "Error: Cargo.toml contains local overrides; remove before committing:" >&2
+	echo "$overrides" >&2
+	exit 1
+fi
+echo "✓ No local overrides"
