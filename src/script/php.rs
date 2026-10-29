@@ -55,29 +55,26 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
     let mut results = Vec::new();
 
     results.extend(try_eval_gzinflate_b64(source));
-    results.extend(try_eval_gzuncompress_b64(source));
-    results.extend(try_eval_b64(source));
-    results.extend(try_eval_rot13(source));
+    results.extend(super::decode_captures(
+        source,
+        &[&EVAL_GZUNCOMPRESS_B64_RE],
+        &[DecodeStep::Base64, DecodeStep::Zlib],
+        "php",
+    ));
+    results.extend(super::decode_captures(
+        source,
+        &[&EVAL_B64_RE],
+        &[DecodeStep::Base64],
+        "php",
+    ));
+    results.extend(super::decode_captures(
+        source,
+        &[&EVAL_ROT13_DOUBLE_RE, &EVAL_ROT13_SINGLE_RE],
+        &[DecodeStep::Rot13],
+        "php",
+    ));
 
     results
-}
-
-fn try_eval_b64(source: &str) -> Vec<DeobfuscationResult> {
-    EVAL_B64_RE
-        .captures_iter(source)
-        .filter_map(|cap| {
-            let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
-            let offset = cap.get(0)?.start();
-            let steps = vec![DecodeStep::Base64];
-            let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps)?;
-            Some(DeobfuscationResult {
-                decoded: result.payload,
-                offset,
-                chain_description: format!("php:{}", result.chain_description),
-                language: "php",
-            })
-        })
-        .collect()
 }
 
 fn try_eval_gzinflate_b64(source: &str) -> Vec<DeobfuscationResult> {
@@ -106,44 +103,6 @@ fn try_eval_gzinflate_b64(source: &str) -> Vec<DeobfuscationResult> {
             })
         })
         .collect()
-}
-
-fn try_eval_gzuncompress_b64(source: &str) -> Vec<DeobfuscationResult> {
-    EVAL_GZUNCOMPRESS_B64_RE
-        .captures_iter(source)
-        .filter_map(|cap| {
-            let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
-            let offset = cap.get(0)?.start();
-            // PHP gzuncompress expects zlib-compressed data (with header)
-            let steps = vec![DecodeStep::Base64, DecodeStep::Zlib];
-            let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps)?;
-            Some(DeobfuscationResult {
-                decoded: result.payload,
-                offset,
-                chain_description: format!("php:{}", result.chain_description),
-                language: "php",
-            })
-        })
-        .collect()
-}
-
-fn try_eval_rot13(source: &str) -> Vec<DeobfuscationResult> {
-    let iter = EVAL_ROT13_DOUBLE_RE
-        .captures_iter(source)
-        .chain(EVAL_ROT13_SINGLE_RE.captures_iter(source));
-    iter.filter_map(|cap| {
-        let encoded = cap.get(1)?.as_str();
-        let offset = cap.get(0)?.start();
-        let steps = vec![DecodeStep::Rot13];
-        let result = super::decode_chain::apply_chain(encoded.as_bytes(), &steps)?;
-        Some(DeobfuscationResult {
-            decoded: result.payload,
-            offset,
-            chain_description: format!("php:{}", result.chain_description),
-            language: "php",
-        })
-    })
-    .collect()
 }
 
 #[cfg(test)]

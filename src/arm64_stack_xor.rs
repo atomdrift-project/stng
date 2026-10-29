@@ -8,10 +8,12 @@
 
 use crate::classifier::classify_string;
 use crate::types::{ExtractedString, StringKind, StringMethod};
+use aho_corasick::AhoCorasick;
 use goblin::mach::MachO;
 use goblin::mach::constants::S_ATTR_SOME_INSTRUCTIONS;
 use goblin::mach::constants::cputype::CPU_TYPE_ARM64;
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 // The known stack-XOR family is compact. Above this size, only pay for the
 // specialized disassembly when the ordinary extraction pass says the image is
@@ -129,6 +131,15 @@ impl Budget {
     }
 }
 
+/// Bytes stored at a stack offset, and the file offset of the store.
+struct Slot {
+    bytes: Vec<u8>,
+    at: u64,
+}
+
+/// The emulated stack, by offset from the entry stack pointer.
+type Stack = HashMap<i64, Slot>;
+
 fn extract_section(
     code: &[u8],
     section_file_offset: u64,
@@ -136,7 +147,7 @@ fn extract_section(
     budget: &mut Budget,
 ) -> Vec<ExtractedString> {
     let mut regs: HashMap<u8, RegValue> = HashMap::with_capacity(32);
-    let mut memory: HashMap<i64, Vec<u8>> = HashMap::new();
+    let mut memory = Stack::new();
     let mut sink_results = Vec::new();
     let mut decoded_arg_starts = HashSet::new();
     let mut decoded_blob_state: HashMap<i64, (usize, usize, u64)> = HashMap::new();
@@ -190,8 +201,8 @@ fn extract_section(
             };
             let disp = base + mem.disp;
             if mem.load {
-                if let Some(bytes) = memory.get(&disp).cloned() {
-                    regs.insert(mem.rt, RegValue::Bytes(bytes));
+                if let Some(slot) = memory.get(&disp) {
+                    regs.insert(mem.rt, RegValue::Bytes(slot.bytes.clone()));
                 } else {
                     regs.remove(&mem.rt);
                 }
@@ -207,7 +218,8 @@ fn extract_section(
                     memory.clear();
                     decoded_blob_state.clear();
                 }
-                memory.insert(disp, bytes);
+                let at = section_file_offset + instr_off;
+                memory.insert(disp, Slot { bytes, at });
                 if !recovered_pads.is_empty() && budget.spend(memory.len()) {
                     let decoded = decode_recent_stack_blobs_with_pads(
                         &memory,
@@ -297,7 +309,7 @@ fn decode_unsigned_mem(word: u32) -> Option<MemInsn> {
 }
 
 fn decode_stack_arg_with_candidate_pads(
-    memory: &HashMap<i64, Vec<u8>>,
+    memory: &Stack,
     cipher_start: i64,
     instr_off: u64,
     min_length: usize,
@@ -369,9 +381,10 @@ fn decode_stack_arg_with_candidate_pads(
                 pads.push(key);
             }
             if seen.insert(key_value.clone()) {
+                // The key is located at the store that wrote its first bytes.
                 results.push(ExtractedString {
                     value: key_value,
-                    data_offset: instr_off.saturating_sub(1),
+                    data_offset: memory.get(&pad_start).map_or(instr_off, |slot| slot.at),
                     method: StringMethod::XorStackPair,
                     kind: Some(StringKind::XorKey),
                     ..Default::default()
@@ -391,7 +404,7 @@ fn decode_stack_arg_with_candidate_pads(
 }
 
 fn decode_recent_stack_blobs_with_pads(
-    memory: &HashMap<i64, Vec<u8>>,
+    memory: &Stack,
     write_start: i64,
     pads: &[Vec<u8>],
     decoded_blob_state: &mut HashMap<i64, (usize, usize, u64)>,
@@ -445,7 +458,7 @@ fn decode_recent_stack_blobs_with_pads(
                 .collect();
 
             for raw_value in printable_runs(&decoded, min_length) {
-                if !might_contain_useful_decoded_marker(&raw_value) {
+                if !MARKERS.is_match(&raw_value) {
                     continue;
                 }
                 let Some(value) = normalize_decoded_value(&raw_value, min_length) else {
@@ -466,41 +479,6 @@ fn decode_recent_stack_blobs_with_pads(
     }
 
     results
-}
-
-fn might_contain_useful_decoded_marker(s: &str) -> bool {
-    let lower = s.to_ascii_lowercase();
-    [
-        "osascript",
-        "dscl",
-        "/users/",
-        "/library/",
-        "library/",
-        "application support",
-        "bravesoftware/",
-        "google/",
-        "chrome",
-        "chromium",
-        "cookies",
-        "login data",
-        "accounts-metadata/",
-        ".electrum",
-        ".walletwasabi",
-        "monero/",
-        "bitcoin",
-        "wallet.dat",
-        "ledger",
-        "ledger-wallet",
-        "exodus",
-        "atomic",
-        "killall",
-        "terminal",
-        "keychain",
-        "wallet",
-        "wallets",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
 }
 
 fn printable_runs(decoded: &[u8], min_length: usize) -> Vec<String> {
@@ -534,36 +512,54 @@ fn printable_runs(decoded: &[u8], min_length: usize) -> Vec<String> {
     runs
 }
 
+/// Where a stealer target begins in a decoded run: anything before one of
+/// these, if it is at most 24 bytes in, is stack noise.
+const ANCHORS: &[&str] = &[
+    "osascript",
+    "dscl",
+    "/Users/",
+    "/Library/",
+    "Library/",
+    "Application Support",
+    "BraveSoftware/",
+    "Google/",
+    "Chrome",
+    "Chromium",
+    "Cookies",
+    "Login Data",
+    "accounts-metadata/",
+    ".electrum",
+    ".walletwasabi",
+    "Monero/",
+    "Bitcoin",
+    "wallet.dat",
+    "Ledger",
+    "ledger-wallet",
+    "Exodus",
+    "Atomic",
+];
+
+/// A decoded run is worth normalizing only if it names a stealer target or
+/// the commands around one.
+#[allow(clippy::expect_used)] // static patterns
+static MARKERS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build(
+            ANCHORS
+                .iter()
+                .chain(&["killall", "terminal", "keychain", "wallet"]),
+        )
+        .expect("static patterns")
+});
+
 fn normalize_decoded_value(value: &str, min_length: usize) -> Option<String> {
     let mut value = value.trim().to_string();
     if value.len() < min_length {
         return None;
     }
 
-    for anchor in [
-        "osascript",
-        "dscl",
-        "/Users/",
-        "/Library/",
-        "Library/",
-        "Application Support",
-        "BraveSoftware/",
-        "Google/",
-        "Chrome",
-        "Chromium",
-        "Cookies",
-        "Login Data",
-        "accounts-metadata/",
-        ".electrum",
-        ".walletwasabi",
-        "Monero/",
-        "Bitcoin",
-        "wallet.dat",
-        "Ledger",
-        "ledger-wallet",
-        "Exodus",
-        "Atomic",
-    ] {
+    for anchor in ANCHORS {
         if let Some(idx) = value.find(anchor)
             && idx > 0
             && idx <= 24
@@ -620,15 +616,11 @@ fn normalize_decoded_value(value: &str, min_length: usize) -> Option<String> {
     }
 }
 
-fn collect_contiguous(
-    memory: &HashMap<i64, Vec<u8>>,
-    start: i64,
-    max_len: usize,
-) -> Option<Vec<u8>> {
+fn collect_contiguous(memory: &Stack, start: i64, max_len: usize) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut pos = start;
     while out.len() < max_len {
-        let Some(chunk) = memory.get(&pos) else {
+        let Some(Slot { bytes: chunk, .. }) = memory.get(&pos) else {
             break;
         };
         if chunk.is_empty() {

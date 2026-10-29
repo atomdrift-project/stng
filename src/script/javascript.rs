@@ -60,49 +60,17 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
     let mut results = Vec::new();
 
     results.extend(super::javascript_permutation::extract(source));
-    results.extend(try_eval_atob(source));
-    results.extend(try_eval_buffer_b64(source));
+    results.extend(super::decode_captures(
+        source,
+        &[&EVAL_ATOB_RE, &EVAL_BUFFER_B64_RE],
+        &[DecodeStep::Base64],
+        "javascript",
+    ));
     results.extend(try_eval_charcode(source));
     results.extend(try_charcode_array(source));
     results.extend(try_eval_reverse(source));
 
     results
-}
-
-fn try_eval_atob(source: &str) -> Vec<DeobfuscationResult> {
-    EVAL_ATOB_RE
-        .captures_iter(source)
-        .filter_map(|cap| {
-            let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
-            let offset = cap.get(0)?.start();
-            let steps = vec![DecodeStep::Base64];
-            let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps)?;
-            Some(DeobfuscationResult {
-                decoded: result.payload,
-                offset,
-                chain_description: format!("javascript:{}", result.chain_description),
-                language: "javascript",
-            })
-        })
-        .collect()
-}
-
-fn try_eval_buffer_b64(source: &str) -> Vec<DeobfuscationResult> {
-    EVAL_BUFFER_B64_RE
-        .captures_iter(source)
-        .filter_map(|cap| {
-            let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
-            let offset = cap.get(0)?.start();
-            let steps = vec![DecodeStep::Base64];
-            let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps)?;
-            Some(DeobfuscationResult {
-                decoded: result.payload,
-                offset,
-                chain_description: format!("javascript:{}", result.chain_description),
-                language: "javascript",
-            })
-        })
-        .collect()
 }
 
 fn try_eval_charcode(source: &str) -> Vec<DeobfuscationResult> {

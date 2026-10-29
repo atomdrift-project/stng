@@ -51,8 +51,8 @@ fn polyglot_text_prefix_with_binary_tail_still_decodes_embedded_base64() {
         [Convert]::FromBase64String('c3VwZXJsb25na2V5LW1hcmtlcg==')\", 0, False\r\n";
 
     // Fake ZIP-style body: lots of non-printable bytes, no recognised
-    // binary magic. Pushes is_text_file's printable-byte ratio below
-    // the threshold and gives goblin nothing to identify.
+    // binary magic: not text to `is_text_file`, and nothing goblin can
+    // identify.
     let mut data = prefix.to_vec();
     data.extend(std::iter::repeat_n(0u8, 8 * 1024));
     data.extend((0u8..251).cycle().take(16 * 1024));

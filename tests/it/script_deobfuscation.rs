@@ -639,19 +639,23 @@ fn test_binary_files_not_affected() {
     );
 }
 
+/// A GBK-encoded ASP page is text, and so is decoded; embedded in a binary
+/// container (NULs around it) it is not text, and the `#@~^` marker alone
+/// must still trigger decoding.
 #[test]
-fn vbscript_encode_in_binary_classified_asp_is_deobfuscated() {
-    let sample = &crate::common::bytes("testdata/script/vbscript-encoded-malformed-asp.asp");
-    assert!(
-        !stng::is_text_file(sample),
-        "fixture must exercise the encoded ASP binary-classification path"
-    );
+fn vbscript_encode_in_asp_is_deobfuscated_as_text_and_inside_binary() {
+    let page = crate::common::bytes("testdata/script/vbscript-encoded-malformed-asp.asp");
+    let embedded = [&[0u8; 16][..], &page, &[0u8; 16]].concat();
+    assert!(stng::is_text_file(&page));
+    assert!(!stng::is_text_file(&embedded));
 
-    let strings = stng::extract_strings_with_options(sample, &ExtractOptions::new(4));
-    assert!(
-        strings.iter().any(|s| {
-            s.method == StringMethod::ScriptDecode && s.value.contains("wscript.shell")
-        }),
-        "encoded VBScript payload should be exposed as decoded strings"
-    );
+    for sample in [&page, &embedded] {
+        let strings = stng::extract_strings_with_options(sample, &ExtractOptions::new(4));
+        assert!(
+            strings.iter().any(|s| {
+                s.method == StringMethod::ScriptDecode && s.value.contains("wscript.shell")
+            }),
+            "encoded VBScript payload should be exposed as decoded strings"
+        );
+    }
 }

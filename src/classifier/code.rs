@@ -668,49 +668,16 @@ pub(super) fn is_shell_command(s: &str) -> bool {
     // appears anywhere, neither `starts_with` nor the space-preceded `find` can
     // match, so the ~40 substring searches are skipped — the common case for
     // symbol-table strings.
-    if SHELL_CMD_PREFIX_AC.is_match(s) {
-        for &prefix in SHELL_CMD_PREFIXES {
-            if s.starts_with(prefix) {
-                // Special case: "service " at start should be followed by command words
-                if prefix == "service "
-                    && let Some(after) = s.strip_prefix(prefix)
-                {
-                    let is_command = after.starts_with("start")
-                        || after.starts_with("stop")
-                        || after.starts_with("restart")
-                        || after.starts_with("status")
-                        || after.starts_with("enable")
-                        || after.starts_with("disable");
-                    if !is_command {
-                        continue;
-                    }
-                }
-                return true;
-            }
-            // Check for " prefix" pattern without allocation
-            if let Some(pos) = s.find(prefix)
-                && pos > 0
-                && s.as_bytes()[pos - 1] == b' '
-            {
-                // Special case: "service " should be followed by command words, not "provider" etc.
-                if prefix == "service " {
-                    let after = &s[pos + prefix.len()..];
-                    let is_command = after.starts_with("start")
-                        || after.starts_with("stop")
-                        || after.starts_with("restart")
-                        || after.starts_with("status")
-                        || after.starts_with("enable")
-                        || after.starts_with("disable");
-                    if !is_command {
-                        continue;
-                    }
-                }
-                return true;
-            }
-        }
-    }
-
-    false
+    SHELL_CMD_PREFIX_AC.is_match(s)
+        && SHELL_CMD_PREFIXES.iter().any(|&prefix| {
+            // The first occurrence, at the start or after a space.
+            let Some(at) = s.find(prefix).filter(|&p| p == 0 || s[..p].ends_with(' ')) else {
+                return false;
+            };
+            // "service restart" is a command; "service provider" is prose.
+            let verbs = ["start", "stop", "restart", "status", "enable", "disable"];
+            prefix != "service " || verbs.iter().any(|v| s[at + prefix.len()..].starts_with(v))
+        })
 }
 
 #[cfg(test)]

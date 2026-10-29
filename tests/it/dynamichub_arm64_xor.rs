@@ -15,16 +15,18 @@ fn test_dynamichub_arm64_stack_xor_system_arg() {
 
     assert_eq!(decoded.method, StringMethod::XorStackPair);
 
+    // The pad that decodes `killall Terminal`, one of the sample's four keys.
     let xor_key = results
         .iter()
-        .find(|s| s.kind == Some(StringKind::XorKey))
+        .find(|s| {
+            s.kind == Some(StringKind::XorKey)
+                && s.value == "0xff19765d94e37e6e85ec4f5b1a3ad577734d3269b8c8ab49b9e771fc8e769ee4"
+        })
         .expect("missing recovered ARM64 stack-XOR key entry");
-
-    assert_eq!(
-        xor_key.value,
-        "0xff19765d94e37e6e85ec4f5b1a3ad577734d3269b8c8ab49b9e771fc8e769ee4"
-    );
     assert_eq!(xor_key.method, StringMethod::XorStackPair);
+    // Located at the store that wrote the pad, which precedes the call.
+    assert_eq!(xor_key.data_offset % 4, 0);
+    assert!(xor_key.data_offset < decoded.data_offset);
 
     for expected in [
         "dscl . -auth",

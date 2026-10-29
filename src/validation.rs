@@ -6,25 +6,11 @@
 use aho_corasick::AhoCorasick;
 use std::sync::LazyLock;
 
-use crate::validation_thresholds::{
-    MAX_AVG_RUN_LENGTH_CHAOS, MAX_CLASS_DOMINANCE_RATIO, MAX_HASH_LENGTH, MAX_NON_ASCII_RATIO,
-    MAX_SHORT_ESCAPE_LENGTH, MAX_SPECIAL_RATIO_FOR_DOMAINS, MAX_SPECIAL_RATIO_FOR_PATHS,
-    MAX_TRANSITION_RATIO, MAX_WALLET_LENGTH, MAX_WHITESPACE_RATIO, MIN_ALPHANUMERIC_RATIO,
-    MIN_BASE64_RATIO_FOR_KEYS, MIN_BASE64_SHAPED_LENGTH, MIN_CHAOTIC_PATTERN_LENGTH,
-    MIN_EMAIL_VALID_CHAR_RATIO, MIN_FAST_PATH_ALPHABETIC_RATIO, MIN_FAST_PATH_VALID_LENGTH,
-    MIN_HASH_LENGTH, MIN_HEX_RATIO_FOR_HASH, MIN_LOWERCASE_RATIO_FOR_PATHS,
-    MIN_NON_ASCII_ALPHABETIC_RATIO, MIN_NON_ASCII_COUNT_SHORT, MIN_SEGMENT_COUNT,
-    MIN_TRANSITIONS_FOR_CHAOS, MIN_WALLET_ALPHANUMERIC_RATIO, MIN_WALLET_LENGTH,
-    MIXED_CASE_DIGIT_MAX_LEN, MIXED_CASE_DIGIT_MIN_LEN, SHORT_IDENTIFIER_MAX_LEN,
-    SHORT_IDENTIFIER_MIN_LEN, SHORT_NON_ASCII_CHECK_LEN,
-};
-
-/// Patterns that immediately identify miner IOC strings (pure OR match).
+/// Mining software and its command-line flags. Pool URLs are the
+/// classifier's `MiningPool`; these have no kind of their own.
 #[allow(clippy::expect_used)]
-static MINER_PURE_OR: LazyLock<AhoCorasick> = LazyLock::new(|| {
+static MINER_SOFTWARE: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
-        "stratum+tcp://",
-        "stratum+ssl://",
         "xmrig",
         "xmr-stak",
         "cpuminer",
@@ -37,12 +23,6 @@ static MINER_PURE_OR: LazyLock<AhoCorasick> = LazyLock::new(|| {
         "--cuda-devices",
     ])
     .expect("valid miner patterns")
-});
-
-/// Pool-type indicators (combined with a network indicator to confirm miner IOC).
-#[allow(clippy::expect_used)]
-static MINER_POOL: LazyLock<AhoCorasick> = LazyLock::new(|| {
-    AhoCorasick::new(["pool.", "nanopool", "minergate"]).expect("valid pool patterns")
 });
 
 /// Literal shell-command indicators, batched into one Aho-Corasick pass
@@ -142,37 +122,6 @@ static CODE_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     .expect("valid code patterns")
 });
 
-fn is_crypto_wallet_address(s: &str, len: usize) -> bool {
-    if !(MIN_WALLET_LENGTH..=MAX_WALLET_LENGTH).contains(&len) {
-        return false;
-    }
-    let looks_like_crypto = (s.starts_with('1') || s.starts_with('3'))
-        || s.starts_with("bc1")
-        || (s.starts_with("0x") && len == 42)
-        || ((s.starts_with('4') || s.starts_with('8')) && len >= 90)
-        || (s.starts_with('L') || s.starts_with('M'))
-        || s.starts_with('D');
-    if !looks_like_crypto {
-        return false;
-    }
-    let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
-    alnum_count * 100 / len >= MIN_WALLET_ALPHANUMERIC_RATIO
-}
-
-fn is_miner_ioc(s: &str) -> bool {
-    if MINER_PURE_OR.is_match(s) {
-        return true;
-    }
-    if MINER_POOL.is_match(s)
-        && (s.contains(".com")
-            || s.contains(".org")
-            || memchr::memchr(b':', s.as_bytes()).is_some())
-    {
-        return true;
-    }
-    s.contains("-o ") && s.contains("-u ")
-}
-
 /// String of length ≥8 composed entirely of `[0-9a-fA-F:-]`, with at
 /// least 6 hex digits drawn from ≥4 distinct hex characters. Catches
 /// UUIDs, MD5/SHA hashes, MAC addresses, IPv6 address fragments,
@@ -220,65 +169,6 @@ fn is_token_id_run(s: &str, len: usize) -> bool {
         seen |= 1u128 << (b - 0x20);
     }
     seen.count_ones() >= 6
-}
-
-fn is_ctf_or_guid(s: &str, len: usize) -> bool {
-    if !s.starts_with('{') || !s.ends_with('}') {
-        return false;
-    }
-    if len > 5
-        && (s.contains("CTF{")
-            || s.contains("flag{")
-            || s.contains("FLAG{")
-            || s.contains("picoCTF{")
-            || s.contains("HTB{"))
-    {
-        return true;
-    }
-    if (36..=38).contains(&len) {
-        let dash_count = memchr::memchr_iter(b'-', s.as_bytes()).count();
-        let hex_count = s.bytes().filter(u8::is_ascii_hexdigit).count();
-        if dash_count == 4 && (30..=32).contains(&hex_count) {
-            return true;
-        }
-    }
-    false
-}
-
-fn is_email_address(s: &str, len: usize) -> bool {
-    if !s.contains('@') || !s.contains('.') || len < 6 {
-        return false;
-    }
-    let at_count = memchr::memchr_iter(b'@', s.as_bytes()).count();
-    let dot_count = memchr::memchr_iter(b'.', s.as_bytes()).count();
-    if at_count != 1 || dot_count < 1 {
-        return false;
-    }
-    let valid_chars = s
-        .chars()
-        .filter(|c| c.is_alphanumeric() || matches!(c, '@' | '.' | '-' | '_' | '+'))
-        .count();
-    valid_chars * 100 / len >= MIN_EMAIL_VALID_CHAR_RATIO
-}
-
-fn is_jwt_token(s: &str, len: usize) -> bool {
-    if s.matches('.').count() != 2 || len < 50 {
-        return false;
-    }
-    // Exactly three segments guaranteed above; none may be empty.
-    if s.split('.').any(str::is_empty) {
-        return false;
-    }
-    // Every real JWT header is `{"alg":...}` → base64url `eyJ`. The prefix
-    // keeps arbitrary `foo.bar.baz`-shaped identifiers out.
-    if !s.starts_with("eyJ") {
-        return false;
-    }
-    let base64_chars = s
-        .chars()
-        .filter(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '='))
-        .count();
-    base64_chars * 100 / len >= 95
 }
 
 /// Telegram bot API token: `<bot_id>:<auth_token>`.
@@ -334,33 +224,6 @@ fn is_swift_mangled_symbol(s: &str, len: usize) -> bool {
     // identifier that happens to share the prefix).
     s.bytes()
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'))
-}
-
-fn is_attack_payload(s: &str) -> bool {
-    if (s.contains("' OR '") || s.contains("1'='1"))
-        || (s.contains("UNION") && s.contains("SELECT"))
-        || s.contains("admin'--")
-    {
-        return true;
-    }
-    (s.contains("<script>") && s.contains("</script>"))
-        || (s.contains("onerror=") && s.contains("alert("))
-        || s.starts_with("javascript:")
-}
-
-fn is_api_key_pattern(s: &str, len: usize) -> bool {
-    let matches_prefix = (s.starts_with("AKIA") && len >= 20)
-        || (s.starts_with("ghp_") && len >= 36)
-        || (s.starts_with("sk_live_") || s.starts_with("pk_live_"))
-        || (s.starts_with("xox") && len >= 30);
-    if !matches_prefix {
-        return false;
-    }
-    let alnum_count = s
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_')
-        .count();
-    alnum_count * 100 / len >= MIN_BASE64_RATIO_FOR_KEYS
 }
 
 fn is_code_pattern(s: &str) -> bool {
@@ -551,8 +414,11 @@ struct CharStats {
     ascii_count: usize,
     alternations: usize,
     first_char: char,
+    second_char: Option<char>,
     last_char: char,
     all_same: bool,
+    /// Lowercase ASCII vowels; the word-likeness rules only look at lowercase.
+    vowels: usize,
     has_non_hex_letter: bool,
     alphanumeric: usize,
     char_count: usize,
@@ -579,9 +445,17 @@ impl CharStats {
         let mut last_char = '\0';
         let mut has_non_hex_letter = false;
         let mut char_count = 0usize;
+        let mut second_char = None;
+        let mut vowels = 0usize;
 
         for c in s.chars() {
             char_count += 1;
+            if char_count == 2 {
+                second_char = Some(c);
+            }
+            if matches!(c, 'a' | 'e' | 'i' | 'o' | 'u') {
+                vowels += 1;
+            }
             if first_char_opt.is_none() {
                 first_char_opt = Some(c);
             } else if all_same && Some(c) != first_char_opt {
@@ -663,18 +537,27 @@ impl CharStats {
             ascii_count,
             alternations,
             first_char,
+            second_char,
             last_char,
             all_same,
             has_non_hex_letter,
             alphanumeric,
             char_count,
+            vowels,
         }
+    }
+
+    /// A lone `0` or `1` leading the string, not the start of a longer number:
+    /// real identifiers rarely start that way.
+    fn suspicious_leading_digit(&self) -> bool {
+        matches!(self.first_char, '0' | '1')
+            && self.second_char.is_some_and(|c| !c.is_ascii_digit())
     }
 }
 
 /// Returns true if a very short string (2-6 chars) looks like random binary garbage.
 fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
-    if !(SHORT_IDENTIFIER_MIN_LEN..=SHORT_IDENTIFIER_MAX_LEN).contains(&len) {
+    if !(2..=6).contains(&len) {
         return false;
     }
     let is_all_upper = stats.upper == len;
@@ -682,10 +565,7 @@ fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
     let is_all_digit = stats.digit == len;
     // Digit + uppercase patterns like "8BIM", "3DES" are valid
     // But single leading 0 or 1 is suspicious (real identifiers use meaningful numbers)
-    let chars: Vec<char> = s.chars().collect();
-    let has_suspicious_leading_digit = (stats.first_char == '0' || stats.first_char == '1')
-        && chars.len() > 1
-        && !chars[1].is_ascii_digit(); // Single 0 or 1 at start, not part of larger number
+    let has_suspicious_leading_digit = stats.suspicious_leading_digit();
     let is_digit_upper_id = stats.first_char.is_ascii_digit()
         && stats.upper > 0
         && stats.lower == 0
@@ -730,12 +610,7 @@ fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats) -> bool {
         && !has_suspicious_leading_digit;
 
     // Lowercase strings of four or more letters with no vowel are random.
-    if is_all_lower
-        && len >= 4
-        && !s
-            .bytes()
-            .any(|b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
-    {
+    if is_all_lower && len >= 4 && stats.vowels == 0 {
         return true;
     }
 
@@ -1016,12 +891,10 @@ fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bool {
                     | '\u{00AF}'
             )
         });
-        if (alpha_percentage < MIN_NON_ASCII_ALPHABETIC_RATIO || has_noise_punct)
-            && non_ascii_bytes * 100 / len > MAX_NON_ASCII_RATIO
-        {
+        if (alpha_percentage < 90 || has_noise_punct) && non_ascii_bytes * 100 / len > 20 {
             return true;
         }
-        if len < SHORT_NON_ASCII_CHECK_LEN && non_ascii_bytes >= MIN_NON_ASCII_COUNT_SHORT {
+        if len < 10 && non_ascii_bytes >= 2 {
             return true;
         }
 
@@ -1196,7 +1069,7 @@ fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
         .max(stats.lower)
         .max(stats.digit)
         .max(stats.special);
-    let is_mostly_one_class = max_class_count * 100 / len > MAX_CLASS_DOMINANCE_RATIO;
+    let is_mostly_one_class = max_class_count * 100 / len > 70;
 
     let alphanumeric = stats.alphanumeric;
     let lower = stats.lower;
@@ -1205,8 +1078,8 @@ fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
 
     let looks_like_path = (s.contains('/') || s.contains('\\'))
         && alphanumeric >= 3
-        && special * 100 / len <= MAX_SPECIAL_RATIO_FOR_PATHS
-        && (alphanumeric == 0 || lower * 100 / alphanumeric >= MIN_LOWERCASE_RATIO_FOR_PATHS)
+        && special * 100 / len <= 30
+        && (alphanumeric == 0 || lower * 100 / alphanumeric >= 40)
         && (s.starts_with('/')
             || s.starts_with('\\')
             || s.contains("/.")
@@ -1217,12 +1090,12 @@ fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
                 >= 2);
     let looks_like_url = s.contains("://") || s.contains("http");
     let looks_like_domain = s.contains('.')
-        && s.split('.').filter(|seg| !seg.is_empty()).count() >= MIN_SEGMENT_COUNT
-        && special * 100 / len <= MAX_SPECIAL_RATIO_FOR_DOMAINS;
+        && s.split('.').filter(|seg| !seg.is_empty()).count() >= 2
+        && special * 100 / len <= 20;
     let looks_like_version = (s.starts_with("go") || s.starts_with('v') || s.starts_with('V'))
         && s.contains('.')
         && digit > 0;
-    let looks_like_base64 = len >= MIN_BASE64_SHAPED_LENGTH
+    let looks_like_base64 = len >= 16
         && stats.upper > 0
         && lower > 0
         && s.chars()
@@ -1255,10 +1128,10 @@ fn has_chaotic_char_pattern(s: &str, len: usize, stats: &CharStats) -> bool {
         || looks_like_multi_word;
 
     if !is_mostly_one_class && !is_structured_pattern {
-        if transitions * 100 / len > MAX_TRANSITION_RATIO {
+        if transitions * 100 / len > 60 {
             return true;
         }
-        if avg_run_length < MAX_AVG_RUN_LENGTH_CHAOS && len >= 8 {
+        if avg_run_length < 2.0 && len >= 8 {
             return true;
         }
         if len <= 7 && avg_run_length < 1.5 && transitions >= 4 {
@@ -1278,7 +1151,7 @@ fn is_fast_path_valid_with_kind(
     len: usize,
     kind: Option<crate::types::StringKind>,
 ) -> bool {
-    if len >= MIN_FAST_PATH_VALID_LENGTH {
+    if len >= 12 {
         let bytes = s.as_bytes();
         let first = bytes[0];
         // Quick check for all-same-character strings (garbage)
@@ -1313,7 +1186,7 @@ fn is_fast_path_valid_with_kind(
                 }
             }
 
-            if simple_count * 100 / len >= MIN_FAST_PATH_ALPHABETIC_RATIO {
+            if simple_count * 100 / len >= 80 {
                 let max_letter = letter_counts.iter().max().copied().unwrap_or(0) as usize;
                 // For pure-ASCII strings char_count == len, avoiding an extra O(n) scan.
                 let char_count = if has_non_ascii {
@@ -1401,9 +1274,7 @@ fn is_fast_path_garbage(s: &str, original: &str, len: usize) -> bool {
     }
 
     // Literal escape sequences in short strings without code context are garbage.
-    if len < MAX_SHORT_ESCAPE_LENGTH
-        && (s.contains("\\x") || s.contains("\\u") || s.contains("\\U"))
-    {
+    if len < 30 && (s.contains("\\x") || s.contains("\\u") || s.contains("\\U")) {
         let has_code_context = s.contains('"')
             || s.contains('\'')
             || s.contains('(')
@@ -1432,11 +1303,7 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
     }) {
         return true;
     }
-    // Crypto and malware IOCs
-    if is_crypto_wallet_address(s, len) {
-        return true;
-    }
-    if is_miner_ioc(s) {
+    if MINER_SOFTWARE.is_match(s) || (s.contains("-o ") && s.contains("-u ")) {
         return true;
     }
     // Batched substring sweep: `.onion`, `HKLM\`, `HKCU\`, `HKEY_`, `LDAP://`,
@@ -1454,10 +1321,6 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
         return true;
     }
 
-    // Authentication and tokens
-    if is_ctf_or_guid(s, len) {
-        return true;
-    }
     // Contiguous runs of hex/colon/dash (UUIDs, hashes, MAC addresses,
     // public-key fingerprints, IPv6 fragments, build IDs). These all
     // trip the chaos filter because they oscillate between digit and
@@ -1468,15 +1331,6 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
     // Longer runs of base64/base64url-alphabet characters: API tokens,
     // opaque service IDs, AES keys, short b64-encoded payloads.
     if is_token_id_run(s, len) {
-        return true;
-    }
-    if is_email_address(s, len) {
-        return true;
-    }
-    if is_jwt_token(s, len) {
-        return true;
-    }
-    if is_api_key_pattern(s, len) {
         return true;
     }
     if is_telegram_bot_token(s, len) {
@@ -1491,10 +1345,7 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
         return true;
     }
 
-    // Attack patterns and code
-    if is_attack_payload(s) {
-        return true;
-    }
+    // Code
     if is_code_pattern(s) {
         return true;
     }
@@ -1527,10 +1378,11 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
         return true;
     }
 
-    // Long hex strings are crypto hashes or keys
-    if (MIN_HASH_LENGTH..=MAX_HASH_LENGTH).contains(&len) {
+    // Long hex strings are crypto hashes or keys, MD5 through SHA-512. A
+    // misaligned read may add a stray non-hex byte, hence 95% rather than all.
+    if (32..=128).contains(&len) {
         let hex_count = s.bytes().filter(u8::is_ascii_hexdigit).count();
-        if hex_count * 100 / len > MIN_HEX_RATIO_FOR_HASH {
+        if hex_count * 100 / len > 95 {
             return true;
         }
     }
@@ -1553,15 +1405,12 @@ fn is_recognized_ioc(s: &str, len: usize) -> bool {
     if s.contains("2>&1")
         || s.contains("2>")
         || s.contains("<<")
-        || (s.contains(" > ") && s.split_whitespace().count() >= MIN_SEGMENT_COUNT)
+        || (s.contains(" > ") && s.split_whitespace().count() >= 2)
     {
         let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
         let ascii_chars = s.bytes().filter(u8::is_ascii).count();
         let char_count = s.chars().count();
-        if alnum_count >= 3
-            && char_count > 0
-            && ascii_chars * 100 / char_count > MIN_FAST_PATH_ALPHABETIC_RATIO
-        {
+        if alnum_count >= 3 && char_count > 0 && ascii_chars * 100 / char_count > 80 {
             return true;
         }
     }
@@ -1595,12 +1444,8 @@ fn is_statistical_garbage(
     // Short strings (4-10 chars) with mixed case and digits that don't look like identifiers
     // e.g., "gvjc54" - lowercase + digit but no vowels and doesn't follow naming conventions
     if (4..=10).contains(&len) && stats.lower > 0 && stats.digit > 0 && stats.upper == 0 {
-        let vowel_count = s
-            .bytes()
-            .filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
-            .count();
         // If no vowels and has digits embedded in lowercase, likely garbage
-        if vowel_count == 0 && stats.lower >= 3 && stats.digit >= 1 {
+        if stats.vowels == 0 && stats.lower >= 3 && stats.digit >= 1 {
             return true;
         }
     }
@@ -1608,13 +1453,8 @@ fn is_statistical_garbage(
     // Short all-lowercase strings (4-5 chars) that don't look like real words
     // e.g., "oujr", "omor", "kmnro" - unusual phonotactic patterns
     if (4..=5).contains(&len) && stats.lower == len && stats.digit == 0 && stats.upper == 0 {
-        let vowel_count = s
-            .bytes()
-            .filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
-            .count();
-
         // At most one vowel: likely random, unless a common word
-        if vowel_count <= 1 {
+        if stats.vowels <= 1 {
             let known_short = [
                 "type", "func", "test", "temp", "sync", "async", "null", "char", "path", "text",
             ];
@@ -1686,12 +1526,8 @@ fn is_statistical_garbage(
     // Very short strings (4 chars) with lowercase + single digit at end
     // e.g., "kmo8", "abc1" - unless it follows naming conventions or is known
     if len == 4 && stats.lower >= 2 && stats.digit == 1 && stats.upper == 0 {
-        let vowel_count = s
-            .bytes()
-            .filter(|&b| matches!(b, b'a' | b'e' | b'i' | b'o' | b'u'))
-            .count();
         // If has 0-1 vowels and ends with digit, likely garbage
-        if vowel_count <= 1 && stats.last_char.is_ascii_digit() {
+        if stats.vowels <= 1 && stats.last_char.is_ascii_digit() {
             // Whitelist known patterns (encoding, crypto, architecture suffixes)
             if !matches!(s, "sha1" | "utf8") {
                 return true;
@@ -1728,7 +1564,7 @@ fn is_statistical_garbage(
 
     // Pattern: ends with backtick + single letter (Go misaligned reads)
     let bytes = s.as_bytes();
-    if len >= MIN_SEGMENT_COUNT
+    if len >= 2
         && let Some(idx) = bytes.iter().rposition(|&b| b.is_ascii_alphabetic())
         && idx > 0
         && bytes[idx - 1] == b'`'
@@ -1753,11 +1589,7 @@ fn is_statistical_garbage(
     }
 
     // Medium-length strings with mixed case and digits are noise from compressed data
-    if (MIXED_CASE_DIGIT_MIN_LEN..=MIXED_CASE_DIGIT_MAX_LEN).contains(&len)
-        && stats.digit > 0
-        && stats.upper > 0
-        && stats.lower > 0
-    {
+    if (5..=10).contains(&len) && stats.digit > 0 && stats.upper > 0 && stats.lower > 0 {
         let looks_like_version =
             s.starts_with("go") || s.starts_with('v') || s.starts_with('V') || s.contains('.');
         // Crypto/algorithm names (`MD5Hash`, `SHA256Init`, `Curve25519`,
@@ -1774,10 +1606,7 @@ fn is_statistical_garbage(
     // Reject alternating patterns like "0a1b2c3d" (too many transitions)
     // Reject single leading 0 or 1 (unusual in real identifiers)
     // (4-6 char patterns are handled by is_short_identifier_garbage)
-    let chars: Vec<char> = s.chars().collect();
-    let has_suspicious_leading_digit = (stats.first_char == '0' || stats.first_char == '1')
-        && chars.len() > 1
-        && !chars[1].is_ascii_digit();
+    let has_suspicious_leading_digit = stats.suspicious_leading_digit();
     // Valid identifiers are ASCII-only, so check ascii_count == len
     let is_all_ascii = stats.ascii_count == len;
     if (7..=8).contains(&len)
@@ -1798,18 +1627,16 @@ fn is_statistical_garbage(
         return true;
     }
 
-    if len >= MIN_CHAOTIC_PATTERN_LENGTH
+    if len >= 6
         && stats.digit > 0
         && stats.alpha > 0
-        && stats.alternations >= MIN_TRANSITIONS_FOR_CHAOS
+        && stats.alternations >= 4
         && stats.alternations * 2 >= len
     {
         return true;
     }
 
-    if stats.char_count > MIN_CHAOTIC_PATTERN_LENGTH
-        && stats.alphanumeric * 100 / stats.char_count < MIN_ALPHANUMERIC_RATIO
-    {
+    if stats.char_count > 6 && stats.alphanumeric * 100 / stats.char_count < 30 {
         return true;
     }
 
@@ -1829,7 +1656,8 @@ fn is_statistical_garbage(
         return true;
     }
 
-    if stats.whitespace > 0 && stats.whitespace * 100 / len > MAX_WHITESPACE_RATIO {
+    // More than a third whitespace is padding or layout, not text.
+    if stats.whitespace > 0 && stats.whitespace * 100 / len > 33 {
         return true;
     }
 
@@ -1946,7 +1774,7 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bo
     // yet the colon alone was enough to flip the verdict: it adds a character
     // class and a run, which no short-identifier pattern here tolerates
     // (`is_pascal_case` allows one uppercase and no specials), and strings
-    // under MIN_FAST_PATH_VALID_LENGTH never reach the fast path that accepts
+    // under 12 bytes never reach the fast path that accepts
     // punctuation. `TracerPid` survived extraction from a real ELF while
     // `TracerPid:` did not. Judge the stem instead; the guard keeps this to
     // identifier-shaped labels so arbitrary junk ending in a colon still gets
@@ -2936,38 +2764,6 @@ mod tests {
     }
 
     // ===== JWT predicate =====
-
-    #[test]
-    fn test_is_jwt_token_positive() {
-        // Canonical HS256 JWT (from RFC 7519 example, with SflKxwRJSMe... sig).
-        let s = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
-        assert!(is_jwt_token(s, s.len()));
-        assert!(!is_garbage(s));
-
-        // RS256 with longer signature.
-        let s = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2V4YW1wbGUuYXV0aDAuY29tLyIsInN1YiI6ImF1dGgwfDEyMzQ1Njc4OTAiLCJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbS8iLCJleHAiOjE2NDE2NzgwMDB9.abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        assert!(is_jwt_token(s, s.len()));
-    }
-
-    #[test]
-    fn test_is_jwt_token_negative() {
-        // Right shape (3 dot-parts, base64url chars) but no eyJ header prefix.
-        // This is the pattern Go symbols land in (e.g. `pkg.sub.Module`).
-        let s = "foo.bar.baz0123456789abcdef0123456789abcdef01234567890AB";
-        assert!(!is_jwt_token(s, s.len()));
-
-        // Only 2 parts.
-        let s = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0";
-        assert!(!is_jwt_token(s, s.len()));
-
-        // Too short.
-        let s = "eyJx.eyJx.eyJx";
-        assert!(!is_jwt_token(s, s.len()));
-
-        // Empty segment.
-        let s = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
-        assert!(!is_jwt_token(s, s.len()));
-    }
 }
 
 #[cfg(test)]

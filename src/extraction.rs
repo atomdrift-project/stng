@@ -72,6 +72,30 @@ pub(crate) fn uncovered_pair_ranges<'a>(
     out
 }
 
+/// Strings in `target` that a `{ptr, len}` pair in `sections` points at, at
+/// least `min_length` bytes long. Sections are `(address, file offset,
+/// bytes)`; bytes several sections share are scanned once.
+pub(crate) fn pair_strings<'a>(
+    sections: impl IntoIterator<Item = (u64, usize, &'a [u8])>,
+    (target_addr, target): (u64, &[u8]),
+    info: &BinaryInfo,
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let ranges = uncovered_pair_ranges(sections, info);
+    let bytes = ranges.iter().map(|(_, data)| data.len()).sum();
+    let structs: Vec<StringStruct> = ranges
+        .par_iter()
+        .with_min_len(crate::par::job_len(ranges.len(), bytes))
+        .flat_map(|(addr, data)| {
+            find_string_structures(data, *addr, target_addr, target.len() as u64, info)
+        })
+        .collect();
+    let mut strings =
+        extract_from_structures(target, target_addr, &structs, crate::classify_string);
+    strings.retain(|s| s.value.len() >= min_length);
+    strings
+}
+
 /// Find pointer+length structures that point into a data blob.
 ///
 /// This scans section data looking for consecutive pointer+length pairs

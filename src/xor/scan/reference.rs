@@ -199,13 +199,9 @@ pub(super) fn pattern_scan(
             // When apply_filters=false, still classify to assign the correct kind for
             // overlap resolution (IOCs win over generic Const strings of similar length).
             let kind = match classify_xor_string(&trimmed_s) {
-                Some(k) => k,
-                None => {
-                    if apply_filters {
-                        return None; // Filter rejected this string
-                    }
-                    None
-                }
+                Verdict::Keep(kind) => kind,
+                Verdict::Reject if apply_filters => return None,
+                Verdict::Reject => None,
             };
 
             // Additional sanity check: reject obvious garbage even if classify passed it
@@ -602,7 +598,7 @@ pub(super) fn rolling(
                         && s.bytes().any(|b| b.is_ascii_alphabetic())
                     {
                         let file_offset = (region_start + start_pos) as u64;
-                        let kind = classify_xor_string(&s).flatten();
+                        let kind = classify_xor_string(&s).kind();
                         results.push(ExtractedString {
                             value: s,
                             data_offset: file_offset,

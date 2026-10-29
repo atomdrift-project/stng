@@ -5,14 +5,13 @@
 // This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::extraction::{extract_from_structures, find_string_structures};
-use crate::instr::{extract_inline_strings_amd64, extract_inline_strings_arm64};
-use crate::types::{BinaryInfo, ExtractedString, StringMethod, StringStruct};
+use crate::extraction::pair_strings;
+use crate::instr::inline_strings;
+use crate::types::{Arch, BinaryInfo, ExtractedString, StringMethod};
 use goblin::elf::Elf;
 use goblin::mach::MachO;
 use goblin::mach::cputype::{CPU_TYPE_ARM64, CPU_TYPE_X86_64};
 use goblin::pe::PE;
-use rayon::prelude::*;
 use std::collections::HashSet;
 
 use crate::classifier::classify_string;
@@ -37,425 +36,193 @@ impl GoStringExtractor {
         Self { min_length }
     }
 
-    /// Extract strings from a Mach-O binary.
-    #[must_use]
     /// Extract strings from a Go Mach-O binary.
     ///
     /// Structure, inline-instruction, and packed-pool extraction all record the
     /// string's virtual address; a final pass converts each to a file offset so
     /// every emitted offset indexes the file. `file_base` rebases a fat slice's
     /// offsets onto the whole fat file (0 for a thin binary).
+    #[must_use]
     pub(crate) fn extract_macho(&self, macho: &MachO<'_>, file_base: u64) -> Vec<ExtractedString> {
-        let mut strings = Vec::new();
-        // Mach-O is always little-endian on modern systems (x86_64, ARM64)
-        let info = BinaryInfo::from_macho(macho.is_64);
-
-        // Find __rodata section in __TEXT segment (contains string data)
-        let mut rodata_info: Option<(u64, &[u8])> = None;
-        let mut text_info: Option<(u64, &[u8])> = None;
-
-        for seg in &macho.segments {
-            let seg_name = seg.name().unwrap_or("");
-            if seg_name == "__TEXT"
-                && let Ok(sections) = seg.sections()
-            {
-                for (section, section_data) in sections {
-                    let name = section.name().unwrap_or("");
-                    if name == "__rodata" {
-                        rodata_info = Some((section.addr, section_data));
-                    }
-                    if name == "__text" {
-                        text_info = Some((section.addr, section_data));
-                    }
-                }
-            }
-        }
-
-        let Some((rodata_addr, rodata_data)) = rodata_info else {
-            return strings;
+        let text_section = |name: &str| {
+            crate::binary::macho_sections(macho)
+                .filter(|(s, _)| s.segname().ok() == Some("__TEXT") && s.name().ok() == Some(name))
+                .last()
+                .map(|(s, data)| (s.addr, data))
         };
-
-        // Collect all sections first for parallel processing
-        let sections_info = crate::extraction::uncovered_pair_ranges(
-            macho
-                .segments
-                .iter()
-                .filter_map(|seg| seg.sections().ok())
-                .flatten()
-                .map(|(section, section_data)| {
-                    (section.addr, section.offset as usize, section_data)
-                }),
-            &info,
-        );
-
-        // Search all sections for string structures in parallel
-        let bytes = sections_info.iter().map(|(_, data)| data.len()).sum();
-        let all_structs: Vec<StringStruct> = sections_info
-            .par_iter()
-            .with_min_len(crate::par::job_len(sections_info.len(), bytes))
-            .flat_map(|(section_addr, section_data)| {
-                find_string_structures(
-                    section_data,
-                    *section_addr,
-                    rodata_addr,
-                    rodata_data.len() as u64,
-                    &info,
-                )
-            })
-            .collect();
-
-        // Extract strings using structure boundaries
-        let structured =
-            extract_from_structures(rodata_data, rodata_addr, &all_structs, classify_string);
-
-        // Filter by minimum length — use lower floor for structure-based strings
-        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
-        strings.extend(
-            structured
-                .into_iter()
-                .filter(|s| s.value.len() >= struct_min),
-        );
-
-        // Extract inline strings from instructions (ARM64 or x86_64)
-        // Use the same lower floor — instruction patterns (LEA+MOV with rodata
-        // pointer and immediate length) are high confidence.
-        if let Some((text_addr, text_data)) = text_info {
-            let cpu_type = macho.header.cputype();
-            if cpu_type == CPU_TYPE_ARM64 {
-                let inline_strings = extract_inline_strings_arm64(
-                    text_data,
-                    text_addr,
-                    rodata_data,
-                    rodata_addr,
-                    struct_min,
-                );
-                strings.extend(
-                    inline_strings
-                        .into_iter()
-                        .filter(|s| s.value.len() >= struct_min),
-                );
-            } else if cpu_type == CPU_TYPE_X86_64 {
-                let inline_strings = extract_inline_strings_amd64(
-                    text_data,
-                    text_addr,
-                    rodata_data,
-                    rodata_addr,
-                    struct_min,
-                );
-                strings.extend(
-                    inline_strings
-                        .into_iter()
-                        .filter(|s| s.value.len() >= struct_min),
-                );
-            }
-        }
-
-        // Go's Mach-O linker stores many literals in one packed printable
-        // `__rodata` pool. The generic raw scanner skips that section to avoid
-        // emitting giant concatenated runs, while pointer/length analysis can
-        // miss constants that are assembled at runtime. Recover only bounded
-        // high-signal substrings from the packed pool.
-        if rodata_data.len() > MAX_PACKED_RODATA_HEURISTIC_SIZE {
-            tracing::debug!(
-                size = rodata_data.len(),
-                "Go packed-literal scan skipped: rodata too large"
-            );
-        } else {
-            let packed = extract_packed_rodata_literals(rodata_data, rodata_addr, self.min_length);
-            // Borrow existing values (no per-string clone). Collect the genuinely new
-            // literals first so the borrow on `strings` is released before we extend it.
-            let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-            let fresh: Vec<ExtractedString> = packed
-                .into_iter()
-                .filter(|s| !existing.contains(s.value.as_str()))
-                .collect();
-            drop(existing);
-            let mut batch_seen: HashSet<String> = HashSet::new();
-            for s in fresh {
-                if batch_seen.insert(s.value.clone()) {
-                    strings.push(s);
-                }
-            }
-        }
-
+        let Some(rodata) = text_section("__rodata") else {
+            return Vec::new();
+        };
+        let arch = match macho.header.cputype() {
+            CPU_TYPE_ARM64 => Arch::Aarch64,
+            CPU_TYPE_X86_64 => Arch::X86_64,
+            _ => Arch::Other,
+        };
+        let sections = crate::binary::macho_sections(macho)
+            .map(|(section, data)| (section.addr, section.offset as usize, data));
+        let info = BinaryInfo::from_macho(macho.is_64);
+        let mut strings =
+            self.pointer_strings(sections, rodata, text_section("__text"), arch, &info);
+        self.extend_packed_literals(&mut strings, rodata);
         strings.extend(super::struct_tags::extract(macho, self.min_length));
 
-        // Every phase recorded a virtual address; resolve each to a file offset.
         for s in &mut strings {
             s.data_offset = file_base.saturating_add(crate::binary::macho_vaddr_to_file_offset(
                 macho,
                 s.data_offset,
             ));
         }
-
         strings
     }
 
     /// Extract strings from an ELF binary.
     #[must_use]
     pub(crate) fn extract_elf(&self, elf: &Elf<'_>, data: &[u8]) -> Vec<ExtractedString> {
-        let mut strings = Vec::new();
-        let info = BinaryInfo::from_elf(elf.is_64, elf.little_endian);
-
-        // Find .rodata section (contains string data)
-        let Some((rodata_addr, rodata_data)) = crate::binary::elf_section(elf, data, ".rodata")
-        else {
-            return strings;
+        let Some(rodata) = crate::binary::elf_section(elf, data, ".rodata") else {
+            return Vec::new();
         };
+        let arch = match elf.header.e_machine {
+            goblin::elf::header::EM_AARCH64 => Arch::Aarch64,
+            goblin::elf::header::EM_X86_64 => Arch::X86_64,
+            _ => Arch::Other,
+        };
+        let sections = elf.section_headers.iter().filter_map(|sh| {
+            let bytes = crate::binary::file_range(data, sh.sh_offset, sh.sh_size)?;
+            Some((sh.sh_addr, usize::try_from(sh.sh_offset).ok()?, bytes))
+        });
+        let text = crate::binary::elf_section(elf, data, ".text");
+        let info = BinaryInfo::from_elf(elf.is_64, elf.little_endian);
+        // No packed-literal pass: on ELF the generic scanners already report
+        // the pool's URLs, and the pass only adds run-ons whose end it misses
+        // (`…/payload.tsnet/http`).
+        let mut strings = self.pointer_strings(sections, rodata, text, arch, &info);
 
-        // Find .text section for inline string extraction
-        let text_info = crate::binary::elf_section(elf, data, ".text");
-
-        // Search all data sections for string structures in parallel
-        let sections_info = crate::extraction::uncovered_pair_ranges(
-            elf.section_headers.iter().filter_map(|sh| {
-                let bytes = crate::binary::file_range(data, sh.sh_offset, sh.sh_size)?;
-                Some((sh.sh_addr, usize::try_from(sh.sh_offset).ok()?, bytes))
-            }),
-            &info,
-        );
-
-        let bytes = sections_info.iter().map(|(_, data)| data.len()).sum();
-        let all_structs: Vec<StringStruct> = sections_info
-            .par_iter()
-            .with_min_len(crate::par::job_len(sections_info.len(), bytes))
-            .flat_map(|(section_addr, section_data)| {
-                find_string_structures(
-                    section_data,
-                    *section_addr,
-                    rodata_addr,
-                    rodata_data.len() as u64,
-                    &info,
-                )
-            })
-            .collect();
-
-        // Extract strings using structure boundaries
-        let structured =
-            extract_from_structures(rodata_data, rodata_addr, &all_structs, classify_string);
-
-        // Filter by minimum length — use lower floor for structure-based strings
-        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
-        strings.extend(
-            structured
-                .into_iter()
-                .filter(|s| s.value.len() >= struct_min),
-        );
-
-        // Extract inline strings from .text section
-        // Use the same lower floor for instruction patterns (high confidence)
-        if let Some((text_addr, text_data)) = text_info {
-            let inline_strings = match elf.header.e_machine {
-                goblin::elf::header::EM_AARCH64 => extract_inline_strings_arm64(
-                    text_data,
-                    text_addr,
-                    rodata_data,
-                    rodata_addr,
-                    struct_min,
-                ),
-                goblin::elf::header::EM_X86_64 => extract_inline_strings_amd64(
-                    text_data,
-                    text_addr,
-                    rodata_data,
-                    rodata_addr,
-                    struct_min,
-                ),
-                _ => Vec::new(),
-            };
-
-            strings.extend(
-                inline_strings
-                    .into_iter()
-                    .filter(|s| s.value.len() >= struct_min),
-            );
-        }
-
-        // Every phase recorded a virtual address; resolve each to a file
-        // offset, as the Mach-O and PE paths do.
         for s in &mut strings {
             s.data_offset = crate::binary::elf_vaddr_to_file_offset(elf, s.data_offset);
         }
-
         strings
     }
 
     /// Extract strings from a PE binary.
     #[must_use]
     pub(crate) fn extract_pe(&self, pe: &PE<'_>, data: &[u8]) -> Vec<ExtractedString> {
-        let mut strings = Vec::new();
-        let info = BinaryInfo::from_pe(pe.is_64);
-
-        // PE pointers are full virtual addresses (`ImageBase + section_va`).
-        // Without folding ImageBase into the addresses we hand to
-        // `find_string_structures`, every {ptr,len} pair stored in `.data`
-        // misses its target by exactly ImageBase and the structure scanner
-        // returns essentially zero hits.
+        // PE pointers are full virtual addresses (`ImageBase + section_va`),
+        // so every address handed to the scanners includes ImageBase.
         let image_base = pe
             .header
             .optional_header
             .map_or(0u64, |opt| opt.windows_fields.image_base);
-
-        // Find .rodata or .rdata section
-        let rodata_info = Self::find_rodata_pe(pe, data);
-        let Some((rodata_addr, rodata_data)) = rodata_info else {
-            return strings;
+        // Section bytes as the file holds them: a truncated sample still
+        // yields the strings in the part that survived.
+        let raw = |section: &goblin::pe::section_table::SectionTable| {
+            crate::binary::file_range_clamped(
+                data,
+                u64::from(section.pointer_to_raw_data),
+                u64::from(section.size_of_raw_data),
+            )
         };
-        let rodata_va = rodata_addr.wrapping_add(image_base);
+        let Some((rodata_section, rodata_data)) = pe.sections.iter().find_map(|section| {
+            let name = crate::binary::pe_section_name(&section.name);
+            if !(name.contains("rodata") || name.contains(".rdata")) {
+                return None;
+            }
+            Some((section, raw(section)?))
+        }) else {
+            return Vec::new();
+        };
+        let rodata_va = u64::from(rodata_section.virtual_address).wrapping_add(image_base);
+        let rodata = (rodata_va, rodata_data);
 
-        // Search all sections for string structures
-        let sections_info = crate::extraction::uncovered_pair_ranges(
-            pe.sections.iter().filter_map(|section| {
-                let start = section.pointer_to_raw_data as usize;
-                let size = section.size_of_raw_data as usize;
-                let end = start.saturating_add(size);
-                (end <= data.len() && size > 0).then(|| {
-                    (
-                        u64::from(section.virtual_address).wrapping_add(image_base),
-                        start,
-                        &data[start..end],
-                    )
-                })
-            }),
-            &info,
-        );
-
-        let bytes = sections_info.iter().map(|(_, data)| data.len()).sum();
-        let all_structs: Vec<StringStruct> = sections_info
-            .par_iter()
-            .with_min_len(crate::par::job_len(sections_info.len(), bytes))
-            .flat_map(|(section_addr, section_data)| {
-                find_string_structures(
-                    section_data,
-                    *section_addr,
-                    rodata_va,
-                    rodata_data.len() as u64,
-                    &info,
-                )
-            })
-            .collect();
-
-        // Extract strings
-        let structured =
-            extract_from_structures(rodata_data, rodata_va, &all_structs, classify_string);
-
-        // Filter by minimum length — use lower floor for structure-based strings
-        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
-        strings.extend(
-            structured
-                .into_iter()
-                .filter(|s| s.value.len() >= struct_min),
-        );
-
-        // Extract inline strings referenced from `.text` (LEA + MOV-length).
-        // Go x86-64/arm64 code points at packed `.rdata` literals this way, and
-        // the {ptr,len} structure scan above misses them — which is why format
-        // strings such as `dd if=/dev/zero of=%s bs=446 count=1` surface only
-        // inside rizin's merged blobs. Mirrors the ELF and Mach-O paths.
-        let text_info = pe.sections.iter().find_map(|section| {
+        let sections = pe.sections.iter().filter_map(|section| {
+            Some((
+                u64::from(section.virtual_address).wrapping_add(image_base),
+                section.pointer_to_raw_data as usize,
+                raw(section)?,
+            ))
+        });
+        // Go code points at packed `.rdata` literals with LEA + MOV-length,
+        // which the structure scan misses: format strings such as
+        // `dd if=/dev/zero of=%s bs=446 count=1` surface only this way.
+        let text = pe.sections.iter().find_map(|section| {
             if crate::binary::pe_section_name(&section.name) != ".text" {
                 return None;
             }
-            let start = section.pointer_to_raw_data as usize;
-            let end = start.checked_add(section.size_of_raw_data as usize)?;
-            let text = data.get(start..end)?;
             Some((
                 u64::from(section.virtual_address).wrapping_add(image_base),
-                text,
+                raw(section)?,
             ))
         });
-        if let Some((text_va, text_data)) = text_info {
-            let inline_strings = match pe.header.coff_header.machine {
-                goblin::pe::header::COFF_MACHINE_ARM64 => extract_inline_strings_arm64(
-                    text_data,
-                    text_va,
-                    rodata_data,
-                    rodata_va,
-                    struct_min,
-                ),
-                goblin::pe::header::COFF_MACHINE_X86_64 => extract_inline_strings_amd64(
-                    text_data,
-                    text_va,
-                    rodata_data,
-                    rodata_va,
-                    struct_min,
-                ),
-                _ => Vec::new(),
-            };
-            strings.extend(
-                inline_strings
-                    .into_iter()
-                    .filter(|s| s.value.len() >= struct_min),
-            );
-        }
+        let arch = match pe.header.coff_header.machine {
+            goblin::pe::header::COFF_MACHINE_ARM64 => Arch::Aarch64,
+            goblin::pe::header::COFF_MACHINE_X86_64 => Arch::X86_64,
+            _ => Arch::Other,
+        };
+        let info = BinaryInfo::from_pe(pe.is_64);
+        let mut strings = self.pointer_strings(sections, rodata, text, arch, &info);
+        self.extend_packed_literals(&mut strings, rodata);
 
-        // Recover bounded high-signal literals (URLs, find-command fragments)
-        // from the packed `.rdata` pool, which the generic raw scanner skips to
-        // avoid emitting one giant concatenated run.
-        if rodata_data.len() > MAX_PACKED_RODATA_HEURISTIC_SIZE {
-            tracing::debug!(
-                size = rodata_data.len(),
-                "Go packed-literal scan skipped: rodata too large"
-            );
-        } else {
-            let packed = extract_packed_rodata_literals(rodata_data, rodata_va, self.min_length);
-            let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-            let fresh: Vec<ExtractedString> = packed
-                .into_iter()
-                .filter(|s| !existing.contains(s.value.as_str()))
-                .collect();
-            drop(existing);
-            let mut batch_seen: HashSet<String> = HashSet::new();
-            for s in fresh {
-                if batch_seen.insert(s.value.clone()) {
-                    strings.push(s);
-                }
+        // The passes above work in virtual addresses, but `data_offset` is a
+        // file offset (cleave's section matcher compares it with PE raw-data
+        // ranges): map every result in rodata back to its file position.
+        let rodata_file = u64::from(rodata_section.pointer_to_raw_data);
+        for s in &mut strings {
+            if let Some(relative) = s.data_offset.checked_sub(rodata_va)
+                && relative < rodata_data.len() as u64
+            {
+                s.data_offset = rodata_file + relative;
             }
         }
-
-        // All PE Go passes above work in image-relative virtual addresses so
-        // pointer/length structures and instruction references can be
-        // resolved consistently. The public `data_offset` contract is a file
-        // offset, however, and cleave's section matcher compares it with PE
-        // raw-data ranges. Convert every result back to the physical `.rdata`
-        // offset before returning it.
-        let rdata_file_start = pe
-            .sections
-            .iter()
-            .find(|section| {
-                let name = crate::binary::pe_section_name(&section.name);
-                name.contains("rodata") || name == ".rdata"
-            })
-            .map(|section| u64::from(section.pointer_to_raw_data));
-        if let Some(rdata_file_start) = rdata_file_start {
-            for s in &mut strings {
-                if let Some(relative) = s.data_offset.checked_sub(rodata_va)
-                    && relative < rodata_data.len() as u64
-                {
-                    s.data_offset = rdata_file_start + relative;
-                }
-            }
-        }
-
         strings
     }
 
-    /// Find .rodata or .rdata section in PE
-    fn find_rodata_pe<'a>(pe: &PE<'_>, data: &'a [u8]) -> Option<(u64, &'a [u8])> {
-        // Try .rodata or .rdata
-        for section in &pe.sections {
-            let name = crate::binary::pe_section_name(&section.name);
-            if (name.contains("rodata") || name.contains(".rdata"))
-                && let Some(bytes) = crate::binary::file_range(
-                    data,
-                    u64::from(section.pointer_to_raw_data),
-                    u64::from(section.size_of_raw_data),
-                )
-                && !bytes.is_empty()
-            {
-                return Some((u64::from(section.virtual_address), bytes));
+    /// The strings `{ptr, len}` pairs in `sections` and `text`'s instructions
+    /// point at in `rodata`, in virtual addresses. Both are high-confidence,
+    /// so they use the structure floor rather than `min_length`.
+    fn pointer_strings<'a>(
+        &self,
+        sections: impl IntoIterator<Item = (u64, usize, &'a [u8])>,
+        rodata: (u64, &[u8]),
+        text: Option<(u64, &[u8])>,
+        arch: Arch,
+        info: &BinaryInfo,
+    ) -> Vec<ExtractedString> {
+        let min = self.min_length.min(STRUCTURE_MIN_LENGTH);
+        let mut strings = pair_strings(sections, rodata, info, min);
+        if let Some(text) = text {
+            strings.extend(inline_strings(arch, text, rodata, min));
+        }
+        strings
+    }
+
+    /// Bounded high-signal literals (URLs, find-command fragments) from Go's
+    /// packed rodata pool. The raw scanner skips the pool to avoid one giant
+    /// concatenated run, and pointer analysis misses constants assembled at
+    /// run time.
+    fn extend_packed_literals(
+        &self,
+        strings: &mut Vec<ExtractedString>,
+        (addr, rodata): (u64, &[u8]),
+    ) {
+        if rodata.len() > MAX_PACKED_RODATA_HEURISTIC_SIZE {
+            tracing::debug!(
+                size = rodata.len(),
+                "Go packed-literal scan skipped: rodata too large"
+            );
+            return;
+        }
+        let packed = extract_packed_rodata_literals(rodata, addr, self.min_length);
+        let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+        let fresh: Vec<ExtractedString> = packed
+            .into_iter()
+            .filter(|s| !existing.contains(s.value.as_str()))
+            .collect();
+        drop(existing);
+        let mut batch_seen: HashSet<String> = HashSet::new();
+        for s in fresh {
+            if batch_seen.insert(s.value.clone()) {
+                strings.push(s);
             }
         }
-        None
     }
 }
 

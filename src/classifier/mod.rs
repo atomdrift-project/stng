@@ -25,453 +25,409 @@ static RANSOM_INDICATORS: LazyLock<AhoCorasick> =
 static LDAP_INDICATORS: LazyLock<AhoCorasick> =
     LazyLock::new(|| AhoCorasick::new(["LDAP://", "CN=", "DC="]).expect("valid markers"));
 
+/// URL schemes, including database connection strings.
+const URL_SCHEMES: &[&str] = &[
+    "http://",
+    "https://",
+    "ftp://",
+    "postgresql://",
+    "mysql://",
+    "redis://",
+    "mongodb://",
+    "ssh://",
+    "tcp://",
+    "udp://",
+];
+
+/// Prefixes that make a string a path, absolute or relative.
+const PATH_PREFIXES: &[&str] = &["/", "C:\\", "./", "../"];
+
+/// Config, credential and project files worth reporting even without a
+/// directory, matched as a suffix.
+const WELL_KNOWN_FILES: &[&str] = &[
+    ".DS_Store",
+    ".localized",
+    ".bashrc",
+    ".zshrc",
+    ".profile",
+    ".bash_profile",
+    ".gitignore",
+    ".gitconfig",
+    ".ssh/",
+    ".aws/",
+    ".docker/",
+    "authorized_keys",
+    "id_rsa",
+    "id_ed25519",
+    "known_hosts",
+    ".npmrc",
+    ".yarnrc",
+    "package.json",
+    "Cargo.toml",
+    "go.mod",
+    "requirements.txt",
+];
+
+/// Environment variables too short or plain to be recognized by shape
+/// (an underscore or a `GO` prefix).
+const KNOWN_ENV_VARS: &[&str] = &[
+    // POSIX/Unix
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "TERM",
+    "LANG",
+    "PWD",
+    "TMP",
+    "TEMP",
+    "TMPDIR",
+    "EDITOR",
+    "PAGER",
+    "MAIL",
+    "LOGNAME",
+    "HOSTNAME",
+    "DISPLAY",
+    "TZ",
+    "UID",
+    "GID",
+    "EUID",
+    "EGID",
+    // Locale
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_COLLATE",
+    "LC_MESSAGES",
+    "LC_MONETARY",
+    "LC_NUMERIC",
+    "LC_TIME",
+    // Terminal
+    "COLUMNS",
+    "LINES",
+    "COLORTERM",
+    "CLICOLOR",
+    "LSCOLORS",
+    // Build
+    "CC",
+    "CXX",
+    "CFLAGS",
+    "CXXFLAGS",
+    "LDFLAGS",
+    "MAKE",
+    "AR",
+    "AS",
+    "LD",
+    "NM",
+    "RANLIB",
+    "STRIP",
+    // Language toolchains
+    "JAVA_HOME",
+    "PYTHONPATH",
+    "NODE_PATH",
+    "RUBYLIB",
+    "PERL5LIB",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "GOPATH",
+    "GOROOT",
+    "GOBIN",
+    "GOCACHE",
+    // XDG base directories
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "XDG_RUNTIME_DIR",
+    // Security/auth
+    "SSH_AUTH_SOCK",
+    "SSH_AGENT_PID",
+    "GPG_AGENT_INFO",
+    "SUDO_USER",
+    "SUDO_UID",
+    "SUDO_GID",
+    "SUDO_COMMAND",
+    // Proxies
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "FTP_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    // Debugging
+    "DEBUG",
+    "VERBOSE",
+    "TRACE",
+    // Loaders
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "GLIBC_TUNABLES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_FRAMEWORK_PATH",
+    // Windows
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMFILES",
+    "SYSTEMROOT",
+    "WINDIR",
+    "USERPROFILE",
+    "COMPUTERNAME",
+];
+
+type Detector = fn(&str) -> Option<StringKind>;
+
+/// High-value indicators, checked first so that, for example, a stratum URL
+/// is a mining pool and a JWT is not mistaken for base64.
+const INDICATORS: &[Detector] = &[
+    ctf_flag,
+    guid,
+    |s| encoding::is_cryptographic_hash(s).then_some(StringKind::Hash),
+    network::classify_crypto_address,
+    // A string with `@` and `.` that is not an email falls through to the
+    // URL, path and command checks (`https://user@host/`, `git@host:org/repo`).
+    classify_email,
+    |s| (s.len() >= 10 && s.contains(".onion")).then_some(StringKind::TorAddress),
+    jwt,
+    network::classify_api_key,
+    sql_injection,
+    xss,
+    |s| {
+        (LDAP_INDICATORS.is_match(s)
+            && (s.contains("LDAP://") || (s.contains("CN=") && s.contains("DC="))))
+        .then_some(StringKind::LDAPPath)
+    },
+    |s| (s.starts_with("Global\\") || s.starts_with("Local\\")).then_some(StringKind::Mutex),
+    ransom_note,
+    mining_pool,
+];
+
+/// Code, commands and locations. Code comes before commands so a script that
+/// runs `curl` is still a script, and injection wrappers (`;`, `|`, `$()`)
+/// before generic shell commands because they are the stronger signal.
+const SYNTAX: &[Detector] = &[
+    |s| code::is_php_code(s).then_some(StringKind::PhpCode),
+    |s| code::is_python_code(s).then_some(StringKind::PythonCode),
+    |s| code::is_javascript_code(s).then_some(StringKind::JavaScriptCode),
+    |s| code::is_applescript(s).then_some(StringKind::AppleScript),
+    command_injection,
+    |s| code::is_shell_command(s).then_some(StringKind::ShellCmd),
+    |s| {
+        if s.starts_with(|c: char| c.is_ascii_digit()) {
+            network::classify_ip(s)
+        } else {
+            None
+        }
+    },
+    |s| is_registry_path(s).then_some(StringKind::Registry),
+    |s| network::names_targeted_location(s).then_some(StringKind::SuspiciousPath),
+    |s| {
+        WELL_KNOWN_FILES
+            .iter()
+            .any(|f| s.ends_with(f))
+            .then_some(StringKind::FilePath)
+    },
+];
+
+/// Encodings, which need the whole string, from most to least constrained
+/// alphabet.
+const ENCODINGS: &[Detector] = &[
+    |s| encoding::is_unicode_escaped(s).then_some(StringKind::UnicodeEscaped),
+    |s| encoding::is_url_encoded(s).then_some(StringKind::UrlEncoded),
+    |s| encoding::is_hex_encoded(s).then_some(StringKind::HexEncoded),
+    |s| encoding::is_base58(s).then_some(StringKind::Base58),
+    |s| encoding::is_base32(s).then_some(StringKind::Base32),
+    |s| encoding::is_base85(s).then_some(StringKind::Base85),
+    |s| encoding::is_base64(s).then_some(StringKind::Base64),
+];
+
 /// Classify a general string by its content.
 /// Note: Section names are detected via goblin, not pattern matching here.
 pub fn classify_string(s: &str) -> Option<StringKind> {
-    let len = s.len();
-
-    if len < 3 {
+    if s.len() < 3 {
         return None;
     }
-
-    // For long strings, classify using only the first 256 bytes.
-    // Most high-value patterns (URLs, paths, shebangs, code markers) are
-    // prefix-based and don't need the full string. Skip encoding checks
-    // (base64, hex, etc.) since those require full-content validation.
-    if len > 1000 {
-        let prefix = &s[..s.floor_char_boundary(256.min(len))];
-        return classify_prefix(prefix);
+    // The high-value kinds of a long string are prefix-anchored, and the
+    // encodings would need a full-content scan.
+    if s.len() > 1000 {
+        return classify_prefix(&s[..s.floor_char_boundary(256)]);
     }
+    let detect = |detectors: &[Detector]| detectors.iter().find_map(|d| d(s));
+    if let Some(kind) = detect(INDICATORS) {
+        return Some(kind);
+    }
+    if URL_SCHEMES.iter().any(|p| s.starts_with(p)) {
+        // Apple's certificate authority URL is in every signed Mach-O.
+        return (!s.starts_with("https://www.apple.com/appleca")).then_some(StringKind::Url);
+    }
+    if let Some(kind) = detect(SYNTAX) {
+        return Some(kind);
+    }
+    if PATH_PREFIXES.iter().any(|p| s.starts_with(p)) {
+        return path(s);
+    }
+    detect(ENCODINGS).or_else(|| env_var(s))
+}
 
-    let bytes = s.as_bytes();
-    let first = bytes[0];
+/// `CTF{...}`, `flag{...}`, `picoCTF{...}` and friends.
+fn ctf_flag(s: &str) -> Option<StringKind> {
+    let opens = ["CTF{", "flag{", "FLAG{", "picoCTF{", "HTB{"];
+    (s.ends_with('}') && opens.iter().any(|p| s.starts_with(p))).then_some(StringKind::CTFFlag)
+}
 
-    // ===== HIGH-PRIORITY IOC DETECTION =====
-    // These checks come first because they're high-value security indicators
-
-    // CTF flags: CTF{...}, flag{...}, FLAG{...}, picoCTF{...}, HTB{...}
-    if (s.starts_with("CTF{")
-        || s.starts_with("flag{")
-        || s.starts_with("FLAG{")
-        || s.starts_with("picoCTF{")
-        || s.starts_with("HTB{"))
+/// A braced registry GUID or a canonical 8-4-4-4-12 UUID (Mythic payload
+/// UUIDs, systemd, COM). The garbage filter would otherwise drop these: hex
+/// and dashes trip its character-class-transition check.
+fn guid(s: &str) -> Option<StringKind> {
+    let b = s.as_bytes();
+    let hex = || s.bytes().filter(u8::is_ascii_hexdigit).count();
+    let braced = s.starts_with('{')
         && s.ends_with('}')
-    {
-        return Some(StringKind::CTFFlag);
-    }
+        && (36..=38).contains(&s.len())
+        && memchr::memchr_iter(b'-', b).count() == 4
+        && (30..=32).contains(&hex());
+    let canonical = s.len() == 36 && [8, 13, 18, 23].iter().all(|&i| b[i] == b'-') && hex() == 32;
+    (braced || canonical).then_some(StringKind::GUID)
+}
 
-    // GUIDs: {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}
-    if s.starts_with('{') && s.ends_with('}') && (36..=38).contains(&len) {
-        let dash_count = memchr::memchr_iter(b'-', s.as_bytes()).count();
-        let hex_count = s.bytes().filter(u8::is_ascii_hexdigit).count();
-        if dash_count == 4 && (30..=32).contains(&hex_count) {
-            return Some(StringKind::GUID);
-        }
-    }
+/// Three base64url segments. Every real JWT header encodes `{"...`, which is
+/// `eyJ` in base64url; requiring it rules out `pkg/foo.Type.method` symbols.
+fn jwt(s: &str) -> Option<StringKind> {
+    let segment = |p: &str| {
+        !p.is_empty()
+            && p.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'='))
+    };
+    (s.len() >= 50
+        && s.starts_with("eyJ")
+        && s.matches('.').count() == 2
+        && s.split('.').all(segment))
+    .then_some(StringKind::JWT)
+}
 
-    // Canonical UUIDs: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX (RFC 4122 form,
-    // 8-4-4-4-12). Used by Mythic agent payload_uuid, systemd, COM objects in
-    // .NET registry hives, etc. The chaos filter would otherwise drop these
-    // because hex+dash strings trip the character-class-transition check.
-    if len == 36
-        && bytes[8] == b'-'
-        && bytes[13] == b'-'
-        && bytes[18] == b'-'
-        && bytes[23] == b'-'
-        && s.bytes().filter(u8::is_ascii_hexdigit).count() == 32
-    {
-        return Some(StringKind::GUID);
-    }
+fn sql_injection(s: &str) -> Option<StringKind> {
+    let union = s.contains("UNION");
+    ((memchr::memchr2(b'\'', b'-', s.as_bytes()).is_some() || union)
+        && (s.contains("' OR '")
+            || s.contains("1'='1")
+            || (union && s.contains("SELECT"))
+            || s.contains("admin'--")))
+    .then_some(StringKind::SQLInjection)
+}
 
-    // Cryptographic hashes (MD5=32, SHA1=40, SHA256=64, SHA512=128)
-    if encoding::is_cryptographic_hash(s) {
-        return Some(StringKind::Hash);
-    }
-
-    // Cryptocurrency wallet addresses (high value IOC)
-    if let Some(kind) = network::classify_crypto_address(s) {
-        return Some(kind);
-    }
-
-    // Email addresses (often used in ransomware). A string that merely
-    // contains `@` and `.` but is not an email falls through to the URL, path
-    // and command checks below (`https://user@host/`, `git@host:org/repo`).
-    if let Some(kind) = classify_email(s) {
-        return Some(kind);
-    }
-
-    // Tor/Onion addresses
-    if s.contains(".onion") && len >= 10 {
-        return Some(StringKind::TorAddress);
-    }
-
-    // JWT tokens: three base64url segments separated by dots. Every real JWT
-    // header decodes from `{"alg":...}`, which in base64url always starts with
-    // `eyJ`. Requiring that prefix plus strict base64url chars in every
-    // segment rules out arbitrary `foo/bar.Type.method` Go symbols.
-    if s.matches('.').count() == 2 && len >= 50 && s.starts_with("eyJ") {
-        // Exactly three dot-separated segments (guaranteed above); each must be a
-        // non-empty base64url run.
-        let is_base64url = |p: &str| {
-            !p.is_empty()
-                && p.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '='))
-        };
-        if s.split('.').all(is_base64url) {
-            return Some(StringKind::JWT);
-        }
-    }
-
-    // API keys (AWS, GitHub, Stripe, Slack)
-    if let Some(kind) = network::classify_api_key(s) {
-        return Some(kind);
-    }
-
-    // SQL injection patterns - only check if contains ' or - which are key indicators
-    if (memchr::memchr2(b'\'', b'-', bytes).is_some() || s.contains("UNION"))
-        && ((s.contains("' OR '") || s.contains("1'='1"))
-            || (s.contains("UNION") && s.contains("SELECT"))
-            || s.contains("admin'--"))
-    {
-        return Some(StringKind::SQLInjection);
-    }
-
-    // XSS payloads - only check if contains < or = which are key indicators
-    if (first == b'j' || memchr::memchr2(b'<', b'=', bytes).is_some())
+fn xss(s: &str) -> Option<StringKind> {
+    ((s.starts_with('j') || memchr::memchr2(b'<', b'=', s.as_bytes()).is_some())
         && ((s.contains("<script>") && s.contains("</script>"))
             || (s.contains("onerror=") && s.contains("alert("))
-            || s.starts_with("javascript:"))
-    {
-        return Some(StringKind::XSSPayload);
-    }
+            || s.starts_with("javascript:")))
+    .then_some(StringKind::XSSPayload)
+}
 
-    // LDAP/AD paths. The AC gate skips the precise check for the common case
-    // where none of LDAP://, CN=, DC= appear.
-    if LDAP_INDICATORS.is_match(s)
-        && (s.contains("LDAP://") || (s.contains("CN=") && s.contains("DC=")))
-    {
-        return Some(StringKind::LDAPPath);
-    }
-
-    // Windows mutex names (often weird strings used for malware synchronization)
-    if s.starts_with("Global\\") || s.starts_with("Local\\") {
-        return Some(StringKind::Mutex);
-    }
-
-    // Ransomware patterns
-    if RANSOM_INDICATORS.is_match(s) {
-        let uppercase_count = s.bytes().filter(u8::is_ascii_uppercase).count();
-        if uppercase_count * 100 / len > 50 {
-            return Some(StringKind::RansomNote);
-        }
-    }
-    // Ransomware file extensions
-    if s == ".locked"
-        || s == ".encrypted"
-        || s == ".crypted"
-        || s == ".wannacry"
-        || s == ".ryuk"
-        || s == ".locky"
+/// A shouted ransom demand, or a well-known ransomware file extension or
+/// note name.
+fn ransom_note(s: &str) -> Option<StringKind> {
+    let shouted = RANSOM_INDICATORS.is_match(s)
+        && s.bytes().filter(u8::is_ascii_uppercase).count() * 100 / s.len() > 50;
+    let extensions = [
+        ".locked",
+        ".encrypted",
+        ".crypted",
+        ".wannacry",
+        ".ryuk",
+        ".locky",
+    ];
+    (shouted
+        || extensions.contains(&s)
         || s.ends_with("-DECRYPT-INSTRUCTIONS.txt")
-        || s.ends_with("HOW-TO-DECRYPT.html")
-    {
-        return Some(StringKind::RansomNote);
-    }
+        || s.ends_with("HOW-TO-DECRYPT.html"))
+    .then_some(StringKind::RansomNote)
+}
 
-    // Cryptocurrency mining pools - only check if contains ':' or 'pool'
-    if (first == b's' || memchr::memchr2(b':', b'p', bytes).is_some())
-        && ((s.contains("stratum+tcp://") || s.contains("stratum+ssl://"))
+fn mining_pool(s: &str) -> Option<StringKind> {
+    ((s.starts_with('s') || memchr::memchr2(b':', b'p', s.as_bytes()).is_some())
+        && (s.contains("stratum+tcp://")
+            || s.contains("stratum+ssl://")
             || ((s.contains("pool.") || s.contains("nanopool") || s.contains("minergate"))
-                && (s.contains(".com") || s.contains(".org") || s.contains(':'))))
-    {
-        return Some(StringKind::MiningPool);
-    }
+                && (s.contains(".com") || s.contains(".org") || s.contains(':')))))
+    .then_some(StringKind::MiningPool)
+}
 
-    // ===== ORIGINAL CLASSIFICATION CONTINUES =====
-
-    // URLs (including database URLs) - check first char for fast path
-    if (first == b'h'
-        || first == b'f'
-        || first == b'p'
-        || first == b'm'
-        || first == b'r'
-        || first == b's'
-        || first == b't'
-        || first == b'u')
-        && (s.starts_with("http://")
-            || s.starts_with("https://")
-            || s.starts_with("ftp://")
-            || s.starts_with("postgresql://")
-            || s.starts_with("mysql://")
-            || s.starts_with("redis://")
-            || s.starts_with("mongodb://")
-            || s.starts_with("ssh://")
-            || s.starts_with("tcp://")
-            || s.starts_with("udp://"))
-    {
-        // Skip common benign URLs (Apple certs, etc.)
-        if s.starts_with("https://www.apple.com/appleca") {
-            return None;
-        }
-        return Some(StringKind::Url);
-    }
-
-    // Check for embedded code first (most specific markers)
-    // PHP has very distinctive markers (<?php tags) so check it first
-    if code::is_php_code(s) {
-        return Some(StringKind::PhpCode);
-    }
-
-    if code::is_python_code(s) {
-        return Some(StringKind::PythonCode);
-    }
-
-    if code::is_javascript_code(s) {
-        return Some(StringKind::JavaScriptCode);
-    }
-
-    // Check for AppleScript syntax (common in macOS malware)
-    if code::is_applescript(s) {
-        return Some(StringKind::AppleScript);
-    }
-
-    // Command injection patterns - check AFTER code detection but BEFORE generic shell commands.
-    // Injection wrappers (;, |, $()) are stronger signals than generic command keywords.
-    // JavaScript/PHP code might contain command strings but should be detected as code first.
-    if memchr::memchr3(b';', b'|', b'$', bytes).is_some() {
-        // Classic injection: `; cat`, `| whoami`: the command right after the
-        // separator, as a whole word ("valid | hidden" is not `| id`).
+/// `; cat`, `| whoami`, or a `$(...)` or backtick substitution holding
+/// something command-shaped rather than binary noise.
+fn command_injection(s: &str) -> Option<StringKind> {
+    let ascii_percent = |t: &str| t.bytes().filter(u8::is_ascii).count() * 100 / t.len();
+    if memchr::memchr3(b';', b'|', b'$', s.as_bytes()).is_some() {
+        // The command must follow the separator as a whole word: "valid |
+        // hidden" is not `| id`.
         if command_follows(s, ';', &["cat", "wget", "curl"])
             || command_follows(s, '|', &["whoami", "id", "uname"])
         {
             return Some(StringKind::CommandInjection);
         }
-
-        // Command substitution: $(...) - require actual command content inside
-        // Must have command-like content, not just random binary data
         if let Some(start) = s.find("$(")
-            && let Some(end_rel) = s[start + 2..].find(')')
+            && let Some(end) = s[start + 2..].find(')')
         {
-            let content = &s[start + 2..start + 2 + end_rel];
-            // Must be non-empty and contain a space (actual command with args)
-            // or be a known command name
-            let is_command = !content.is_empty()
-                && (content.contains(' ')
-                    || content.starts_with("whoami")
-                    || content.starts_with("id")
-                    || content.starts_with("pwd")
-                    || content.starts_with("hostname")
-                    || content.starts_with("uname"));
-            // Must be mostly ASCII and have reasonable alphanumeric ratio
-            let ascii_count = content.bytes().filter(u8::is_ascii).count();
-            let alpha_count = content.bytes().filter(u8::is_ascii_alphanumeric).count();
-            let content_len = content.len();
-            let is_valid = content_len >= 2
-                && ascii_count * 100 / content_len > 90
-                && alpha_count * 100 / content_len > 40;
-
-            if is_command && is_valid {
-                return Some(StringKind::CommandInjection);
-            }
-        }
-    }
-
-    // Backtick command substitution - must be mostly ASCII and contain command-like content
-    if s.starts_with('`') && s.ends_with('`') && len >= 5 {
-        let content = &s[1..len - 1];
-        let content_len = content.len();
-
-        // Must be mostly ASCII (>90%) - reject garbage with non-ASCII chars
-        let ascii_count = content.bytes().filter(u8::is_ascii).count();
-        if ascii_count * 100 / content_len > 90 {
-            // Must contain spaces (multiword command) or known command names
-            if content.contains(' ')
-                || content.contains("cat")
-                || content.contains("ls")
-                || content.contains("pwd")
-                || content.contains("echo")
-                || content.contains("wget")
-                || content.contains("curl")
+            let inner = &s[start + 2..start + 2 + end];
+            let commands = ["whoami", "id", "pwd", "hostname", "uname"];
+            let command = inner.contains(' ') || commands.iter().any(|c| inner.starts_with(c));
+            let alnum = || inner.bytes().filter(u8::is_ascii_alphanumeric).count();
+            if command
+                && inner.len() >= 2
+                && ascii_percent(inner) > 90
+                && alnum() * 100 / inner.len() > 40
             {
                 return Some(StringKind::CommandInjection);
             }
         }
     }
-
-    // Check for shell commands after injection detection (catches generic commands like 'echo', 'curl')
-    // This is intentionally after code detection to avoid false positives
-    if code::is_shell_command(s) {
-        return Some(StringKind::ShellCmd);
-    }
-
-    // IP addresses and IP:port - only if starts with digit
-    if first.is_ascii_digit()
-        && let Some(kind) = network::classify_ip(s)
-    {
-        return Some(kind);
-    }
-
-    // Windows registry paths (full HKEY-prefixed or root-relative subkeys
-    // passed alongside a separate hKey arg to Reg* APIs).
-    if is_registry_path(s) {
-        return Some(StringKind::Registry);
-    }
-
-    if network::names_targeted_location(s) {
-        return Some(StringKind::SuspiciousPath);
-    }
-
-    // Well-known config/system files (even without path prefix)
-    let well_known_files = [
-        ".DS_Store",
-        ".localized",
-        ".bashrc",
-        ".zshrc",
-        ".profile",
-        ".bash_profile",
-        ".gitignore",
-        ".gitconfig",
-        ".ssh/",
-        ".aws/",
-        ".docker/",
-        "authorized_keys",
-        "id_rsa",
-        "id_ed25519",
-        "known_hosts",
-        ".npmrc",
-        ".yarnrc",
-        "package.json",
-        "Cargo.toml",
-        "go.mod",
-        "requirements.txt",
-    ];
-    for file in &well_known_files {
-        if s == *file || s.ends_with(file) {
-            return Some(StringKind::FilePath);
+    if s.len() >= 5 && s.starts_with('`') && s.ends_with('`') {
+        let inner = &s[1..s.len() - 1];
+        let commands = [" ", "cat", "ls", "pwd", "echo", "wget", "curl"];
+        if ascii_percent(inner) > 90 && commands.iter().any(|c| inner.contains(c)) {
+            return Some(StringKind::CommandInjection);
         }
     }
-
-    // File paths - check for suspicious patterns
-    // Skip Go runtime metrics (e.g., /gc/heap/allocs:bytes, /sched/latencies:seconds)
-    if s.starts_with('/') || s.starts_with("C:\\") || s.starts_with("./") || s.starts_with("../") {
-        // Go runtime metrics start with / and have colon (not URLs like file://)
-        if s.starts_with('/') && s.contains(':') && !s.contains("://") {
-            return None;
-        }
-
-        // Reject paths with too many special characters (likely garbage)
-        let special_count = s
-            .bytes()
-            .filter(|b| !b.is_ascii_alphanumeric() && !b.is_ascii_whitespace())
-            .count();
-        let alphanumeric_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
-        if alphanumeric_count == 0 || (len > 0 && special_count * 100 / len > 30) {
-            return None; // Too many special chars for a valid path
-        }
-
-        if network::is_suspicious_path(s) {
-            return Some(StringKind::SuspiciousPath);
-        }
-        return Some(StringKind::Path);
-    }
-
-    // Unicode escape sequences (common in JavaScript malware)
-    if encoding::is_unicode_escaped(s) {
-        return Some(StringKind::UnicodeEscaped);
-    }
-
-    // URL-encoded data (common in web shells and HTTP payloads)
-    if encoding::is_url_encoded(s) {
-        return Some(StringKind::UrlEncoded);
-    }
-
-    // Hex-encoded ASCII data (common in malware obfuscation)
-    if encoding::is_hex_encoded(s) {
-        return Some(StringKind::HexEncoded);
-    }
-
-    // Base58-encoded data (Bitcoin/cryptocurrency addresses)
-    if encoding::is_base58(s) {
-        return Some(StringKind::Base58);
-    }
-
-    // Base32-encoded data (Tor, some malware)
-    if encoding::is_base32(s) {
-        return Some(StringKind::Base32);
-    }
-
-    // Base85-encoded data (ASCII85/Z85, some compressed formats)
-    if encoding::is_base85(s) {
-        return Some(StringKind::Base85);
-    }
-
-    // Base64-encoded data (long strings, right charset, proper padding)
-    if encoding::is_base64(s) {
-        return Some(StringKind::Base64);
-    }
-
-    // Environment variable names (UPPERCASE, optionally with _ and digits)
-    // May have trailing = for assignment context (e.g., "GOMEMLIMIT=")
-    // This avoids matching x86 instruction patterns like "AWAVAUATSH"
-    let env_name = s.strip_suffix('=').unwrap_or(s);
-    if env_name.len() >= 3
-        && env_name
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_uppercase())
-        && env_name
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
-    {
-        let has_underscore = env_name.contains('_');
-
-        // Go runtime env vars (GODEBUG, GOTRACEBACK, GOMAXPROCS, GOMEMLIMIT, etc.)
-        let is_go_env = env_name.starts_with("GO") && env_name.len() >= 4;
-
-        // Comprehensive whitelist of well-known environment variables
-        let is_known = matches!(
-            env_name,
-            // POSIX/Unix standard
-            "PATH" | "HOME" | "USER" | "SHELL" | "TERM" | "LANG" | "PWD" | "TMP" | "TEMP"
-            | "TMPDIR" | "EDITOR" | "PAGER" | "MAIL" | "LOGNAME" | "HOSTNAME" | "DISPLAY"
-            | "TZ" | "UID" | "GID" | "EUID" | "EGID"
-            // Locale
-            | "LC_ALL" | "LC_CTYPE" | "LC_COLLATE" | "LC_MESSAGES" | "LC_MONETARY"
-            | "LC_NUMERIC" | "LC_TIME"
-            // Terminal/Display
-            | "COLUMNS" | "LINES" | "COLORTERM" | "CLICOLOR" | "LSCOLORS"
-            // Development/Build
-            | "CC" | "CXX" | "CFLAGS" | "CXXFLAGS" | "LDFLAGS" | "MAKE" | "AR" | "AS"
-            | "LD" | "NM" | "RANLIB" | "STRIP"
-            // Common application vars
-            | "JAVA_HOME" | "PYTHONPATH" | "NODE_PATH" | "RUBYLIB" | "PERL5LIB"
-            | "CARGO_HOME" | "RUSTUP_HOME" | "GOPATH" | "GOROOT" | "GOBIN" | "GOCACHE"
-            // XDG Base Directory
-            | "XDG_CONFIG_HOME" | "XDG_DATA_HOME" | "XDG_CACHE_HOME" | "XDG_STATE_HOME"
-            | "XDG_RUNTIME_DIR"
-            // Security/Auth
-            | "SSH_AUTH_SOCK" | "SSH_AGENT_PID" | "GPG_AGENT_INFO" | "SUDO_USER"
-            | "SUDO_UID" | "SUDO_GID" | "SUDO_COMMAND"
-            // HTTP/Network
-            | "HTTP_PROXY" | "HTTPS_PROXY" | "FTP_PROXY" | "NO_PROXY" | "ALL_PROXY"
-            // Debugging/Profiling
-            | "DEBUG" | "VERBOSE" | "TRACE"
-            // glibc/system
-            | "LD_LIBRARY_PATH" | "LD_PRELOAD" | "GLIBC_TUNABLES"
-            // macOS specific
-            | "DYLD_LIBRARY_PATH" | "DYLD_INSERT_LIBRARIES" | "DYLD_FRAMEWORK_PATH"
-            // Windows common (for cross-platform tools)
-            | "APPDATA" | "LOCALAPPDATA" | "PROGRAMFILES" | "SYSTEMROOT" | "WINDIR"
-            | "USERPROFILE" | "COMPUTERNAME"
-        );
-
-        // Accept if: well-known name, has underscore (like BUILD_ID, CI_JOB), or Go env var
-        if is_known || (has_underscore && env_name.len() >= 3) || is_go_env {
-            return Some(StringKind::EnvVar);
-        }
-    }
-
     None
+}
+
+/// A path, unless it is a Go runtime metric name (`/gc/heap/allocs:bytes`)
+/// or mostly punctuation.
+fn path(s: &str) -> Option<StringKind> {
+    if s.starts_with('/') && s.contains(':') && !s.contains("://") {
+        return None;
+    }
+    let alnum = s.bytes().filter(u8::is_ascii_alphanumeric).count();
+    let special = s
+        .bytes()
+        .filter(|b| !b.is_ascii_alphanumeric() && !b.is_ascii_whitespace())
+        .count();
+    if alnum == 0 || special * 100 / s.len() > 30 {
+        return None;
+    }
+    Some(path_kind(s))
+}
+
+fn path_kind(s: &str) -> StringKind {
+    if network::is_suspicious_path(s) {
+        StringKind::SuspiciousPath
+    } else {
+        StringKind::Path
+    }
+}
+
+/// An upper-case variable name, optionally with the `=` of an assignment
+/// (`GOMEMLIMIT=`). Unknown names need an underscore or a `GO` prefix, which
+/// keeps out x86 register-push noise like `AWAVAUATSH`.
+fn env_var(s: &str) -> Option<StringKind> {
+    let name = s.strip_suffix('=').unwrap_or(s);
+    let shaped = name.len() >= 3
+        && name.starts_with(|c: char| c.is_ascii_uppercase())
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_uppercase() || c == b'_' || c.is_ascii_digit());
+    (shaped
+        && (KNOWN_ENV_VARS.contains(&name)
+            || name.contains('_')
+            || (name.starts_with("GO") && name.len() >= 4)))
+        .then_some(StringKind::EnvVar)
 }
 
 /// Recognize a Windows registry key path, including the root-relative subkey
@@ -528,66 +484,34 @@ fn is_registry_path(s: &str) -> bool {
     false
 }
 
-/// Classify a long string using only its prefix.
-///
-/// Uses first-byte dispatch to avoid running expensive checks on irrelevant
-/// prefixes. Skips encoding checks (base64, hex) that need full content.
+/// Classify a long string by its first 256 bytes: only the prefix-anchored
+/// kinds and code markers.
 fn classify_prefix(prefix: &str) -> Option<StringKind> {
-    if prefix.len() < 3 {
-        return None;
+    if URL_SCHEMES.iter().any(|p| prefix.starts_with(p)) {
+        return Some(StringKind::Url);
     }
-
-    let first = prefix.as_bytes()[0];
-
-    match first {
-        // URLs: http://, https://, ftp://, etc.
-        b'h' | b'f' | b'p' | b'm' | b'r' | b's' | b't' | b'u'
-            if prefix.starts_with("http://")
-                || prefix.starts_with("https://")
-                || prefix.starts_with("ftp://")
-                || prefix.starts_with("postgresql://")
-                || prefix.starts_with("mysql://")
-                || prefix.starts_with("redis://")
-                || prefix.starts_with("mongodb://")
-                || prefix.starts_with("ssh://")
-                || prefix.starts_with("tcp://")
-                || prefix.starts_with("udp://") =>
-        {
-            return Some(StringKind::Url);
-        }
-        // File paths
-        b'/' | b'.'
-            if prefix.starts_with('/') || prefix.starts_with("./") || prefix.starts_with("../") =>
-        {
-            if network::is_suspicious_path(prefix) {
-                return Some(StringKind::SuspiciousPath);
-            }
-            return Some(StringKind::Path);
-        }
-        // Windows paths / registry
-        b'C' if prefix.starts_with("C:\\") => return Some(StringKind::Path),
-        b'H' | b'S' if is_registry_path(prefix) => {
-            return Some(StringKind::Registry);
-        }
-        // PHP opening tag
-        b'<' if prefix.starts_with("<?php") => return Some(StringKind::PhpCode),
-        // Shebang / shell
-        b'#' if prefix.starts_with("#!") => return Some(StringKind::ShellCmd),
-        _ => {}
+    if ["/", "./", "../"].iter().any(|p| prefix.starts_with(p)) {
+        return Some(path_kind(prefix));
     }
-
-    // Code detection (only if first byte didn't already resolve)
+    if prefix.starts_with("C:\\") {
+        return Some(StringKind::Path);
+    }
+    if is_registry_path(prefix) {
+        return Some(StringKind::Registry);
+    }
+    if prefix.starts_with("<?php") {
+        return Some(StringKind::PhpCode);
+    }
+    if prefix.starts_with("#!") {
+        return Some(StringKind::ShellCmd);
+    }
     if code::is_python_code(prefix) {
         return Some(StringKind::PythonCode);
     }
     if code::is_javascript_code(prefix) {
         return Some(StringKind::JavaScriptCode);
     }
-    if code::is_shell_command(prefix) {
-        return Some(StringKind::ShellCmd);
-    }
-
-    None
+    code::is_shell_command(prefix).then_some(StringKind::ShellCmd)
 }
 
 /// Whether some `separator` in `s` is followed, after spaces, by one of
@@ -723,6 +647,27 @@ mod tests {
     use super::network::is_ipv4;
     use crate::extraction::{extract_from_structures, find_string_structures};
     use crate::types::{BinaryInfo, StringKind, StringStruct};
+
+    #[test]
+    fn jwts_classify_and_lookalikes_do_not() {
+        // RFC 7519's example, and an RS256 token with a longer signature.
+        for jwt in [
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+            "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2V4YW1wbGUuYXV0aDAuY29tLyIsInN1YiI6ImF1dGgwfDEyMzQ1Njc4OTAiLCJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbS8iLCJleHAiOjE2NDE2NzgwMDB9.abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        ] {
+            assert_eq!(classify_string(jwt), Some(StringKind::JWT), "{jwt}");
+        }
+        // No `eyJ` header (a Go symbol's shape), two parts, too short, an
+        // empty segment.
+        for not_jwt in [
+            "foo.bar.baz0123456789abcdef0123456789abcdef01234567890AB",
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0",
+            "eyJx.eyJx.eyJx",
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+        ] {
+            assert_ne!(classify_string(not_jwt), Some(StringKind::JWT), "{not_jwt}");
+        }
+    }
 
     #[test]
     fn test_find_string_structures() {

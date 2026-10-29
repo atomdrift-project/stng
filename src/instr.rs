@@ -8,7 +8,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use super::classifier::classify_string;
-use super::types::{ExtractedString, StringKind, StringMethod};
+use super::types::{Arch, ExtractedString, StringKind, StringMethod};
 use std::collections::HashSet;
 mod arm64_preserved;
 
@@ -53,7 +53,29 @@ impl<'a> Scan<'a> {
     }
 }
 
-pub(crate) fn extract_inline_strings_arm64(
+/// Strings that `text`'s instructions address in `target` with an immediate
+/// length; empty for an instruction set stng does not decode. Both are
+/// `(address, bytes)`.
+pub(crate) fn inline_strings(
+    arch: Arch,
+    (text_addr, text): (u64, &[u8]),
+    (target_addr, target): (u64, &[u8]),
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let mut strings = match arch {
+        Arch::Aarch64 => {
+            extract_inline_strings_arm64(text, text_addr, target, target_addr, min_length)
+        }
+        Arch::X86_64 => {
+            extract_inline_strings_amd64(text, text_addr, target, target_addr, min_length)
+        }
+        _ => Vec::new(),
+    };
+    strings.retain(|s| s.value.len() >= min_length);
+    strings
+}
+
+fn extract_inline_strings_arm64(
     text_data: &[u8],
     text_addr: u64,
     rodata_data: &[u8],
@@ -484,7 +506,7 @@ fn decode_arm_mov_immediate(inst: u32) -> Option<u64> {
 ///
 /// Scans for CALL instructions and looks for LEAQ addr(RIP) patterns
 /// (string address) and MOVL/MOVQ or adjacent PUSH/POP patterns (string length).
-pub(crate) fn extract_inline_strings_amd64(
+fn extract_inline_strings_amd64(
     text_data: &[u8],
     text_addr: u64,
     rodata_data: &[u8],

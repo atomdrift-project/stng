@@ -81,7 +81,12 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
     results.extend(try_encoded_command(source));
 
     // iex_encoding_b64 is a superset of convert_b64, so track covered offsets
-    let iex_results = try_iex_encoding_b64(source);
+    let iex_results = super::decode_captures(
+        source,
+        &[&IEX_ENCODING_B64_RE],
+        &[DecodeStep::Base64],
+        "powershell",
+    );
     let covered_offsets: std::collections::BTreeSet<usize> =
         iex_results.iter().map(|r| r.offset).collect();
     results.extend(iex_results);
@@ -124,25 +129,6 @@ fn try_encoded_command(source: &str) -> Vec<DeobfuscationResult> {
             }
             let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
             let steps = vec![DecodeStep::Base64, DecodeStep::Utf16Le];
-            let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps)?;
-            Some(DeobfuscationResult {
-                decoded: result.payload,
-                offset,
-                chain_description: format!("powershell:{}", result.chain_description),
-                language: "powershell",
-            })
-        })
-        .collect()
-}
-
-/// `iex([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("...")))`
-fn try_iex_encoding_b64(source: &str) -> Vec<DeobfuscationResult> {
-    IEX_ENCODING_B64_RE
-        .captures_iter(source)
-        .filter_map(|cap| {
-            let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
-            let offset = cap.get(0)?.start();
-            let steps = vec![DecodeStep::Base64];
             let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps)?;
             Some(DeobfuscationResult {
                 decoded: result.payload,

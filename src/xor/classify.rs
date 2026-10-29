@@ -398,14 +398,10 @@ pub(crate) fn auto_detect_xor_key(
         }
     }
 
-    // Require VERY high score to avoid false positives from random XOR keys
-    // Any key produces ~85% printable output, so we need EXTREMELY strong evidence
-    // Minimum threshold: 300+ (2+ shell commands, multiple high-value IOCs, or clusters of URLs/IPs)
-    // This filters out unobfuscated binaries - real XOR'd malware will have explicit
-    // command & control URLs, shell commands, or cryptocurrency wallet paths.
-    // Threshold is 375 (= 5 unique suspicious paths at 75 pts each). This rejects keys
-    // that score only from a handful of garbled path matches (null-byte false positives)
-    // while accepting real malware which typically has shell commands (100+ pts) or URLs.
+    // Any key decodes to mostly printable bytes, so a key must earn a high
+    // score: 375 is five distinct suspicious paths (75 each). A handful of
+    // garbled path matches does not reach it; real samples, with shell
+    // commands (100+) or C2 URLs, do.
     let min_xor_confidence_threshold = 375;
 
     if best_score >= min_xor_confidence_threshold {
@@ -451,7 +447,7 @@ pub(crate) fn extract_xor_strings(
             expand_xor_string(data, pos, key, min_length)
         };
         if let Some((decoded, start, end)) = expanded
-            && let Some(kind) = classify_xor_string(&decoded)
+            && let Verdict::Keep(kind) = classify_xor_string(&decoded)
             && (kind.is_some() || !reads_as_text(&data[start..end]))
         {
             let offset = start as u64;
@@ -554,7 +550,7 @@ pub(crate) fn extract_multikey_xor_strings(
                     let len = i - start;
                     if len >= blind_min_len {
                         let s = String::from_utf8_lossy(&decoded_full[start..i]).to_string();
-                        if let Some(kind) = classify_xor_string(&s)
+                        if let Verdict::Keep(kind) = classify_xor_string(&s)
                             && seen.insert((start as u64, s.clone()))
                         {
                             results.push(ExtractedString {
@@ -604,7 +600,7 @@ pub(crate) fn extract_multikey_xor_strings(
             // But we can just use expand_multikey_xor_string which handles arbitrary alignment
             if let Some((decoded, start, end)) =
                 expand_multikey_xor_string(data, pos, key_bytes, shift, min_length)
-                && let Some(kind) = classify_xor_string(&decoded)
+                && let Verdict::Keep(kind) = classify_xor_string(&decoded)
             {
                 let offset = start as u64;
                 if seen.insert((offset, decoded.clone())) {
@@ -1512,7 +1508,30 @@ fn is_markup(s: &str) -> bool {
     true
 }
 
-pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
+/// What the XOR filter makes of a decoded candidate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    /// Noise from a wrong key or alignment.
+    Reject,
+    /// Plausible plaintext, with the kind the classifier gave it, if any.
+    Keep(Option<StringKind>),
+}
+
+impl Verdict {
+    /// The kind of a kept candidate; `None` when rejected or unclassified.
+    pub(crate) fn kind(self) -> Option<StringKind> {
+        match self {
+            Self::Keep(kind) => kind,
+            Self::Reject => None,
+        }
+    }
+}
+
+pub(crate) fn classify_xor_string(s: &str) -> Verdict {
+    // Several rules below need the classifier's verdict; compute it once, and
+    // only on paths that ask.
+    let classified = std::cell::LazyCell::new(|| classify_string(s));
+
     // FIRST: Check for high-value IOCs that should bypass strict filtering.
     // These checks must come BEFORE is_partial_xor_decode to avoid false rejections
     // of legitimate paths like /proc/net/tcp that could superficially resemble
@@ -1520,18 +1539,18 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
 
     // Check for locale strings (common in malware geofencing)
     if has_multiple_locales(s) {
-        return Some(Some(StringKind::SuspiciousPath));
+        return Verdict::Keep(Some(StringKind::SuspiciousPath));
     }
 
     // Locations stealers go after (even with garbage around them)
     if names_targeted_location(s) {
-        return Some(Some(StringKind::SuspiciousPath));
+        return Verdict::Keep(Some(StringKind::SuspiciousPath));
     }
 
     // Check for Windows DLL names - covert dynamic loading is a strong malware indicator.
     // Names like "bcrypt.dll" have no vowels and would fail linguistic checks without this.
     if s.ends_with(".dll") || s.ends_with(".DLL") {
-        return Some(Some(StringKind::SuspiciousPath));
+        return Verdict::Keep(Some(StringKind::SuspiciousPath));
     }
 
     // Check for Windows crypto/process API names - indicate AES decryption or injection.
@@ -1556,7 +1575,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     ];
     for api in &win_api_patterns {
         if s.contains(api) {
-            return Some(Some(StringKind::SuspiciousPath));
+            return Verdict::Keep(Some(StringKind::SuspiciousPath));
         }
     }
 
@@ -1565,7 +1584,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     // diverge into garbage (e.g., "%UsERP4NFINE%\"). Must check this BEFORE
     // is_meaningful_string() which might pass these due to acceptable vowel ratios.
     if super::validate::is_partial_xor_decode(s) {
-        return None;
+        return Verdict::Reject;
     }
 
     // Defer lowercase allocation until needed for case-insensitive checks.
@@ -1574,21 +1593,21 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     // Check for shell executable paths (before shell commands)
     for exe_path in SHELL_EXECUTABLE_PATHS {
         if lower.contains(exe_path) {
-            return Some(Some(StringKind::SuspiciousPath));
+            return Verdict::Keep(Some(StringKind::SuspiciousPath));
         }
     }
 
     // Check for well-known shell commands (even with trailing garbage)
     for cmd in SHELL_COMMANDS {
         if lower.contains(cmd) {
-            return Some(Some(StringKind::ShellCmd));
+            return Verdict::Keep(Some(StringKind::ShellCmd));
         }
     }
 
     // Check for credential keywords
     for keyword in CREDENTIAL_KEYWORDS {
         if lower.contains(keyword) {
-            return Some(Some(StringKind::SuspiciousPath));
+            return Verdict::Keep(Some(StringKind::SuspiciousPath));
         }
     }
 
@@ -1614,21 +1633,21 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
 
     for indicator in &exfil_indicators {
         if lower.contains(indicator) {
-            return Some(Some(StringKind::SuspiciousPath));
+            return Verdict::Keep(Some(StringKind::SuspiciousPath));
         }
     }
 
     // Persistence plists and entitlements are spelled out tag by tag.
     if is_markup(s) {
-        return Some(None);
+        return Verdict::Keep(None);
     }
 
     // Quick check for URLs/IPs before strict filtering
     if lower.contains("http://") || lower.contains("https://") || lower.contains("://") {
         // Likely a URL, allow through
-        let kind = classify_string(s);
+        let kind = *classified;
         if matches!(kind, Some(StringKind::Url)) {
-            return Some(kind);
+            return Verdict::Keep(kind);
         }
     }
 
@@ -1641,9 +1660,9 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
             })
         {
             // Likely an IP address, allow through
-            let kind = classify_string(s);
+            let kind = *classified;
             if matches!(kind, Some(StringKind::IP | StringKind::IPPort)) {
-                return Some(kind);
+                return Verdict::Keep(kind);
             }
         }
     }
@@ -1652,7 +1671,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     // If it passes linguistic validation, trust it
     if is_meaningful_string(s) {
         // String looks legitimate - classify it
-        let kind = classify_string(s);
+        let kind = *classified;
 
         // Accept meaningful strings that classify as high-value IOCs
         // NOTE: Const is intentionally excluded - it must pass strict validation below
@@ -1667,7 +1686,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
                     | StringKind::Url
             )
         ) {
-            return Some(kind);
+            return Verdict::Keep(kind);
         }
     }
 
@@ -1685,7 +1704,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
             }
         }
         if max_count * 2 > char_count {
-            return None;
+            return Verdict::Reject;
         }
     }
 
@@ -1693,12 +1712,12 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
     // Base64, hex, and url-encoded strings don't pass linguistic checks but are high-value IOCs.
     // classify_string handles proper format validation (length, charset, structure).
     {
-        let kind = classify_string(s);
+        let kind = *classified;
         if matches!(
             kind,
             Some(StringKind::Base64 | StringKind::HexEncoded | StringKind::UrlEncoded)
         ) {
-            return Some(kind);
+            return Verdict::Keep(kind);
         }
         // XOR decoding may strip trailing '=' padding from base64 (e.g., '=' XOR 0x42 = 0x7F,
         // which is non-printable and gets cut off by the scan). Try re-adding padding.
@@ -1707,18 +1726,18 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
             let padding = if remainder == 2 { "==" } else { "=" };
             let padded = format!("{s}{padding}");
             if matches!(classify_string(&padded), Some(StringKind::Base64)) {
-                return Some(Some(StringKind::Base64));
+                return Verdict::Keep(Some(StringKind::Base64));
             }
         }
     }
 
     // THIRD: For strings that don't pass linguistic checks, apply strict filtering
     if !is_valid_xor_string(s) {
-        return None;
+        return Verdict::Reject;
     }
 
     // Classify remaining strings that passed strict validation
-    let kind = classify_string(s);
+    let kind = *classified;
 
     match kind {
         Some(
@@ -1731,7 +1750,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
             | StringKind::UrlEncoded
             | StringKind::Registry
             | StringKind::Base64,
-        ) => Some(kind),
+        ) => Verdict::Keep(kind),
         Some(StringKind::ShellCmd | StringKind::AppleScript) => {
             // Reject obvious garbage that starts with backtick but no valid command
             if s.starts_with('`')
@@ -1741,9 +1760,9 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
                     .next()
                     .is_some_and(|c| c.is_ascii_alphabetic())
             {
-                None
+                Verdict::Reject
             } else {
-                Some(kind)
+                Verdict::Keep(kind)
             }
         }
         Some(StringKind::Path) => {
@@ -1767,7 +1786,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
                     >= 1;
 
             if !has_known_prefix && !is_windows_path && !is_relative_path {
-                return None;
+                return Verdict::Reject;
             }
 
             // Reject if path has too many non-path characters
@@ -1781,7 +1800,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
 
             // Reject if > 10% bad characters
             if bad_chars * 10 > s.len() {
-                return None;
+                return Verdict::Reject;
             }
 
             // For UNIX paths, ensure they have proper structure
@@ -1818,7 +1837,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
 
                         // Reject paths with mixed case + digits (garbage pattern)
                         if has_upper && has_lower && has_digit {
-                            return None;
+                            return Verdict::Reject;
                         }
 
                         // Reject if it alternates between upper/lower too much (gibberish)
@@ -1833,7 +1852,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
                         }
                         // Real paths rarely change case more than 2-3 times
                         if case_changes > 3 {
-                            return None;
+                            return Verdict::Reject;
                         }
                     }
                 }
@@ -1843,12 +1862,12 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
                     // Each component should be mostly alphanumeric
                     let alnum = part.chars().filter(char::is_ascii_alphanumeric).count();
                     if !part.is_empty() && alnum * 100 / part.len() < 60 {
-                        return None;
+                        return Verdict::Reject;
                     }
                 }
             }
 
-            Some(kind)
+            Verdict::Keep(kind)
         }
         _ => {
             // Generic fallback for Const and other types
@@ -1866,15 +1885,15 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
 
             // Reject if > 40% special characters (garbage indicator)
             if char_count > 0 && special_chars * 10 > char_count * 4 {
-                return None;
+                return Verdict::Reject;
             }
 
             // Longer strings with spaces should look like natural text
             if char_count >= 30 && s.contains(' ') {
                 if looks_like_text(s) {
-                    return Some(None);
+                    return Verdict::Keep(None);
                 }
-                return None;
+                return Verdict::Reject;
             }
 
             // Short strings: must be mostly alphanumeric
@@ -1883,10 +1902,10 @@ pub(crate) fn classify_xor_string(s: &str) -> Option<Option<StringKind>> {
             let alnum = s.chars().filter(|c| c.is_alphanumeric()).count();
             if char_count > 0 && alnum * 10 < char_count * 6 {
                 // < 60% alphanumeric = likely garbage
-                return None;
+                return Verdict::Reject;
             }
 
-            Some(None)
+            Verdict::Keep(None)
         }
     }
 }

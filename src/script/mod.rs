@@ -113,6 +113,38 @@ fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
     all_results
 }
 
+/// Decode the first capture of every match of `patterns` in `source`
+/// through `steps`, reporting each as `language`. Base64 literals are often
+/// line-wrapped, so a chain that starts with base64 sees the capture without
+/// its whitespace.
+fn decode_captures(
+    source: &str,
+    patterns: &[&regex::Regex],
+    steps: &[decode_chain::DecodeStep],
+    language: &'static str,
+) -> Vec<DeobfuscationResult> {
+    let squeeze = matches!(steps.first(), Some(decode_chain::DecodeStep::Base64));
+    patterns
+        .iter()
+        .flat_map(|pattern| pattern.captures_iter(source))
+        .filter_map(|cap| {
+            let blob = cap.get(1)?.as_str();
+            let blob = if squeeze {
+                std::borrow::Cow::Owned(blob.replace(char::is_whitespace, ""))
+            } else {
+                std::borrow::Cow::Borrowed(blob)
+            };
+            let result = decode_chain::apply_chain(blob.as_bytes(), steps)?;
+            Some(DeobfuscationResult {
+                decoded: result.payload,
+                offset: cap.get(0)?.start(),
+                chain_description: format!("{language}:{}", result.chain_description),
+                language,
+            })
+        })
+        .collect()
+}
+
 /// The text a comma-separated list of code points spells, as in
 /// `String.fromCharCode(104, 0x69)` or `[char]104`. `0x` entries count only
 /// when `hex` is set; anything that is not a code point is skipped.

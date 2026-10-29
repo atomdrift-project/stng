@@ -15,11 +15,9 @@
 //! For inline literals, we also perform instruction pattern analysis.
 
 use super::classifier::classify_string;
-use super::extraction::{extract_from_structures, find_string_structures};
-use super::instr::{
-    extract_inline_strings_amd64, extract_inline_strings_arm64, is_valid_utf8_string,
-};
-use super::types::{BinaryInfo, ExtractedString, StringMethod, StringStruct};
+use super::extraction::pair_strings;
+use super::instr::{inline_strings, is_valid_utf8_string};
+use super::types::{Arch, BinaryInfo, ExtractedString, StringMethod};
 use goblin::elf::Elf;
 use goblin::mach::MachO;
 use goblin::mach::cputype::{CPU_TYPE_ARM64, CPU_TYPE_X86_64};
@@ -83,7 +81,7 @@ impl RustStringExtractor {
     /// rebases a fat slice's offsets onto the whole fat file; it is 0 for a thin
     /// binary, where `macho`'s load commands already carry file-relative offsets.
     pub(crate) fn extract_macho(&self, macho: &MachO<'_>, file_base: u64) -> Vec<ExtractedString> {
-        let mut strings = Vec::new();
+        let mut strings: Vec<ExtractedString> = Vec::new();
         let info = BinaryInfo::from_macho(macho.is_64);
 
         // Collect sections by type
@@ -122,28 +120,18 @@ impl RustStringExtractor {
         // This is the primary method for Rust - it stores &str slices here
         for (data_const_addr, data_const_data) in data_const_sections.into_iter().flatten() {
             // Target sections to look for pointers to
-            for (target_addr, target_data) in [cstring_info, text_const_info].into_iter().flatten()
-            {
-                let structs = find_string_structures(
-                    data_const_data,
-                    data_const_addr,
-                    target_addr,
-                    target_data.len() as u64,
-                    &info,
-                );
-
-                let structured =
-                    extract_from_structures(target_data, target_addr, &structs, classify_string);
-
+            for target in [cstring_info, text_const_info].into_iter().flatten() {
                 // Use lower floor for structure-based strings (high confidence)
-                let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
-                let existing: HashSet<&str> = strings
-                    .iter()
-                    .map(|s: &ExtractedString| s.value.as_str())
-                    .collect();
+                let structured = pair_strings(
+                    [(data_const_addr, 0, data_const_data)],
+                    target,
+                    &info,
+                    self.min_length.min(STRUCTURE_MIN_LENGTH),
+                );
+                let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
                 let new_strings: Vec<_> = structured
                     .into_iter()
-                    .filter(|s| s.value.len() >= struct_min && !existing.contains(s.value.as_str()))
+                    .filter(|s| !existing.contains(s.value.as_str()))
                     .collect();
                 strings.extend(new_strings);
             }
@@ -199,36 +187,19 @@ impl RustStringExtractor {
         }
 
         // PHASE 4: Instruction pattern analysis
-        if let Some((text_addr, text_data)) = text_info {
-            for (section_addr, section_data) in
-                [cstring_info, text_const_info].into_iter().flatten()
-            {
-                let inline_strings = match macho.header.cputype() {
-                    CPU_TYPE_ARM64 => extract_inline_strings_arm64(
-                        text_data,
-                        text_addr,
-                        section_data,
-                        section_addr,
-                        self.min_length,
-                    ),
-                    CPU_TYPE_X86_64 => extract_inline_strings_amd64(
-                        text_data,
-                        text_addr,
-                        section_data,
-                        section_addr,
-                        self.min_length,
-                    ),
-                    _ => Vec::new(),
-                };
-
-                let new_inline: Vec<_> = {
-                    let existing: HashSet<&str> =
-                        strings.iter().map(|s| s.value.as_str()).collect();
-                    inline_strings
-                        .into_iter()
-                        .filter(|s| !existing.contains(s.value.as_str()))
-                        .collect()
-                };
+        if let Some(text) = text_info {
+            let arch = match macho.header.cputype() {
+                CPU_TYPE_ARM64 => Arch::Aarch64,
+                CPU_TYPE_X86_64 => Arch::X86_64,
+                _ => Arch::Other,
+            };
+            for target in [cstring_info, text_const_info].into_iter().flatten() {
+                let inline = inline_strings(arch, text, target, self.min_length);
+                let existing: HashSet<&str> = strings.iter().map(|s| s.value.as_str()).collect();
+                let new_inline: Vec<_> = inline
+                    .into_iter()
+                    .filter(|s| !existing.contains(s.value.as_str()))
+                    .collect();
                 strings.extend(new_inline);
             }
         }
@@ -255,9 +226,20 @@ impl RustStringExtractor {
         // Rust uses multiple sections for string data
         let string_sections = [".rodata", ".data.rel.ro", ".data.rel.ro.local"];
 
-        for section_name in &string_sections {
-            if let Some(extracted) = self.extract_from_section(elf, data, section_name, &info) {
-                strings.extend(extracted);
+        let sections = || {
+            elf.section_headers.iter().filter_map(|sh| {
+                if sh.sh_type == goblin::elf::section_header::SHT_NOBITS || sh.sh_size == 0 {
+                    return None;
+                }
+                let offset = sh.sh_offset as usize;
+                let end = offset.checked_add(sh.sh_size as usize)?;
+                Some((sh.sh_addr, offset, data.get(offset..end)?))
+            })
+        };
+        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
+        for name in string_sections {
+            if let Some(target) = crate::binary::elf_section(elf, data, name) {
+                strings.extend(pair_strings(sections(), target, &info, struct_min));
             }
         }
 
@@ -279,28 +261,13 @@ impl RustStringExtractor {
         let text_info = crate::binary::elf_section(elf, data, ".text");
         let rodata_info = crate::binary::elf_section(elf, data, ".rodata");
 
-        if let (Some((text_addr, text_data)), Some((rodata_addr, rodata_data))) =
-            (text_info, rodata_info)
-        {
-            let inline_strings = match elf.header.e_machine {
-                goblin::elf::header::EM_X86_64 => extract_inline_strings_amd64(
-                    text_data,
-                    text_addr,
-                    rodata_data,
-                    rodata_addr,
-                    self.min_length,
-                ),
-                goblin::elf::header::EM_AARCH64 => extract_inline_strings_arm64(
-                    text_data,
-                    text_addr,
-                    rodata_data,
-                    rodata_addr,
-                    self.min_length,
-                ),
-                _ => Vec::new(),
+        if let (Some(text), Some(rodata)) = (text_info, rodata_info) {
+            let arch = match elf.header.e_machine {
+                goblin::elf::header::EM_X86_64 => Arch::X86_64,
+                goblin::elf::header::EM_AARCH64 => Arch::Aarch64,
+                _ => Arch::Other,
             };
-
-            strings.extend(inline_strings);
+            strings.extend(inline_strings(arch, text, rodata, self.min_length));
         }
 
         // Both phases decoded pointers, so every offset so far is a virtual
@@ -353,98 +320,39 @@ impl RustStringExtractor {
         // also holds Rust slice tables for items that the linker chose not to
         // place in read-only memory.
         let candidate_names: &[&str] = &[".rdata", ".rodata", ".data"];
-        let scan_sections = crate::extraction::uncovered_pair_ranges(
-            pe.sections.iter().filter_map(|sec| {
-                let name = crate::binary::pe_section_name(&sec.name);
-                if !candidate_names.contains(&&*name) {
-                    return None;
-                }
-                let bytes = crate::binary::file_range_clamped(
-                    data,
-                    u64::from(sec.pointer_to_raw_data),
-                    u64::from(sec.size_of_raw_data),
-                )?;
-                Some((
-                    image_base.wrapping_add(u64::from(sec.virtual_address)),
-                    sec.pointer_to_raw_data as usize,
-                    bytes,
-                ))
-            }),
-            &info,
-        );
+        let scan_sections = pe.sections.iter().filter_map(|sec| {
+            let name = crate::binary::pe_section_name(&sec.name);
+            if !candidate_names.contains(&&*name) {
+                return None;
+            }
+            let bytes = crate::binary::file_range_clamped(
+                data,
+                u64::from(sec.pointer_to_raw_data),
+                u64::from(sec.size_of_raw_data),
+            )?;
+            Some((
+                image_base.wrapping_add(u64::from(sec.virtual_address)),
+                sec.pointer_to_raw_data as usize,
+                bytes,
+            ))
+        });
 
-        let bytes = scan_sections.iter().map(|(_, data)| data.len()).sum();
-        let all_structs: Vec<StringStruct> = scan_sections
-            .par_iter()
-            .with_min_len(crate::par::job_len(scan_sections.len(), bytes))
-            .flat_map(|(addr, bytes)| {
-                find_string_structures(bytes, *addr, rdata_va, rdata_bytes.len() as u64, &info)
-            })
-            .collect();
-
-        let mut structured =
-            extract_from_structures(rdata_bytes, rdata_va, &all_structs, classify_string);
+        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
+        let structured = pair_strings(scan_sections, (rdata_va, rdata_bytes), &info, struct_min);
 
         // Convert the VA stored in `data_offset` back to a file offset so the
         // result lines up with the raw scanner's reporting convention.
-        let rdata_file_start_u64 = rdata_file_start as u64;
-        for s in &mut structured {
-            s.data_offset = rdata_file_start_u64.wrapping_add(s.data_offset.wrapping_sub(rdata_va));
-        }
-
-        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
+        let rdata_file_start = rdata_file_start as u64;
         let mut seen: HashSet<String> = HashSet::new();
         structured
             .into_iter()
-            .filter(|s| s.value.len() >= struct_min && seen.insert(s.value.clone()))
+            .filter(|s| seen.insert(s.value.clone()))
+            .map(|mut s| {
+                s.data_offset = rdata_file_start.wrapping_add(s.data_offset.wrapping_sub(rdata_va));
+                s
+            })
             .collect()
     }
-
-    fn extract_from_section(
-        &self,
-        elf: &Elf<'_>,
-        data: &[u8],
-        target_section: &str,
-        info: &BinaryInfo,
-    ) -> Option<Vec<ExtractedString>> {
-        let (section_addr, section_data) = crate::binary::elf_section(elf, data, target_section)?;
-        let section_size = section_data.len();
-
-        // Search all sections for string structures pointing into this section
-        let mut all_structs = Vec::new();
-
-        let sections = crate::extraction::uncovered_pair_ranges(
-            elf.section_headers.iter().filter_map(|sh| {
-                if sh.sh_type == goblin::elf::section_header::SHT_NOBITS || sh.sh_size == 0 {
-                    return None;
-                }
-                let offset = sh.sh_offset as usize;
-                let end = offset.checked_add(sh.sh_size as usize)?;
-                Some((sh.sh_addr, offset, data.get(offset..end)?))
-            }),
-            info,
-        );
-        for (addr, search_data) in sections {
-            let structs =
-                find_string_structures(search_data, addr, section_addr, section_size as u64, info);
-            all_structs.extend(structs);
-        }
-
-        if all_structs.is_empty() {
-            return None;
-        }
-
-        // Extract strings using structure boundaries
-        let mut extracted =
-            extract_from_structures(section_data, section_addr, &all_structs, classify_string);
-
-        // Use lower floor for structure-based strings (high confidence)
-        let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
-        extracted.retain(|s| s.value.len() >= struct_min);
-
-        Some(extracted)
-    }
-
     /// Extract raw strings as fallback.
     fn extract_raw_strings(&self, data: &[u8]) -> Vec<ExtractedString> {
         let mut strings = Vec::new();

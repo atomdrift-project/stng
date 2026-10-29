@@ -365,10 +365,12 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    // Handle text files by extracting and classifying strings from lines
-    if stng::is_text_file(&data) {
-        let content = String::from_utf8_lossy(&data);
-
+    // UTF-8 text is reported line by line. Text in a legacy code page goes
+    // through the library like any other file: a lossy decode would replace
+    // each foreign byte with a 3-byte U+FFFD and skew every later offset.
+    if stng::is_text_file(&data)
+        && let Ok(content) = std::str::from_utf8(&data)
+    {
         // Track byte offset for each line
         let mut byte_offset = 0u64;
         let mut strings: Vec<stng::ExtractedString> = Vec::new();

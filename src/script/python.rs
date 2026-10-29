@@ -95,54 +95,31 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
     let mut results = Vec::new();
 
     // Try direct patterns first (most common, simplest)
-    results.extend(try_exec_b64(source));
-    results.extend(try_exec_zlib_b64(source));
+    results.extend(super::decode_captures(
+        source,
+        &[&EXEC_B64_RE],
+        &[DecodeStep::Base64],
+        "python",
+    ));
+    results.extend(super::decode_captures(
+        source,
+        &[&EXEC_ZLIB_B64_RE],
+        &[DecodeStep::Base64, DecodeStep::Zlib],
+        "python",
+    ));
     results.extend(try_exec_fromhex(source));
     results.extend(try_exec_chr_array(source));
-    results.extend(try_exec_rot13(source));
+    results.extend(super::decode_captures(
+        source,
+        &[&EXEC_ROT13_DOUBLE_RE, &EXEC_ROT13_SINGLE_RE],
+        &[DecodeStep::Rot13],
+        "python",
+    ));
 
     // Try aliased-import pattern (complex, like tahmin-uygulamasi)
     results.extend(try_aliased_import_chain(source));
 
     results
-}
-
-/// exec(base64.b64decode("..."))
-fn try_exec_b64(source: &str) -> Vec<DeobfuscationResult> {
-    EXEC_B64_RE
-        .captures_iter(source)
-        .filter_map(|cap| {
-            let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
-            let offset = cap.get(0)?.start();
-            let steps = vec![DecodeStep::Base64];
-            let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps)?;
-            Some(DeobfuscationResult {
-                decoded: result.payload,
-                offset,
-                chain_description: format!("python:{}", result.chain_description),
-                language: "python",
-            })
-        })
-        .collect()
-}
-
-/// exec(zlib.decompress(base64.b64decode("...")))
-fn try_exec_zlib_b64(source: &str) -> Vec<DeobfuscationResult> {
-    EXEC_ZLIB_B64_RE
-        .captures_iter(source)
-        .filter_map(|cap| {
-            let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
-            let offset = cap.get(0)?.start();
-            let steps = vec![DecodeStep::Base64, DecodeStep::Zlib];
-            let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps)?;
-            Some(DeobfuscationResult {
-                decoded: result.payload,
-                offset,
-                chain_description: format!("python:{}", result.chain_description),
-                language: "python",
-            })
-        })
-        .collect()
 }
 
 /// exec(bytes.fromhex("..."))
@@ -183,26 +160,6 @@ fn try_exec_chr_array(source: &str) -> Vec<DeobfuscationResult> {
             })
         })
         .collect()
-}
-
-/// exec(codecs.decode("...", "rot_13"))
-fn try_exec_rot13(source: &str) -> Vec<DeobfuscationResult> {
-    let iter = EXEC_ROT13_DOUBLE_RE
-        .captures_iter(source)
-        .chain(EXEC_ROT13_SINGLE_RE.captures_iter(source));
-    iter.filter_map(|cap| {
-        let encoded = cap.get(1)?.as_str();
-        let offset = cap.get(0)?.start();
-        let steps = vec![DecodeStep::Rot13];
-        let result = super::decode_chain::apply_chain(encoded.as_bytes(), &steps)?;
-        Some(DeobfuscationResult {
-            decoded: result.payload,
-            offset,
-            chain_description: format!("python:{}", result.chain_description),
-            language: "python",
-        })
-    })
-    .collect()
 }
 
 /// Complex aliased-import pattern (tahmin-uygulamasi style).

@@ -9,7 +9,7 @@
 
 use super::SKIP_XOR_KEYS;
 use super::classify::{
-    classify_xor_string, clean_locale_trailing_garbage, clean_url_trailing_garbage,
+    Verdict, classify_xor_string, clean_locale_trailing_garbage, clean_url_trailing_garbage,
     trim_consonant_clusters, trim_trailing_garbage,
 };
 use super::validate::{
@@ -474,7 +474,7 @@ fn single_byte_xor_strings(
             // Classify to reject garbage and pick the kind used by the vowel-ratio
             // bypass below. Unclassified strings are kept: these maximal ASCII runs
             // are far less noisy than the multi-byte scan's every-offset candidates.
-            let Some(kind) = classify_xor_string(&s) else {
+            let Verdict::Keep(kind) = classify_xor_string(&s) else {
                 continue;
             };
             if kind.is_none() && reads_as_text(&data[cur_start..seg_end]) {
@@ -623,9 +623,7 @@ fn extract_xor_strings_from_hints(
                 // Always classify so IOC-aware handling stays consistent between
                 // hint-based extraction and file-wide scanning. In unfiltered mode
                 // we still keep unclassified strings if classify_xor_string accepts them.
-                let kind_opt = classify_xor_string(&s);
-
-                if let Some(kind) = kind_opt
+                if let Verdict::Keep(kind) = classify_xor_string(&s)
                     && (kind.is_some() || !reads_as_text(&data[offset..end]))
                     && seen.insert((offset as u64, s.clone()))
                 {
@@ -987,13 +985,9 @@ fn finish_xor_candidate(
     // When apply_filters=false, still classify to assign the correct kind for
     // overlap resolution (IOCs win over generic Const strings of similar length).
     let kind = match classify_xor_string(&trimmed_s) {
-        Some(k) => k,
-        None => {
-            if apply_filters {
-                return None; // Filter rejected this string
-            }
-            None
-        }
+        Verdict::Keep(kind) => kind,
+        Verdict::Reject if apply_filters => return None,
+        Verdict::Reject => None,
     };
 
     // Additional sanity check: reject obvious garbage even if classify passed it
@@ -1238,7 +1232,7 @@ pub(crate) fn extract_rolling_xor_with_known_plaintext(
                             data_offset: (region_start + start) as u64,
                             data_len: 0,
                             method: StringMethod::XorDecode,
-                            kind: classify_xor_string(s).flatten(),
+                            kind: classify_xor_string(s).kind(),
                             fragments: None,
                         });
                     }
@@ -1402,7 +1396,7 @@ pub fn extract_incremental_xor_strings(
                             // strings that the classifier affirms are meaningful
                             // — unclassified "any-alpha-char" noise should be dropped.
                             if s.chars().any(char::is_alphabetic)
-                                && let Some(Some(kind)) = classify_xor_string(&s)
+                                && let Some(kind) = classify_xor_string(&s).kind()
                             {
                                 results.push(ExtractedString {
                                     value: s,
@@ -1422,7 +1416,7 @@ pub fn extract_incremental_xor_strings(
                                 valid_bytes.truncate(valid_up_to);
                                 if let Ok(s) = String::from_utf8(valid_bytes)
                                     && s.chars().any(char::is_alphabetic)
-                                    && let Some(Some(kind)) = classify_xor_string(&s)
+                                    && let Some(kind) = classify_xor_string(&s).kind()
                                 {
                                     results.push(ExtractedString {
                                         value: s,
