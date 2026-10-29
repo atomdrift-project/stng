@@ -13,6 +13,7 @@ mod lua;
 mod php;
 mod powershell;
 mod python;
+mod vbs_paired_array;
 mod vbscript;
 
 pub use batch::expand_batch_variables;
@@ -59,6 +60,14 @@ fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
     };
 
     let mut all_results = Vec::new();
+    if let Some(decoded) = vbs_paired_array::decode(text) {
+        all_results.push(DeobfuscationResult {
+            decoded,
+            offset: 0,
+            chain_description: "vbscript:paired-array-character-recipe".to_owned(),
+            language: "vbscript",
+        });
+    }
     let mut current_text = text.to_string();
 
     // VBScript.Encode blocks are self-identifying and can occur inside ASP or
