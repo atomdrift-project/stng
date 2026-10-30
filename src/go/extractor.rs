@@ -162,8 +162,8 @@ impl GoStringExtractor {
         self.extend_packed_literals(&mut strings, rodata);
 
         // The passes above work in virtual addresses, but `data_offset` is a
-        // file offset (cleave's section matcher compares it with PE raw-data
-        // ranges): map every result in rodata back to its file position.
+        // file offset that callers compare with PE raw-data ranges: map every
+        // result in rodata back to its file position.
         let rodata_file = u64::from(rodata_section.pointer_to_raw_data);
         for s in &mut strings {
             if let Some(relative) = s.data_offset.checked_sub(rodata_va)
@@ -572,12 +572,11 @@ fn extract_null_separated_strings(
     // Funcnametab entries are Go function or type names, and a full name
     // carries its module path: `github.com/org/repo/internal/pkg.Func` is
     // routinely past 80 characters, and a generic instantiation spells its
-    // type shape in full. 80 used to be the cap; on a 75 MB Go Terraform
-    // provider it dropped 27,227 of 113,601 names (24%) -- and every rejected
-    // entry also broke the 3-in-a-row run around it, so whole stretches of
-    // application and third-party packages went missing. 1,024 keeps all but
-    // a few dozen there (max 1,139); the alphabet and 3-in-a-row gates, not
-    // the length, are what keep packed-pool runs out.
+    // type shape in full. A rejected entry also breaks the 3-in-a-row run
+    // around it, so too low a cap loses whole stretches of packages. 1,024
+    // keeps all but a few dozen names of a 75 MB Go binary (longest 1,139);
+    // the alphabet and 3-in-a-row gates, not the length, keep packed-pool
+    // runs out.
     const MAX_ENTRY_LEN: usize = 1024;
 
     fn entry_at(data: &[u8], pos: usize) -> Option<(usize, &[u8])> {
@@ -726,10 +725,9 @@ mod tests {
     }
 
     /// Real funcnametab names carry the full module path and, for generics,
-    /// the spelled-out type shape. Both used to be rejected (80-byte cap, no
-    /// `{ } ;` in the alphabet), and each rejection also broke the 3-in-a-row
-    /// run around it, so a hash-renamed backdoor helper and its neighbours in
-    /// a trojanized Terraform provider were never extracted.
+    /// the spelled-out type shape (`{ } ;` included). Each rejection would
+    /// also break the 3-in-a-row run around it, losing the neighbours: here a
+    /// hash-renamed backdoor helper in a trojanized Terraform provider.
     #[test]
     fn null_separated_keeps_long_module_paths_and_generic_shapes() {
         let names = [

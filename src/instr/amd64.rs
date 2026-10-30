@@ -581,7 +581,7 @@ pub(super) fn extract_amd64_value_string(
             && text_data[call_pos + offset + 2] == 0x40
             && text_data[call_pos + offset + 3] == 0x08
         {
-            // SAFETY: the `call_pos + offset + 8 > text_data.len()` guard above bounds this slice.
+            // The `call_pos + offset + 8 > text_data.len()` guard above bounds this slice.
             if let Ok(bytes) = text_data[call_pos + offset + 4..call_pos + offset + 8].try_into() {
                 str_len = u64::from(u32::from_le_bytes(bytes));
                 found_len = true;
@@ -604,7 +604,7 @@ pub(super) fn extract_amd64_value_string(
             && text_data[call_pos + offset + 1] == 0x8D
             && text_data[call_pos + offset + 2] == 0x0D
         {
-            // SAFETY: the `call_pos + offset + 7 > text_data.len()` guard above bounds this slice.
+            // The `call_pos + offset + 7 > text_data.len()` guard above bounds this slice.
             let rip_offset = if let Ok(bytes) =
                 text_data[call_pos + offset + 3..call_pos + offset + 7].try_into()
             {

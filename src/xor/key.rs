@@ -4,7 +4,7 @@
 //! and scoring it as a candidate. Used by the auto-detection pipeline.
 
 /// Check if a string is a good XOR key candidate based on entropy.
-/// DPRK malware often uses high-entropy keys like "Moz&Wie;#t/6T!2y", "12GWAPCT1F0I1S14".
+/// Malware often uses high-entropy keys like "Moz&Wie;#t/6T!2y" or "12GWAPCT1F0I1S14".
 ///
 /// `entropy` must be pre-computed by the caller via `bytes::entropy`.
 pub(super) fn is_good_xor_key_candidate(s: &str, entropy: f64) -> bool {

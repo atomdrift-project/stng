@@ -66,16 +66,10 @@ pub(crate) fn extract_xor_strings(
     results
 }
 
-/// Extract strings encrypted with multi-byte XOR keys detected by radare2 analysis.
-///
-/// Uses high-confidence keys from `r2::verify_xor_keys()` to decrypt data by cycling
-/// through key bytes. Only attempts decryption with HIGH confidence keys to minimize
-/// false positives.
-///
-/// # Arguments
-/// * `data` - Binary data to scan
-/// * `keys` - XOR key candidates from radare2 analysis
-/// * `min_length` - Minimum string length
+/// Strings decrypted with multi-byte XOR keys found at `key_offsets`: the
+/// offsets of data a disassembler saw code load next to a `xor`
+/// ([`ExternalHints::xor_key_offsets`](crate::ExternalHints)). The key's
+/// length is unknown, so 16, 32 and 8 bytes are tried at each.
 pub(crate) fn extract_multikey_xor_strings(
     data: &[u8],
     key_offsets: &[u64],
@@ -109,8 +103,8 @@ pub(crate) fn extract_multikey_xor_strings(
         }
         let key_bytes = &data[start..end];
 
-        // Blind Decode Fallback: For HIGH confidence keys, try all shifts of the key
-        // to find short or split strings (which won't match Aho-Corasick patterns).
+        // Decode under every rotation of the key, to find short or split
+        // strings that no Aho-Corasick pattern would anchor.
         for shift in 0..key_bytes.len() {
             if !blind || results.len() >= MAX_BLIND_RESULTS {
                 break;
@@ -301,7 +295,7 @@ pub(crate) fn scan_dotted_patterns(
 ) {
     // Every byte is a '.' under exactly one key: `byte ^ '.'`. Derive that key
     // per position in a single pass instead of rescanning the whole buffer once
-    // per candidate key (previously up to 255 memchr passes over `data`).
+    // per candidate key.
     for pos in 1..data.len().saturating_sub(1) {
         let raw = data[pos];
         let key = raw ^ b'.';

@@ -2,9 +2,12 @@
 //!
 //! Some native loaders evolve a small state with `state = state * a % m`
 //! and XOR each payload byte with the low state byte and a fixed mask. The
-//! parameters and source range can come from explicit analyst input. Automatic
-//! Mach-O passes require identified loader structures or instruction patterns
-//! before decoding, and validate the recovered bytes before emitting strings.
+//! parameters and source range can come from explicit analyst input. The
+//! automatic Mach-O passes search only parameters the loader's own code
+//! names: a seed that also appears in `__text`, and at most 64 multiplier and
+//! 64 modulus immediates from it, or a modulus derived from an embedded clock
+//! string. Every mask is tried on a short preview, and a payload is decoded
+//! only when that preview begins like a script or shell command.
 
 use crate::{ExtractedString, StringMethod, classify_string};
 use goblin::Object;

@@ -30,8 +30,8 @@ pub(super) fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats
     let last_char = stats.last_char;
     // camelCase identifiers: lowercase first char, exactly one uppercase
     // somewhere in the middle, lowercase tail. At 4+ chars this matches
-    // short brand/Hungarian names (`iPad`, `iMac`, `hWnd`, `lpSz`) — the
-    // 7-char floor used to filter these out alongside actual noise.
+    // short brand/Hungarian names (`iPad`, `iMac`, `hWnd`, `lpSz`), which a
+    // longer floor would filter out with the noise.
     let is_camel_case = len >= 4
         && stats.first_char.is_ascii_lowercase()
         && stats.upper == 1
@@ -165,10 +165,8 @@ pub(super) fn is_short_binary_garbage(s: &str, len: usize, stats: &CharStats) ->
 /// **Scoping:** the rule is x86-only (REX prefix is x86-64 instruction
 /// encoding) and code-only (asm fragments leak from `.text`-like
 /// sections, never from `.rodata`/`.data`/`.symtab`/etc.).  A
-/// `StringContext` with `arch == Some(non-x86)` or
-/// `section == Some(non_code_section)` skips the rule entirely; an
-/// empty context (`None`/`None`) preserves the legacy "apply globally"
-/// behavior for callers that don't know their input.
+/// `StringContext` with a non-x86 `arch` or `in_code_section ==
+/// Some(false)` skips the rule; unknown (`None`) applies it.
 ///
 /// **Known false positives** (only when the rule actually runs): rare
 /// English words / proper nouns that happen to decode as multiple

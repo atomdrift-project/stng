@@ -315,7 +315,7 @@ pub(crate) fn has_multiple_locales(s: &str) -> bool {
         "ar_SA", "ar-SA", // Arabic (Saudi Arabia)
         "hi_IN", "hi-IN", // Hindi (India)
         "tr_TR", "tr-TR", // Turkish (Turkey)
-        // CIS countries (common in DPRK malware geofencing)
+        // CIS countries, which malware geofencing commonly checks
         "hy_AM", "hy-AM", // Armenian
         "be_BY", "be-BY", // Belarusian
         "kk_KZ", "kk-KZ", // Kazakh

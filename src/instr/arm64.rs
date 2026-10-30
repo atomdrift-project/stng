@@ -64,9 +64,8 @@ pub(super) fn extract_inline_strings_arm64(
 
 /// How many instructions a register's decoded pointer or length stays usable.
 /// Go writes a composite literal's elements one after another, but reuses a
-/// length register across elements of equal length — the sckit implant's
-/// credential-path table reloads `x4 = 7` once and stores it with two
-/// different pointers eight instructions apart. Beyond a short window the value
+/// length register across elements of equal length: a table of paths may load
+/// `x4 = 7` once and store it with two pointers eight instructions apart. Beyond a short window the value
 /// is more likely stale than reused, and a stale length over Go's packed
 /// rodata decodes into a plausible but wrong string.
 pub(super) const ARM64_STORED_WINDOW: usize = 24;

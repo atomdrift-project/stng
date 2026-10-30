@@ -1,14 +1,14 @@
 //! Short base64 through the full extraction path.
 //!
 //! `decoders::tests` cover the unit behavior; these exercise the public
-//! `extract_strings_with_options` that filefacts/cleave drive, with the same
-//! options a source file gets there (`garbage_filter`, `caller_provides_symbols`).
+//! `extract_strings_with_options` with the options a caller would give a
+//! source file (`garbage_filter`, `caller_provides_symbols`).
 //! The motivating sample is gentoo-systemd's obfuscated `configure`, which hides
 //! a root/home wipe behind `base64 -d <<< L2Jpbi9ybQo=` (→ `/bin/rm`).
 
 use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 
-/// Options matching filefacts' source-file string extraction.
+/// Options for a source file whose symbols the caller extracts itself.
 fn source_opts() -> ExtractOptions {
     ExtractOptions::new(4)
         .with_garbage_filter(true)

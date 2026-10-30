@@ -18,9 +18,9 @@ use rayon::prelude::*;
 /// 12 is the shortest base64 that carries a meaningful short command: a
 /// 7–9 byte payload (`/bin/rm`, `uname -a`) encodes to exactly 12 chars, and
 /// obfuscated droppers hide exactly those primitives in `base64 -d <<< …`
-/// one-liners. It also matches the `{12,}` embedded-base64 extraction regex
-/// above, so a run this scan surfaces is a run this decoder will attempt. The
-/// input-vs-output quality gate below — not this floor — is what rejects short
+/// one-liners. The embedded-base64 regex starts candidates at 8 characters;
+/// this floor decides which of them are decoded. The input-vs-output quality
+/// gate below — not this floor — is what rejects short
 /// identifiers that merely look like base64.
 pub(crate) const MIN_BASE64_LENGTH: usize = 12;
 

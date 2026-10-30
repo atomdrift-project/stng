@@ -1,4 +1,4 @@
-//! The straightforward implementations the scans replaced, kept as the
+//! Straightforward implementations of the scans, kept as their
 //! specification: each re-decodes from every offset, which is easy to read and
 //! check but quadratic. The `differential` tests assert the fast scans match.
 
@@ -374,7 +374,7 @@ pub(super) fn rolling(
                 let region = &data[region_start..region_end];
                 covered_ranges.push((region_start, region_end));
 
-                // Fixed 2026-10-01: decode with the key aligned to `offset`.
+                // The key is aligned to `offset`, not to the region start.
                 let skew = key_len - (offset - region_start) % key_len;
                 let decoded: Vec<u8> = region
                     .iter()
@@ -412,9 +412,9 @@ pub(super) fn rolling(
     results
 }
 
-/// The single-byte anchors as [`super::single_byte_xor_anchors`] replaced
-/// them: every pattern XOR'd with every allowed key (and in UTF-16LE form when
-/// `wide`), in one large automaton.
+/// The specification of [`super::single_byte_xor_anchors`]: every pattern
+/// XOR'd with every allowed key (and in UTF-16LE form when `wide`), in one
+/// large automaton.
 pub(super) fn single_byte_anchors(data: &[u8], wide: bool) -> Vec<(usize, u8, bool)> {
     /// An automaton and each pattern's `(key, wide)`.
     type Anchors = (AhoCorasick, Vec<(u8, bool)>);

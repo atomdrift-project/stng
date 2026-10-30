@@ -4,7 +4,7 @@
 //! fragments, encoding schemes, and other security-relevant categories.
 
 mod code;
-pub mod encoding;
+pub(crate) mod encoding;
 mod network;
 
 pub(crate) use network::names_targeted_location;
@@ -14,8 +14,7 @@ use aho_corasick::AhoCorasick;
 use std::sync::LazyLock;
 
 /// Ransomware note markers. A string is a candidate only if it contains one of
-/// these, so a single Aho-Corasick scan replaces three sequential `contains`
-/// probes run on every classified string.
+/// these; every classified string is checked, so they share one automaton.
 #[allow(clippy::expect_used)]
 static RANSOM_INDICATORS: LazyLock<AhoCorasick> =
     LazyLock::new(|| AhoCorasick::new(["ENCRYPTED", "DECRYPT", "RANSOM"]).expect("valid markers"));

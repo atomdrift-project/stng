@@ -90,9 +90,8 @@ pub(crate) fn extract_incremental_xor_strings(
     // never inspected.
     let mut covered = Covered::new(excluded_ranges);
 
-    // Anchors, in the order the pattern-major/offset-ascending scan this
-    // replaces would have found them — covered-range suppression depends on
-    // that order, so the sort reproduces it exactly.
+    // Anchors in pattern-major, offset-ascending order: covered-range
+    // suppression depends on that order.
     let mut anchors = find_incremental_anchors(data);
     anchors.sort_unstable();
 

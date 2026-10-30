@@ -24,8 +24,8 @@ pub(super) const EARLY_TERMINATION_WINDOW: usize = 4096;
 /// Longest decode attempted from one offset.
 pub(super) const MAX_PATTERN_DECODE: usize = 1024;
 
-/// Simplified pattern-based extraction matching decode.py behavior.
-/// Scans every offset, no overlap skipping, minimal filtering.
+/// Every string `key` decodes from `data`, scanning every offset with no
+/// overlap skipping and minimal filtering.
 ///
 /// Every offset whose XOR decode starts a printable run yields a candidate (the
 /// caller resolves overlaps), so decoding each offset independently re-walks a

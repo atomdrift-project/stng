@@ -33,6 +33,16 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
   `extract_incremental_xor_strings`, `extract_macho_xor_macho_strings`, and
   `stng::subprocess` (depend on `stng-process` directly).
 - `ExtractedString::source_spans` returns `impl Iterator<Item = (u64, u64)>`.
+- Raw-scan strings are located at their trimmed value's bytes, so offsets of
+  tokens decoded from inside them are exact.
+- The `stng` command runs everything, text included, through the library:
+  the text-only pipeline, the second deduplication table, and the display-time
+  re-decoding of base64, hex, URL and Unicode escapes are gone, so
+  `--simple`, `-i`, `--xor` and `--xor-lcg` behave the same on text.
+  `--flat` and `--r2` are removed; `--no-r2` is now `--no-rizin` (the old
+  name still works). `--xor` reads hex only after `0x` or `hex:`; anything
+  else is the literal key text. `--json` on a directory prints one
+  `{"path", "strings"}` object per line instead of concatenated arrays.
 
 ### Added
 
@@ -51,6 +61,10 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
 - A single text-file test; the CLI reports non-UTF-8 text through the library,
   with correct offsets.
 - Stack-XOR keys are reported at the store that wrote them.
+- The rizin cache is keyed on the analysed bytes, the rizin install and the
+  stng version, so an upgraded rizin or stng never reads stale output. Older
+  entries age out after 30 days. rizin failures, unparseable output and cache
+  errors are logged.
 - Internal reorganisation: smaller files and functions, shared Go/Rust pointer
   pipelines, XOR passes under `xor/`. The public API is unchanged.
 

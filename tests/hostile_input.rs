@@ -198,9 +198,9 @@ fn arm64_macho_with_bind_stream(bind: &[u8]) -> Vec<u8> {
 }
 
 /// A bind stream repeating one import 2^32 - 1 times. goblin's `imports()`
-/// replays it into a multi-gigabyte list, which no panic guard stops; the
-/// ARM64 stack-XOR scan and the import pass both used to call it unchecked
-/// (found by fuzzing filefacts).
+/// replays it into a multi-gigabyte list, which no panic guard stops, so
+/// neither the ARM64 stack-XOR scan nor the import pass may call it on
+/// unchecked input.
 #[test]
 fn forged_bind_repeat_count_is_not_replayed() {
     // Symbol `_a`, ordinal 1, segment 0, then

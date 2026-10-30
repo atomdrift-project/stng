@@ -301,8 +301,9 @@ pub(super) fn english_shaped(s: &str, n: &Letters) -> bool {
     true
 }
 
-/// Check if a string looks like well-formed text using linguistic patterns.
-/// This recognizes legitimate English/computing text without hardcoded keyword lists.
+/// Whether a string looks like well-formed text: letter, vowel and digit
+/// proportions of English or computing text, non-ASCII letters, or a file
+/// extension.
 pub(crate) fn is_meaningful_string(s: &str) -> bool {
     if s.is_empty() {
         return false;

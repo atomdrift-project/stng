@@ -224,7 +224,7 @@ pub(super) fn is_likely_base64(s: &str) -> bool {
 
     // Single pass: count base64-alphabet chars, the leading run of lowercase
     // (to reject lowerCamelCase identifiers), and which case/digit classes
-    // appear. (Previously three separate passes over the string.)
+    // appear.
     let mut base64_chars = 0usize;
     let mut consecutive_lower_at_start = 0;
     let mut leading_run_done = false;

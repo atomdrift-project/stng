@@ -8,11 +8,11 @@
 //! 1. No dedicated sections like .gopclntab
 //! 2. More aggressive inlining and optimization
 //! 3. String data may be in .rodata or .data.rel.ro
+//!
+//! For inline literals, we also perform instruction pattern analysis.
 
 // This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
 #![allow(clippy::cast_possible_truncation)]
-//!
-//! For inline literals, we also perform instruction pattern analysis.
 
 use super::classifier::classify_string;
 use super::extraction::pair_strings;
@@ -72,7 +72,6 @@ impl RustStringExtractor {
     ///
     /// Rust stores &str slice structures (ptr+len) in either data segment,
     /// while the actual string data is in `__TEXT,__const` or `__cstring`.
-    /// Extract strings from a Mach-O binary.
     ///
     /// Each phase below records the string's *virtual address* (PHASE 1/4 from a
     /// pointer or instruction operand, PHASE 3 from the section base, PHASE 2

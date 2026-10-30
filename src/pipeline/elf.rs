@@ -61,15 +61,13 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         // The structure and instruction passes slice rustc's packed
         // `&str` blob; everything else -- libc strings, C dependencies,
         // data the Rust code never names -- still needs the raw scan an
-        // unknown ELF gets. Before content detection this branch only
-        // saw dylibs; now it sees every Rust executable, and dropping
-        // the raw scan would have lost strings they used to report.
+        // unknown ELF gets.
         strings.extend(opts.hints.strings.iter().cloned());
         let raw = extract_raw_strings(scan_data, min_length, &segments, &[]);
         let fresh = unclaimed_raw_strings(raw, &strings, min_length);
         strings.extend(fresh);
     } else {
-        // Unknown ELF (C, C++, assembly, etc.) - use r2 if available + raw scan.
+        // Unknown ELF (C, C++, assembly, etc.): caller strings + raw scan.
         strings.extend(opts.hints.strings.iter().cloned());
         strings.extend(extract_raw_strings(scan_data, min_length, &segments, &[]));
     }
@@ -155,12 +153,10 @@ fn scan_go(
     //   5. network-IP scan
     //   6. .text XOR-pair extraction
     // None of them depend on another's output, so run all six
-    // concurrently. The raw fallback is normally pruned of strings
-    // the structure pass already found; that `known`-set filter is a
-    // value comparison applied *after* the join, so it no longer
-    // forces the structure pass to complete first. Results are
-    // appended in the original sequential order, leaving downstream
-    // deduplication unaffected.
+    // concurrently. The raw fallback is pruned of strings the
+    // structure pass found after the join, by value, so it need not
+    // wait for that pass. Results are appended in a fixed order, so
+    // deduplication downstream is deterministic.
     let skip = elf_go_skip_ranges(elf, scan_data.len());
     let split = crate::par::splits(scan_data.len());
     let [go_strings, pcln_res, raw_all, wide_res, ip_res, stack_res] = parallel(

@@ -330,8 +330,8 @@ pub struct StringContext {
 }
 
 impl StringContext {
-    /// Empty context — no kind, no section, no arch.  Equivalent to
-    /// the legacy `is_garbage(s)` call.
+    /// A context that assumes nothing: what [`is_garbage`](crate::is_garbage)
+    /// uses.
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
@@ -362,9 +362,9 @@ pub enum StringMethod {
     RawScan,
     /// Found via heuristic pattern matching (Rust packed strings)
     Heuristic,
-    /// Found via radare2 string analysis (iz command)
+    /// Found by rizin's string analysis (`izz`), passed in as a hint
     RizinString,
-    /// Found via radare2 symbol analysis (is command)
+    /// Found by rizin's symbol analysis (`is`), passed in as a hint
     RizinSymbol,
     /// Found via UTF-16LE wide string scan (Windows)
     WideString,
@@ -447,42 +447,24 @@ impl StringMethod {
         }
     }
 
-    /// Priority for display ordering: higher-value findings appear first.
-    /// Differs from dedup_priority: structure/stack strings beat decoded payloads
-    /// since they carry richer metadata.
+    /// A short label for the method's column in the `stng` listing: what
+    /// was decoded (`xor`, `b64`, `script`), or empty for plain extraction.
     #[must_use]
-    #[allow(clippy::match_same_arms)]
-    pub fn display_priority(self) -> u8 {
+    pub fn short_name(self) -> &'static str {
         match self {
-            // Highest: language-aware extraction and obfuscated decoding
-            Self::Structure
-            | Self::StackString
-            | Self::XorStackPair
-            | Self::XorRepeatingKey
-            | Self::InstructionPattern
-            | Self::Base64ObfuscatedDecode => 3,
-
-            // High: decoded content and rich sources
-            Self::RizinString
-            | Self::RizinSymbol
-            | Self::WideString
-            | Self::XorDecode
-            | Self::Base64Decode
-            | Self::Base32Decode
-            | Self::Base85Decode
-            | Self::Rot13Base64Decode
-            | Self::HexDecode
-            | Self::UrlDecode
-            | Self::UnicodeEscapeDecode
-            | Self::CodeSignature
-            | Self::Utf16LeDecode
-            | Self::Utf16BeDecode
-            | Self::ScriptDecode
-            | Self::CfmlDecode
-            | Self::PclntabSymbol => 2,
-
-            Self::Heuristic => 1,
-            Self::RawScan | Self::SpacedAscii => 0,
+            Self::XorDecode | Self::XorStackPair | Self::XorRepeatingKey => "xor",
+            Self::Base64ObfuscatedDecode => "b64+obf",
+            Self::Base64Decode => "b64",
+            Self::HexDecode => "hex",
+            Self::UrlDecode => "url",
+            Self::UnicodeEscapeDecode => "unicode",
+            Self::Base32Decode => "b32",
+            Self::Base85Decode => "b85",
+            Self::CodeSignature => "codesig",
+            Self::WideString => "wide",
+            Self::SpacedAscii => "spaced",
+            Self::ScriptDecode => "script",
+            _ => "",
         }
     }
 }
@@ -632,8 +614,8 @@ impl StringKind {
     /// `classify_string` call: if the extractor already labelled a string with
     /// one of these kinds, the classifier would also label it — so
     /// re-validation is pure waste.  Extractor-only labels fall through to
-    /// the original classifier check because the filter uses classifier
-    /// recognition to decide "meaningful".
+    /// the classifier because the filter uses its recognition to decide
+    /// "meaningful".
     #[must_use]
     pub fn is_classifier_output(self) -> bool {
         matches!(

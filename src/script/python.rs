@@ -117,7 +117,7 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
         ScriptLanguage::Python,
     ));
 
-    // Try aliased-import pattern (complex, like tahmin-uygulamasi)
+    // Modules imported under random names, then base64 → zlib → XOR.
     results.extend(try_aliased_import_chain(source));
 
     results
@@ -163,7 +163,7 @@ fn try_exec_chr_array(source: &str) -> Vec<DeobfuscationResult> {
         .collect()
 }
 
-/// Complex aliased-import pattern (tahmin-uygulamasi style).
+/// Modules imported under random names, then base64 → zlib → XOR.
 ///
 /// Detects patterns where:
 /// 1. Modules are imported via `__import__()` with random variable names
@@ -340,7 +340,6 @@ print(data)
 
     #[test]
     fn test_aliased_import_chain_simple() {
-        // Simplified tahmin-uygulamasi pattern
         let src = r"
 abc = __import__('base64')
 xyz = __import__('zlib')

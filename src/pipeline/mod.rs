@@ -110,8 +110,7 @@ fn finish(
     // IPs an external disassembler recovered from `connect()` call sites.
     strings.extend(opts.hints.connect_addrs.iter().cloned());
 
-    // Section names are no longer stored per-string (callers derive them from
-    // the offset when needed). PE version-info IP suppression still applies.
+    // Version numbers in PE version info look like IPs.
     if let Object::PE(pe) = object {
         suppress_version_info_ips(&mut strings, pe);
     }
@@ -134,9 +133,8 @@ fn finish(
     if opts.filter_garbage {
         // The garbage heuristic is the single most expensive post-extraction
         // pass (it runs `is_garbage_with_context` over every candidate). Each
-        // verdict is independent, so evaluate them in parallel. `into_par_iter`
-        // + `filter` + `collect` preserves the original order, matching the
-        // sequential `retain` it replaces.
+        // verdict is independent, so evaluate them in parallel;
+        // `into_par_iter` + `filter` + `collect` keeps the order.
         let code_ranges = binary::code_ranges_from_sections(&section_info);
         strings = std::mem::take(&mut strings)
             .into_par_iter()
@@ -355,8 +353,7 @@ pub(crate) fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, 
     }
     // Derive the code-section flag from the offset: `code_ranges` are the
     // executable byte ranges (built once from section headers). Empty ranges
-    // mean "no section info" → unknown. Replaces the per-string section name
-    // that `ExtractedString` no longer carries.
+    // mean "no section info" → unknown.
     let in_code_section = if code_ranges.is_empty() {
         None
     } else {

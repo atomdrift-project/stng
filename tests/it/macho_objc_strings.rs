@@ -94,7 +94,7 @@ fn symbol_table_entries_are_typed_without_r2() {
 
 #[test]
 fn caller_provides_symbols_skips_typing_but_keeps_strings() {
-    // When the caller owns symbol extraction (e.g. filefacts), stng must not
+    // When the caller owns symbol extraction, stng must not
     // redo the structured pass — but the names must still SURVIVE as strings so
     // nothing is lost; only the typing is suppressed.
     let data = std::fs::read(crate::common::path("testdata/macho/wallet_report_objc"))
@@ -116,7 +116,7 @@ fn caller_provides_symbols_skips_typing_but_keeps_strings() {
 
 #[test]
 fn from_object_matches_full_parse() {
-    // The pre-parsed entry point lets a caller (filefacts) parse the binary once
+    // The pre-parsed entry point lets a caller parse the binary once
     // and hand the goblin object to stng, skipping a second parse. Guard that it
     // yields the same string set as the parse-it-yourself path, so the
     // double-parse optimisation is behaviour-preserving.
@@ -167,8 +167,7 @@ fn fragments_are_locatable_by_section_and_offset() {
         .expect("selector present");
 }
 
-/// The load-bearing invariant for every downstream consumer (filefacts, cleave,
-/// their traits): a string's `data_offset` indexes the *file*, never a Mach-O
+/// The load-bearing invariant for every caller: a string's `data_offset` indexes the *file*, never a Mach-O
 /// section or a virtual address. For any literal-byte extraction method the
 /// proof is direct — the bytes at the offset must equal the string itself.
 ///

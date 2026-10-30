@@ -232,8 +232,8 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
                     &macho, data, slice_base, min_length,
                 ));
 
-                // See macho_has_go_sections branch above for why we
-                // skip-scan the Go string-blob sections.
+                // Raw scan fallback, skipping the packed Go string blobs
+                // (see `elf_go_skip_ranges`).
                 let base = usize::try_from(slice_base).unwrap_or(usize::MAX);
                 let skip: Vec<_> = macho_go_skip_ranges(&macho)
                     .into_iter()
@@ -437,8 +437,8 @@ fn extract_macho_pclntab_strings(
 
 /// File-offset range(s) of the Mach-O `__LINKEDIT` segment (which holds the
 /// code-signature blob). Returns one range for a thin binary and one per slice
-/// for a fat binary; empty for non-Mach-O. Used to scope code-signature
-/// reclassification by offset now that strings no longer carry a section name.
+/// for a fat binary; empty for non-Mach-O. Strings carry no section name, so
+/// code-signature reclassification is scoped by these offsets.
 pub(crate) fn macho_linkedit_ranges(object: &Object<'_>) -> Vec<(u64, u64)> {
     fn from_macho(macho: &MachO<'_>, base: u64) -> Option<(u64, u64)> {
         macho.segments.iter().find_map(|seg| {
@@ -588,8 +588,8 @@ fn arm64_stack_xor_profile(
 }
 
 /// Upgrade strings in the Mach-O __LINKEDIT segment related to code
-/// signatures. Section names are no longer stored per-string, so gate on
-/// the segment's file-offset range(s) instead (thin: one; fat: per slice).
+/// signatures, gated on the segment's file-offset range(s) (thin: one; fat:
+/// per slice).
 pub(super) fn classify_code_signature(strings: &mut [ExtractedString], object: &Object<'_>) {
     let linkedit_ranges = macho_linkedit_ranges(object);
     for s in strings.iter_mut() {

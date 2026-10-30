@@ -1,8 +1,8 @@
-//! Script deobfuscation module.
+//! Script deobfuscation.
 //!
-//! Detects and decodes obfuscated payloads in Lua, Python, JavaScript, PHP, and PowerShell scripts.
-//! This module targets common malware obfuscation patterns found in PyPI/npm packages,
-//! PHP webshells, and PowerShell droppers.
+//! Detects and decodes obfuscated payloads in Lua, Python, JavaScript, PHP,
+//! PowerShell, batch and VBScript: the patterns of malicious PyPI and npm
+//! packages, PHP webshells, and PowerShell, batch and VBScript droppers.
 
 mod batch;
 pub(crate) mod decode_chain;

@@ -53,9 +53,9 @@ pub(crate) fn extract_raw_strings(
     };
 
     // The two scan strategies are independent full passes over `data`, so run
-    // them concurrently. Each keeps its own dedup set; the merge below replays
-    // the original shared-`seen` ordering — Strategy 1 wins ties, and Strategy 2
-    // only contributes values Strategy 1 didn't already find.
+    // them concurrently. Each keeps its own dedup set; in the merge below
+    // Strategy 1 wins ties, and Strategy 2 contributes only values Strategy 1
+    // did not find.
     let ((mut strings, seen1), strings2) = crate::par::join(
         data.len(),
         || {
@@ -209,12 +209,13 @@ fn classify_runs(
                         kind = None;
                     }
 
+                    // Exactly the trimmed value's bytes: decoders that find a
+                    // token inside the value add its position to this offset.
+                    let lead = s.len() - s.trim_start().len();
                     return Some(ExtractedString {
                         value: trimmed.to_string(),
-                        data_offset: start as u64,
-                        // The full printable run `[start, start+run.len())` — so a
-                        // value trimmed of surrounding whitespace still spans it.
-                        data_len: u32::try_from(run.len()).unwrap_or(u32::MAX),
+                        data_offset: (start + lead) as u64,
+                        data_len: 0,
                         method: StringMethod::RawScan,
                         kind,
                         fragments: None,
@@ -398,10 +399,10 @@ mod tests {
         assert_eq!(s.source_spans().collect::<Vec<_>>(), vec![(0, 10)]);
     }
 
-    /// A raw ASCII run records the *untrimmed* run as its extent, so a value
-    /// trimmed of surrounding whitespace still spans the full source bytes.
+    /// A raw ASCII run is located at its trimmed value's own bytes, so a
+    /// position inside the value maps straight to the file.
     #[test]
-    fn raw_run_data_len_covers_untrimmed_extent() {
+    fn raw_run_span_is_the_trimmed_value() {
         let empty: HashSet<&str> = HashSet::new();
         let ctx = PrintableRunContext {
             min_length: 4,
@@ -416,11 +417,6 @@ mod tests {
         assert_eq!(strings.len(), 1);
         let s = &strings[0];
         assert_eq!(s.value, "hello");
-        assert_eq!(s.data_offset, 0);
-        assert_eq!(
-            s.data_len, 9,
-            "data_len must span the full run, including trimmed whitespace"
-        );
-        assert_eq!(s.source_spans().collect::<Vec<_>>(), vec![(0, 9)]);
+        assert_eq!(s.source_spans().collect::<Vec<_>>(), vec![(2, 5)]);
     }
 }

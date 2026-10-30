@@ -23,7 +23,7 @@ const FEW_STRINGS: usize = 64;
 
 /// Stack slots the decoders may visit per file, summed over calls. Each call
 /// scans every slot recorded so far, so a section of stores and calls costs
-/// quadratic time. The largest known sample (DynamicHub) uses ~2^24.
+/// quadratic time. The largest real sample seen uses ~2^24.
 const MAX_DECODE_WORK: usize = 1 << 28;
 /// Distinct stack slots tracked per section. Past this the map starts over.
 const MAX_SLOTS: usize = 1 << 16;
@@ -104,9 +104,8 @@ fn should_extract(profile: AdmissionProfile) -> bool {
         return true;
     }
 
-    // Match the opacity definition used by filefacts' expensive-analysis
-    // admission policy: either very few printable runs, or printable content
-    // covering less than roughly 0.1% of the image. A large, transparent app
+    // An opaque image: either very few printable runs, or printable content
+    // covering less than roughly 0.1% of it. A large, transparent app
     // with thousands of ordinary strings has little to gain from this narrow
     // malware-family extractor.
     profile.string_count < FEW_STRINGS

@@ -1,14 +1,14 @@
 //! rizin/radare2 integration for the stng CLI. The library runs no
 //! subprocesses: this module runs rizin, caches its output (see [`cache`]) and
 //! hands the results to extraction through [`stng::ExtractOptions`].
-pub(crate) mod cache;
-use cache::R2Cache;
+mod cache;
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, mpsc};
+use std::thread::ScopedJoinHandle;
 use std::time::Duration;
 use stng::goblin::Object;
 use stng::{
@@ -17,31 +17,20 @@ use stng::{
 
 static TOOL: OnceLock<Option<PathBuf>> = OnceLock::new();
 
-/// In-process memoization of tool command outputs, keyed by
-/// `(path, command, file size, mtime)`. Several extraction passes ask for the
-/// same command on the same file (e.g. `izzj` for both string extraction and
-/// XOR boundary hints); each spawn costs a full rizin startup + scan, so the
-/// second caller waits on the first instead of re-running it. The size/mtime
-/// key components keep long-lived library callers safe if a file changes on
-/// disk between extractions; the size cap bounds growth for such callers.
-type MemoKey = (String, String, u64, Option<std::time::SystemTime>);
-type MemoCell = Arc<OnceLock<Option<Arc<String>>>>;
-static MEMO: LazyLock<Mutex<HashMap<MemoKey, MemoCell>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-const MEMO_MAX_ENTRIES: usize = 16;
 /// How long one rizin command may run. A crafted binary can keep `aaa` busy
 /// indefinitely; past this the pass is dropped, not the run.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 /// Output past this is dropped with the pass. `izzj` on a 10 MB file is tens
 /// of MB; a binary built to inflate it should not take the host's memory.
 const MAX_TOOL_OUTPUT: u64 = 512 * 1024 * 1024;
-#[must_use]
-pub(crate) fn is_available() -> bool {
-    tool_path().is_some()
+/// Remove the cached rizin output for `data`.
+pub(crate) fn flush_cache(data: &[u8]) -> io::Result<()> {
+    match tool_path() {
+        Some(tool) => cache::Entry::open(data, tool)?.clear(),
+        None => Ok(()),
+    }
 }
-pub(crate) fn flush_cache(file_path: &str) -> Result<(), std::io::Error> {
-    R2Cache::new()?.clear(file_path)
-}
+
 fn tool_path() -> Option<&'static Path> {
     TOOL.get_or_init(|| resolve_tool("rizin").or_else(|| resolve_tool("r2")))
         .as_deref()
@@ -116,33 +105,24 @@ fn scrub_env(cmd: &mut Command) {
     }
 }
 
-#[must_use]
-pub(crate) fn extract_string_boundaries(
-    path: &str,
-    use_cache: bool,
-) -> Option<Vec<StringBoundary>> {
-    let tool = tool_path()?;
-    let file_size = std::fs::metadata(path).ok()?.len();
-    if file_size > 10 * 1024 * 1024 {
-        return None;
+/// The extents of the strings rizin finds in data sections.
+fn extract_string_boundaries(session: &Session<'_>) -> Vec<StringBoundary> {
+    if session.data.len() > MAX_ANALYSIS_SIZE {
+        return Vec::new();
     }
-    let data_strings = run_tool_command_with_cache(tool, path, "izzj", use_cache)?;
-    serde_json::from_str::<Vec<R2String>>(&data_strings)
-        .ok()
-        .map(|json| {
-            json.iter()
-                .map(|s| {
-                    StringBoundary::new(
-                        s.paddr,
-                        if s.length > 0 {
-                            s.length
-                        } else {
-                            s.string.len()
-                        },
-                    )
-                })
-                .collect()
+    session
+        .run_json::<Vec<R2String>>("izzj")
+        .unwrap_or_default()
+        .iter()
+        .map(|s| {
+            let len = if s.length > 0 {
+                s.length
+            } else {
+                s.string.len()
+            };
+            StringBoundary::new(s.paddr, len)
         })
+        .collect()
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -160,33 +140,22 @@ struct R2Symbol {
     r#type: String,
 }
 
-#[must_use]
-pub(crate) fn extract_strings(
-    path: &str,
-    min_length: usize,
-    use_cache: bool,
-) -> Option<Vec<ExtractedString>> {
-    let tool = tool_path()?;
-    let file_size = std::fs::metadata(path).ok()?.len();
-    let is_large_file = file_size > 10 * 1024 * 1024;
-    let path_owned = path.to_string();
-    let (data_result, symbols_result) = if is_large_file {
-        (
-            None,
-            run_tool_command_with_cache(tool, &path_owned, "isj", use_cache),
-        )
+/// The strings rizin finds in data sections, and the symbol names. A file
+/// too large to scan for strings still gets its symbols.
+fn extract_strings(session: &Session<'_>, min_length: usize) -> Vec<ExtractedString> {
+    let file_size = session.data.len() as u64;
+    let (data_strings, symbols) = if session.data.len() > MAX_ANALYSIS_SIZE {
+        (None, session.run_json::<Vec<R2Symbol>>("isj"))
     } else {
         rayon::join(
-            || run_tool_command_with_cache(tool, &path_owned, "izzj", use_cache),
-            || run_tool_command_with_cache(tool, &path_owned, "isj", use_cache),
+            || session.run_json::<Vec<R2String>>("izzj"),
+            || session.run_json::<Vec<R2Symbol>>("isj"),
         )
     };
 
     let mut strings = Vec::new();
     let mut seen = HashSet::new();
-    if let Some(data_strings) = data_result
-        && let Ok(json) = serde_json::from_str::<Vec<R2String>>(&data_strings)
-    {
+    if let Some(json) = data_strings {
         for s in json {
             if s.paddr > file_size {
                 continue;
@@ -210,9 +179,7 @@ pub(crate) fn extract_strings(
             }
         }
     }
-    if let Some(symbols) = symbols_result
-        && let Ok(json) = serde_json::from_str::<Vec<R2Symbol>>(&symbols)
-    {
+    if let Some(json) = symbols {
         for s in json {
             if s.paddr > file_size {
                 continue;
@@ -230,54 +197,76 @@ pub(crate) fn extract_strings(
             }
         }
     }
-    if strings.is_empty() {
-        None
-    } else {
-        Some(strings)
-    }
+    strings
 }
 
-fn run_tool_command_with_cache(
-    tool: &Path,
-    path: &str,
-    cmd: &str,
-    use_cache: bool,
-) -> Option<Arc<String>> {
-    let key = match std::fs::metadata(path) {
-        Ok(m) => (
-            path.to_string(),
-            cmd.to_string(),
-            m.len(),
-            m.modified().ok(),
-        ),
-        Err(_) => (path.to_string(), cmd.to_string(), 0, None),
-    };
-    let cell = {
-        let mut memo = match MEMO.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
+/// One input's rizin analyses: the snapshot rizin reads, its cache entry,
+/// and the output of each command run so far. Passes that need the same
+/// command (`izzj` serves both strings and XOR boundaries) share one run:
+/// each costs a full rizin startup and scan, so the second waits on the first.
+struct Session<'a> {
+    tool: &'a Path,
+    data: &'a [u8],
+    input: TempInput,
+    cache: Option<cache::Entry>,
+    outputs: Mutex<HashMap<String, Output>>,
+}
+
+/// A command's output, filled by whichever pass asks for it first.
+type Output = Arc<OnceLock<Option<Arc<String>>>>;
+
+impl<'a> Session<'a> {
+    fn new(tool: &'a Path, data: &'a [u8], use_cache: bool) -> io::Result<Self> {
+        let cache = if use_cache {
+            cache::Entry::open(data, tool)
+                .inspect_err(|e| tracing::debug!(error = %e, "rizin cache unavailable"))
+                .ok()
+        } else {
+            None
         };
-        if memo.len() >= MEMO_MAX_ENTRIES && !memo.contains_key(&key) {
-            memo.clear();
-        }
-        memo.entry(key).or_default().clone()
-    };
-    cell.get_or_init(|| spawn_tool_command(tool, path, cmd, use_cache).map(Arc::new))
-        .clone()
-}
+        Ok(Self {
+            tool,
+            data,
+            input: TempInput::write(data)?,
+            cache,
+            outputs: Mutex::default(),
+        })
+    }
 
-fn spawn_tool_command(tool: &Path, path: &str, cmd: &str, use_cache: bool) -> Option<String> {
-    if use_cache
-        && let Ok(cache) = R2Cache::new()
-        && let Some(cached) = cache.get(path, cmd)
-    {
-        return Some(cached);
+    /// The output of `command`, from this session, the cache, or rizin.
+    fn run(&self, command: &str) -> Option<Arc<String>> {
+        let cell = self
+            .outputs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(command.to_string())
+            .or_default()
+            .clone();
+        cell.get_or_init(|| {
+            if let Some(cached) = self.cache.as_ref().and_then(|c| c.get(command)) {
+                return Some(Arc::new(cached));
+            }
+            let output =
+                run_tool_with_timeout(self.tool, self.input.path(), command, TOOL_TIMEOUT)?;
+            if let Some(cache) = &self.cache
+                && let Err(e) = cache.set(command, &output)
+            {
+                tracing::debug!(command, error = %e, "could not cache rizin output");
+            }
+            Some(Arc::new(output))
+        })
+        .clone()
     }
-    let result = run_tool_with_timeout(tool, path, cmd, TOOL_TIMEOUT)?;
-    if use_cache && let Ok(cache) = R2Cache::new() {
-        let _ = cache.set(path, cmd, &result);
+
+    /// The output of `command` parsed as JSON. Output rizin produced but
+    /// stng cannot parse is logged: it means a rizin version stng does not
+    /// understand.
+    fn run_json<T: serde::de::DeserializeOwned>(&self, command: &str) -> Option<T> {
+        let output = self.run(command)?;
+        serde_json::from_str(&output)
+            .inspect_err(|e| tracing::warn!(command, error = %e, "unparseable rizin output"))
+            .ok()
     }
-    Some(result)
 }
 
 /// Own the child through every early return and panic. Group cleanup runs
@@ -324,7 +313,7 @@ impl Drop for ToolChild {
     }
 }
 
-fn run_tool_with_timeout(tool: &Path, path: &str, cmd: &str, timeout: Duration) -> Option<String> {
+fn run_tool_with_timeout(tool: &Path, path: &Path, cmd: &str, timeout: Duration) -> Option<String> {
     let mut command = Command::new(tool);
     command
         .args(["-NN", "-q", "-c", cmd])
@@ -334,7 +323,9 @@ fn run_tool_with_timeout(tool: &Path, path: &str, cmd: &str, timeout: Duration) 
         .stderr(Stdio::null());
     scrub_env(&mut command);
     let started = std::time::Instant::now();
-    let mut guard = ToolChild::spawn(&mut command, timeout).ok()?;
+    let mut guard = ToolChild::spawn(&mut command, timeout)
+        .inspect_err(|e| tracing::warn!(cmd, error = %e, "could not start rizin"))
+        .ok()?;
     drop(command);
     let stdout = guard.child.stdout.take()?;
     let (tx, rx) = mpsc::channel();
@@ -345,13 +336,25 @@ fn run_tool_with_timeout(tool: &Path, path: &str, cmd: &str, timeout: Duration) 
             let read = stdout.take(MAX_TOOL_OUTPUT + 1).read_to_end(&mut out);
             let _ = tx.send(read.map(|_| out));
         })
+        .inspect_err(|e| tracing::warn!(error = %e, "could not start the rizin reader"))
         .ok()?;
     let mut output = None;
     loop {
         if output.is_none() {
             match rx.try_recv() {
                 Ok(Ok(out)) if out.len() as u64 <= MAX_TOOL_OUTPUT => output = Some(out),
-                Ok(_) | Err(mpsc::TryRecvError::Disconnected) => return None,
+                Ok(Ok(_)) => {
+                    tracing::warn!(
+                        cmd,
+                        "rizin output exceeded {MAX_TOOL_OUTPUT} bytes; dropped"
+                    );
+                    return None;
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(cmd, error = %e, "could not read rizin output");
+                    return None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return None,
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
@@ -359,12 +362,15 @@ fn run_tool_with_timeout(tool: &Path, path: &str, cmd: &str, timeout: Duration) 
             Ok(true) => break,
             Ok(false) => {}
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return None,
+            Err(e) => {
+                tracing::warn!(cmd, error = %e, "could not poll rizin");
+                return None;
+            }
         }
         if started.elapsed() >= timeout {
             // Kill before logging: a blocked stderr must not delay cleanup.
             let _ = guard.finish();
-            tracing::warn!(cmd, path, "rizin ran past {timeout:?}; killed");
+            tracing::warn!(cmd, "rizin ran past {timeout:?}; killed");
             return None;
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -373,11 +379,18 @@ fn run_tool_with_timeout(tool: &Path, path: &str, cmd: &str, timeout: Duration) 
     // not imply process exit, and process exit does not imply pipe closure.
     let status = guard.finish()?;
     if !status.success() {
-        tracing::debug!(cmd, path, %status, "rizin failed");
+        tracing::debug!(cmd, path = %path.display(), %status, "rizin failed");
         return None;
     }
-    let out = output.or_else(|| rx.recv_timeout(Duration::from_secs(5)).ok()?.ok())?;
+    let Some(out) = output.or_else(|| rx.recv_timeout(Duration::from_secs(5)).ok()?.ok()) else {
+        tracing::warn!(cmd, "rizin output could not be read");
+        return None;
+    };
     if out.len() as u64 > MAX_TOOL_OUTPUT {
+        tracing::warn!(
+            cmd,
+            "rizin output exceeded {MAX_TOOL_OUTPUT} bytes; dropped"
+        );
         return None;
     }
     Some(String::from_utf8_lossy(&out).into_owned())
@@ -411,13 +424,8 @@ fn vaddr_to_paddr(vaddr: u64, sections: &[R2Section]) -> Option<u64> {
 
 /// File offsets of XOR keys: the operand of each `lea` within 256 bytes of a
 /// `xor` instruction, mapped from its virtual address to the file.
-fn xor_key_offsets(path: &str, use_cache: bool) -> Vec<u64> {
-    let Some(tool) = tool_path() else {
-        return Vec::new();
-    };
-    let sections: Vec<R2Section> = run_tool_command_with_cache(tool, path, "iSj", use_cache)
-        .and_then(|output| serde_json::from_str(&output).ok())
-        .unwrap_or_default();
+fn xor_key_offsets(session: &Session<'_>) -> Vec<u64> {
+    let sections: Vec<R2Section> = session.run_json("iSj").unwrap_or_default();
     let mut offsets = Vec::new();
     let mut seen_keys = HashSet::new();
     let mut xor_instrs = Vec::new();
@@ -428,8 +436,7 @@ fn xor_key_offsets(path: &str, use_cache: bool) -> Vec<u64> {
     // between them prints a single line of bare hex (never `0x…`), so the
     // first non-`0x` line marks the xor→lea boundary — architecture-independent,
     // unlike matching on the mnemonic (ARM uses `eor`/`adrp`, not `xor`/`lea`).
-    let instr_output =
-        run_tool_command_with_cache(tool, path, "aaa; /at xor; p8 1 @ 0; /at lea", use_cache);
+    let instr_output = session.run("aaa; /at xor; p8 1 @ 0; /at lea");
     let mut lea_addrs = Vec::new();
     let mut in_lea = false;
     for line in instr_output
@@ -479,7 +486,7 @@ fn xor_key_offsets(path: &str, use_cache: bool) -> Vec<u64> {
             .map(|addr| format!("aoj 1 @ 0x{addr:x}"))
             .collect::<Vec<_>>()
             .join("; ");
-        let ao_outputs = run_tool_command_with_cache(tool, path, &batched, use_cache);
+        let ao_outputs = session.run(&batched);
         let stream = serde_json::Deserializer::from_str(
             ao_outputs.as_deref().map(String::as_str).unwrap_or(""),
         )
@@ -500,39 +507,22 @@ fn xor_key_offsets(path: &str, use_cache: bool) -> Vec<u64> {
     offsets
 }
 
-#[must_use]
-pub(crate) fn extract_connect_addrs(
-    path: &str,
-    data: &[u8],
-    use_cache: bool,
-) -> Vec<ExtractedString> {
-    let Some(tool) = tool_path() else {
+/// Addresses an ARM binary builds in a `sockaddr_in` before `connect()`,
+/// from the disassembly of its entry point, or failing that from a scan of
+/// its bytes for the stores that build one.
+fn extract_connect_addrs(session: &Session<'_>) -> Vec<ExtractedString> {
+    let Some(output) = session.run("aaa; e scr.color=0; s entry0; pdf") else {
         return Vec::new();
     };
-    if data.len() > 10 * 1024 * 1024 {
-        return scan_binary_for_connect_addrs(data);
-    }
-    let Some(output) =
-        run_tool_command_with_cache(tool, path, "aaa; e scr.color=0; s entry0; pdf", use_cache)
-    else {
-        return Vec::new();
-    };
-    let mut results = Vec::new();
-    let mut seen = HashSet::new();
     if !output.contains("283")
         && !output.contains("syscall.connect")
         && !output.contains("sym.imp.connect")
     {
         return Vec::new();
     }
-    if let Some(sockaddr) = parse_sockaddr_from_disasm(&output) {
-        let es = sockaddr_to_string(&sockaddr);
-        if seen.insert(es.value.clone()) {
-            results.push(es);
-        }
-        results
-    } else {
-        scan_binary_for_connect_addrs(data)
+    match parse_sockaddr_from_disasm(&output) {
+        Some(sockaddr) => vec![sockaddr_to_string(&sockaddr)],
+        None => scan_binary_for_connect_addrs(session.data),
     }
 }
 
@@ -598,7 +588,7 @@ fn parse_sockaddr_from_disasm(disasm: &str) -> Option<SockaddrIn> {
             pending = None;
         }
     }
-    if found == 4 && !is_z(&ip) {
+    if found == 4 && !is_unroutable(&ip) {
         Some(SockaddrIn { ip, port, offset })
     } else {
         None
@@ -633,7 +623,9 @@ fn extract_stack_off(line: &str) -> Option<u8> {
     }
     None
 }
-fn is_z(ip: &[u8; 4]) -> bool {
+/// Whether `ip` is in 0.0.0.0/8 or at or past 224.0.0.0 (multicast and
+/// reserved): bytes that look like an address but cannot be a server.
+fn is_unroutable(ip: &[u8; 4]) -> bool {
     ip[0] == 0 || ip[0] >= 224
 }
 fn find_sockaddr_in_binary(data: &[u8]) -> Vec<SockaddrIn> {
@@ -656,7 +648,7 @@ fn find_sockaddr_in_binary(data: &[u8]) -> Vec<SockaddrIn> {
                 }
             }
         }
-        if f == 15 && !is_z(&ip) {
+        if f == 15 && !is_unroutable(&ip) {
             res.push(SockaddrIn {
                 ip,
                 port: 0,
@@ -719,8 +711,9 @@ impl Drop for TempInput {
 const MAX_ANALYSIS_SIZE: usize = 10 * 1024 * 1024;
 
 /// Run the rizin analyses extraction can use on an immutable snapshot of
-/// `data` and attach the results to `opts`. They run concurrently; `izzj` is
-/// shared through the memo, and each `aaa` is the expensive part.
+/// `data` and attach the results to `opts`; without rizin, `opts` is
+/// returned as is. The analyses run concurrently, sharing `izzj` through the
+/// session; each `aaa` is the expensive part.
 ///
 /// - strings and symbols, except for Go binaries, whose strings come from
 ///   their own structures;
@@ -735,35 +728,48 @@ pub(crate) fn attach(
     xorscan: bool,
     use_cache: bool,
 ) -> ExtractOptions {
-    let Ok(input) = TempInput::write(data) else {
+    let Some(tool) = tool_path() else {
         return opts;
     };
-    let Some(path) = input.path().to_str() else {
-        return opts;
+    let session = match Session::new(tool, data, use_cache) {
+        Ok(session) => session,
+        Err(e) => {
+            tracing::warn!(error = %e, "rizin skipped: could not snapshot the input");
+            return opts;
+        }
     };
+    let session = &session;
     let min_length = opts.min_length();
     let strings = !stng::is_go_binary(data);
     let connect = data.len() <= MAX_ANALYSIS_SIZE
         && Object::parse(data)
             .is_ok_and(|o| !matches!(o, Object::Unknown(_)) && arm_arch_possible(&o));
-    let (strings, boundaries, connect, keys) = std::thread::scope(|scope| {
-        let strings = strings.then(|| scope.spawn(|| extract_strings(path, min_length, use_cache)));
-        let boundaries = xor.then(|| scope.spawn(|| extract_string_boundaries(path, use_cache)));
-        let connect = connect.then(|| scope.spawn(|| extract_connect_addrs(path, data, use_cache)));
-        let keys = xorscan.then(|| scope.spawn(|| xor_key_offsets(path, use_cache)));
-        (
-            strings.and_then(|h| h.join().ok()).flatten(),
-            boundaries.and_then(|h| h.join().ok()).flatten(),
-            connect.and_then(|h| h.join().ok()),
-            keys.and_then(|h| h.join().ok()),
-        )
-    });
     let mut hints = stng::ExternalHints::default();
-    hints.strings = strings.unwrap_or_default();
-    hints.boundaries = boundaries.unwrap_or_default();
-    hints.connect_addrs = connect.unwrap_or_default();
-    hints.xor_key_offsets = keys.unwrap_or_default();
+    std::thread::scope(|scope| {
+        let strings = strings.then(|| scope.spawn(|| extract_strings(session, min_length)));
+        let boundaries = xor.then(|| scope.spawn(|| extract_string_boundaries(session)));
+        let connect = connect.then(|| scope.spawn(|| extract_connect_addrs(session)));
+        let keys = xorscan.then(|| scope.spawn(|| xor_key_offsets(session)));
+        hints.strings = joined(strings, "strings");
+        hints.boundaries = joined(boundaries, "string extents");
+        hints.connect_addrs = joined(connect, "connect addresses");
+        hints.xor_key_offsets = joined(keys, "XOR keys");
+    });
     opts.with_hints(hints)
+}
+
+/// The result of a pass that ran, or nothing for one that did not. A pass
+/// that panicked is logged and contributes nothing: the rest of the
+/// analysis stands.
+fn joined<T: Default>(pass: Option<ScopedJoinHandle<'_, T>>, name: &str) -> T {
+    match pass.map(ScopedJoinHandle::join) {
+        Some(Ok(result)) => result,
+        Some(Err(_)) => {
+            tracing::warn!(pass = name, "rizin pass panicked; its results are dropped");
+            T::default()
+        }
+        None => T::default(),
+    }
 }
 
 /// Whether `object` could be an ARM binary (32- or 64-bit), including
@@ -804,7 +810,3 @@ fn arm_arch_possible(object: &Object<'_>) -> bool {
 
 #[cfg(test)]
 mod tests;
-
-/// Size gates and missing inputs. None of these reach rizin or the cache.
-#[cfg(test)]
-mod helper_tests;

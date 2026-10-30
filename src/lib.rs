@@ -227,9 +227,9 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
     // its architecture count in bytes 4..8 (normally a small integer), while
     // a class stores a plausible JVM major version in bytes 6..8 followed by
     // a constant-pool count and tag. Walk that pool directly: it is both
-    // cheaper and more exact than treating Java as an unknown binary.
-    // filefacts uses the same bound, which also keeps malformed CAFEBABE input
-    // out of Goblin's fat-architecture loop.
+    // cheaper and more exact than treating Java as an unknown binary. The
+    // bound also keeps malformed CAFEBABE input out of goblin's
+    // fat-architecture loop.
     if let Some(&[0xCA, 0xFE, 0xBA, 0xBE, a, b, c, d]) = data.get(..8)
         && u32::from_be_bytes([a, b, c, d]) > 16
     {
@@ -253,7 +253,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
 
         deduplicate_by_offset(strings)
     } else {
-        // Unknown format - use r2 if available, plus raw scan
+        // Unknown format: the caller's strings, if any, plus a raw scan.
         let mut strings = Vec::new();
         strings.extend(opts.hints.strings.iter().cloned());
 
@@ -265,7 +265,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
             strings.extend(extract_wide_strings(data, opts.min_length, &[], &[]));
         }
 
-        // Raw scan for all unknown formats (r2 strings complement, not replace)
+        // Raw scan for all unknown formats; caller strings complement it.
         if !data.is_empty() {
             strings.extend(extract_raw_strings(data, opts.min_length, &[], &[]));
         }
@@ -335,8 +335,8 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
 
 /// Extract strings from binary data using a caller-supplied parsed goblin object.
 ///
-/// Library callers (e.g. cleave) that have already called `goblin::Object::parse`
-/// for their own analysis can pass the result here to avoid stng re-parsing.
+/// Callers that have already called `goblin::Object::parse` for their own
+/// analysis can pass the result here to avoid stng re-parsing.
 ///
 /// The function routes through the same internal pipeline as
 /// `extract_strings_with_options`, honouring cancellation and format-hint

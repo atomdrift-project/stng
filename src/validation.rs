@@ -241,9 +241,8 @@ fn is_fast_path_valid_with_kind(
 
     // If the extractor already classified this string (or classify_string
     // recognises it now), it is not garbage.  When a classifier-produced
-    // `kind` hint is passed in we avoid the second `classify_string` call —
-    // it was the single largest hotspot on the garbage-filter path (the
-    // classifier was being run twice per string).  Extractor-only labels
+    // `kind` hint is passed in we skip `classify_string`, the costliest step
+    // on the garbage-filter path.  Extractor-only labels
     // (`Overlay`, `Section`, `Import`, …) fall through to the real
     // classifier because those labels don't imply content recognition.
     if s.is_ascii() {
@@ -327,24 +326,16 @@ pub fn is_garbage(s: &str) -> bool {
     is_garbage_with_context(s, &crate::types::StringContext::empty())
 }
 
-/// Garbage check with full context: `kind`, `section`, and `arch`.
+/// [`is_garbage`] informed by what the caller knows about the string.
 ///
-/// Architecture- and section-aware rules use the context to scope
-/// themselves — for example the x86 register save-sequence detector
-/// only fires when `arch` is `None` (unknown) or x86-family AND
-/// `section` is `None` or a known code section.  Callers that don't
-/// know their context can pass [`StringContext::empty`](crate::types::StringContext::empty) and get the
-/// same behavior as `is_garbage(s)` did before context was added.
-///
-/// Use cases:
-/// * stng CLI: bind `--arch x86_64 --section .text` flags into a
-///   context to enable code-only filters.
-/// * Library callers (cleave, …): build per-string context from the
-///   binary they're analyzing (ELF/PE/Mach-O machine field +
-///   section name).
-/// * Source-code scans: pass `arch: None, section: None` — the asm
-///   filter intentionally stays inactive when the bytes weren't
-///   extracted from a code section.
+/// `kind` exempts strings an extractor already recognised. `in_code_section`
+/// and `arch` scope the code-only rules: the x86 register save-sequence
+/// detector runs only when the string may come from code (`None` or
+/// `Some(true)`) of an x86-family binary (`None` or an x86 `Arch`). Source
+/// files and other non-binary inputs should pass `in_code_section:
+/// Some(false)`, so those rules stay off. A default
+/// [`StringContext`](crate::types::StringContext) assumes nothing; it is what
+/// [`is_garbage`] passes.
 #[must_use]
 pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bool {
     let trimmed = s.trim();
@@ -422,7 +413,7 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bo
     // `len` stays the byte length although `CharStats` counts characters: a
     // multi-byte character then weighs more in every ratio, which keeps the
     // filter strict on non-ASCII text. The thresholds are tuned to that;
-    // character counts admit Unicode-table noise (measured 2026-10-01).
+    // character counts admit Unicode-table noise.
     let stats = CharStats::from_str(trimmed);
     is_statistical_garbage(trimmed, len, &stats, ctx)
 }

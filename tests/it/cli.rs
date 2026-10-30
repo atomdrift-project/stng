@@ -88,7 +88,7 @@ fn test_cli_json_output() {
 
     let output = stng_cmd()
         .arg("--json")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -105,7 +105,7 @@ fn test_cli_json_output() {
 fn test_cli_decodes_vbscript_encoder_in_binary_classified_asp() {
     let sample = crate::common::path("testdata/script/vbscript-encoded-malformed-asp.asp");
     let output = stng_cmd()
-        .args(["--json", "--no-r2", "--no-xor"])
+        .args(["--json", "--no-rizin", "--no-xor"])
         .arg(sample)
         .output()
         .expect("Failed to execute stng");
@@ -122,7 +122,7 @@ fn test_cli_simple_output() {
 
     let output = stng_cmd()
         .arg("--simple")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -141,7 +141,7 @@ fn test_cli_min_length() {
     // Run with min_length 4 (default)
     let output_default = stng_cmd()
         .arg("--json")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -151,7 +151,7 @@ fn test_cli_min_length() {
         .arg("-m")
         .arg("20")
         .arg("--json")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -178,7 +178,7 @@ fn test_cli_unfiltered() {
     // Run without --unfiltered
     let output1 = stng_cmd()
         .arg("--json")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -186,7 +186,7 @@ fn test_cli_unfiltered() {
     // Run with --unfiltered
     let output2 = stng_cmd()
         .arg("--json")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg("--unfiltered")
         .arg(binary_path)
         .output()
@@ -205,21 +205,23 @@ fn test_cli_unfiltered() {
 }
 
 #[test]
-fn test_cli_flat_output() {
+fn test_cli_removed_flags_are_rejected_and_no_r2_is_an_alias() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
-
+    for removed in ["--flat", "--r2"] {
+        let output = stng_cmd()
+            .args([removed, "--no-rizin"])
+            .arg(binary_path)
+            .output()
+            .expect("Failed to execute stng");
+        assert!(!output.status.success(), "{removed} should be rejected");
+    }
     let output = stng_cmd()
-        .arg("--flat")
-        .arg("--no-r2")
+        .args(["--no-r2", "--json"])
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Should have a header with string count and format info
-        assert!(stdout.contains("strings ·") || stdout.contains("strings"));
-    }
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with('['));
 }
 
 #[test]
@@ -227,7 +229,7 @@ fn test_cli_no_r2() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     let output = stng_cmd()
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg("--json")
         .arg(binary_path)
         .output()
@@ -315,7 +317,7 @@ fn test_cli_base64_decoding() {
 
     let output = stng_cmd()
         .arg("--no-color")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -351,7 +353,7 @@ fn test_cli_trailing_newlines_trimmed() {
 
     let output = stng_cmd()
         .arg("--no-color")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -397,7 +399,7 @@ fn test_cli_simple_mode_trims_newlines() {
 
     let output = stng_cmd()
         .arg("--simple")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -428,7 +430,7 @@ fn test_cli_interesting_flag() {
     let output = stng_cmd()
         .arg("--interesting")
         .arg("--json")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -451,7 +453,7 @@ fn test_cli_no_xor_flag() {
     let output = stng_cmd()
         .arg("--no-xor")
         .arg("--json")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -475,7 +477,7 @@ fn test_cli_debug_flag_does_not_crash() {
 
     let output = stng_cmd()
         .arg("--debug")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -494,7 +496,7 @@ fn test_cli_xor_min_length_respected() {
 
     let output = stng_cmd()
         .arg("--json")
-        .arg("--no-r2")
+        .arg("--no-rizin")
         .arg("--xor-min-length")
         .arg("200")
         .arg(binary_path)

@@ -23,8 +23,8 @@ pub(super) static MINER_SOFTWARE: LazyLock<AhoCorasick> = LazyLock::new(|| {
     .expect("valid miner patterns")
 });
 
-/// Literal shell-command indicators, batched into one Aho-Corasick pass
-/// (replaces eight independent `contains` scans in `is_shell_command_string`).
+/// Literal shell-command indicators for `is_shell_command_string`, batched
+/// into one Aho-Corasick pass.
 #[allow(clippy::expect_used)]
 pub(super) static SHELL_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
@@ -42,10 +42,9 @@ pub(super) static SHELL_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
 
 /// IOC substring patterns batched into one Aho-Corasick automaton.
 ///
-/// `is_recognized_ioc` historically did ~11 independent `s.contains(...)`
-/// scans (one per needle).  For long strings that is O(11 × len).  A single
-/// AC find is O(len).  The index of the matched pattern is mapped back to
-/// the per-needle constraint via [`ioc_substring_match`].
+/// One find costs O(len) where a `contains` per needle would cost
+/// O(needles × len). The matched pattern's index maps back to its per-needle constraint
+/// in [`ioc_substring_match`].
 #[allow(clippy::expect_used)]
 pub(super) static IOC_SUBSTRING: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new(IOC_SUBSTRING_PATTERNS).expect("valid IOC substring patterns")
@@ -413,8 +412,7 @@ pub(super) fn is_recognized_ioc(s: &str, len: usize) -> bool {
         return true;
     }
     // Batched substring sweep: `.onion`, `HKLM\`, `HKCU\`, `HKEY_`, `LDAP://`,
-    // `-----BEGIN`, `-----END`, `2>&1`, `<<`.  One AC find replaces the
-    // eight-plus individual `s.contains(...)` scans these checks used to do.
+    // `-----BEGIN`, `-----END`, in one automaton pass.
     if ioc_substring_match(s, len) {
         return true;
     }

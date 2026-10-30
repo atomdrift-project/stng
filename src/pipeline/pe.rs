@@ -147,7 +147,7 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     }
 
     // Recover imports/exports from the PE directories — names behind RVA
-    // tables that a raw byte scan can't reach (the radare2-only gap).
+    // tables that a raw byte scan can't reach.
     if !opts.caller_provides_symbols {
         merge_imports(&mut strings, extract_pe_imports(pe, min_length));
     }

@@ -1,7 +1,7 @@
 # Bounded PE XOR recovery
 
-`ExtractOptions::with_xor` includes an in-process x86 PE pass for small
-repeating-key XOR decoders. It does not require Rizin, brute-force keys, or
+`XorMode::Auto` and `XorMode::Scan` include an in-process x86 PE pass for
+small repeating-key XOR decoders (`src/xor/pe_decoder.rs`). It does not require Rizin, brute-force keys, or
 execute a binary. The normal PE parse is reused.
 
 A fast byte prefilter looks for four distinct immediate register assignments
@@ -22,13 +22,10 @@ Recovered ASCII and ASCII-subset UTF-16LE strings use the existing `XorDecode`
 method. Their `data_offset` and `data_len` describe ciphertext, and
 `source_spans()` includes both the ciphertext extent and the key extent. They
 remain decoded content references, never PE imports or confirmed calls.
-Callers that cache stng's output (filefacts) key it on the stng commit, so new
-output never meets stale entries.
-No fields or allocations are added to the common `ExtractedString` layout.
 
 ## Per-file limits
 
-- x86 PE only, at most 96 sections; skip Go PE and an explicit caller XOR key.
+- x86 PE only, at most 96 sections; skipped for Go PE and `XorMode::Key`.
 - Scan at most 4 MiB of executable section bytes and 65,536 CALL-byte anchors.
 - Interpret at most four candidates, sharing 262,144 instruction steps.
 - At most 128 decoded instructions, 32 stack slots and 16 KiB output per candidate.

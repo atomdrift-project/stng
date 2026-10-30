@@ -1,4 +1,4 @@
-//! Binary network data detection.
+//! Hard-coded IPv4 addresses in `sockaddr_in` structures.
 //!
 //! Scans binary data for hardcoded IP addresses in socket structures.
 //! Only detects IPs in contextual patterns (sockaddr_in) to avoid false positives
@@ -182,8 +182,8 @@ fn sits_in_periodic_table(data: &[u8], offset: usize) -> bool {
 pub(crate) enum Endianness {
     Little,
     Big,
-    /// Format gave no endianness hint — accept either marker (legacy behavior
-    /// for Mach-O / unknown / fully-unparsed inputs).
+    /// Format gave no endianness hint (Mach-O, unknown or unparsed input):
+    /// accept either marker.
     Unknown,
 }
 
@@ -305,15 +305,7 @@ pub(crate) fn scan_binary_ips(
     results
 }
 
-/// Scan for sockaddr_in structures (AF_INET + port + IP).
-///
-/// sockaddr_in structure layout:
-/// - Byte 0-1: sin_family (AF_INET = 2, stored in host byte order)
-/// - Byte 2-3: sin_port (network byte order / big-endian)
-/// - Byte 4-7: sin_addr (4 bytes IPv4, network byte order / big-endian)
-///
-/// Skips the first 256 bytes to avoid false positives from ELF/PE/Mach-O file headers
-/// that happen to contain sockaddr_in-like byte sequences.
+/// Whether `octets` is a plausible hard-coded server address.
 fn is_valid_ip(octets: [u8; 4]) -> bool {
     // Reject if any octet is 0 (including first, last, or middle)
     // Real IPs don't have 0 octets, 0.x.x.x is invalid, x.x.x.0 is network address
@@ -372,6 +364,12 @@ fn is_valid_ip(octets: [u8; 4]) -> bool {
     true
 }
 
+/// Scan for sockaddr_in structures (AF_INET + port + IP).
+///
+/// sockaddr_in structure layout:
+/// - Byte 0-1: sin_family (AF_INET = 2, stored in host byte order)
+/// - Byte 2-3: sin_port (network byte order / big-endian)
+/// - Byte 4-7: sin_addr (4 bytes IPv4, network byte order / big-endian)
 fn scan_sockaddr_in(
     data: &[u8],
     min_length: usize,

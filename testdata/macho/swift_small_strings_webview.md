@@ -2,7 +2,7 @@
 
 SHA-256: `e804a52fe033d7e99f4e51c5b7f70bd5101e61de1478f5c619219fea8ef8a957`
 
-Source: triage40 e804a52fe033 specimen, standalone Swift WebView executable.
+Source: a standalone Swift WebView executable.
 This fixture is for static extraction only. The submitted native module was
 reviewed as good; the referenced HTML bundle resource was not provided, so that
 page and the whole app bundle are outside the verdict.
@@ -32,7 +32,6 @@ processes, dependencies, unbounded searches, or allocations before output beyond
 existing Mach-O section enumeration. Unicode, pointer-backed Swift strings,
 interprocedural values, and x86 Swift small strings are not covered.
 
-Native stng static extraction and offline stng/cleave builds were used during
-authoring. Eight regression tests now cover the specimen and filtered pipeline, malformed
-layouts, registers, barriers, lifetime and resource bounds in
-`src/swift_small_strings/tests.rs`. No production throughput benchmark was performed.
+Eight regression tests in `src/swift_small_strings/tests.rs` cover the
+specimen and filtered pipeline, malformed layouts, registers, barriers,
+lifetime and resource bounds.

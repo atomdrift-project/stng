@@ -58,8 +58,7 @@ pub enum IpEvidence {
 
 /// Whether an address is externally routable and useful as an IOC.
 ///
-/// This is the shared implementation of Cleave's external-IPv4 policy,
-/// extended to IPv6. It rejects non-routable/special ranges and, for bare
+/// It rejects non-routable/special ranges and, for bare
 /// IPv4 strings, dotted versions. URL/endpoint structure relaxes only the
 /// version heuristic; it never admits private or otherwise non-routable IPs.
 #[must_use]
@@ -73,8 +72,8 @@ pub fn is_external_ip(ip: &IpAddr, evidence: IpEvidence) -> bool {
 fn is_external_ipv4(ip: &Ipv4Addr, evidence: IpEvidence) -> bool {
     let octets = ip.octets();
 
-    // Zero octets are overwhelmingly versions/padding in static data. Cleave's
-    // established IOC policy rejects them even inside a URL.
+    // Zero octets are overwhelmingly versions and padding in static data, so
+    // they are rejected even inside a URL.
     if octets.contains(&0) {
         return false;
     }

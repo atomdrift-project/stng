@@ -84,7 +84,7 @@ struct StackStringExtractor<'a> {
     full_data: Option<&'a [u8]>,
     section_vma: u64,
     image_base: u64,
-    // Register state: (Value, Instruction Offset, Flavor)
+    // Register state: (value, instruction offset).
     regs: HashMap<Register, (String, u64)>,
     // Raw (non-printable) immediate bytes held in registers, kept for XOR pairing.
     raw_regs: HashMap<Register, Vec<u8>>,

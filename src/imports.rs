@@ -52,8 +52,8 @@ pub(crate) fn extract_macho_imports(
     // Walk the static symbol table (nlist). imports()/exports() above only see
     // dyld bind info and the export trie; the symbol table additionally carries
     // undefined externals (`_popen`), Objective-C class references
-    // (`_OBJC_CLASS_$_…`) and local stub helpers (`_objc_msgSend$…`) that radare2
-    // surfaces but those two views miss. Without this they appear only as
+    // (`_OBJC_CLASS_$_…`) and local stub helpers (`_objc_msgSend$…`) that a
+    // disassembler surfaces but those two views miss. Without this they appear only as
     // untyped raw-scan hits in the __LINKEDIT string table; classifying them by
     // nlist type lets `merge_imports` retag those hits with a proper kind.
     //
@@ -94,8 +94,7 @@ pub(crate) fn extract_macho_imports(
 /// goblin resolves the import directory (and bound imports) to `(name, dll)`
 /// pairs and the export directory to named exports; neither is recoverable by a
 /// raw byte scan when the names live behind RVA tables rather than as inline
-/// literals, which is why PE import names were previously absent without
-/// radare2. Each entry carries the resolving DLL as its source.
+/// literals. Each entry carries the resolving DLL as its source.
 pub(crate) fn extract_pe_imports(
     pe: &goblin::pe::PE<'_>,
     min_length: usize,

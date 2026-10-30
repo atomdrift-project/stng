@@ -33,7 +33,7 @@ fn cli_strings(source: &str) -> Vec<ExtractedString> {
             "--json",
             "--unfiltered",
             "--no-xor",
-            "--no-r2",
+            "--no-rizin",
             "--no-cache",
         ])
         .arg(&path)

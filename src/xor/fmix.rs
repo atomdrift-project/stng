@@ -1,7 +1,7 @@
 //! Strings sealed by a MurmurHash3-finalizer keystream with ciphertext feedback.
 //!
-//! A macOS stealer (2026-09, bfc96a7fa7aa) inlines one decryption loop per
-//! string. Every string is a self-contained record in constant data:
+//! One macOS stealer inlines a decryption loop per string. Every string is a
+//! self-contained record in constant data:
 //!
 //! ```text
 //! seed: u32 LE | ciphertext | encrypted NUL | zero padding to 4 bytes

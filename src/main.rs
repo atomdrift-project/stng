@@ -1,9 +1,8 @@
 // Allow unwrap/expect/panic in test code — panicking on failure is idiomatic in tests.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-//! stng - Language-aware string extraction CLI
-//!
-//! Extract strings from Go and Rust binaries with proper boundary detection.
+//! The `stng` command: extract and classify the strings in a file, or in
+//! every file under a directory.
 
 // Use jemalloc on unix systems where it isn't the OS default (see Cargo.toml).
 // `--features jemalloc-prof` adds heap profiling (`make heap-benchmark`).
@@ -22,16 +21,13 @@
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::Result;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::Parser;
-use sha2::{Digest, Sha256};
-use std::borrow::Cow;
+use cli::args::{LcgRange, XorKey};
+use cli::output::{self, Style, safe_path};
 use std::collections::HashSet;
-use std::fs;
-use std::io::{self, IsTerminal};
-use std::path::Path;
-use stng::{Severity, StringKind};
+use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use stng::{ExtractedString, StringMethod, XorMode};
 
 mod cli;
 
@@ -49,25 +45,25 @@ and suspicious paths while filtering noise. XOR-encoded strings are
 detected by default.
 
 EXAMPLES:
-    stng malware.elf                            # Full analysis with single-byte XOR detection
-    stng -i malware.elf                         # Filter out raw scan noise
-    stng --xor 0xAB malware.elf                 # Decode with custom hex XOR key
-    stng --xor \"secretkey\" malware.elf          # Decode with string XOR key
-    stng --xorscan malware.elf                  # Deep scan with multi-byte XOR (slow, requires r2/rizin)
-    stng --no-xor malware.elf                   # Disable all XOR detection
-    stng --debug malware.elf                    # Show debug logging
-    stng --json malware.elf                     # JSON output for tooling
+    stng malware.elf                   # Full analysis with single-byte XOR detection
+    stng -i malware.elf                # Filter out raw scan noise
+    stng --xor 0xAB malware.elf        # Decode with a hex XOR key
+    stng --xor secretkey malware.elf   # Decode with a text XOR key
+    stng --xorscan malware.elf         # Also decode keys rizin finds loaded by code
+    stng --no-xor malware.elf          # Disable all XOR detection
+    stng --json malware.elf            # JSON output for tooling
+    stng --json samples/               # One JSON object per file
 ")]
 struct Cli {
-    /// Target binary file to analyze
-    #[arg(required = true)]
-    target: String,
+    /// File to analyze, or a directory to analyze every file under
+    target: PathBuf,
 
     /// Minimum string length to extract
     #[arg(short = 'm', long, default_value = "4")]
     min_length: usize,
 
-    /// Output as JSON
+    /// Output as JSON: an array of strings, or for a directory one
+    /// `{"path", "strings"}` object per line
     #[arg(long)]
     json: bool,
 
@@ -79,27 +75,19 @@ struct Cli {
     #[arg(long)]
     detect: bool,
 
-    /// Don't group by section (flat output)
-    #[arg(long)]
-    flat: bool,
-
     /// Show unfiltered results including garbage/noise
     #[arg(long)]
     unfiltered: bool,
 
-    /// Use radare2 for extraction (auto-detected by default)
-    #[arg(long)]
-    r2: bool,
-
-    /// Disable radare2 even if installed
-    #[arg(long)]
-    no_r2: bool,
+    /// Don't run rizin, even if installed
+    #[arg(long, alias = "no-r2")]
+    no_rizin: bool,
 
     /// Disable colored output
     #[arg(long)]
     no_color: bool,
 
-    /// Filter out raw scan noise (keep structured, r2, and symbol data)
+    /// Filter out raw scan noise (keep structured, rizin, and symbol data)
     #[arg(short = 'i', long)]
     interesting: bool,
 
@@ -107,32 +95,34 @@ struct Cli {
     #[arg(long)]
     no_xor: bool,
 
-    /// Custom XOR key (hex bytes like "0xABCD" or plain string)
-    #[arg(long)]
-    xor: Option<String>,
+    /// XOR key: hex digits after `0x` or `hex:` (`0xABCD`), otherwise the
+    /// literal text
+    #[arg(long, value_parser = cli::args::parse_xor_key)]
+    xor: Option<XorKey>,
 
     /// Decode an analyst-identified LCG-XOR range:
     /// seed,multiplier,modulus,mask,offset,length (decimal or 0x-prefixed)
     #[arg(
         long,
         value_name = "SEED,MUL,MOD,MASK,OFFSET,LENGTH",
+        value_parser = cli::args::parse_lcg,
         conflicts_with = "xor"
     )]
-    xor_lcg: Option<String>,
+    xor_lcg: Option<LcgRange>,
 
     /// Minimum length for XOR-decoded strings
     #[arg(long, default_value = "10")]
     xor_min_length: usize,
 
-    /// Enable advanced XOR scanning with radare2/rizin (slow but finds multi-byte keys)
+    /// Also decode with XOR keys rizin finds loaded by code (slow)
     #[arg(long)]
     xorscan: bool,
 
-    /// Disable radare2/rizin result caching
+    /// Disable rizin result caching
     #[arg(long)]
     no_cache: bool,
 
-    /// Clear cached r2 results for this file before analysis
+    /// Clear cached rizin results for this file before analysis
     #[arg(long)]
     flush_cache: bool,
 
@@ -141,352 +131,95 @@ struct Cli {
     debug: bool,
 }
 
-// ANSI color codes
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const RED: &str = "\x1b[31m"; // Dark red text
-const CYAN: &str = "\x1b[36m"; // For medium severity items
-const GREEN: &str = "\x1b[32m";
-const BRIGHT_YELLOW: &str = "\x1b[93m"; // For XOR-decoded/decrypted content (stands out)
-
-/// Parse XOR key from command line (hex bytes or plain string)
-fn parse_xor_key(input: &str) -> Result<Vec<u8>> {
-    // Check if it's hex format (0x... or just bare hex digits)
-    let hex_str = if let Some(stripped) = input.strip_prefix("0x") {
-        stripped
-    } else if input.chars().all(|c| c.is_ascii_hexdigit()) && input.len().is_multiple_of(2) {
-        input
-    } else {
-        return Ok(input.as_bytes().to_vec());
-    };
-
-    if hex_str.is_empty() {
-        anyhow::bail!("XOR key cannot be empty");
-    }
-
-    let digit = |c: u8| char::from(c).to_digit(16);
-    let key: Option<Vec<u8>> = match hex_str.as_bytes().as_chunks::<2>() {
-        (pairs, []) => pairs
-            .iter()
-            .map(|&[h, l]| u8::try_from(digit(h)? << 4 | digit(l)?).ok())
-            .collect(),
-        _ => None,
-    };
-    key.ok_or_else(|| {
-        anyhow::anyhow!("Invalid hex key '{hex_str}': not an even number of hex digits")
-    })
-}
-
-fn parse_integer(input: &str) -> Result<u64> {
-    if let Some(hex) = input
-        .strip_prefix("0x")
-        .or_else(|| input.strip_prefix("0X"))
-    {
-        u64::from_str_radix(hex, 16)
-            .map_err(|e| anyhow::anyhow!("Invalid hexadecimal integer '{input}': {e}"))
-    } else {
-        input
-            .parse::<u64>()
-            .map_err(|e| anyhow::anyhow!("Invalid decimal integer '{input}': {e}"))
-    }
-}
-
-fn parse_lcg_parameters(input: &str) -> Result<(stng::Lcg, std::ops::Range<usize>)> {
-    let fields: Vec<_> = input.split(',').map(str::trim).collect();
-    if fields.len() != 6 {
-        anyhow::bail!("--xor-lcg expects seed,multiplier,modulus,mask,offset,length");
-    }
-    let seed = parse_integer(fields[0])?;
-    let multiplier = parse_integer(fields[1])?;
-    let modulus = parse_integer(fields[2])?;
-    let mask = u8::try_from(parse_integer(fields[3])?)
-        .map_err(|e| anyhow::anyhow!("LCG mask must fit in one byte: {e}"))?;
-    let offset = usize::try_from(parse_integer(fields[4])?)
-        .map_err(|e| anyhow::anyhow!("LCG offset is too large: {e}"))?;
-    let length = usize::try_from(parse_integer(fields[5])?)
-        .map_err(|e| anyhow::anyhow!("LCG length is too large: {e}"))?;
-    if modulus == 0 || multiplier == 0 || length == 0 {
-        anyhow::bail!("LCG multiplier, modulus, and length must be nonzero");
-    }
-    let end = offset
-        .checked_add(length)
-        .ok_or_else(|| anyhow::anyhow!("LCG offset + length overflows"))?;
-    let lcg = stng::Lcg {
-        seed,
-        multiplier,
-        modulus,
-        mask,
-    };
-    Ok((lcg, offset..end))
-}
-
-/// Get binary format and architecture string (e.g., "ELF arm32", "PE x64", "Mach-O arm64")
-fn binary_format(data: &[u8]) -> String {
-    use stng::goblin::Object;
-
-    match Object::parse(data) {
-        Ok(Object::Elf(elf)) => {
-            let arch = match elf.header.e_machine {
-                stng::goblin::elf::header::EM_X86_64 => "x64",
-                stng::goblin::elf::header::EM_386 => "x86",
-                stng::goblin::elf::header::EM_AARCH64 => "arm64",
-                stng::goblin::elf::header::EM_ARM => "arm32",
-                stng::goblin::elf::header::EM_MIPS => "mips",
-                stng::goblin::elf::header::EM_PPC => "ppc",
-                stng::goblin::elf::header::EM_PPC64 => "ppc64",
-                stng::goblin::elf::header::EM_RISCV => "riscv",
-                stng::goblin::elf::header::EM_S390 => "s390x",
-                _ => "unknown",
-            };
-            format!("ELF {arch}")
-        }
-        Ok(Object::PE(pe)) => {
-            let arch = match pe.header.coff_header.machine {
-                stng::goblin::pe::header::COFF_MACHINE_X86_64 => "x64",
-                stng::goblin::pe::header::COFF_MACHINE_X86 => "x86",
-                stng::goblin::pe::header::COFF_MACHINE_ARM64 => "arm64",
-                stng::goblin::pe::header::COFF_MACHINE_ARMNT => "arm32",
-                _ => "unknown",
-            };
-            format!("PE {arch}")
-        }
-        Ok(Object::Mach(stng::goblin::mach::Mach::Binary(macho))) => {
-            let arch = match macho.header.cputype() {
-                stng::goblin::mach::cputype::CPU_TYPE_X86_64 => "x64",
-                stng::goblin::mach::cputype::CPU_TYPE_X86 => "x86",
-                stng::goblin::mach::cputype::CPU_TYPE_ARM64 => "arm64",
-                stng::goblin::mach::cputype::CPU_TYPE_ARM => "arm32",
-                stng::goblin::mach::cputype::CPU_TYPE_POWERPC => "ppc",
-                stng::goblin::mach::cputype::CPU_TYPE_POWERPC64 => "ppc64",
-                _ => "unknown",
-            };
-            format!("Mach-O {arch}")
-        }
-        Ok(Object::Mach(stng::goblin::mach::Mach::Fat(_))) => "Mach-O fat".to_string(),
-        _ => "unknown".to_string(),
-    }
-}
-
 /// One file's extraction stops getting faster at about 16 threads. Past that,
 /// idle workers only burn CPU: on a 128-core machine the default pool was
 /// 15–40% slower than 16 threads and used 4–8× the CPU.
 const MAX_THREADS: usize = 16;
 
-/// Size rayon's global pool to the machine, up to [`MAX_THREADS`], unless
-/// `RAYON_NUM_THREADS` says otherwise.
-fn init_thread_pool() {
-    if std::env::var_os("RAYON_NUM_THREADS").is_some() {
-        return;
-    }
-    let n = std::thread::available_parallelism().map_or(1, |n| n.get().min(MAX_THREADS));
-    // Fails only if a pool already exists, which then stays as it is.
-    let _ = rayon::ThreadPoolBuilder::new()
-        .num_threads(n)
-        .build_global();
-}
-
 fn main() -> Result<()> {
-    let t_total = std::time::Instant::now();
     let cli = Cli::parse();
-    init_thread_pool();
-
-    // Initialize tracing (modern structured logging)
-    if cli.debug {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::WARN)
-            .with_target(false)
-            .init();
+    if std::env::var_os("RAYON_NUM_THREADS").is_none() {
+        let n = std::thread::available_parallelism().map_or(1, |n| n.get().min(MAX_THREADS));
+        // Fails only if a pool already exists, which then stays as it is.
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global();
     }
+    let level = if cli.debug {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::WARN
+    };
+    tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_target(false)
+        .init();
 
-    let root = Path::new(&cli.target);
+    let style = Style::new(!cli.no_color && !cli.json && io::stdout().is_terminal());
+    let root = &cli.target;
     if !root.exists() {
-        anyhow::bail!("Path does not exist: {}", terminal_safe(&cli.target));
+        anyhow::bail!("Path does not exist: {}", safe_path(root));
     }
-
-    if root.is_dir() {
-        let mut stack = vec![root.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            let entries = match fs::read_dir(&dir) {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("warning: {}: {}", safe_path(&dir), e);
-                    continue;
-                }
-            };
-            for entry in entries.flatten() {
-                let p = entry.path();
-                match entry.file_type() {
-                    Ok(ft) if ft.is_dir() => stack.push(p),
-                    Ok(ft) if ft.is_file() => {
-                        if let Err(e) = analyze_one(&cli, &p) {
-                            eprintln!("warning: {}: {}", safe_path(&p), e);
-                        }
+    if !root.is_dir() {
+        return analyze(&cli, root, &style, false);
+    }
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("warning: {}: {e}", safe_path(&dir));
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => stack.push(path),
+                Ok(t) if t.is_file() => {
+                    if let Err(e) = analyze(&cli, &path, &style, true) {
+                        eprintln!("warning: {}: {e}", safe_path(&path));
                     }
-                    _ => {}
                 }
+                _ => {}
             }
         }
-    } else {
-        analyze_one(&cli, root)?;
     }
-
-    tracing::debug!("TIME: Total execution time: {:?}", t_total.elapsed());
     Ok(())
 }
 
-/// Serialize strings as pretty JSON directly to stdout.
-///
-/// Streaming via `to_writer_pretty` avoids materializing the entire JSON
-/// document as an intermediate `String` (which can rival the input file in
-/// size for string-dense binaries).
-fn print_json(strings: &[stng::ExtractedString]) -> Result<()> {
-    let stdout = io::stdout();
-    let mut out = io::BufWriter::new(stdout.lock());
-    serde_json::to_writer_pretty(&mut out, strings)?;
-    io::Write::write_all(&mut out, b"\n")?;
-    io::Write::flush(&mut out)?;
-    Ok(())
-}
-
-fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
-    // Handle cache flushing if requested
-    if cli.flush_cache {
-        let target = path.to_string_lossy();
-        if let Err(e) = cli::rizin::flush_cache(target.as_ref()) {
-            eprintln!("Warning: failed to flush cache: {e}");
-        }
-    }
-
-    let t_read = std::time::Instant::now();
-    let data = fs::read(path)?;
-    tracing::debug!("TIME: Reading file took {:?}", t_read.elapsed());
-
-    // Handle --detect flag
-    if cli.detect {
-        let lang = stng::detect_language(&data);
-        println!("{lang}");
-        return Ok(());
-    }
-
-    // UTF-8 text is reported line by line. Text in a legacy code page goes
-    // through the library like any other file: a lossy decode would replace
-    // each foreign byte with a 3-byte U+FFFD and skew every later offset.
-    if stng::is_text_file(&data)
-        && let Ok(content) = std::str::from_utf8(&data)
+/// Extract and print one file's strings. `in_directory` selects the
+/// one-object-per-line JSON form.
+fn analyze(cli: &Cli, path: &Path, style: &Style, in_directory: bool) -> Result<()> {
+    let data = std::fs::read(path)?;
+    if cli.flush_cache
+        && let Err(e) = cli::rizin::flush_cache(&data)
     {
-        // Track byte offset for each line
-        let mut byte_offset = 0u64;
-        let mut strings: Vec<stng::ExtractedString> = Vec::new();
-
-        // Keep the original line terminators: lines() strips CRLF and made
-        // every later encoded token point one byte too early per CRLF line.
-        for line in content.split_inclusive('\n') {
-            let trimmed = line.trim();
-            if trimmed.len() >= cli.min_length {
-                strings.push(
-                    stng::ExtractedString::new(
-                        trimmed.to_string(),
-                        byte_offset + (line.len() - line.trim_start().len()) as u64,
-                        stng::StringMethod::RawScan,
-                    )
-                    .with_kind(stng::classify_string(trimmed)),
-                );
-            }
-            byte_offset += line.len() as u64;
-        }
-
-        // Apply the generic decoders so encoded payloads embedded in plain text
-        // — base64, hex, URL, base32/85, and notably base64-over-UTF-16LE as
-        // Windows emits — are surfaced regardless of filetype, not just when a
-        // recognized script-obfuscation pattern is present.
-        let decoded = stng::decode_encoded_strings(&strings);
-        strings.extend(decoded);
-
-        // Script deobfuscation: decode hidden payloads from obfuscated scripts
-        let deob_results = stng::script::deobfuscate_script(&data);
-        for result in deob_results {
-            let payload_opts = stng::ExtractOptions::new(cli.min_length);
-            let payload_strings =
-                stng::extract_strings_with_options(result.decoded.as_bytes(), &payload_opts);
-            for s in payload_strings {
-                // Located at the encoded blob it was decoded from.
-                strings.push(
-                    stng::ExtractedString::new(
-                        s.value.clone(),
-                        result.offset as u64,
-                        stng::StringMethod::ScriptDecode,
-                    )
-                    .with_kind(stng::classify_string(&s.value)),
-                );
-            }
-        }
-
-        // Jump to output section
-        if strings.is_empty() {
-            if !cli.json {
-                eprintln!("No strings found in {}", safe_path(path));
-            }
-            return Ok(());
-        }
-
-        // Continue to normal output handling below
-        let use_color = !cli.no_color && !cli.json && io::stdout().is_terminal();
-        if cli.json {
-            print_json(&strings)?;
-            return Ok(());
-        }
-
-        // Sort by offset (text files are sequential, so offset order makes sense)
-        strings.sort_by_key(|s| s.data_offset);
-
-        for s in &strings {
-            print_string_line(s, use_color);
-        }
-
+        eprintln!("warning: failed to flush the rizin cache: {e}");
+    }
+    if cli.detect {
+        println!("{}", stng::detect_language(&data));
         return Ok(());
     }
 
-    // Determine whether to use radare2
-    // Note: R2 module now handles large files intelligently (symbols only, no slow string scan)
-    let use_r2 = if cli.no_r2 {
-        false
-    } else if cli.r2 {
-        true
-    } else {
-        cli::rizin::is_available()
+    let key = cli.xor.as_ref().map(|k| k.0.clone());
+    let xorscan = cli.xorscan && key.is_none() && !cli.no_xor;
+    let mode = match &key {
+        Some(key) => XorMode::Key(key.clone()),
+        None if cli.no_xor => XorMode::Off,
+        None if xorscan => XorMode::Scan,
+        None => XorMode::Auto,
     };
-    tracing::debug!("use_r2: {}", use_r2);
-
-    // Extract strings with options
-    let mut opts = stng::ExtractOptions::new(cli.min_length).with_garbage_filter(!cli.unfiltered);
-
-    // A given key wins; --xorscan also decodes with keys rizin finds loaded
-    // by code.
-    let custom_xor_key = cli.xor.as_deref().map(parse_xor_key).transpose()?;
-    let xorscan = cli.xorscan && custom_xor_key.is_none() && !cli.no_xor;
-    let mode = match &custom_xor_key {
-        Some(key) => stng::XorMode::Key(key.clone()),
-        None if cli.no_xor => stng::XorMode::Off,
-        None if xorscan => stng::XorMode::Scan,
-        None => stng::XorMode::Auto,
-    };
-    if !matches!(mode, stng::XorMode::Key(_)) {
-        opts = opts.with_xor_min_length(cli.xor_min_length);
-    }
-    opts = opts.with_xor(mode);
-    if use_r2 {
-        let xor = *opts.xor() != stng::XorMode::Off;
+    let mut opts = stng::ExtractOptions::new(cli.min_length)
+        .with_garbage_filter(!cli.unfiltered)
+        .with_xor_min_length(cli.xor_min_length)
+        .with_xor(mode);
+    if !cli.no_rizin {
+        let xor = *opts.xor() != XorMode::Off;
         opts = cli::rizin::attach(opts, &data, xor, xorscan, !cli.no_cache);
     }
-
-    // Show brief status message only if we'll actually scan (file is within size limits)
     if !cli.no_xor
+        && !cli.json
         && !cli.debug
         && io::stderr().is_terminal()
         && data.len() <= stng::MAX_XOR_SCAN_SIZE
@@ -495,769 +228,58 @@ fn analyze_one(cli: &Cli, path: &Path) -> Result<()> {
     }
 
     let mut strings = stng::extract_strings_with_options(&data, &opts);
-
-    if let Some(parameters) = cli.xor_lcg.as_deref() {
-        let (lcg, range) = parse_lcg_parameters(parameters)?;
-        let decoded = stng::decode_lcg_xor(&data, range, &lcg)
+    if let Some(LcgRange(lcg, range)) = &cli.xor_lcg {
+        let decoded = stng::decode_lcg_xor(&data, range.clone(), lcg)
             .ok_or_else(|| anyhow::anyhow!("LCG-XOR parameters did not decode a readable range"))?;
         strings.push(decoded);
     }
-
-    // Detect overlay for display purposes (even if no strings found)
-    let overlay_info = stng::detect_elf_overlay(&data);
-
-    // Deduplicate: when multiple strings at same offset, keep only the longest
-    use std::collections::HashMap;
-    // Strings decoded from one script blob share its offset; each is its own.
-    let mut offset_map: HashMap<(u64, Option<&str>), Vec<usize>> = HashMap::new();
-    for (idx, s) in strings.iter().enumerate() {
-        let derived = (s.method == stng::StringMethod::ScriptDecode).then_some(s.value.as_str());
-        offset_map
-            .entry((s.data_offset, derived))
-            .or_default()
-            .push(idx);
-    }
-
-    let mut keep_indices = HashSet::new();
-    for indices in offset_map.values() {
-        // Of the strings at one offset, prefer decoded strings, then the longest.
-        if let Some(&best) = indices
-            .iter()
-            .max_by_key(|&&i| (strings[i].method.display_priority(), strings[i].value.len()))
-        {
-            keep_indices.insert(best);
-        }
-    }
-
-    let mut idx = 0;
-    strings.retain(|_| {
-        let keep = keep_indices.contains(&idx);
-        idx += 1;
-        keep
-    });
-
-    // Deduplicate by value (but always keep decoded/high-value strings)
-    let mut seen_values: HashSet<String> = HashSet::new();
+    // Show each value once, except what was decoded from a script: those
+    // are distinct finds that may repeat text found elsewhere.
+    let mut seen = HashSet::new();
     strings.retain(|s| {
-        // Always keep ScriptDecode — these are decoded payloads, not duplicates
-        if s.method == stng::StringMethod::ScriptDecode {
-            return true;
-        }
-        let normalized: String = s
-            .value
-            .trim()
-            .trim_end_matches(|c: char| c.is_control())
-            .to_string();
-        seen_values.insert(normalized)
+        s.method == StringMethod::ScriptDecode
+            || seen.insert(s.value.trim().trim_end_matches(char::is_control).to_owned())
     });
-
-    // Filter out raw scan noise if --interesting
     if cli.interesting {
-        strings.retain(|s| s.method != stng::StringMethod::RawScan);
+        strings.retain(|s| s.method != StringMethod::RawScan);
     }
 
-    // Determine if we should use colors
-    let use_color = !cli.no_color && !cli.json && io::stdout().is_terminal();
-
-    // Output results
     if cli.json {
-        print_json(&strings)?;
+        print_json(path, &strings, in_directory)
     } else if cli.simple {
         for s in &strings {
             println!(
                 "{}",
-                terminal_safe(s.value.trim_end_matches(|c: char| c.is_control()))
+                output::terminal_safe(s.value.trim_end_matches(char::is_control))
             );
         }
         eprintln!("\n{} strings extracted", strings.len());
+        Ok(())
     } else {
-        if strings.is_empty() {
-            println!("No strings found in {}", safe_path(path));
-            return Ok(());
-        }
-
-        // Print header with format info
-        let filename =
-            terminal_safe(&path.file_name().unwrap_or_default().to_string_lossy()).into_owned();
-        let format = binary_format(&data);
-        let size = data.len();
-        let mut hasher = Sha256::new();
-        hasher.update(&data);
-        let hash = cli::hex(&hasher.finalize());
-
-        // Format custom XOR key for display
-        // Check for XOR key (custom or auto-detected)
-        let xor_key_display = if let Some(ref key) = custom_xor_key {
-            // Custom XOR key from --xor flag
-            format!(" · xor:{}", terminal_safe(&String::from_utf8_lossy(key)))
-        } else if let Some(xor_key_str) =
-            strings.iter().find(|s| s.kind == Some(StringKind::XorKey))
-        {
-            // Auto-detected XOR key
-            format!(" · xor:{}", terminal_safe(&xor_key_str.value))
-        } else {
-            String::new()
-        };
-
-        if use_color {
-            println!(
-                "{}{}{} · {} · {} bytes · {} strings · {}{}{}",
-                BOLD,
-                DIM,
-                filename,
-                format,
-                size,
-                strings.len(),
-                hash,
-                xor_key_display,
-                RESET
-            );
-        } else {
-            println!(
-                "{} · {} · {} bytes · {} strings · {}{}",
-                filename,
-                format,
-                size,
-                strings.len(),
-                hash,
-                xor_key_display
-            );
-        }
-        println!();
-
-        // Sort by file offset (section grouping was dropped with the per-string
-        // section field; callers that need a section derive it from the offset).
-        strings.sort_by_key(|s| s.data_offset);
-
-        // Collect high-severity items for the summary.
-        let mut notable: Vec<&stng::ExtractedString> = Vec::new();
-        for s in &strings {
-            print_string_line(s, use_color);
-            if s.kind.map_or(Severity::Info, StringKind::severity) == Severity::High
-                && s.kind != Some(stng::StringKind::XorKey)
-            {
-                notable.push(s);
-            }
-        }
-
-        // Show overlay section even if no printable strings were found
-        if let Some(ref overlay) = overlay_info {
-            let has_overlay_strings = strings
-                .iter()
-                .any(|s| s.data_offset >= overlay.start_offset);
-
-            if !has_overlay_strings && !cli.flat {
-                // Overlay exists but no printable strings - show informational message
-                if !strings.is_empty() {
-                    println!();
-                }
-                if use_color {
-                    println!("{DIM}── overlay ──{RESET}");
-                    println!(
-                        "  {}{:>8x}{} {}{:<12}{} {}{} bytes (unprintable){}",
-                        DIM, overlay.start_offset, RESET, DIM, "-", RESET, DIM, overlay.size, RESET
-                    );
-                } else {
-                    println!("── overlay ──");
-                    println!(
-                        "  {:>8x} {:<12} {} bytes (unprintable)",
-                        overlay.start_offset, "-", overlay.size
-                    );
-                }
-            }
-        }
-
-        // Sort notable items by priority: IPs first, then shell/suspicious, then base64, then URLs
-        notable.sort_by_key(|s| match s.kind {
-            Some(stng::StringKind::Ip | stng::StringKind::IpPort) => 0,
-            Some(stng::StringKind::ShellCmd | stng::StringKind::SuspiciousPath) => 1,
-            Some(stng::StringKind::Base64) => 2,
-            Some(stng::StringKind::Overlay | stng::StringKind::OverlayWide) => 3,
-            Some(stng::StringKind::Url) => 4,
-            _ => 5,
-        });
-        notable.truncate(8);
-
-        // Print notable summary if there are high-severity items
-        if !notable.is_empty() {
-            println!();
-            if use_color {
-                println!("{RED}{BOLD}▌ Notable{RESET}");
-            } else {
-                println!("── Notable ──");
-            }
-            for s in notable {
-                print_string_line(s, use_color);
-            }
-        }
-
-        println!();
+        output::print_listing(path, &data, &mut strings, key.as_deref(), style);
+        Ok(())
     }
+}
 
+/// The strings as a JSON array; in a directory, as one
+/// `{"path": …, "strings": […]}` object per line.
+fn print_json(path: &Path, strings: &[ExtractedString], in_directory: bool) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct File<'a> {
+        path: std::borrow::Cow<'a, str>,
+        strings: &'a [ExtractedString],
+    }
+    let mut out = io::BufWriter::new(io::stdout().lock());
+    if in_directory {
+        let file = File {
+            path: path.to_string_lossy(),
+            strings,
+        };
+        serde_json::to_writer(&mut out, &file)?;
+    } else {
+        serde_json::to_writer_pretty(&mut out, strings)?;
+    }
+    out.write_all(b"\n")?;
+    out.flush()?;
     Ok(())
-}
-
-/// Colorize the first `<key>` (entitlement name) and `<string>` (value) element
-/// on a plist line. The closing tag is searched for only after the opening tag:
-/// the line comes from the sample, so the tags may appear in any order.
-fn colorize_xml_line(line: &str) -> String {
-    let mut output = line.to_string();
-    for (open, close, color) in [("<key>", "</key>", RED), ("<string>", "</string>", CYAN)] {
-        if let Some(start) = output.find(open).map(|i| i + open.len())
-            && let Some(len) = output[start..].find(close)
-        {
-            let end = start + len;
-            output = format!(
-                "{}{color}{}{RESET}{}",
-                &output[..start],
-                &output[start..end],
-                &output[end..]
-            );
-        }
-    }
-    output
-}
-
-/// Wrap a string to fit terminal width, returning lines with byte offsets
-///
-/// # Arguments
-/// * `text` - The string to wrap
-/// * `start_offset` - Starting byte offset
-/// * `max_width` - Maximum width for text content (excluding prefix columns)
-///
-/// # Returns
-/// Vector of (`byte_offset`, `line_text`) tuples
-fn wrap_string_lines(text: &str, start_offset: u64, max_width: usize) -> Vec<(u64, String)> {
-    if max_width == 0 {
-        return vec![(start_offset, text.to_string())];
-    }
-
-    // One pass: a line ends every `max_width` characters. Recounting what
-    // remains for each line made a multi-megabyte string quadratic.
-    let mut result = Vec::new();
-    let mut start = 0;
-    for (count, (pos, _)) in text.char_indices().enumerate() {
-        if count > 0 && count % max_width == 0 {
-            result.push((start_offset + start as u64, text[start..pos].to_string()));
-            start = pos;
-        }
-    }
-    if start < text.len() {
-        result.push((start_offset + start as u64, text[start..].to_string()));
-    }
-
-    result
-}
-
-/// `text` with every character a terminal would act on, rather than print,
-/// replaced by its Rust escape (`\u{1b}`, `\r`). Extracted strings are the
-/// attacker's: an ESC opens sequences that retitle the window, write the
-/// clipboard (OSC 52), or move the cursor to hide or forge earlier lines; a
-/// bare CR or newline overwrites or fakes a row; bidirectional overrides
-/// reorder what is shown. Tab is harmless and stays.
-fn terminal_safe(text: &str) -> Cow<'_, str> {
-    let unsafe_char = |c: char| {
-        (c.is_control() && c != '\t')
-            || matches!(
-                c,
-                '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
-            )
-    };
-    if !text.chars().any(unsafe_char) {
-        return Cow::Borrowed(text);
-    }
-    let mut out = String::with_capacity(text.len() + 8);
-    for c in text.chars() {
-        if unsafe_char(c) {
-            out.extend(c.escape_default());
-        } else {
-            out.push(c);
-        }
-    }
-    Cow::Owned(out)
-}
-
-/// A path for a terminal message; file names are as hostile as contents.
-fn safe_path(path: &Path) -> String {
-    terminal_safe(&path.display().to_string()).into_owned()
-}
-
-/// Get terminal width, defaulting to 120 if unavailable
-fn terminal_width() -> usize {
-    terminal_size::terminal_size()
-        .map(|(terminal_size::Width(w), _)| w as usize)
-        .unwrap_or(120)
-}
-
-fn print_string_line(s: &stng::ExtractedString, use_color: bool) {
-    // Special handling for multi-line entitlements XML
-    if s.kind == Some(stng::StringKind::EntitlementsXml) {
-        let kind_color = if use_color { CYAN } else { "" };
-        let mut byte_offset = s.data_offset;
-
-        // Print each line with its calculated offset
-        for raw_line in s.value.lines() {
-            let offset = format!("{byte_offset:>8x}");
-            let line = terminal_safe(raw_line);
-
-            if use_color {
-                let colorized = colorize_xml_line(&line);
-                println!(
-                    "  {}{}{} {}{:<12}{} {}",
-                    DIM, offset, RESET, kind_color, "entitlement", RESET, colorized
-                );
-            } else {
-                println!("  {} {:<12} {}", offset, "entitlement", line);
-            }
-
-            // Update offset for next line (line length + newline)
-            byte_offset += raw_line.len() as u64 + 1;
-        }
-        return;
-    }
-
-    // Special handling for multi-line decoded strings (XOR or obfuscated base64)
-    if (s.method == stng::StringMethod::XorDecode
-        || s.method == stng::StringMethod::XorStackPair
-        || s.method == stng::StringMethod::Base64ObfuscatedDecode)
-        && s.value.contains('\n')
-    {
-        let (method, classification) = if s.method == stng::StringMethod::XorDecode
-            || s.method == stng::StringMethod::XorStackPair
-        {
-            ("xor", s.kind.map_or("-", |k| k.short_name()))
-        } else {
-            ("b64+obf", s.kind.map_or("-", |k| k.short_name()))
-        };
-        // Decoded content always uses bright yellow to stand out
-        let (color, kind_color) = if use_color {
-            (BRIGHT_YELLOW, BRIGHT_YELLOW)
-        } else {
-            ("", "")
-        };
-
-        let mut byte_offset = s.data_offset;
-
-        // Print each line with its calculated offset
-        for line in s.value.lines() {
-            let offset = format!("{byte_offset:>8x}");
-            let clean_line = terminal_safe(line.trim_end_matches(|c: char| c.is_control()));
-
-            if use_color {
-                println!(
-                    "  {DIM}{offset}{RESET} {kind_color}{method:<8}{RESET} {kind_color}{classification:<12}{RESET} {color}{clean_line}{RESET}"
-                );
-            } else {
-                println!("  {offset} {method:<8} {classification:<12} {clean_line}");
-            }
-
-            // Update offset for next line (line length + newline)
-            byte_offset += line.len() as u64 + 1;
-        }
-        return;
-    }
-
-    // Split method/encoding from classification for separate columns
-    let (method, classification) = if s.method == stng::StringMethod::XorDecode
-        || s.method == stng::StringMethod::XorStackPair
-        || s.method == stng::StringMethod::XorRepeatingKey
-    {
-        ("xor", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::Base64ObfuscatedDecode {
-        ("b64+obf", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::Base64Decode {
-        ("b64", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::HexDecode {
-        ("hex", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::UrlDecode {
-        ("url", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::UnicodeEscapeDecode {
-        ("unicode", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::Base32Decode {
-        ("b32", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::Base85Decode {
-        ("b85", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::CodeSignature {
-        // All CodeSignature strings get the "codesig" method tag
-        ("codesig", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::WideString
-        && s.kind != Some(stng::StringKind::OverlayWide)
-    {
-        ("wide", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::SpacedAscii {
-        ("spaced", s.kind.map_or("-", |k| k.short_name()))
-    } else if s.method == stng::StringMethod::ScriptDecode {
-        ("script", s.kind.map_or("-", |k| k.short_name()))
-    } else {
-        ("", s.kind.map_or("-", |k| k.short_name()))
-    };
-
-    // Get color based on method and severity
-    let (color, kind_color) = if use_color {
-        // XOR-decoded and obfuscated base64 content uses bright yellow to stand out
-        if s.method == stng::StringMethod::XorDecode
-            || s.method == stng::StringMethod::XorStackPair
-            || s.method == stng::StringMethod::XorRepeatingKey
-            || s.method == stng::StringMethod::Base64ObfuscatedDecode
-            || s.method == stng::StringMethod::ScriptDecode
-        {
-            (BRIGHT_YELLOW, BRIGHT_YELLOW)
-        } else if s.kind == Some(stng::StringKind::Section) {
-            // Section names are rarely interesting - show in dim grey
-            (DIM, DIM)
-        } else {
-            match s.kind.map_or(Severity::Info, StringKind::severity) {
-                Severity::High => (RED, RED),
-                Severity::Medium => (CYAN, CYAN),
-                Severity::Low => (GREEN, GREEN),
-                _ => ("", DIM),
-            }
-        }
-    } else {
-        ("", "")
-    };
-
-    // Format the value, trimming control characters
-    let clean_value = s.value.trim_end_matches(|c: char| c.is_control());
-    let mut value = terminal_safe(clean_value).into_owned();
-
-    // For encoded strings that haven't been decoded separately, show preview inline
-    // Skip inline preview if this is a decoded string (to avoid duplication)
-    let show_inline_preview = !matches!(
-        s.method,
-        stng::StringMethod::Base64Decode
-            | stng::StringMethod::HexDecode
-            | stng::StringMethod::UrlDecode
-            | stng::StringMethod::UnicodeEscapeDecode
-    );
-
-    if show_inline_preview {
-        // Decode base64 strings and show plaintext/hex in brackets
-        if s.kind == Some(stng::StringKind::Base64)
-            && let Ok(decoded) = BASE64.decode(s.value.trim())
-            && !decoded.is_empty()
-        {
-            let printable = decoded
-                .iter()
-                .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-                .count();
-
-            // Show decoded content (text or hex)
-            if printable > decoded.len() / 2 {
-                // Mostly printable - show as text
-                if let Ok(text) = String::from_utf8(decoded) {
-                    let text = terminal_safe(text.trim());
-                    if !text.is_empty() {
-                        if use_color {
-                            value = format!("{value} {DIM}→ {text}{RESET}");
-                        } else {
-                            value = format!("{value} -> {text}");
-                        }
-                    }
-                }
-            } else {
-                // Binary data - show as hex (especially useful for XOR-decoded base64)
-                let hex_preview = if decoded.len() <= 16 {
-                    decoded
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect::<String>()
-                } else {
-                    format!(
-                        "{}...",
-                        decoded[..16]
-                            .iter()
-                            .map(|b| format!("{b:02x}"))
-                            .collect::<String>()
-                    )
-                };
-                if use_color {
-                    value = format!("{value} {DIM}→ 0x{hex_preview}{RESET}");
-                } else {
-                    value = format!("{value} -> 0x{hex_preview}");
-                }
-            }
-        }
-
-        // Decode hex-encoded strings
-        if s.kind == Some(stng::StringKind::HexEncoded) {
-            let decoded: Vec<u8> = (0..s.value.len().saturating_sub(1))
-                .step_by(2)
-                .filter_map(|i| {
-                    s.value
-                        .get(i..i + 2)
-                        .and_then(|h| u8::from_str_radix(h, 16).ok())
-                })
-                .collect();
-
-            if !decoded.is_empty()
-                && let Ok(text) = String::from_utf8(decoded)
-            {
-                let text = terminal_safe(text.trim());
-                if !text.is_empty() {
-                    if use_color {
-                        value = format!("{value} {DIM}→ {text}{RESET}");
-                    } else {
-                        value = format!("{value} -> {text}");
-                    }
-                }
-            }
-        }
-
-        // Decode Unicode escape sequences
-        if s.kind == Some(stng::StringKind::UnicodeEscaped) {
-            let decoded = stng::classifier::encoding::decode_unicode_escapes(&s.value);
-            if !decoded.is_empty()
-                && let Ok(text) = String::from_utf8(decoded)
-            {
-                let text = terminal_safe(text.trim());
-                if !text.is_empty() {
-                    if use_color {
-                        value = format!("{value} {DIM}→ {text}{RESET}");
-                    } else {
-                        value = format!("{value} -> {text}");
-                    }
-                }
-            }
-        }
-
-        // Decode URL-encoded strings
-        if s.kind == Some(stng::StringKind::UrlEncoded) {
-            let decoded = stng::classifier::encoding::decode_url_encoding(&s.value);
-            if !decoded.is_empty()
-                && let Ok(text) = String::from_utf8(decoded)
-            {
-                let text = terminal_safe(text.trim());
-                if !text.is_empty() {
-                    if use_color {
-                        value = format!("{value} {DIM}→ {text}{RESET}");
-                    } else {
-                        value = format!("{value} -> {text}");
-                    }
-                }
-            }
-        }
-    }
-
-    let display_value = value;
-
-    // Calculate available width for string content
-    // Prefix format: "  " (2) + offset (8) + " " (1) + method (8) + " " (1) + classification (12) + " " (1) = 33 chars
-    let prefix_width = 33;
-    let term_width = terminal_width();
-    let available_width = if term_width > prefix_width + 20 {
-        term_width - prefix_width
-    } else {
-        120 // Fallback for very narrow terminals
-    };
-
-    // Wrap the display value if needed
-    let wrapped_lines = wrap_string_lines(&display_value, s.data_offset, available_width);
-
-    // Print each wrapped line with proper offset
-    for (line_offset, line_text) in wrapped_lines {
-        let line_offset_str = format!("{line_offset:>8x}");
-
-        if use_color {
-            println!(
-                "  {DIM}{line_offset_str}{RESET} {kind_color}{method:<8}{RESET} {kind_color}{classification:<12}{RESET} {color}{line_text}{RESET}"
-            );
-        } else {
-            println!("  {line_offset_str} {method:<8} {classification:<12} {line_text}");
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_wrap_string_lines_no_wrap_needed() {
-        let text = "Short string";
-        let result = wrap_string_lines(text, 0, 100);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].0, 0);
-        assert_eq!(result[0].1, text);
-    }
-
-    #[test]
-    fn test_wrap_string_lines_exact_width() {
-        let text = "Exactly10!";
-        let result = wrap_string_lines(text, 0, 10);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].0, 0);
-        assert_eq!(result[0].1, text);
-    }
-
-    #[test]
-    fn test_wrap_string_lines_basic_wrap() {
-        let text = "This is a longer string that needs wrapping";
-        let result = wrap_string_lines(text, 0, 20);
-
-        // Should be wrapped into multiple lines
-        assert!(result.len() > 1, "String should be wrapped");
-
-        // First line should start at offset 0
-        assert_eq!(result[0].0, 0);
-
-        // Second line should start after first line
-        let first_line_len = result[0].1.len();
-        assert_eq!(result[1].0, first_line_len as u64);
-
-        // Verify all content is preserved
-        let rejoined: String = result.iter().map(|(_, text)| text.as_str()).collect();
-        assert_eq!(rejoined, text);
-    }
-
-    #[test]
-    fn test_wrap_string_lines_offset_tracking() {
-        let text = "AAAABBBBCCCCDDDD";
-        let result = wrap_string_lines(text, 100, 4);
-
-        // Should be split into 4 parts: AAAA, BBBB, CCCC, DDDD
-        assert_eq!(result.len(), 4);
-
-        // Check offsets
-        assert_eq!(result[0].0, 100); // AAAA at offset 100
-        assert_eq!(result[1].0, 104); // BBBB at offset 104 (100 + 4)
-        assert_eq!(result[2].0, 108); // CCCC at offset 108 (104 + 4)
-        assert_eq!(result[3].0, 112); // DDDD at offset 112 (108 + 4)
-
-        // Check content
-        assert_eq!(result[0].1, "AAAA");
-        assert_eq!(result[1].1, "BBBB");
-        assert_eq!(result[2].1, "CCCC");
-        assert_eq!(result[3].1, "DDDD");
-    }
-
-    #[test]
-    fn test_wrap_string_lines_utf8() {
-        // Each emoji is 4 bytes
-        let text = "🔥🔥🔥🔥";
-        let result = wrap_string_lines(text, 0, 2);
-
-        // Should wrap into 2 lines of 2 emojis each
-        assert_eq!(result.len(), 2);
-
-        // First line: 2 emojis = 8 bytes
-        assert_eq!(result[0].0, 0);
-        assert_eq!(result[0].1, "🔥🔥");
-
-        // Second line: starts at byte 8
-        assert_eq!(result[1].0, 8);
-        assert_eq!(result[1].1, "🔥🔥");
-    }
-
-    #[test]
-    fn test_wrap_string_lines_mixed_width_chars() {
-        // Mix of ASCII and multi-byte UTF-8
-        let text = "Hi🔥there";
-        let result = wrap_string_lines(text, 0, 4);
-
-        // Should wrap properly: "Hi🔥t" (2 + 4 + 1 = 7 bytes), "here" (4 bytes)
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].0, 0);
-        assert_eq!(result[0].1, "Hi🔥t");
-        assert_eq!(result[1].0, 7);
-        assert_eq!(result[1].1, "here");
-    }
-
-    #[test]
-    fn test_wrap_string_lines_empty() {
-        let text = "";
-        let result = wrap_string_lines(text, 42, 100);
-        assert_eq!(result.len(), 0);
-    }
-
-    #[test]
-    fn test_wrap_string_lines_zero_width() {
-        let text = "Some text";
-        let result = wrap_string_lines(text, 0, 0);
-
-        // Zero width should return the whole string as-is
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].1, text);
-    }
-
-    #[test]
-    fn test_wrap_string_lines_preserves_content() {
-        let text = "abcdefghijklmnopqrstuvwxyz0123456789";
-        let result = wrap_string_lines(text, 0, 10);
-
-        // Reconstruct the string
-        let reconstructed: String = result.iter().map(|(_, s)| s.as_str()).collect();
-        assert_eq!(reconstructed, text, "Wrapping should preserve all content");
-    }
-
-    #[test]
-    fn test_wrap_string_lines_single_char_width() {
-        let text = "ABCDEF";
-        let result = wrap_string_lines(text, 0, 1);
-
-        // Should wrap into 6 lines, one char each
-        assert_eq!(result.len(), 6);
-        assert_eq!(result[0].1, "A");
-        assert_eq!(result[1].1, "B");
-        assert_eq!(result[2].1, "C");
-        assert_eq!(result[3].1, "D");
-        assert_eq!(result[4].1, "E");
-        assert_eq!(result[5].1, "F");
-
-        // Check offsets increment by 1 each time
-        for (i, item) in result.iter().enumerate().take(6) {
-            assert_eq!(item.0, i as u64);
-        }
-    }
-
-    #[test]
-    fn test_terminal_safe_escapes_control_sequences() {
-        // OSC 52 (clipboard write), CSI conceal, CR overwrite, and a
-        // right-to-left override: all shown, none acted on.
-        assert_eq!(
-            terminal_safe("a\x1b]52;c;Zm9v\x07b"),
-            "a\\u{1b}]52;c;Zm9v\\u{7}b"
-        );
-        assert_eq!(terminal_safe("x\x1b[8my"), "x\\u{1b}[8my");
-        assert_eq!(terminal_safe("good\rbad"), "good\\rbad");
-        assert_eq!(terminal_safe("one\ntwo"), "one\\ntwo");
-        assert_eq!(terminal_safe("abc\u{202e}gpj.exe"), "abc\\u{202e}gpj.exe");
-        assert_eq!(terminal_safe("c1\u{9b}31m"), "c1\\u{9b}31m");
-    }
-
-    #[test]
-    fn colorize_xml_line_colors_key_and_string() {
-        assert_eq!(
-            colorize_xml_line("<key>a</key><string>b</string>"),
-            format!("<key>{RED}a{RESET}</key><string>{CYAN}b{RESET}</string>")
-        );
-    }
-
-    #[test]
-    fn colorize_xml_line_tolerates_misordered_tags() {
-        // Closing tags before opening ones come from hostile signatures.
-        for line in ["</key><key>", "</string><string>", "<key>", "</string>"] {
-            assert_eq!(colorize_xml_line(line), line);
-        }
-        assert_eq!(
-            colorize_xml_line("</key><key>x</key>"),
-            format!("</key><key>{RED}x{RESET}</key>")
-        );
-    }
-
-    #[test]
-    fn test_terminal_safe_borrows_clean_text() {
-        for text in ["plain", "tab\tseparated", "ünïcødé 🔥", ""] {
-            assert!(matches!(terminal_safe(text), Cow::Borrowed(t) if t == text));
-        }
-    }
-
-    #[test]
-    fn test_wrap_string_lines_long_input_is_linear() {
-        // Quadratic wrapping took minutes on a string this size.
-        let text = "a".repeat(4 * 1024 * 1024);
-        let result = wrap_string_lines(&text, 0, 80);
-        assert_eq!(result.len(), text.len().div_ceil(80));
-        assert_eq!(result.last().map(|(o, _)| *o), Some(4 * 1024 * 1024 - 64));
-    }
 }

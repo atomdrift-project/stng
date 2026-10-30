@@ -131,7 +131,7 @@ pub(crate) fn extract_custom_xor_strings(
     )
 }
 
-/// Extract XOR strings with optional radare2 boundary hints.
+/// Extract XOR strings, aimed first at the caller's string-extent hints.
 /// Hints are tried first, and successful regions are excluded from file-wide scanning.
 pub(crate) fn extract_custom_xor_strings_with_hints(
     data: &[u8],
@@ -558,8 +558,8 @@ fn key_preview(key: &[u8]) -> String {
     }
 }
 
-/// Try XOR decoding at radare2 string boundary hints.
-/// These locations are where r2 found null-terminated strings, making them
+/// Try XOR decoding at the caller's string-extent hints: where a
+/// disassembler found null-terminated strings, making them
 /// likely candidates for properly-terminated XOR'd strings.
 fn extract_xor_strings_from_hints(
     data: &[u8],

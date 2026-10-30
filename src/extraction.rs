@@ -285,7 +285,6 @@ fn find_string_structures_generic(
 /// * `blob` - Raw bytes of the data blob containing string data
 /// * `blob_addr` - Virtual address of the blob
 /// * `structs` - String structures pointing into the blob
-/// * `section_name` - Optional section name for metadata
 /// * `classify_fn` - Function to classify each extracted string
 ///
 /// # Type Parameters

@@ -64,7 +64,8 @@ fn test_string_wrapping_long_lines() {
     let long_line = "A".repeat(200);
     let test_file = crate::common::temp_file("wrapping.txt", &long_line);
 
-    let output = run_stng(&[test_file]);
+    // A run of one letter is noise to the garbage filter; this tests layout.
+    let output = run_stng(&["--unfiltered", test_file]);
 
     // Count how many times we see offset 0 (wrapped lines)
     let offset_0_count = output
@@ -93,7 +94,8 @@ fn test_offset_calculation_multiline() {
     let content = "AAAA\nBBBBBBBB\nCCCC\n";
     let test_file = crate::common::temp_file("offsets.txt", content);
 
-    let output = run_stng(&[test_file]);
+    // Runs of one letter are noise to the garbage filter; this tests offsets.
+    let output = run_stng(&["--unfiltered", test_file]);
 
     // Parse all offsets
     let offsets: Vec<u64> = output
@@ -236,11 +238,11 @@ fn test_sorting_preserves_all_strings() {
 }
 
 #[test]
-fn test_flat_mode_sorting() {
+fn test_listing_is_sorted_by_offset() {
     let content = "First\nSecond\nThird\n";
     let test_file = crate::common::temp_file("flat.txt", content);
 
-    let output = run_stng(&["--flat", test_file]);
+    let output = run_stng(&["--unfiltered", test_file]);
 
     // Extract offsets
     let offsets: Vec<u64> = output
