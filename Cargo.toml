@@ -35,7 +35,7 @@ aho-corasick = "1.1"
 # The `stng` command only; see the `cli` feature.
 clap = { version = "4.6", features = ["derive"], optional = true }
 anyhow = { version = "1.0", optional = true }
-dirs = { version = "6.0", optional = true }
+dirs = { version = "7.0", optional = true }
 # Rizin cache keys. No `asm` feature: its assembly does not build with MSVC.
 sha2 = { version = "0.11", optional = true }
 terminal_size = { version = "0.4", optional = true }
@@ -45,10 +45,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Base64 decoding
-base64 = "0.22"
+base64 = "0.23"
 
 # DES is used only by the signature-gated legacy ColdFusion template decoder.
-des = "0.8"
+des = "0.9"
 
 # Hostname canonicalization and public-suffix validation. `psl` embeds a static
 # snapshot, so analysis never performs network I/O and remains reproducible.
@@ -228,7 +228,7 @@ manual_let_else = "warn"                 # match/if-let that diverges → let-el
 match_same_arms = "warn"                 # merge identical match arms
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 sha2 = "0.11"
 
 [[bench]]
