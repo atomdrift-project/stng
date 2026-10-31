@@ -250,3 +250,7 @@ harness = false
 [patch.crates-io]
 tree-sitter = { git = "https://github.com/tstromberg/tree-sitter" }
 tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter" }
+
+[profile.dev]
+# `false` still permits local Thin LTO in optimized crates.
+lto = "off"
