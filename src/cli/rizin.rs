@@ -23,14 +23,6 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 /// Output past this is dropped with the pass. `izzj` on a 10 MB file is tens
 /// of MB; a binary built to inflate it should not take the host's memory.
 const MAX_TOOL_OUTPUT: u64 = 512 * 1024 * 1024;
-/// Remove the cached rizin output for `data`.
-pub(crate) fn flush_cache(data: &[u8]) -> io::Result<()> {
-    match tool_path() {
-        Some(tool) => cache::Entry::open(data, tool)?.clear(),
-        None => Ok(()),
-    }
-}
-
 fn tool_path() -> Option<&'static Path> {
     TOOL.get_or_init(|| resolve_tool("rizin").or_else(|| resolve_tool("r2")))
         .as_deref()
@@ -216,14 +208,7 @@ struct Session<'a> {
 type Output = Arc<OnceLock<Option<Arc<String>>>>;
 
 impl<'a> Session<'a> {
-    fn new(tool: &'a Path, data: &'a [u8], use_cache: bool) -> io::Result<Self> {
-        let cache = if use_cache {
-            cache::Entry::open(data, tool)
-                .inspect_err(|e| tracing::debug!(error = %e, "rizin cache unavailable"))
-                .ok()
-        } else {
-            None
-        };
+    fn new(tool: &'a Path, data: &'a [u8], cache: Option<cache::Entry>) -> io::Result<Self> {
         Ok(Self {
             tool,
             data,
@@ -726,12 +711,14 @@ pub(crate) fn attach(
     data: &[u8],
     xor: bool,
     xorscan: bool,
-    use_cache: bool,
 ) -> ExtractOptions {
     let Some(tool) = tool_path() else {
         return opts;
     };
-    let session = match Session::new(tool, data, use_cache) {
+    let cache = cache::Entry::open(data, tool)
+        .inspect_err(|e| tracing::debug!(error = %e, "rizin cache unavailable"))
+        .ok();
+    let session = match Session::new(tool, data, cache) {
         Ok(session) => session,
         Err(e) => {
             tracing::warn!(error = %e, "rizin skipped: could not snapshot the input");

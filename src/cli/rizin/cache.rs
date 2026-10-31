@@ -68,14 +68,6 @@ impl Entry {
         write_atomic(&self.file(command), output.as_bytes())
     }
 
-    /// Remove every cached output for this input.
-    pub(crate) fn clear(&self) -> io::Result<()> {
-        match fs::remove_dir_all(&self.dir) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            result => result,
-        }
-    }
-
     fn file(&self, command: &str) -> PathBuf {
         self.dir.join(format!("{}.json", file_name(command)))
     }

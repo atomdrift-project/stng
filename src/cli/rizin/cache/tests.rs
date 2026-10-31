@@ -62,20 +62,6 @@ fn other_content_or_tool_misses() {
 }
 
 #[test]
-fn clear_removes_only_that_input() {
-    let root = Root::new("clear");
-    let (a, b) = (root.entry(b"a"), root.entry(b"b"));
-    a.set("isj", "[]").unwrap();
-    a.set("izzj", "[]").unwrap();
-    b.set("isj", "[]").unwrap();
-    a.clear().unwrap();
-    assert_eq!(a.get("isj"), None);
-    assert_eq!(a.get("izzj"), None);
-    assert!(b.get("isj").is_some());
-    a.clear().unwrap();
-}
-
-#[test]
 #[cfg(unix)]
 fn entries_are_private() {
     use std::os::unix::fs::PermissionsExt;

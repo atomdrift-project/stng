@@ -39,8 +39,11 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
   the text-only pipeline, the second deduplication table, and the display-time
   re-decoding of base64, hex, URL and Unicode escapes are gone, so
   `--simple`, `-i`, `--xor` and `--xor-lcg` behave the same on text.
-  `--flat` and `--r2` are removed; `--no-r2` is now `--no-rizin` (the old
-  name still works). `--xor` reads hex only after `0x` or `hex:`; anything
+  `--flat`, `--r2`, `--no-r2`, `--no-cache`, `--flush-cache` and
+  `--xor-min-length` are removed: rizin is always cached (its entries are
+  keyed on the input, the tool and stng, so they are never stale) and
+  XOR-decoded strings keep the library's minimum length.
+  `--xor` reads hex only after `0x` or `hex:`; anything
   else is the literal key text. `--json` on a directory prints one
   `{"path", "strings"}` object per line instead of concatenated arrays.
 

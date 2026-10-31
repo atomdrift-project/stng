@@ -29,13 +29,7 @@ fn cli_strings(source: &str) -> Vec<ExtractedString> {
     ));
     fs::write(&path, source).unwrap();
     let output = crate::stng()
-        .args([
-            "--json",
-            "--unfiltered",
-            "--no-xor",
-            "--no-rizin",
-            "--no-cache",
-        ])
+        .args(["--json", "--unfiltered", "--no-xor", "--no-rizin"])
         .arg(&path)
         .output();
     fs::remove_file(&path).unwrap();

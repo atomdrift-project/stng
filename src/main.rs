@@ -80,7 +80,7 @@ struct Cli {
     unfiltered: bool,
 
     /// Don't run rizin, even if installed
-    #[arg(long, alias = "no-r2")]
+    #[arg(long)]
     no_rizin: bool,
 
     /// Disable colored output
@@ -110,21 +110,9 @@ struct Cli {
     )]
     xor_lcg: Option<LcgRange>,
 
-    /// Minimum length for XOR-decoded strings
-    #[arg(long, default_value = "10")]
-    xor_min_length: usize,
-
     /// Also decode with XOR keys rizin finds loaded by code (slow)
     #[arg(long)]
     xorscan: bool,
-
-    /// Disable rizin result caching
-    #[arg(long)]
-    no_cache: bool,
-
-    /// Clear cached rizin results for this file before analysis
-    #[arg(long)]
-    flush_cache: bool,
 
     /// Enable debug logging
     #[arg(long)]
@@ -192,11 +180,6 @@ fn main() -> Result<()> {
 /// one-object-per-line JSON form.
 fn analyze(cli: &Cli, path: &Path, style: &Style, in_directory: bool) -> Result<()> {
     let data = std::fs::read(path)?;
-    if cli.flush_cache
-        && let Err(e) = cli::rizin::flush_cache(&data)
-    {
-        eprintln!("warning: failed to flush the rizin cache: {e}");
-    }
     if cli.detect {
         println!("{}", stng::detect_language(&data));
         return Ok(());
@@ -212,11 +195,10 @@ fn analyze(cli: &Cli, path: &Path, style: &Style, in_directory: bool) -> Result<
     };
     let mut opts = stng::ExtractOptions::new(cli.min_length)
         .with_garbage_filter(!cli.unfiltered)
-        .with_xor_min_length(cli.xor_min_length)
         .with_xor(mode);
     if !cli.no_rizin {
         let xor = *opts.xor() != XorMode::Off;
-        opts = cli::rizin::attach(opts, &data, xor, xorscan, !cli.no_cache);
+        opts = cli::rizin::attach(opts, &data, xor, xorscan);
     }
     if !cli.no_xor
         && !cli.json

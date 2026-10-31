@@ -104,7 +104,7 @@ fn fake_tool(json: &str) -> TempInput {
 fn large_inputs_get_symbols_but_no_string_scan() {
     let tool = fake_tool(r#"[{"paddr":0,"string":"hello world","length":11,"name":"main_func"}]"#);
     let small = vec![0u8; 64];
-    let session = Session::new(tool.path(), &small, false).unwrap();
+    let session = Session::new(tool.path(), &small, None).unwrap();
     let methods: Vec<_> = extract_strings(&session, 4)
         .iter()
         .map(|s| s.method)
@@ -116,7 +116,7 @@ fn large_inputs_get_symbols_but_no_string_scan() {
     assert_eq!(extract_string_boundaries(&session).len(), 1);
 
     let large = vec![0u8; MAX_ANALYSIS_SIZE + 1];
-    let session = Session::new(tool.path(), &large, false).unwrap();
+    let session = Session::new(tool.path(), &large, None).unwrap();
     let methods: Vec<_> = extract_strings(&session, 4)
         .iter()
         .map(|s| s.method)
@@ -137,7 +137,7 @@ fn a_command_runs_once_per_session() {
     );
     let tool = TempInput::write(script.as_bytes()).unwrap();
     std::fs::set_permissions(tool.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let session = Session::new(tool.path(), b"data", false).unwrap();
+    let session = Session::new(tool.path(), b"data", None).unwrap();
     assert_eq!(
         session.run("izzj").as_deref().map(String::as_str),
         Some("[]\n")
@@ -151,7 +151,7 @@ fn a_command_runs_once_per_session() {
 
 #[test]
 fn a_missing_tool_yields_nothing() {
-    let session = Session::new(Path::new("/nonexistent/rizin"), b"data", false).unwrap();
+    let session = Session::new(Path::new("/nonexistent/rizin"), b"data", None).unwrap();
     assert!(extract_strings(&session, 4).is_empty());
     assert!(extract_string_boundaries(&session).is_empty());
     assert!(xor_key_offsets(&session).is_empty());

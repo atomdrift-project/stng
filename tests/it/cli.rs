@@ -205,9 +205,16 @@ fn test_cli_unfiltered() {
 }
 
 #[test]
-fn test_cli_removed_flags_are_rejected_and_no_r2_is_an_alias() {
+fn test_cli_removed_flags_are_rejected() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
-    for removed in ["--flat", "--r2"] {
+    for removed in [
+        "--flat",
+        "--r2",
+        "--no-r2",
+        "--no-cache",
+        "--flush-cache",
+        "--xor-min-length",
+    ] {
         let output = stng_cmd()
             .args([removed, "--no-rizin"])
             .arg(binary_path)
@@ -216,7 +223,7 @@ fn test_cli_removed_flags_are_rejected_and_no_r2_is_an_alias() {
         assert!(!output.status.success(), "{removed} should be rejected");
     }
     let output = stng_cmd()
-        .args(["--no-r2", "--json"])
+        .args(["--no-rizin", "--json"])
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -490,25 +497,6 @@ fn test_cli_debug_flag_does_not_crash() {
     std::fs::remove_file(&temp_file).ok();
 }
 
-#[test]
-fn test_cli_xor_min_length_respected() {
-    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
-
-    let output = stng_cmd()
-        .arg("--json")
-        .arg("--no-rizin")
-        .arg("--xor-min-length")
-        .arg("200")
-        .arg(binary_path)
-        .output()
-        .expect("Failed to execute stng");
-
-    assert!(
-        output.status.success(),
-        "--xor-min-length should not cause a failure"
-    );
-}
-
 /// rizin's connect()-site scan recovers Kimwolf's C2 sockaddr, which stng's
 /// own passes do not; the CLI runs rizin and hands the result to extraction.
 #[test]
@@ -517,7 +505,7 @@ fn rizin_recovers_kimwolf_connect_address() {
         return;
     }
     let output = stng_cmd()
-        .args(["--json", "--no-cache"])
+        .arg("--json")
         .arg(crate::common::path("testdata/malware/kimwolf_installer"))
         .output()
         .expect("Failed to execute stng");
