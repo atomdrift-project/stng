@@ -66,7 +66,7 @@ tree-sitter-lua = "0.5"
 data-encoding = "2.11"
 
 # x86-64 instruction decoding (for garble emulation)
-iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "intel"] }
+iced-x86 = { version = "1.22", default-features = false, features = ["std", "decoder", "intel"] }
 
 # Logging (modern structured logging with tracing)
 tracing = "0.1"
