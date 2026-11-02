@@ -77,6 +77,33 @@ pub fn detect_script_language(data: &[u8]) -> Option<ScriptLanguage> {
         return Some(ScriptLanguage::Lua);
     }
 
+    // A Lua declaration may start with an arbitrarily large string table.
+    // Requiring a function/end inside the 8 KiB probe then hides the language
+    // and prevents its bounded AST-based decoder from even being attempted.
+    // A local identifier initialized with a table is already Lua syntax;
+    // recognizing it does not assert obfuscation or execute the initializer.
+    let mut lua_head = text.trim_start();
+    // Ordinary header comments must not change whether a leading table is
+    // recognized. Keep this prefix probe bounded by the existing 8 KiB slice.
+    while lua_head.starts_with("--") && !lua_head.starts_with("--[") {
+        let Some((_, rest)) = lua_head.split_once('\n') else {
+            break;
+        };
+        lua_head = rest.trim_start();
+    }
+    if lua_head.strip_prefix("local").is_some_and(|tail| {
+        tail.starts_with(char::is_whitespace)
+            && tail.split_once('=').is_some_and(|(name, rhs)| {
+                let name = name.trim();
+                !name.is_empty()
+                    && (name.as_bytes()[0].is_ascii_alphabetic() || name.as_bytes()[0] == b'_')
+                    && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    && rhs.trim_start().starts_with('{')
+            })
+    }) {
+        return Some(ScriptLanguage::Lua);
+    }
+
     // PowerShell has distinctive markers
     if is_powershell(text) {
         return Some(ScriptLanguage::PowerShell);
@@ -388,6 +415,42 @@ mod tests {
         assert_ne!(
             detect_script_language(lottie.as_bytes()),
             Some(ScriptLanguage::Python)
+        );
+    }
+}
+
+#[cfg(test)]
+mod lua_leading_table_boundary_tests {
+    use super::*;
+    #[test]
+    fn lua_table_before_language_probe_boundary() {
+        let source = format!(
+            "local constants = {{\"{}\"}} local function later() return constants end",
+            "x".repeat(9000)
+        );
+        assert_eq!(
+            detect_script_language(source.as_bytes()),
+            Some(ScriptLanguage::Lua)
+        );
+        assert_eq!(
+            detect_script_language(b"local \t renamed_2 = {answer=42} return renamed_2"),
+            Some(ScriptLanguage::Lua)
+        );
+        assert_eq!(
+            detect_script_language(b"-- header\nlocal _renamed = {answer=42} return _renamed"),
+            Some(ScriptLanguage::Lua)
+        );
+        assert_ne!(
+            detect_script_language(b"local 9invalid = {answer=42}"),
+            Some(ScriptLanguage::Lua)
+        );
+        assert_ne!(
+            detect_script_language(b"const constants={answer:42};"),
+            Some(ScriptLanguage::Lua)
+        );
+        assert_ne!(
+            detect_script_language(b"local words merely discuss = { data"),
+            Some(ScriptLanguage::Lua)
         );
     }
 }
