@@ -782,3 +782,21 @@ fn test_extract_embedded_base64_locates_the_token() {
         vec![(12345 + token_pos, token.len() as u64)]
     );
 }
+
+#[test]
+fn encoded_document_with_embedded_literal_url_is_still_decoded() {
+    let input = ExtractedString {
+        value: "document.write(unescape('%3Cform%20action%3D%22https://example.test/post%22%3E%3Cinput%20type%3D%22password%22%3E'))".to_string(),
+        method: StringMethod::RawScan,
+        kind: Some(StringKind::UrlEncoded),
+        ..Default::default()
+    };
+    let decoded = decode_url_string(&input).unwrap();
+    assert!(
+        decoded
+            .value
+            .contains("<form action=\"https://example.test/post\">")
+    );
+    assert!(decoded.value.contains("<input type=\"password\">"));
+    assert_eq!(decoded.method, StringMethod::UrlDecode);
+}

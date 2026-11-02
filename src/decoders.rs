@@ -240,7 +240,14 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
     // scheme and only escapes reserved characters; decode it only when an
     // *unreserved* char is percent-encoded (`%75` = `u`), the signature of
     // deliberate obfuscation that legitimate URL encoders never produce.
-    if s.value.contains("://") && !encodes_unreserved_char(&s.value) {
+    // Embedded URLs do not make an entire encoded HTML/script buffer a URL.
+    // Only suppress when the percent escapes begin in the URL portion. This
+    // also preserves source-context URL references such as `x = "https://…"`.
+    let url_only_escapes = s
+        .value
+        .find("://")
+        .is_some_and(|scheme_end| !s.value[..scheme_end].contains('%'));
+    if url_only_escapes && !encodes_unreserved_char(&s.value) {
         return None;
     }
 
