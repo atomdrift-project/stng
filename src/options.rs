@@ -1,6 +1,6 @@
 //! What to extract and how: [`ExtractOptions`] and [`FormatHint`].
 
-use crate::{ExtractedString, StringBoundary, xor};
+use crate::xor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -29,28 +29,10 @@ pub enum XorMode {
     /// Skipped for Go binaries and platform-signed binaries, where XOR
     /// obfuscation does not occur in practice.
     Auto,
-    /// Everything `Auto` does, without those skips, plus decoding at the key
-    /// locations in [`ExternalHints::xor_key_offsets`].
+    /// Everything `Auto` does, without those skips.
     Scan,
     /// Decode with this key only (single- or multi-byte).
     Key(Vec<u8>),
-}
-
-/// What an external disassembler (rizin) found, for stng to merge or aim at.
-/// stng runs no subprocesses; the `stng` command runs rizin and passes its
-/// results through these.
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct ExternalHints {
-    /// Strings the disassembler found, merged into the output.
-    pub strings: Vec<ExtractedString>,
-    /// String extents, used to aim XOR decoding.
-    pub boundaries: Vec<StringBoundary>,
-    /// `sockaddr_in` addresses recovered from `connect()` call sites.
-    pub connect_addrs: Vec<ExtractedString>,
-    /// File offsets of code that loads an XOR key; with [`XorMode::Scan`],
-    /// each is tried as a 16-, 32- and 8-byte repeating key.
-    pub xor_key_offsets: Vec<u64>,
 }
 
 /// How to extract strings. Start from [`ExtractOptions::new`] and adjust with
@@ -64,7 +46,6 @@ pub struct ExtractOptions {
     pub(crate) caller_provides_symbols: bool,
     pub(crate) cancel: Option<Arc<AtomicBool>>,
     pub(crate) format_hint: FormatHint,
-    pub(crate) hints: ExternalHints,
 }
 
 impl Default for ExtractOptions {
@@ -86,7 +67,6 @@ impl ExtractOptions {
             caller_provides_symbols: false,
             cancel: None,
             format_hint: FormatHint::Auto,
-            hints: ExternalHints::default(),
         }
     }
 
@@ -135,13 +115,6 @@ impl ExtractOptions {
     #[must_use]
     pub fn with_format_hint(mut self, hint: FormatHint) -> Self {
         self.format_hint = hint;
-        self
-    }
-
-    /// Supply what an external disassembler found. See [`ExternalHints`].
-    #[must_use]
-    pub fn with_hints(mut self, hints: ExternalHints) -> Self {
-        self.hints = hints;
         self
     }
 

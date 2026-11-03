@@ -330,22 +330,24 @@ where
                 return None;
             }
 
-            // Validate UTF-8
-            if let Ok(string) = std::str::from_utf8(bytes) {
-                let trimmed = string.trim();
-                if trimmed.is_empty() {
-                    return None;
-                }
-                Some(ExtractedString {
-                    value: trimmed.to_string(),
-                    data_offset: s.ptr,
-                    method: StringMethod::Structure,
-                    kind: classify_fn(trimmed),
-                    ..Default::default()
-                })
-            } else {
-                None
+            // A structure spanning a NUL is a byte slice of C strings (Go's
+            // file table is one), not a string; the raw scan and the
+            // pclntab report its pieces.
+            if bytes.contains(&0) {
+                return None;
             }
+            let string = std::str::from_utf8(bytes).ok()?;
+            let trimmed = string.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            Some(ExtractedString {
+                value: trimmed.to_string(),
+                data_offset: s.ptr,
+                method: StringMethod::Structure,
+                kind: classify_fn(trimmed),
+                ..Default::default()
+            })
         })
         .collect()
 }

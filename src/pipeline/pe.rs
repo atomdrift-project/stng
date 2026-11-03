@@ -108,7 +108,6 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     let split = crate::par::splits(data.len());
     let [
         us_strings,
-        hint_strings,
         wide_strings,
         net_strings,
         raw_strings,
@@ -117,7 +116,6 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         split,
         [
             &|| dotnet::extract_us_heap_strings(pe, data, min_length),
-            &|| opts.hints.strings.clone(),
             // UTF-16 literals are NUL-terminated, never packed like `&str`
             // data, so the wide scan covers Rust's `.rdata` too. Go's skipped
             // sections hold pclntab tables that only decode to UTF-16 noise.
@@ -137,7 +135,6 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     );
 
     strings.extend(us_strings);
-    strings.extend(hint_strings);
     strings.extend(wide_strings);
     strings.extend(net_strings);
     strings.extend(raw_strings);

@@ -25,8 +25,6 @@ JEMALLOC_SYS_WITH_MALLOC_CONF=narenas:4,dirty_decay_ms:0,muzzy_decay_ms:0 \
   cargo install --locked --git https://github.com/atomdrift-project/stng
 ```
 
-Optional: [Rizin](https://rizin.re/) or [radare2](https://rada.re/n/) finds more strings and enables `--xorscan`; `--no-rizin` turns it off.
-
 ## Use
 
 ```bash
@@ -34,7 +32,7 @@ stng malware.bin              # strings by section, XOR detection on
 stng -i malware.bin           # skip raw-scan noise
 stng --json malware.bin       # machine-readable output
 stng --xor 0xAB malware.bin   # decode with a known key: 0x/hex: for hex, else text
-stng --xorscan malware.bin    # slow multi-byte XOR search
+stng --xorscan malware.bin    # XOR-scan Go and platform-signed binaries too
 stng --json samples/          # one {"path", "strings"} JSON object per line
 ```
 

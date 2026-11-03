@@ -1,9 +1,6 @@
 use std::fs;
 use stng::{ExtractOptions, extract_strings_with_options};
 
-// The C2 address comes from rizin's connect() scan, which the CLI runs:
-// see `rizin_recovers_kimwolf_connect_address` in cli.rs.
-
 #[test]
 fn test_kimwolf_installer_string_deduplication() {
     // Test that overlapping strings at same offset only keep the longest

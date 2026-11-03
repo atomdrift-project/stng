@@ -35,7 +35,6 @@ aho-corasick = "1.1"
 # The `stng` command only; see the `cli` feature.
 clap = { version = "4.6", features = ["derive"], optional = true }
 anyhow = { version = "1.0", optional = true }
-dirs = { version = "6.0", optional = true }
 # Rizin cache keys. No `asm` feature: its assembly does not build with MSVC.
 sha2 = { version = "0.11", optional = true }
 terminal_size = { version = "0.4", optional = true }
@@ -85,12 +84,11 @@ stng-process = { version = "0.1", path = "crates/stng-process" }
 [features]
 default = ["cli"]
 # The `stng` command and what only it needs: argument parsing, logging setup,
-# the terminal, jemalloc, and the rizin cache. Library users turn default
+# the terminal and jemalloc. Library users turn default
 # features off and build none of it.
 cli = [
     "dep:clap",
     "dep:anyhow",
-    "dep:dirs",
     "dep:sha2",
     "dep:terminal_size",
     "dep:tracing-subscriber",

@@ -3,7 +3,7 @@
 //! PE import names live behind RVA tables in the import directory, not as
 //! inline literals, so a raw byte scan never surfaces them; stng resolves them
 //! through goblin's parsed import directory. API names like `CreateProcessW`
-//! must be present and typed without rizin, and the `caller_provides_symbols`
+//! must be present and typed, and the `caller_provides_symbols`
 //! hint must suppress the structured pass for a caller that parses imports
 //! itself.
 

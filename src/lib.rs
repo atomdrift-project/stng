@@ -94,7 +94,7 @@ pub use ioc::{
 };
 pub use overlay::detect_elf_overlay;
 pub use types::{
-    Arch, ExtractedString, OverlayInfo, Severity, StringBoundary, StringContext, StringFragment,
+    Arch, ExtractedString, OverlayInfo, Severity, StringContext, StringFragment,
     StringKind, StringMethod,
 };
 pub use xor::lcg::{Lcg, decode_lcg_xor, decode_xor_fat_macho, extract_macho_lcg_xor};
@@ -113,7 +113,7 @@ pub use validation::{is_garbage, is_garbage_with_context};
 /// API: a goblin release that breaks its API is a stng major release.
 pub use goblin;
 use goblin::Object;
-pub use options::{ExternalHints, ExtractOptions, FormatHint, XorMode};
+pub use options::{ExtractOptions, FormatHint, XorMode};
 pub use pipeline::decode::decode_encoded_strings;
 
 // Import internal modules for use in this file
@@ -255,7 +255,6 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
     } else {
         // Unknown format: the caller's strings, if any, plus a raw scan.
         let mut strings = Vec::new();
-        strings.extend(opts.hints.strings.iter().cloned());
 
         // Check if this looks like a PE (MZ header) even if goblin failed to parse
         let is_pe = data.len() >= 2 && data[0] == 0x4D && data[1] == 0x5A;

@@ -66,9 +66,7 @@ pub(crate) fn extract(
 fn scan_other(data: &[u8], opts: &ExtractOptions) -> Scan {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
-    // Unknown format - use r2 if available, plus raw scan
-    strings.extend(opts.hints.strings.iter().cloned());
-    // Always do raw scan for unknown formats (r2 strings complement, not replace)
+    // Unknown format: raw scan.
     if !data.is_empty() {
         strings.extend(extract_raw_strings(data, min_length, &[], &[]));
     }
@@ -84,8 +82,7 @@ fn scan_other(data: &[u8], opts: &ExtractOptions) -> Scan {
 }
 
 /// The passes every format shares, over what its scan found: XOR decoding,
-/// rizin's connect() addresses, code-signature reclassification, the
-/// decoders, the garbage filter and offset deduplication.
+/// code-signature reclassification, the decoders, the garbage filter and offset deduplication.
 fn finish(
     object: &Object<'_>,
     data: &[u8],
@@ -106,9 +103,6 @@ fn finish(
     if !is_go_binary || opts.xor_explicit() {
         apply_xor_scan(&mut strings, data, opts, is_pe, &excluded_ranges);
     }
-
-    // IPs an external disassembler recovered from `connect()` call sites.
-    strings.extend(opts.hints.connect_addrs.iter().cloned());
 
     // Version numbers in PE version info look like IPs.
     if let Object::PE(pe) = object {

@@ -88,7 +88,6 @@ fn test_cli_json_output() {
 
     let output = stng_cmd()
         .arg("--json")
-        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -105,7 +104,7 @@ fn test_cli_json_output() {
 fn test_cli_decodes_vbscript_encoder_in_binary_classified_asp() {
     let sample = crate::common::path("testdata/script/vbscript-encoded-malformed-asp.asp");
     let output = stng_cmd()
-        .args(["--json", "--no-rizin", "--no-xor"])
+        .args(["--json", "--no-xor"])
         .arg(sample)
         .output()
         .expect("Failed to execute stng");
@@ -122,7 +121,6 @@ fn test_cli_simple_output() {
 
     let output = stng_cmd()
         .arg("--simple")
-        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -141,7 +139,6 @@ fn test_cli_min_length() {
     // Run with min_length 4 (default)
     let output_default = stng_cmd()
         .arg("--json")
-        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -151,7 +148,6 @@ fn test_cli_min_length() {
         .arg("-m")
         .arg("20")
         .arg("--json")
-        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -178,7 +174,6 @@ fn test_cli_unfiltered() {
     // Run without --unfiltered
     let output1 = stng_cmd()
         .arg("--json")
-        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -186,7 +181,6 @@ fn test_cli_unfiltered() {
     // Run with --unfiltered
     let output2 = stng_cmd()
         .arg("--json")
-        .arg("--no-rizin")
         .arg("--unfiltered")
         .arg(binary_path)
         .output()
@@ -216,14 +210,14 @@ fn test_cli_removed_flags_are_rejected() {
         "--xor-min-length",
     ] {
         let output = stng_cmd()
-            .args([removed, "--no-rizin"])
+            .arg(removed)
             .arg(binary_path)
             .output()
             .expect("Failed to execute stng");
         assert!(!output.status.success(), "{removed} should be rejected");
     }
     let output = stng_cmd()
-        .args(["--no-rizin", "--json"])
+        .arg("--json")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -236,7 +230,6 @@ fn test_cli_no_r2() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     let output = stng_cmd()
-        .arg("--no-rizin")
         .arg("--json")
         .arg(binary_path)
         .output()
@@ -324,7 +317,6 @@ fn test_cli_base64_decoding() {
 
     let output = stng_cmd()
         .arg("--no-color")
-        .arg("--no-rizin")
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -360,7 +352,6 @@ fn test_cli_trailing_newlines_trimmed() {
 
     let output = stng_cmd()
         .arg("--no-color")
-        .arg("--no-rizin")
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -406,7 +397,6 @@ fn test_cli_simple_mode_trims_newlines() {
 
     let output = stng_cmd()
         .arg("--simple")
-        .arg("--no-rizin")
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -437,7 +427,6 @@ fn test_cli_interesting_flag() {
     let output = stng_cmd()
         .arg("--interesting")
         .arg("--json")
-        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -460,7 +449,6 @@ fn test_cli_no_xor_flag() {
     let output = stng_cmd()
         .arg("--no-xor")
         .arg("--json")
-        .arg("--no-rizin")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
@@ -484,7 +472,6 @@ fn test_cli_debug_flag_does_not_crash() {
 
     let output = stng_cmd()
         .arg("--debug")
-        .arg("--no-rizin")
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -495,21 +482,4 @@ fn test_cli_debug_flag_does_not_crash() {
     );
 
     std::fs::remove_file(&temp_file).ok();
-}
-
-/// rizin's connect()-site scan recovers Kimwolf's C2 sockaddr, which stng's
-/// own passes do not; the CLI runs rizin and hands the result to extraction.
-#[test]
-fn rizin_recovers_kimwolf_connect_address() {
-    if !crate::rizin_installed() {
-        return;
-    }
-    let output = stng_cmd()
-        .arg("--json")
-        .arg(crate::common::path("testdata/malware/kimwolf_installer"))
-        .output()
-        .expect("Failed to execute stng");
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"45.139.197.87\""), "C2 address missing");
 }

@@ -16,11 +16,10 @@ pub(crate) struct StringStruct {
     pub len: u64,
 }
 
-/// Where a string lies in the file, as reported by an external disassembler
-/// (rizin `izzj`): used to aim XOR decoding at known string extents.
+/// Where a string lies in the file: the NUL-bounded extents around strings
+/// the raw scan found, used to aim XOR decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub struct StringBoundary {
+pub(crate) struct StringBoundary {
     /// File offset of the string's first byte.
     pub offset: u64,
     /// Length in bytes.
@@ -30,7 +29,7 @@ pub struct StringBoundary {
 impl StringBoundary {
     /// A string of `length` bytes at file offset `offset`.
     #[must_use]
-    pub fn new(offset: u64, length: usize) -> Self {
+    pub(crate) fn new(offset: u64, length: usize) -> Self {
         Self { offset, length }
     }
 }
@@ -362,10 +361,6 @@ pub enum StringMethod {
     RawScan,
     /// Found via heuristic pattern matching (Rust packed strings)
     Heuristic,
-    /// Found by rizin's string analysis (`izz`), passed in as a hint
-    RizinString,
-    /// Found by rizin's symbol analysis (`is`), passed in as a hint
-    RizinSymbol,
     /// Found via UTF-16LE wide string scan (Windows)
     WideString,
     /// Found via space-padded ASCII decoding (.NET metadata format)
@@ -435,9 +430,7 @@ impl StringMethod {
             | Self::CfmlDecode => 3,
 
             // High: rich metadata sources
-            Self::RizinString
-            | Self::RizinSymbol
-            | Self::WideString
+            Self::WideString
             | Self::SpacedAscii
             | Self::CodeSignature
             | Self::PclntabSymbol => 2,

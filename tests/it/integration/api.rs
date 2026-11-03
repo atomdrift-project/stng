@@ -11,26 +11,6 @@ fn test_extract_from_object_api() {
 }
 
 #[test]
-fn test_extract_from_object_with_preextracted_r2() {
-    let data = crate::common::bytes("testdata/macho/charge0x_installer_universal.macho");
-
-    // Create fake pre-extracted r2 strings
-    let fake_r2 = vec![ExtractedString::new(
-        "fake_r2_string".to_string(),
-        0x1000,
-        StringMethod::RizinString,
-    )];
-
-    let mut hints = stng::ExternalHints::default();
-    hints.strings = fake_r2;
-    let opts = ExtractOptions::new(4).with_hints(hints);
-    let strings = stng::extract_strings_with_options(&data, &opts);
-
-    // Should include our fake r2 string
-    assert!(strings.iter().any(|s| s.value == "fake_r2_string"));
-}
-
-#[test]
 fn test_goblin_reexport() {
     // Verify goblin is properly re-exported
     let data = crate::common::bytes("testdata/macho/charge0x_installer_universal.macho");
@@ -42,17 +22,7 @@ fn test_goblin_reexport() {
 
 #[test]
 fn test_extract_options_builder_chain() {
-    let fake_strings = vec![ExtractedString::new(
-        "test".to_string(),
-        0,
-        StringMethod::RizinString,
-    )];
-
-    let mut hints = stng::ExternalHints::default();
-    hints.strings = fake_strings;
-    let opts = ExtractOptions::new(8)
-        .with_hints(hints)
-        .with_xor(stng::XorMode::Auto);
+    let opts = ExtractOptions::new(8).with_xor(stng::XorMode::Auto);
 
     assert_eq!(opts.min_length(), 8);
     assert_eq!(*opts.xor(), stng::XorMode::Auto);

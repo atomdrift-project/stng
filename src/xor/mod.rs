@@ -24,7 +24,7 @@ mod validate;
 // Re-export the public API that lib.rs calls as `xor::*`
 pub(crate) use self::autodetect::auto_detect_xor_key;
 pub(crate) use self::classify::report_kinds;
-pub(crate) use self::expand::{extract_multikey_xor_strings, extract_xor_strings};
+pub(crate) use self::expand::extract_xor_strings;
 pub use self::repeating_pe::{RepeatingXorKey, recover_repeating_xor_pe};
 pub(crate) use self::scan::extract_incremental_xor_strings;
 pub(crate) use self::scan::{

@@ -598,6 +598,8 @@ fn extract_null_separated_strings(
         // packed-pool runs from masquerading as funcnametab entries.
         // `{ } ; :` appear in generic instantiations
         // (`pkg.F[go.shape.interface { Open([]uint8) error; Size() int }]`).
+        // filetab entries name Go or assembly sources.
+        let source = bytes.ends_with(b".go") || bytes.ends_with(b".s");
         let valid_body = bytes.iter().all(|&b| {
             b.is_ascii_alphanumeric()
                 || matches!(
@@ -617,11 +619,21 @@ fn extract_null_separated_strings(
                         | b';'
                         | b':'
                 )
+                // A filetab source path may also hold a module-cache
+                // version (`@v1.2.3`, `+incompatible`), `!`-escaped
+                // capitals and `~`.
+                || (source && matches!(b, b'@' | b'+' | b'!' | b'~'))
         });
-        let starts_ok = matches!(
-            bytes[0],
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'*' | b'[' | b'(' | b'.'
-        );
+        // A source path may be absolute, when the build did not trim it
+        // (`/opt/homebrew/.../escape.go`, `/root/go/...`).
+        let starts_ok = match bytes {
+            [b'/', next, ..] => source && (next.is_ascii_alphanumeric() || *next == b'_'),
+            [first, ..] => matches!(
+                first,
+                b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'*' | b'[' | b'(' | b'.'
+            ),
+            [] => false,
+        };
         if valid_body && starts_ok {
             Some((nul + 1, bytes))
         } else {

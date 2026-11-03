@@ -13,7 +13,7 @@ fn single_byte_keys_merge_hints_and_honor_exclusions() {
         }
     }
     let hint = ExtractedString {
-        value: "rizin-found".to_owned(),
+        value: "pre-decoded".to_owned(),
         data_offset: 500,
         method: StringMethod::XorDecode,
         ..Default::default()
@@ -32,7 +32,7 @@ fn single_byte_keys_merge_hints_and_honor_exclusions() {
         values.contains(&"http://evil.example.com/payload.sh"),
         "{values:?}"
     );
-    assert!(values.contains(&"rizin-found"), "hint dropped: {values:?}");
+    assert!(values.contains(&"pre-decoded"), "hint dropped: {values:?}");
     assert!(
         !values.iter().any(|v| v.contains("cmd.exe")),
         "excluded: {values:?}"

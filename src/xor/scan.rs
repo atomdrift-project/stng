@@ -131,13 +131,13 @@ pub(crate) fn extract_custom_xor_strings(
     )
 }
 
-/// Extract XOR strings, aimed first at the caller's string-extent hints.
-/// Hints are tried first, and successful regions are excluded from file-wide scanning.
+/// Extract XOR strings, aimed first at known string extents.
+/// Extents are tried first, and successful regions are excluded from file-wide scanning.
 pub(crate) fn extract_custom_xor_strings_with_hints(
     data: &[u8],
     key: &[u8],
     min_length: usize,
-    hints: &[crate::StringBoundary],
+    hints: &[crate::types::StringBoundary],
     apply_filters: bool,
     enable_early_termination: bool,
 ) -> Vec<ExtractedString> {
@@ -148,7 +148,7 @@ pub(crate) fn extract_custom_xor_strings_with_hints(
     // Track regions that have been successfully decoded with high quality
     let mut excluded_ranges: Vec<(usize, usize)> = Vec::new();
 
-    // Step 1: decode the disassembler's string extents first, if any.
+    // Step 1: decode the string extents first, if any.
     let mut hint_results = Vec::new();
     if !hints.is_empty() {
         hint_results = extract_xor_strings_from_hints(data, key, min_length, hints, apply_filters);
@@ -214,7 +214,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
         });
         kept.extend(candidates);
     }
-    // Strings decoded from rizin boundary hints fill whatever is left.
+    // Strings decoded at string extents fill whatever is left.
     kept.extend(hint_results);
     let mut kept = kept.strings;
     kept.sort_by_key(|s| s.data_offset);
@@ -565,7 +565,7 @@ fn extract_xor_strings_from_hints(
     data: &[u8],
     key: &[u8],
     min_length: usize,
-    hints: &[crate::StringBoundary],
+    hints: &[crate::types::StringBoundary],
     apply_filters: bool,
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();

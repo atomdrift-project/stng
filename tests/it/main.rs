@@ -9,22 +9,7 @@
 mod common;
 
 /// The `stng` command, with `HOME` and `XDG_CACHE_HOME` pointing into the
-/// target directory so a test run never touches the user's rizin cache.
-/// Whether rizin or radare2 is on PATH. Tests that need one return early
-/// without it, saying so on stderr.
-fn rizin_installed() -> bool {
-    let found = ["rizin", "r2"].iter().any(|tool| {
-        std::process::Command::new(tool)
-            .arg("-v")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    });
-    if !found {
-        eprintln!("skipped: rizin/r2 not on PATH");
-    }
-    found
-}
-
+/// target directory so a test run never touches the user's files.
 fn stng() -> std::process::Command {
     let home = common::scratch_dir().join("home");
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_stng"));

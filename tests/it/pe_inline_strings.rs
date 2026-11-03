@@ -5,11 +5,11 @@
 //! Several are referenced only by `LEA reg, [rip+disp]` + an immediate length
 //! in `.text`, not by `{ptr,len}` data structures. Before the PE path learned
 //! to follow those instruction patterns (as the ELF and Mach-O paths already
-//! did), such strings surfaced only as substrings buried inside rizin's merged
+//! did), such strings surfaced only as substrings buried inside merged
 //! megastrings — so the MBR-wipe command `dd if=/dev/zero of=%s bs=446 count=1`
 //! was never extracted as its own string nor classified as a shell command.
 //!
-//! This binary requires no radare2/rizin: the boundaries come entirely from
+//! The boundaries come entirely from
 //! stng's own instruction-pattern analysis.
 
 use stng::{ExtractOptions, StringKind, extract_strings_with_options};

@@ -44,8 +44,7 @@ fn test_string_method_debug() {
         StringMethod::InstructionPattern,
         StringMethod::RawScan,
         StringMethod::Heuristic,
-        StringMethod::RizinString,
-        StringMethod::RizinSymbol,
+        StringMethod::WideString,
     ];
     for method in methods {
         let s = format!("{method:?}");

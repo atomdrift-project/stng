@@ -9,15 +9,18 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
 - `ExtractOptions` fields are private; configure it with the builders.
   `with_xor(XorMode)` replaces `with_xor(Option<usize>)`, `with_xor_key` and
   `with_xor_key_offsets` (`XorMode::{Off, Auto, Scan, Key}`), and
-  `with_xor_min_length` sets the minimum length. `with_hints(ExternalHints)`
-  replaces `with_r2_strings`, `with_rizin_boundaries`,
-  `with_rizin_connect_addrs` and `with_xor_key_offsets`.
-- `ExtractedString`, `StringBoundary`, `StringContext`, `OverlayInfo` and
+  `with_xor_min_length` sets the minimum length. `with_r2_strings`,
+  `with_rizin_boundaries`, `with_rizin_connect_addrs` and
+  `with_xor_key_offsets` are gone with no replacement: stng no longer takes
+  results from rizin (see below).
+- `StringMethod::R2String` and `R2Symbol` are removed, and `StringBoundary`
+  is no longer public.
+- `ExtractedString`, `StringContext`, `OverlayInfo` and
   `Severity` are `#[non_exhaustive]`: build strings with
   `ExtractedString::new(value, offset, method)` and the `with_*` methods.
 - `StringKind` and `StringMethod` use Rust casing (`Ip`, `IpPort`, `Jwt`,
-  `ApiKey`, `Guid`, `CtfFlag`, `SqlInjection`, `XssPayload`, `LdapPath`,
-  `RizinString`, `RizinSymbol`) and serialize in snake_case (`"ip"`,
+  `ApiKey`, `Guid`, `CtfFlag`, `SqlInjection`, `XssPayload`, `LdapPath`)
+  and serialize in snake_case (`"ip"`,
   `"raw_scan"`).
 - `detect_language` returns a `Language`; `DeobfuscationResult::language` is
   a `ScriptLanguage`, which gains `Batch` and `VbScript`.
@@ -40,9 +43,8 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
   re-decoding of base64, hex, URL and Unicode escapes are gone, so
   `--simple`, `-i`, `--xor` and `--xor-lcg` behave the same on text.
   `--flat`, `--r2`, `--no-r2`, `--no-cache`, `--flush-cache` and
-  `--xor-min-length` are removed: rizin is always cached (its entries are
-  keyed on the input, the tool and stng, so they are never stale) and
-  XOR-decoded strings keep the library's minimum length.
+  `--xor-min-length` are removed, and XOR-decoded strings keep the library's
+  minimum length.
   `--xor` reads hex only after `0x` or `hex:`; anything
   else is the literal key text. `--json` on a directory prints one
   `{"path", "strings"}` object per line instead of concatenated arrays.
@@ -64,10 +66,23 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
 - A single text-file test; the CLI reports non-UTF-8 text through the library,
   with correct offsets.
 - Stack-XOR keys are reported at the store that wrote them.
-- The rizin cache is keyed on the analysed bytes, the rizin install and the
-  stng version, so an upgraded rizin or stng never reads stale output. Older
-  entries age out after 30 days. rizin failures, unparseable output and cache
-  errors are logged.
+- The `stng` command no longer runs rizin or radare2, and keeps no cache.
+  What rizin contributed is now native or gone:
+  - XOR decoding is aimed at the NUL-bounded extents around the strings the
+    raw scan found, in place of rizin's `izz` extents. This decodes more:
+    whole XOR-encoded strings rather than fragments, on Mirai, 3CX and
+    `brew_agent` samples among others.
+  - `--xorscan` now means XOR-scanning Go and platform-signed binaries too;
+    the rizin-located multi-byte key offsets it added found only noise.
+  - The `connect()` address scan is dropped; call-site arguments belong in a
+    disassembler, not a string extractor.
+  - `--no-rizin` is still accepted and does nothing.
+- Go binaries yield absolute build paths from the pclntab file table
+  (`/root/go/...`, module-cache `pkg@version` paths).
+- Language string structures that span a NUL are dropped rather than
+  reported with the NUL inside.
+- Go toolchain install paths (`Cellar/go/<version>`, `/usr/local/go`,
+  `go1.N` directories) are not reported as path IOCs.
 - Internal reorganisation: smaller files and functions, shared Go/Rust pointer
   pipelines, XOR passes under `xor/`. The public API is unchanged.
 

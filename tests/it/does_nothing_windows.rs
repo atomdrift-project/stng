@@ -107,13 +107,8 @@ fn test_no_email_false_positives_from_go_module_paths() {
 }
 
 #[test]
-fn rizin_no_hex_false_positive_from_runtime_poison_pattern() {
-    if !crate::rizin_installed() {
-        return;
-    }
-    // The hex false positive is produced by radare2's string extraction path,
-    // which the CLI wires up end-to-end. Invoke the built binary and scan its
-    // JSON output.
+fn no_hex_false_positive_from_runtime_poison_pattern() {
+    // Run the CLI end-to-end and scan its JSON output.
     let output = crate::stng()
         .arg("--json")
         .arg(*SAMPLE_PATH)

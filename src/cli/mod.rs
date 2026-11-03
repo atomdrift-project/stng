@@ -2,7 +2,6 @@
 
 pub(crate) mod args;
 pub(crate) mod output;
-pub(crate) mod rizin;
 
 /// Bytes as lowercase hex.
 pub(crate) fn hex(bytes: &[u8]) -> String {

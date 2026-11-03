@@ -1,10 +1,61 @@
 //! The XOR passes over a whole input: single-byte, auto-detected,
-//! user-supplied, rolling, incremental and disassembler-located keys.
+//! user-supplied, rolling and incremental keys.
 
-use crate::{
-    ExtractOptions, ExtractedString, FormatHint, StringKind, StringMethod, XorMode, binary, detect,
-    xor,
-};
+use crate::types::StringBoundary;
+use crate::{ExtractOptions, ExtractedString, FormatHint, StringKind, StringMethod, binary, detect, xor};
+
+/// Inputs past this size get no extents to aim XOR decoding at: each extent
+/// is decoded once per key byte.
+const MAX_EXTENT_INPUT: usize = 10 * 1024 * 1024;
+
+/// Longest extent [`string_extents`] proposes.
+const MAX_EXTENT: usize = 1024;
+
+/// Where to aim XOR decoding when the caller supplied no extents: around
+/// each plain byte run already extracted from `data`. An XOR-encoded table mostly stays printable (Mirai's 0x22-folded key
+/// does), so the raw scan has found pieces of its entries; the bytes that
+/// split them (`\r`, `\t`, `\x0e` under that key) are encoded `/`, `+` and
+/// `,`, so an extent runs on to the entry's terminator. Decoding stops at
+/// the first byte that does not decode printable, so a long extent costs
+/// nothing.
+fn string_extents(strings: &[ExtractedString], data: &[u8]) -> Vec<StringBoundary> {
+    if data.len() > MAX_EXTENT_INPUT {
+        return Vec::new();
+    }
+    let mut starts: Vec<usize> = strings
+        .iter()
+        .filter(|s| s.method == StringMethod::RawScan && s.fragments.is_none())
+        .filter_map(|s| usize::try_from(s.data_offset).ok())
+        .collect();
+    starts.sort_unstable();
+    starts.dedup();
+    // Each run on to the NUL after it, both from where the run starts and
+    // from the NUL before it, where an encoded entry starts. Neither alone
+    // suffices: a table's entries begin at the NUL, but a key whose phase
+    // follows the run, not the entry, decodes only from the run's start.
+    let mut extents: Vec<(usize, usize)> = starts
+        .into_iter()
+        .filter_map(|start| {
+            let head = data.get(start.saturating_sub(MAX_EXTENT)..start)?;
+            let begin = start - head.iter().rev().position(|&b| b == 0).unwrap_or(head.len());
+            let rest = data.get(start..)?;
+            let end = start
+                + rest
+                    .iter()
+                    .take(MAX_EXTENT)
+                    .position(|&b| b == 0)
+                    .unwrap_or(rest.len().min(MAX_EXTENT));
+            Some([(begin, end), (start, end)])
+        })
+        .flatten()
+        .collect();
+    extents.sort_unstable();
+    extents.dedup();
+    extents
+        .into_iter()
+        .map(|(begin, end)| StringBoundary::new(begin as u64, end - begin))
+        .collect()
+}
 
 /// Whether the XOR scanners may run over `data`.
 ///
@@ -28,6 +79,7 @@ pub(crate) fn single_byte_xor_scan(
     data: &[u8],
     opts: &ExtractOptions,
     is_pe: bool,
+    boundaries: &[StringBoundary],
 ) {
     let found = xor::extract_xor_strings(data, opts.xor_min_length, is_pe);
     // Each result is a single-byte decode, so `value[0] == data[offset] ^
@@ -47,7 +99,7 @@ pub(crate) fn single_byte_xor_scan(
                 data,
                 &[key],
                 opts.xor_min_length,
-                &opts.hints.boundaries,
+                boundaries,
                 opts.filter_garbage,
                 false,
             ));
@@ -75,11 +127,7 @@ pub(crate) fn apply_xor_scan(
     is_pe: bool,
     excluded_ranges: &[(usize, usize)],
 ) {
-    tracing::debug!(
-        mode = ?opts.xor,
-        key_offsets = opts.hints.xor_key_offsets.len(),
-        "apply_xor_scan"
-    );
+    tracing::debug!(mode = ?opts.xor, "apply_xor_scan");
     if data.is_empty() || opts.is_cancelled() {
         return;
     }
@@ -115,7 +163,8 @@ pub(crate) fn apply_xor_scan(
         strings.extend(rolling_results);
     }
 
-    let boundaries = &opts.hints.boundaries;
+    let extents = string_extents(strings, data);
+    let boundaries = extents.as_slice();
 
     if let Some(key) = opts.xor_key() {
         let key_str = String::from_utf8_lossy(key);
@@ -169,23 +218,13 @@ pub(crate) fn apply_xor_scan(
                 false, // Even for auto-detected keys, extract completely for final results
             ));
         } else {
-            single_byte_xor_scan(strings, data, opts, is_pe);
+            single_byte_xor_scan(strings, data, opts, is_pe, boundaries);
         }
 
         // Always run incremental XOR detection if enabled - it might complement regular XOR
         let inc_results =
             xor::extract_incremental_xor_strings(data, opts.xor_min_length, excluded_ranges);
         strings.extend(inc_results);
-    }
-
-    // Code an external disassembler found loading an XOR key: decode the
-    // file with the key at each such offset.
-    if opts.xor == XorMode::Scan && !opts.hints.xor_key_offsets.is_empty() {
-        strings.extend(xor::extract_multikey_xor_strings(
-            data,
-            &opts.hints.xor_key_offsets,
-            opts.xor_min_length,
-        ));
     }
 
     xor::report_kinds(&mut strings[first_added..]);

@@ -62,13 +62,11 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
         // `&str` blob; everything else -- libc strings, C dependencies,
         // data the Rust code never names -- still needs the raw scan an
         // unknown ELF gets.
-        strings.extend(opts.hints.strings.iter().cloned());
         let raw = extract_raw_strings(scan_data, min_length, &segments, &[]);
         let fresh = unclaimed_raw_strings(raw, &strings, min_length);
         strings.extend(fresh);
     } else {
         // Unknown ELF (C, C++, assembly, etc.): caller strings + raw scan.
-        strings.extend(opts.hints.strings.iter().cloned());
         strings.extend(extract_raw_strings(scan_data, min_length, &segments, &[]));
     }
 
@@ -177,7 +175,6 @@ fn scan_go(
     let is_go = !go_strings.is_empty();
     if !is_go {
         tracing::warn!("ELF has Go section names but no Go string structures; scanning as non-Go");
-        strings.extend(opts.hints.strings.iter().cloned());
         strings.extend(extract_raw_strings(scan_data, min_length, segments, &[]));
     }
     let known: HashSet<&str> = go_strings.iter().map(|s| s.value.as_str()).collect();

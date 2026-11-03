@@ -49,7 +49,7 @@ EXAMPLES:
     stng -i malware.elf                # Filter out raw scan noise
     stng --xor 0xAB malware.elf        # Decode with a hex XOR key
     stng --xor secretkey malware.elf   # Decode with a text XOR key
-    stng --xorscan malware.elf         # Also decode keys rizin finds loaded by code
+    stng --xorscan malware.elf         # XOR-scan Go and platform-signed binaries too
     stng --no-xor malware.elf          # Disable all XOR detection
     stng --json malware.elf            # JSON output for tooling
     stng --json samples/               # One JSON object per file
@@ -79,15 +79,16 @@ struct Cli {
     #[arg(long)]
     unfiltered: bool,
 
-    /// Don't run rizin, even if installed
-    #[arg(long)]
+    /// Accepted for compatibility; stng no longer runs rizin.
+    #[arg(long, hide = true)]
+    #[allow(dead_code)]
     no_rizin: bool,
 
     /// Disable colored output
     #[arg(long)]
     no_color: bool,
 
-    /// Filter out raw scan noise (keep structured, rizin, and symbol data)
+    /// Filter out raw scan noise (keep structured and symbol data)
     #[arg(short = 'i', long)]
     interesting: bool,
 
@@ -110,7 +111,7 @@ struct Cli {
     )]
     xor_lcg: Option<LcgRange>,
 
-    /// Also decode with XOR keys rizin finds loaded by code (slow)
+    /// XOR-scan even Go and platform-signed binaries, which are skipped by default
     #[arg(long)]
     xorscan: bool,
 
@@ -193,13 +194,9 @@ fn analyze(cli: &Cli, path: &Path, style: &Style, in_directory: bool) -> Result<
         None if xorscan => XorMode::Scan,
         None => XorMode::Auto,
     };
-    let mut opts = stng::ExtractOptions::new(cli.min_length)
+    let opts = stng::ExtractOptions::new(cli.min_length)
         .with_garbage_filter(!cli.unfiltered)
         .with_xor(mode);
-    if !cli.no_rizin {
-        let xor = *opts.xor() != XorMode::Off;
-        opts = cli::rizin::attach(opts, &data, xor, xorscan);
-    }
     if !cli.no_xor
         && !cli.json
         && !cli.debug

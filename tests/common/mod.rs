@@ -1,7 +1,7 @@
 //! Test samples. Executables and malware live in git gzip-compressed, so no
 //! checkout carries them raw and no test binary embeds them. A sample is
 //! inflated on first use into `target/testdata/`, mirroring its path under the
-//! crate root, because some consumers (the CLI, rizin) need a real file.
+//! crate root, because some consumers (the CLI) need a real file.
 #![allow(dead_code, clippy::panic, clippy::expect_used, clippy::unwrap_used)] // Each test crate uses a different subset.
 
 use flate2::read::GzDecoder;
@@ -72,8 +72,9 @@ pub(crate) fn fixtures() -> Vec<String> {
                 walk(&path, out);
             } else {
                 let rel = path.strip_prefix(ROOT).expect("under crate root");
-                let rel = rel.to_str().expect("UTF-8 fixture path");
-                let rel = rel.strip_suffix(".gz").unwrap_or(rel);
+                // The manifest spells paths with `/` on every platform.
+                let rel = rel.to_str().expect("UTF-8 fixture path").replace('\\', "/");
+                let rel = rel.strip_suffix(".gz").unwrap_or(&rel);
                 if is_sample(rel) {
                     out.push(rel.to_owned());
                 }

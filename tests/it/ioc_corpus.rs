@@ -261,8 +261,8 @@ fn existing_testdata_ioc_manifest_is_exact() {
         ],
     );
 
-    // Kimwolf's sockaddr C2 comes from rizin's connect() scan, which the
-    // CLI runs: see `rizin_recovers_kimwolf_connect_address` in cli.rs.
+    // Kimwolf's sockaddr C2 is built in registers at a connect() call site,
+    // which string extraction does not model.
     assert_exact(
         "vget",
         crate::common::path("testdata/malware/vget_sample"),

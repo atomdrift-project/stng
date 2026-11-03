@@ -46,6 +46,7 @@ pub fn canonicalize_ioc_path(input: &str) -> Option<String> {
         || matches!(leaf, "." | "..")
         || looks_like_source_file(leaf)
         || looks_like_build_source_path(input, leaf)
+        || is_go_toolchain_path(input)
     {
         return None;
     }
@@ -121,6 +122,22 @@ pub(super) fn looks_like_build_source_path(path: &str, leaf: &str) -> bool {
     ]
     .iter()
     .any(|extension| leaf.ends_with(extension))
+}
+
+/// A Go toolchain's install tree, which every Go binary embeds as its
+/// `GOROOT` and in its pclntab file paths: Homebrew's `Cellar/go/<version>`,
+/// the `/usr/local/go` and `/usr/lib/go` installs, and `go1.N` release
+/// directories.
+fn is_go_toolchain_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    normalized.contains("/cellar/go/")
+        || normalized.starts_with("/usr/local/go/")
+        || normalized == "/usr/local/go"
+        || normalized.starts_with("/usr/lib/go")
+        || normalized.split('/').any(|part| {
+            part.strip_prefix("go1.")
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        })
 }
 
 pub(super) fn is_common_system_path(path: &str) -> bool {
