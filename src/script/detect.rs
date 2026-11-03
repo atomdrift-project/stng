@@ -298,6 +298,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn detects_lua_after_a_large_escaped_constant_table() {
+        let prefix = format!("local n={{{}}}", r#""\084","#.repeat(2000));
+        let program = format!(
+            "{prefix} local function f() return string.sub(table.concat(n), math.floor(1)) end"
+        );
+        assert_eq!(
+            detect_script_language(program.as_bytes()),
+            Some(ScriptLanguage::Lua)
+        );
+        let spaced = program.replacen("local n={", "local n = { ", 1);
+        assert_eq!(
+            detect_script_language(spaced.as_bytes()),
+            Some(ScriptLanguage::Lua)
+        );
+        assert_eq!(
+            detect_script_language(prefix.as_bytes()),
+            Some(ScriptLanguage::Lua)
+        );
+    }
+
+    #[test]
     fn test_detect_python() {
         let src = "import os\nimport sys\ndef main():\n    print('hello')\n";
         assert_eq!(

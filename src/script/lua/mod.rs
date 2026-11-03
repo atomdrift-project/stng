@@ -187,6 +187,18 @@ mod tests {
             let decoded = extract_obfuscated_payloads(&source);
             assert_eq!(decoded.len(), 1, "{source}");
             assert!(decoded[0].decoded.contains("gamma independent constant"));
+            if key == 73 {
+                let table = format!("local filler={{{}}} ", r#""\084","#.repeat(2000));
+                let padded = format!(
+                    "{table}local sub=string.sub local join=table.concat local floor=math.floor {source}"
+                );
+                let layers = crate::script::deobfuscate_script(padded.as_bytes());
+                assert!(
+                    layers
+                        .iter()
+                        .any(|layer| layer.decoded.contains("gamma independent constant"))
+                );
+            }
             let missing = source.replace(&format!("small_{key}%32"), &format!("small_{key}%31"));
             assert!(extract_obfuscated_payloads(&missing).is_empty());
         }
