@@ -265,7 +265,7 @@ fn test_script_language_detector_confusion_matrix() {
         (
             "lua table iteration",
             "local t = { answer = 42 }\nfor k, v in pairs(t) do\n  print(k, v)\nend\n",
-            None,
+            Some(ScriptLanguage::Lua),
         ),
         (
             "ruby require and puts",
@@ -298,7 +298,7 @@ fn test_script_language_detector_confusion_matrix() {
         assert_eq!(
             detect_script_language(src.as_bytes()),
             expected,
-            "{name} sample should not be confused with another detected script language"
+            "unexpected detection for {name} sample"
         );
     }
 }

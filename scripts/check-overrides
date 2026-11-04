@@ -1,8 +1,8 @@
 #!/bin/sh
 # Fail if Cargo.toml has a dependency or [patch] path that leaves the repo
 # (absolute, ~, or through ..): it pins against a sibling working tree, so
-# nobody else can reproduce the build. Paths inside the repo, such as
-# crates/stng-process, and [patch] entries sourced from git pass. Target
+# nobody else can reproduce the build. Paths inside the repo and [patch]
+# entries sourced from git pass. Target
 # paths under [lib]/[[bin]] are not dependencies and are ignored.
 #
 # Run by scripts/pre-commit and by CI.

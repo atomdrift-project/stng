@@ -26,8 +26,6 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# The workspace's own path dependency (crates/stng-process) is not a wildcard.
-allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
