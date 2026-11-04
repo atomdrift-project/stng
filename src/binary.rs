@@ -1,10 +1,8 @@
 //! Binary format helpers and type detection.
 
-mod bind;
 mod language;
 mod signature;
 
-pub(crate) use bind::macho_imports;
 pub(crate) use language::{
     elf_go_skip_ranges, elf_is_rust, macho_go_skip_ranges, macho_has_go_sections, macho_is_rust,
     pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
@@ -113,21 +111,6 @@ impl SectionInfo {
         let end = start.saturating_add(size);
         (start, end)
     }
-}
-
-/// Run one of goblin's lazy walks, treating a panic as a parse failure.
-///
-/// goblin's Mach-O bind-opcode interpreter (`MachO::imports`, goblin 0.10
-/// `mach/imports.rs`) indexes the segment and dylib tables with ordinals read
-/// from the file, so a crafted binary panics it. A hostile file should cost
-/// its imports, not the whole extraction. This is stng's only `catch_unwind`:
-/// confine it to third-party walks we cannot bound ourselves.
-pub(crate) fn contain<T, E>(walk: impl FnOnce() -> Result<T, E>) -> Option<T> {
-    let Ok(result) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(walk)) else {
-        tracing::warn!("goblin panicked on a malformed table; skipping it");
-        return None;
-    };
-    result.ok()
 }
 
 /// Every section of `macho` with its bytes, across all segments. Segments

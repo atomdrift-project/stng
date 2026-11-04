@@ -48,6 +48,7 @@ enum RegValue {
 /// Extract printable strings produced by XORing stack-resident ARM64 immediates.
 pub(crate) fn extract_arm64_stack_xor_strings(
     macho: &MachO<'_>,
+    imports_system: impl FnOnce() -> bool,
     arch_data: &[u8],
     arch_base_offset: u64,
     profile: AdmissionProfile,
@@ -56,9 +57,7 @@ pub(crate) fn extract_arm64_stack_xor_strings(
     if macho.header.cputype != CPU_TYPE_ARM64 || !should_extract(profile) {
         return Vec::new();
     }
-    let imports_system = crate::binary::macho_imports(macho, arch_data)
-        .is_some_and(|imports| imports.iter().any(|import| is_system_import(import.name)));
-    if !imports_system {
+    if !imports_system() {
         return Vec::new();
     }
 
@@ -93,6 +92,17 @@ pub(crate) fn extract_arm64_stack_xor_strings(
     let mut seen = HashSet::new();
     results.retain(|r| seen.insert(r.value.clone()));
     results
+}
+
+/// Whether the binary `layout` describes imports `system(3)`, which the
+/// stack-XOR families this pass targets run their decoded commands through.
+pub(crate) fn imports_system(layout: Option<&binform::Binary<'_>>) -> bool {
+    layout.is_some_and(|layout| {
+        layout
+            .imports
+            .iter()
+            .any(|import| is_system_import(&import.name))
+    })
 }
 
 fn is_system_import(name: &str) -> bool {

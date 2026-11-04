@@ -10,11 +10,12 @@ use crate::binary;
 use crate::collect_elf_section_info;
 use crate::collect_elf_segments;
 use crate::elf_go_skip_ranges;
-use crate::extract_elf_imports;
+use crate::extract_layout_imports;
 use crate::extract_overlay_strings;
 use crate::extract_raw_strings;
 use crate::extract_stack_strings_with_context;
 use crate::extract_wide_strings;
+use crate::layouts::Layouts;
 use crate::overlay::detect_elf_overlay_from_elf;
 use crate::pclntab_strings;
 use crate::scan_binary_ips;
@@ -23,7 +24,12 @@ use goblin::elf::Elf;
 use std::collections::HashSet;
 
 /// Strings from an ELF binary.
-pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
+pub(super) fn scan<'d>(
+    elf: &Elf<'_>,
+    layouts: &Layouts<'_, 'd>,
+    data: &'d [u8],
+    opts: &ExtractOptions,
+) -> Scan {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
     let mut is_go_binary = false;
@@ -109,7 +115,8 @@ pub(super) fn scan(elf: &Elf<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     }
 
     if !opts.caller_provides_symbols {
-        merge_imports(&mut strings, extract_elf_imports(elf, min_length));
+        let imports = layouts.with(0, data, |layout| extract_layout_imports(layout, min_length));
+        merge_imports(&mut strings, imports);
     }
 
     // Filter out any strings that fall within the overlay region

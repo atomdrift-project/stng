@@ -5,6 +5,7 @@ use crate::binary;
 use crate::binary::SectionInfo;
 use crate::extract_raw_strings;
 use crate::extract_stack_strings;
+use crate::layouts::Layouts;
 use crate::scan_binary_ips;
 use crate::{ExtractOptions, ExtractedString};
 use crate::{StringKind, StringMethod, classifier, par, validation};
@@ -47,16 +48,20 @@ pub(crate) struct Scan {
 }
 
 /// Extract strings from a parsed binary.
-pub(crate) fn extract(
+/// `layouts` holds, or reads on first use, binform's layouts of `data`.
+pub(crate) fn extract<'d>(
     object: &Object<'_>,
-    data: &[u8],
+    layouts: &Layouts<'_, 'd>,
+    data: &'d [u8],
     opts: &ExtractOptions,
 ) -> Vec<ExtractedString> {
     let scan = match object {
-        Object::Mach(goblin::mach::Mach::Binary(macho)) => macho::scan_thin(macho, data, opts),
-        Object::Mach(goblin::mach::Mach::Fat(fat)) => macho::scan_fat(fat, data, opts),
-        Object::Elf(elf) => elf::scan(elf, data, opts),
-        Object::PE(pe) => pe::scan(pe, data, opts),
+        Object::Mach(goblin::mach::Mach::Binary(macho)) => {
+            macho::scan_thin(macho, layouts, data, opts)
+        }
+        Object::Mach(goblin::mach::Mach::Fat(fat)) => macho::scan_fat(fat, layouts, data, opts),
+        Object::Elf(elf) => elf::scan(elf, layouts, data, opts),
+        Object::PE(pe) => pe::scan(pe, layouts, data, opts),
         _ => scan_other(data, opts),
     };
     finish(object, data, opts, scan)
@@ -182,7 +187,7 @@ fn merge_imports(strings: &mut Vec<ExtractedString>, imports: Vec<ExtractedStrin
 /// Strip Go varint length-prefix bytes that bled into otherwise-clean strings.
 ///
 /// Go's pclntab `pkgnamestab` packs entries as `<varint length byte><N bytes>`.
-/// Raw printable scanners (including radare2's `izz`) capture the length byte
+/// Raw printable scanners capture the length byte
 /// as the first character of the string. When the pattern is unambiguous —
 /// the leading byte is a small printable value, equals the length of the
 /// remainder, the remainder is all printable ASCII, and starts with a

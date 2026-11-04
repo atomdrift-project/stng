@@ -11,9 +11,10 @@ use crate::binary;
 use crate::collect_pe_section_info;
 use crate::dotnet;
 use crate::extract_overlay_strings;
-use crate::extract_pe_imports;
+use crate::extract_layout_imports;
 use crate::extract_raw_strings;
 use crate::extract_wide_strings;
+use crate::layouts::Layouts;
 use crate::pclntab_strings;
 use crate::pe_go_skip_ranges;
 use crate::pe_is_rust;
@@ -24,7 +25,12 @@ use crate::{ExtractOptions, ExtractedString};
 use goblin::pe::PE;
 
 /// Strings from a PE binary.
-pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
+pub(super) fn scan<'d>(
+    pe: &PE<'_>,
+    layouts: &Layouts<'_, 'd>,
+    data: &'d [u8],
+    opts: &ExtractOptions,
+) -> Scan {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
     let mut is_go_binary = false;
@@ -146,7 +152,8 @@ pub(super) fn scan(pe: &PE<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
     // Recover imports/exports from the PE directories — names behind RVA
     // tables that a raw byte scan can't reach.
     if !opts.caller_provides_symbols {
-        merge_imports(&mut strings, extract_pe_imports(pe, min_length));
+        let imports = layouts.with(0, data, |layout| extract_layout_imports(layout, min_length));
+        merge_imports(&mut strings, imports);
     }
 
     strings.extend(pdb_path(pe, min_length));

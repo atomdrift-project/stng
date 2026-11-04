@@ -58,6 +58,7 @@ mod detect;
 mod dotnet;
 mod entitlements;
 mod imports;
+mod layouts;
 mod overlay;
 mod raw;
 mod sockaddr;
@@ -111,7 +112,9 @@ pub use validation::{is_garbage, is_garbage_with_context};
 /// The goblin stng parses with, so a caller can parse once and hand the
 /// object to [`extract_strings_from_object`]. Its version is part of stng's
 /// API: a goblin release that breaks its API is a stng major release.
+pub use binform;
 pub use goblin;
+pub use layouts::Layout;
 use goblin::Object;
 pub use options::{ExtractOptions, FormatHint, XorMode};
 pub use pipeline::decode::decode_encoded_strings;
@@ -122,7 +125,7 @@ use binary::{
     collect_macho_segments, collect_pe_section_info, elf_go_skip_ranges, macho_go_skip_ranges,
     macho_has_go_sections, pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
 };
-use imports::{extract_elf_imports, extract_macho_imports, extract_pe_imports};
+use imports::{extract_layout_imports, extract_macho_imports};
 use pipeline::decode::{Rot13, decode, decode_spaced_strings};
 use pipeline::java::extract_java_class_strings;
 use pipeline::text::{
@@ -243,7 +246,7 @@ pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<E
 
     if let Some(object) = parsed_binary {
         let t0 = std::time::Instant::now();
-        let mut strings = pipeline::extract(&object, data, opts);
+        let mut strings = pipeline::extract(&object, &layouts::Layouts::new(&[]), data, opts);
         tracing::debug!("TIME: Extraction took {:?}", t0.elapsed());
 
         // For text files parsed by goblin (e.g. as Unknown), also run script deobfuscation
@@ -348,6 +351,26 @@ pub fn extract_strings_from_object(
     data: &[u8],
     opts: &ExtractOptions,
 ) -> Vec<ExtractedString> {
+    extract_strings_from_parsed(object, &[], data, opts)
+}
+
+/// [`extract_strings_from_object`], also given the binform layouts the
+/// caller already read from `data`, each with the file offset of the bytes it
+/// was read from: zero for a whole binary, a slice's offset for one
+/// architecture of a universal binary.
+///
+/// stng reads a binary's import, export and symbol tables through binform,
+/// and only when it needs them: unless [`ExtractOptions`] says the caller
+/// provides symbols, and for an ARM64 Mach-O's stack-XOR pass. A layout
+/// passed here is used instead of reading the bytes again; any layout stng
+/// needs and was not given, it reads once per call.
+#[must_use]
+pub fn extract_strings_from_parsed<'d>(
+    object: &Object<'_>,
+    layouts: &[Layout<'_, 'd>],
+    data: &'d [u8],
+    opts: &ExtractOptions,
+) -> Vec<ExtractedString> {
     if opts.is_cancelled() {
         return Vec::new();
     }
@@ -363,7 +386,7 @@ pub fn extract_strings_from_object(
     if matches!(object, Object::Unknown(_)) {
         return extract_strings_with_options(data, opts);
     }
-    let mut strings = pipeline::extract(object, data, opts);
+    let mut strings = pipeline::extract(object, &layouts::Layouts::new(layouts), data, opts);
     if should_deobfuscate_script(data, &strings) {
         append_script_deobfuscation(&mut strings, data, opts);
     }

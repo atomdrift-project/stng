@@ -69,10 +69,11 @@ for s in stng::extract_strings_with_options(&bytes, &opts) {
 }
 ```
 
-`stng` re-exports [goblin](https://crates.io/crates/goblin) and accepts its
-parsed objects (`extract_strings_from_object`), so a caller that already parsed
-a binary does not parse it twice. goblin's version is therefore part of stng's
-public API.
+`stng` re-exports [goblin](https://crates.io/crates/goblin) and
+[binform](https://github.com/atomdrift-project/binform) and accepts what they
+parsed (`extract_strings_from_object`, `extract_strings_from_parsed`), so a
+caller that already parsed a binary does not parse it twice. Their versions
+are therefore part of stng's public API.
 
 Base64-encoded zlib text is decompressed automatically, including literals
 embedded in scripts or binary files. The decoder verifies the zlib checksum
@@ -84,7 +85,7 @@ token. No sample code is executed.
 
 stng follows [semantic versioning](https://semver.org/) across three surfaces:
 the library API, the JSON fields above, and the command-line flags. A breaking
-change to any of them, including a goblin major version, is a major release.
+change to any of them, including a goblin or binform major version, is a major release.
 New `method` and `kind` values, and changes to which strings are found, are not.
 
 ## Development

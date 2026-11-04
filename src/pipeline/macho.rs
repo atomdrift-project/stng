@@ -13,6 +13,7 @@ use crate::collect_macho_segments;
 use crate::entitlements;
 use crate::extract_macho_imports;
 use crate::extract_raw_strings;
+use crate::layouts::Layouts;
 use crate::macho_go_skip_ranges;
 use crate::macho_has_go_sections;
 use crate::pclntab_strings;
@@ -88,7 +89,12 @@ fn extend_with_section_scan(
 }
 
 /// Strings from a thin (single-architecture) Mach-O.
-pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
+pub(super) fn scan_thin<'d>(
+    macho: &MachO<'_>,
+    layouts: &Layouts<'_, 'd>,
+    data: &'d [u8],
+    opts: &ExtractOptions,
+) -> Scan {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
     let mut is_go_binary = false;
@@ -122,14 +128,13 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
         // passes only cover the literals Rust code names.
         extend_with_section_scan(&mut strings, data, min_length, &segments, &section_info);
     } else {
-        // Unknown Mach-O (C/C++/Objective-C/asm). Use r2 if available,
-        // then the targeted extractor, then an unconditional per-section
+        // Unknown Mach-O (C/C++/Objective-C/asm). The targeted extractor,
+        // then an unconditional per-section
         // scan. The targeted extractor only covers __cstring/__const/
         // __text and silently skips other string-literal sections
         // (notably __objc_methname); without the section scan those
         // strings — and any IOC fragments split across literals — are
-        // lost whenever r2 is unavailable. ELF and Go already always run
-        // a raw scan for the same reason.
+        // lost. ELF and Go always run a raw scan for the same reason.
         let extractor = RustStringExtractor::new(min_length);
         // Thin binary: the slice is the whole file, so no slice base.
         strings.extend(extractor.extract_macho(macho, 0));
@@ -138,7 +143,7 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
         // section; whole-file scan second as a backstop for bytes
         // outside any enumerated section (__LINKEDIT, padding, minimal
         // layouts). Merge by value: the section-tagged copy wins and
-        // nothing already held by r2/the targeted extractor is duped.
+        // nothing already held by the targeted extractor is duped.
         extend_with_section_scan(&mut strings, data, min_length, &segments, &section_info);
     }
     if !is_go_binary {
@@ -155,12 +160,21 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
             min_length,
             &exec_ranges,
         ));
-        let xor_strings =
-            xor::arm64_stack::extract_arm64_stack_xor_strings(macho, data, 0, profile, min_length);
+        let xor_strings = xor::arm64_stack::extract_arm64_stack_xor_strings(
+            macho,
+            || layouts.with(0, data, xor::arm64_stack::imports_system),
+            data,
+            0,
+            profile,
+            min_length,
+        );
         strings.extend(xor_strings);
     }
     if !opts.caller_provides_symbols {
-        merge_imports(&mut strings, extract_macho_imports(macho, data, min_length));
+        let imports = layouts.with(0, data, |layout| {
+            extract_macho_imports(macho, layout, data, 0, min_length)
+        });
+        merge_imports(&mut strings, imports);
     }
     apply_entitlements(&mut strings, macho, data);
     Scan {
@@ -172,7 +186,12 @@ pub(super) fn scan_thin(macho: &MachO<'_>, data: &[u8], opts: &ExtractOptions) -
 
 /// Strings from a universal (fat) Mach-O: every slice's own decoders, and
 /// one pass over the file.
-pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) -> Scan {
+pub(super) fn scan_fat<'d>(
+    fat: &MultiArch<'_>,
+    layouts: &Layouts<'_, 'd>,
+    data: &'d [u8],
+    opts: &ExtractOptions,
+) -> Scan {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
     let mut is_go_binary = false;
@@ -182,18 +201,23 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
     let mut is_rust = false;
     let mut segments = Vec::new();
     let mut first_macho: Option<MachO<'_>> = None;
-    // Where `first_macho`'s slice starts in the file.
+    // Where `first_macho`'s slice starts in the file, and its size.
     let mut first_base = 0u64;
+    let mut first_size = 0u64;
     // Fat-header offsets of each slice within the whole file, so a slice's
     // strings can be rebased onto the file (a slice's own load commands are
     // slice-relative). Indexed in lockstep with the iteration below.
-    let arch_offsets: Vec<u64> = fat
+    let arch_offsets: Vec<(u64, u64)> = fat
         .arches()
-        .map(|a| a.iter().map(|x| u64::from(x.offset)).collect())
+        .map(|a| {
+            a.iter()
+                .map(|x| (u64::from(x.offset), u64::from(x.size)))
+                .collect()
+        })
         .unwrap_or_default();
     for (idx, arch_result) in fat.into_iter().enumerate() {
         if let Ok(goblin::mach::SingleArch::MachO(macho)) = arch_result {
-            let Some(&slice_base) = arch_offsets.get(idx) else {
+            let Some(&(slice_base, slice_size)) = arch_offsets.get(idx) else {
                 continue;
             };
             // Instruction decoders must visit every architecture: an
@@ -248,13 +272,13 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
             }
             first_macho = Some(macho);
             first_base = slice_base;
+            first_size = slice_size;
         }
     }
-    // For non-Go fat binaries, use r2 if available + raw scan. Rust
+    // Non-Go fat binaries get a raw scan. Rust
     // slices get it too, after their structure pass: that pass only
     // covers the literals Rust code names (see the thin branch).
     if !is_go {
-        // Also do raw scan to catch anything r2 missed
         let raw = extract_raw_strings(data, min_length, &segments, &[]);
         if is_rust {
             extend_unclaimed(&mut strings, raw);
@@ -291,6 +315,13 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
                 };
                 let xor_strings = xor::arm64_stack::extract_arm64_stack_xor_strings(
                     &macho,
+                    || {
+                        layouts.with(
+                            u64::from(arch.offset),
+                            arch_data,
+                            xor::arm64_stack::imports_system,
+                        )
+                    },
                     arch_data,
                     u64::from(arch.offset),
                     profile,
@@ -302,14 +333,11 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
     }
     if let Some(ref macho) = first_macho {
         if !opts.caller_provides_symbols {
-            let slice = usize::try_from(first_base)
-                .ok()
-                .and_then(|base| data.get(base..))
-                .unwrap_or_default();
-            merge_imports(
-                &mut strings,
-                extract_macho_imports(macho, slice, min_length),
-            );
+            let slice = binary::file_range_clamped(data, first_base, first_size).unwrap_or_default();
+            let imports = layouts.with(first_base, slice, |layout| {
+                extract_macho_imports(macho, layout, slice, first_base, min_length)
+            });
+            merge_imports(&mut strings, imports);
         }
         apply_entitlements(&mut strings, macho, data);
     }
@@ -322,7 +350,7 @@ pub(super) fn scan_fat(fat: &MultiArch<'_>, data: &[u8], opts: &ExtractOptions) 
 
 /// Raw-scan every non-executable Mach-O section so string-literal sections the
 /// targeted extractor skips — notably `__objc_methname` — and the leading entry
-/// of each section still surface when radare2 is unavailable. Each section is
+/// of each section still surface. Each section is
 /// scanned as a slice, so the raw scanner yields section-relative offsets; they
 /// are rebased to the section's file offset before being emitted, because every
 /// offset stng reports indexes the file, never a section. The section name is

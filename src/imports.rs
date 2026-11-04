@@ -1,60 +1,87 @@
-//! Import and export symbol extraction.
+//! Import and export symbol extraction: the tables binform reads from a
+//! binary's headers, and the Mach-O symbol table.
 
 use crate::binary::macho_vaddr_to_file_offset;
 use crate::types::{ExtractedString, StringKind, StringMethod};
 use goblin::mach::MachO;
 use std::collections::HashSet;
 
-/// `slice` is the bytes `macho` was parsed from: the whole file, or one
-/// architecture's slice of a universal binary.
+/// A name a binary's structures hold, at `data_offset`.
+fn structure(value: String, data_offset: u64, kind: StringKind) -> ExtractedString {
+    ExtractedString::new(value, data_offset, StringMethod::Structure).with_kind(kind)
+}
+
+/// The imports, then the exports, `layout` read from a binary's headers,
+/// each name once and only names `seen` does not already hold. Each sits at
+/// the file offset of its slot or its code, zero when the file holds no byte
+/// there. `base` is where the bytes `layout` was read from start in the file.
+///
+/// A PE import by ordinal only is named `ORDINAL n`, as the import tables
+/// spell it elsewhere; a PE export by ordinal only has no name and is left
+/// out.
+fn table_strings(
+    layout: &binform::Binary<'_>,
+    base: u64,
+    min_length: usize,
+    seen: &mut HashSet<String>,
+) -> Vec<ExtractedString> {
+    let pe = layout.format == binform::Format::Pe;
+    let at = |addr: Option<u64>| {
+        addr.and_then(|addr| layout.offset(addr))
+            .map_or(0, |offset| offset.saturating_add(base))
+    };
+    let mut strings = Vec::new();
+    for import in &layout.imports {
+        let name = match import.ordinal {
+            Some(ordinal) if pe => format!("ORDINAL {ordinal}"),
+            _ => import.name.clone(),
+        };
+        if name.len() >= min_length && seen.insert(name.clone()) {
+            strings.push(structure(name, at(import.slot), StringKind::Import));
+        }
+    }
+    for export in &layout.exports {
+        let name = &export.name;
+        if pe && is_ordinal_placeholder(name) {
+            continue;
+        }
+        if name.len() >= min_length && seen.insert(name.clone()) {
+            // A Mach-O re-export has no address of its own.
+            let addr = (export.addr != 0).then_some(export.addr);
+            strings.push(structure(name.clone(), at(addr), StringKind::Export));
+        }
+    }
+    strings
+}
+
+/// binform's name for a PE export by ordinal only: `Ordinal_n`.
+fn is_ordinal_placeholder(name: &str) -> bool {
+    name.strip_prefix("Ordinal_")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Imports and exports of a Mach-O, by its bind information, export trie and
+/// symbol table. `layout` is what binform read from `slice`, the bytes
+/// `macho` was parsed from: the whole file, or the architecture's slice of a
+/// universal binary starting `base` bytes into it.
 pub(crate) fn extract_macho_imports(
     macho: &MachO<'_>,
+    layout: Option<&binform::Binary<'_>>,
     slice: &[u8],
+    base: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    let mut strings = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let mut strings = layout
+        .map(|layout| table_strings(layout, base, min_length, &mut seen))
+        .unwrap_or_default();
 
-    // Extract imports with their source library
-    if let Some(imports) = crate::binary::macho_imports(macho, slice) {
-        for import in imports {
-            if import.name.len() >= min_length && seen.insert(import.name.to_string()) {
-                // Convert virtual address to file offset
-                let file_offset = macho_vaddr_to_file_offset(macho, import.address);
-                strings.push(ExtractedString {
-                    value: import.name.to_string(),
-                    data_offset: file_offset,
-                    method: StringMethod::Structure,
-                    kind: Some(StringKind::Import),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-
-    // Extract exports
-    if let Some(exports) = crate::binary::contain(|| macho.exports()) {
-        for export in exports {
-            if export.name.len() >= min_length && seen.insert(export.name.clone()) {
-                // Convert virtual address to file offset
-                let file_offset = macho_vaddr_to_file_offset(macho, export.offset);
-                strings.push(ExtractedString {
-                    value: export.name.clone(),
-                    data_offset: file_offset,
-                    method: StringMethod::Structure,
-                    kind: Some(StringKind::Export),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-
-    // Walk the static symbol table (nlist). imports()/exports() above only see
-    // dyld bind info and the export trie; the symbol table additionally carries
+    // Walk the static symbol table (nlist). The bind information and the
+    // export trie above miss what the symbol table additionally carries:
     // undefined externals (`_popen`), Objective-C class references
     // (`_OBJC_CLASS_$_…`) and local stub helpers (`_objc_msgSend$…`) that a
-    // disassembler surfaces but those two views miss. Without this they appear only as
-    // untyped raw-scan hits in the __LINKEDIT string table; classifying them by
+    // disassembler surfaces. Without this they appear only as untyped
+    // raw-scan hits in the __LINKEDIT string table; classifying them by
     // nlist type lets `merge_imports` retag those hits with a proper kind.
     //
     // goblin trusts the header's `nsyms`, and past the end of the file its
@@ -76,104 +103,34 @@ pub(crate) fn extract_macho_imports(
         // Undefined symbols have n_value == 0; merge_imports retags the located
         // raw-scan hit and keeps its real offset, so the address here only
         // matters for the rare symbol absent from the strtab scan.
-        let file_offset = macho_vaddr_to_file_offset(macho, nlist.n_value);
-        strings.push(ExtractedString {
-            value: name.to_string(),
-            data_offset: file_offset,
-            method: StringMethod::Structure,
-            kind: Some(kind),
-            ..Default::default()
-        });
+        let file_offset = macho_vaddr_to_file_offset(macho, nlist.n_value).saturating_add(base);
+        strings.push(structure(name.to_string(), file_offset, kind));
     }
 
     strings
 }
 
-/// Extract imports and exports from a PE binary.
-///
-/// goblin resolves the import directory (and bound imports) to `(name, dll)`
-/// pairs and the export directory to named exports; neither is recoverable by a
-/// raw byte scan when the names live behind RVA tables rather than as inline
-/// literals. Each entry carries the resolving DLL as its source.
-pub(crate) fn extract_pe_imports(
-    pe: &goblin::pe::PE<'_>,
+/// Imports and exports of a PE or ELF binary, from the tables `layout` read:
+/// the PE import, delay-load and export directories, whose names sit behind
+/// RVA tables a raw byte scan cannot follow, or the ELF dynamic symbol table.
+pub(crate) fn extract_layout_imports(
+    layout: Option<&binform::Binary<'_>>,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    let mut strings = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-
-    for import in &pe.imports {
-        if import.name.len() >= min_length && seen.insert(import.name.to_string()) {
-            strings.push(ExtractedString {
-                value: import.name.to_string(),
-                // u64 from usize: lossless on 64-bit hosts (this tool is 64-bit only).
-                data_offset: import.offset as u64,
-                method: StringMethod::Structure,
-                kind: Some(StringKind::Import),
-                ..Default::default()
-            });
-        }
-    }
-
-    for export in &pe.exports {
-        if let Some(name) = export.name
-            && name.len() >= min_length
-            && seen.insert(name.to_string())
-        {
-            strings.push(ExtractedString {
-                value: name.to_string(),
-                data_offset: export.offset.unwrap_or(0) as u64,
-                method: StringMethod::Structure,
-                kind: Some(StringKind::Export),
-                ..Default::default()
-            });
-        }
-    }
-
-    strings
+    layout
+        .map(|layout| table_strings(layout, 0, min_length, &mut HashSet::new()))
+        .unwrap_or_default()
 }
 
-/// Extract imports from an ELF binary.
-pub(crate) fn extract_elf_imports(
-    elf: &goblin::elf::Elf<'_>,
-    min_length: usize,
-) -> Vec<ExtractedString> {
-    let mut strings = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+#[cfg(test)]
+mod tests {
+    use super::is_ordinal_placeholder;
 
-    // Extract dynamic symbols (imports/exports)
-    for sym in &elf.dynsyms {
-        let name = match elf.dynstrtab.get_at(sym.st_name) {
-            Some(n) if n.len() >= min_length => n,
-            _ => continue,
-        };
-
-        if !seen.insert(name.to_string()) {
-            continue;
-        }
-
-        // UNDEF symbols with non-zero st_value or GLOBAL binding are imports
-        // GLOBAL/WEAK symbols with defined section are exports
-        let kind = if sym.st_shndx == 0 {
-            // Undefined - this is an import
-            Some(StringKind::Import)
-        } else if sym.st_bind() == goblin::elf::sym::STB_GLOBAL
-            || sym.st_bind() == goblin::elf::sym::STB_WEAK
-        {
-            // Defined global/weak symbol - this is an export
-            Some(StringKind::Export)
-        } else {
-            continue;
-        };
-
-        strings.push(ExtractedString {
-            value: name.to_string(),
-            data_offset: sym.st_value,
-            method: StringMethod::Structure,
-            kind,
-            ..Default::default()
-        });
+    #[test]
+    fn only_binforms_ordinal_spelling_is_a_placeholder() {
+        assert!(is_ordinal_placeholder("Ordinal_12"));
+        assert!(!is_ordinal_placeholder("Ordinal_"));
+        assert!(!is_ordinal_placeholder("Ordinal_x"));
+        assert!(!is_ordinal_placeholder("GetOrdinal_1"));
     }
-
-    strings
 }

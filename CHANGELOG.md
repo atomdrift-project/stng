@@ -55,6 +55,10 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
   inlined `strcat` chains.
 - JavaScript permutation and better batch and PowerShell deobfuscation.
 - Overlay crypter recovery for ELF.
+- `extract_strings_from_parsed` takes, beside goblin's object, the binform
+  layouts the caller already read (`stng::Layout`: a layout and the file
+  offset it was read from), so a binary is read once by both. stng re-exports
+  `binform`.
 - `make deny` and a cargo-deny CI job; Windows and x86_64 musl builds are
   release-blocking, and Windows runs the test suite.
 
@@ -77,6 +81,13 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
   - The `connect()` address scan is dropped; call-site arguments belong in a
     disassembler, not a string extractor.
   - `--no-rizin` is still accepted and does nothing.
+- Import, export and dynamic-symbol names come from binform's tables
+  instead of goblin's, read only when needed (no caller-provided symbols,
+  or an ARM64 Mach-O's stack-XOR pass): goblin's Mach-O bind interpreter
+  no longer runs. Their offsets are file offsets of the import slot or
+  the code: PE imports were RVAs, ELF ones virtual addresses, and fat
+  Mach-O ones slice-relative. ELF imports goblin's dynamic symbol walk
+  missed are found.
 - Go binaries yield absolute build paths from the pclntab file table
   (`/root/go/...`, module-cache `pkg@version` paths).
 - Language string structures that span a NUL are dropped rather than

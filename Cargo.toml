@@ -19,6 +19,7 @@ include = ["/src", "/README.md", "/LICENSE"]
 [dependencies]
 # Binary parsing
 goblin = "0.10"
+binform = { git = "https://github.com/atomdrift-project/binform.git", default-features = false }
 
 # Pattern matching
 regex = "1.13"
@@ -35,7 +36,7 @@ aho-corasick = "1.1"
 # The `stng` command only; see the `cli` feature.
 clap = { version = "4.6", features = ["derive"], optional = true }
 anyhow = { version = "1.0", optional = true }
-# Rizin cache keys. No `asm` feature: its assembly does not build with MSVC.
+# SHA-256 of each input in CLI output. No `asm` feature: its assembly does not build with MSVC.
 sha2 = { version = "0.11", optional = true }
 terminal_size = { version = "0.4", optional = true }
 
