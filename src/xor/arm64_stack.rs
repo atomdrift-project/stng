@@ -99,7 +99,7 @@ pub(crate) fn extract_arm64_stack_xor_strings(
 pub(crate) fn imports_system(layout: Option<&binform::Binary<'_>>) -> bool {
     layout.is_some_and(|layout| {
         layout
-            .imports
+            .imports()
             .iter()
             .any(|import| is_system_import(&import.name))
     })

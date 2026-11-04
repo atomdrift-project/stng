@@ -25,13 +25,13 @@ fn table_strings(
     min_length: usize,
     seen: &mut HashSet<String>,
 ) -> Vec<ExtractedString> {
-    let pe = layout.format == binform::Format::Pe;
+    let pe = layout.format() == binform::Format::Pe;
     let at = |addr: Option<u64>| {
         addr.and_then(|addr| layout.offset(addr))
             .map_or(0, |offset| offset.saturating_add(base))
     };
     let mut strings = Vec::new();
-    for import in &layout.imports {
+    for import in layout.imports() {
         let name = match import.ordinal {
             Some(ordinal) if pe => format!("ORDINAL {ordinal}"),
             _ => import.name.clone(),
@@ -40,15 +40,14 @@ fn table_strings(
             strings.push(structure(name, at(import.slot), StringKind::Import));
         }
     }
-    for export in &layout.exports {
+    for export in layout.exports() {
         let name = &export.name;
         if pe && is_ordinal_placeholder(name) {
             continue;
         }
         if name.len() >= min_length && seen.insert(name.clone()) {
             // A Mach-O re-export has no address of its own.
-            let addr = (export.addr != 0).then_some(export.addr);
-            strings.push(structure(name.clone(), at(addr), StringKind::Export));
+            strings.push(structure(name.clone(), at(export.addr), StringKind::Export));
         }
     }
     strings

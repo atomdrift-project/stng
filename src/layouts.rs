@@ -57,10 +57,13 @@ mod tests {
     fn a_layout_is_read_once_and_the_callers_is_preferred() {
         let elf = crate::test_fixture("testdata/elf/hello_linux_amd64");
         let layouts = Layouts::new(&[]);
-        let first = layouts.with(0, elf, |l| l.map(|l| l.sections.len()));
+        let first = layouts.with(0, elf, |l| l.map(|l| l.sections().len()));
         assert!(first.is_some_and(|n| n > 0));
         assert_eq!(layouts.read.lock().unwrap().len(), 1);
-        assert_eq!(layouts.with(0, elf, |l| l.map(|l| l.sections.len())), first);
+        assert_eq!(
+            layouts.with(0, elf, |l| l.map(|l| l.sections().len())),
+            first
+        );
         assert_eq!(layouts.read.lock().unwrap().len(), 1);
 
         let given = binform::parse(elf).unwrap();
