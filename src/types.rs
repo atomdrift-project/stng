@@ -430,10 +430,7 @@ impl StringMethod {
             | Self::CfmlDecode => 3,
 
             // High: rich metadata sources
-            Self::WideString
-            | Self::SpacedAscii
-            | Self::CodeSignature
-            | Self::PclntabSymbol => 2,
+            Self::WideString | Self::SpacedAscii | Self::CodeSignature | Self::PclntabSymbol => 2,
 
             Self::Heuristic => 1,
             Self::RawScan | Self::Base64ObfuscatedDecode => 0,

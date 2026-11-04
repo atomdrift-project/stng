@@ -2,7 +2,9 @@
 //! user-supplied, rolling and incremental keys.
 
 use crate::types::StringBoundary;
-use crate::{ExtractOptions, ExtractedString, FormatHint, StringKind, StringMethod, binary, detect, xor};
+use crate::{
+    ExtractOptions, ExtractedString, FormatHint, StringKind, StringMethod, binary, detect, xor,
+};
 
 /// Inputs past this size get no extents to aim XOR decoding at: each extent
 /// is decoded once per key byte.
@@ -37,7 +39,12 @@ fn string_extents(strings: &[ExtractedString], data: &[u8]) -> Vec<StringBoundar
         .into_iter()
         .filter_map(|start| {
             let head = data.get(start.saturating_sub(MAX_EXTENT)..start)?;
-            let begin = start - head.iter().rev().position(|&b| b == 0).unwrap_or(head.len());
+            let begin = start
+                - head
+                    .iter()
+                    .rev()
+                    .position(|&b| b == 0)
+                    .unwrap_or(head.len());
             let rest = data.get(start..)?;
             let end = start
                 + rest

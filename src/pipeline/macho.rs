@@ -333,7 +333,8 @@ pub(super) fn scan_fat<'d>(
     }
     if let Some(ref macho) = first_macho {
         if !opts.caller_provides_symbols {
-            let slice = binary::file_range_clamped(data, first_base, first_size).unwrap_or_default();
+            let slice =
+                binary::file_range_clamped(data, first_base, first_size).unwrap_or_default();
             let imports = layouts.with(first_base, slice, |layout| {
                 extract_macho_imports(macho, layout, slice, first_base, min_length)
             });

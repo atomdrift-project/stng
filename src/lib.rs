@@ -95,8 +95,8 @@ pub use ioc::{
 };
 pub use overlay::detect_elf_overlay;
 pub use types::{
-    Arch, ExtractedString, OverlayInfo, Severity, StringContext, StringFragment,
-    StringKind, StringMethod,
+    Arch, ExtractedString, OverlayInfo, Severity, StringContext, StringFragment, StringKind,
+    StringMethod,
 };
 pub use xor::lcg::{Lcg, decode_lcg_xor, decode_xor_fat_macho, extract_macho_lcg_xor};
 
@@ -114,8 +114,8 @@ pub use validation::{is_garbage, is_garbage_with_context};
 /// API: a goblin release that breaks its API is a stng major release.
 pub use binform;
 pub use goblin;
-pub use layouts::Layout;
 use goblin::Object;
+pub use layouts::Layout;
 pub use options::{ExtractOptions, FormatHint, XorMode};
 pub use pipeline::decode::decode_encoded_strings;
 
