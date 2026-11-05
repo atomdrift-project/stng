@@ -23,10 +23,21 @@ thread_local! {
 /// Run `f` with [`MAX_EXPANDED_PER_SCRIPT`] bytes of expansion to spend.
 /// Script extraction is sequential, so a thread-local budget covers it.
 pub(crate) fn with_expansion_budget<T>(f: impl FnOnce() -> T) -> T {
-    let outer = EXPANSION_BUDGET.replace(MAX_EXPANDED_PER_SCRIPT);
-    let result = f();
-    EXPANSION_BUDGET.set(outer);
-    result
+    /// Restores the outer budget even when `f` panics, so a caller that
+    /// catches the panic does not keep this script's leftover budget.
+    struct Restore(usize);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            EXPANSION_BUDGET.set(self.0);
+        }
+    }
+    let _restore = Restore(EXPANSION_BUDGET.replace(MAX_EXPANDED_PER_SCRIPT));
+    f()
+}
+
+/// Whether the budget is spent, so expanding work can be skipped up front.
+pub(crate) fn expansion_spent() -> bool {
+    EXPANSION_BUDGET.get() == 0
 }
 
 /// Charge `n` expanded bytes to the budget; false once it cannot cover them.
@@ -35,7 +46,7 @@ pub(crate) fn spend_expansion(n: usize) -> bool {
     let ok = n <= left;
     EXPANSION_BUDGET.set(if ok { left - n } else { 0 });
     if !ok {
-        tracing::warn!(
+        tracing::debug!(
             "script expansion budget of {MAX_EXPANDED_PER_SCRIPT} bytes spent; payload skipped"
         );
     }
@@ -50,22 +61,17 @@ pub(crate) const MAX_DECODE_DEPTH: usize = 3;
 pub(crate) enum DecodeStep {
     /// Standard base64 decoding
     Base64,
-    /// Zlib inflate (raw deflate stream)
+    /// Zlib inflate (RFC 1950: header, deflate stream, Adler-32)
     Zlib,
     /// Single-byte XOR with a known key
     Xor(u8),
-    /// ROT13 on ASCII letters
-    Rot13,
-    /// Caesar rotation of ASCII letters by an arbitrary amount. ROT13 is the
-    /// self-inverse special case that gets its own variant; packers routinely
-    /// pick another shift precisely because 13 is the one people try.
+    /// Caesar rotation of ASCII letters. Packers use shifts other than 13
+    /// precisely because 13 is the one people try.
     Rot(u8),
     /// UTF-16LE to UTF-8
     Utf16Le,
     /// Reverse the byte sequence
     Reverse,
-    /// Decode a list of integer char codes to a string (already parsed to bytes)
-    CharCodes(Vec<u8>),
     /// Hex decoding (e.g., "48656c6c6f" → "Hello")
     HexDecode,
 }
@@ -77,10 +83,8 @@ impl std::fmt::Display for DecodeStep {
             Self::Base64 => write!(f, "base64"),
             Self::Zlib => write!(f, "zlib"),
             Self::Xor(key) => write!(f, "xor(0x{key:02x})"),
-            Self::Rot13 => write!(f, "rot13"),
             Self::Utf16Le => write!(f, "utf16le"),
             Self::Reverse => write!(f, "reverse"),
-            Self::CharCodes(_) => write!(f, "charcodes"),
             Self::HexDecode => write!(f, "hex"),
         }
     }
@@ -108,7 +112,7 @@ pub(crate) fn apply_chain(input: &[u8], steps: &[DecodeStep]) -> Option<DecodeRe
 
     for step in steps {
         if buf.len() > MAX_DECODED_SIZE {
-            tracing::warn!(
+            tracing::debug!(
                 "Decode chain exceeded max size ({} bytes), aborting",
                 buf.len()
             );
@@ -119,7 +123,6 @@ pub(crate) fn apply_chain(input: &[u8], steps: &[DecodeStep]) -> Option<DecodeRe
         descriptions.push(step.to_string());
     }
 
-    // Convert final result to UTF-8
     let payload = String::from_utf8(buf).ok()?;
     if payload.is_empty() {
         return None;
@@ -131,17 +134,20 @@ pub(crate) fn apply_chain(input: &[u8], steps: &[DecodeStep]) -> Option<DecodeRe
     })
 }
 
-/// Read a decompressor to the end, refusing empty output and output larger
-/// than [`MAX_DECODED_SIZE`]: a few KB of crafted deflate stream can expand to
-/// gigabytes, so the limit applies while inflating, not after.
+/// Read a decompressor to the end, refusing empty output, output larger than
+/// [`MAX_DECODED_SIZE`], and output the expansion budget cannot cover: a few
+/// KB of crafted deflate stream can expand to gigabytes, so both limits apply
+/// while inflating, not after.
 pub(crate) fn inflate(decoder: impl std::io::Read) -> Option<Vec<u8>> {
     use std::io::Read;
+    let limit = MAX_DECODED_SIZE.min(EXPANSION_BUDGET.get());
     let mut out = Vec::new();
-    decoder
-        .take(MAX_DECODED_SIZE as u64 + 1)
-        .read_to_end(&mut out)
-        .ok()?;
-    (!out.is_empty() && out.len() <= MAX_DECODED_SIZE && spend_expansion(out.len())).then_some(out)
+    decoder.take(limit as u64 + 1).read_to_end(&mut out).ok()?;
+    if out.is_empty() || out.len() > MAX_DECODED_SIZE {
+        return None;
+    }
+    // Over the budget but within the cap: `spend_expansion` refuses and logs.
+    spend_expansion(out.len()).then_some(out)
 }
 
 /// Apply a single decode step to a byte buffer.
@@ -157,7 +163,6 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
         }
         DecodeStep::Zlib => inflate(flate2::read::ZlibDecoder::new(input)),
         DecodeStep::Xor(key) => Some(input.iter().map(|b| b ^ key).collect()),
-        DecodeStep::Rot13 => apply_step(input, &DecodeStep::Rot(13)),
         // Only ASCII letters change, so every byte maps to one byte.
         DecodeStep::Rot(n) => Some(
             input
@@ -173,7 +178,7 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
                 .as_chunks::<2>()
                 .0
                 .iter()
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .map(|&c| u16::from_le_bytes(c))
                 .collect();
             let s = String::from_utf16(&code_units).ok()?;
             Some(s.into_bytes())
@@ -188,10 +193,6 @@ fn apply_step(input: &[u8], step: &DecodeStep) -> Option<Vec<u8>> {
                 Some(reversed)
             }
         },
-        DecodeStep::CharCodes(codes) => {
-            // Already pre-parsed to bytes
-            Some(codes.clone())
-        }
         DecodeStep::HexDecode => crate::bytes::from_hex(input),
     }
 }
@@ -220,14 +221,14 @@ mod tests {
     }
 
     #[test]
-    fn test_base64_step() {
+    fn decodes_base64() {
         let input = b"SGVsbG8gV29ybGQ="; // "Hello World"
         let result = apply_step(input, &DecodeStep::Base64);
         assert_eq!(result.as_deref(), Some(b"Hello World".as_slice()));
     }
 
     #[test]
-    fn test_xor_step() {
+    fn decodes_single_byte_xor() {
         let key = 0x42u8;
         let input: Vec<u8> = b"Hello".iter().map(|b| b ^ key).collect();
         let result = apply_step(&input, &DecodeStep::Xor(key));
@@ -235,35 +236,35 @@ mod tests {
     }
 
     #[test]
-    fn test_rot13_step() {
+    fn decodes_rot13() {
         let input = b"Uryyb Jbeyq"; // ROT13 of "Hello World"
-        let result = apply_step(input, &DecodeStep::Rot13);
+        let result = apply_step(input, &DecodeStep::Rot(13));
         assert_eq!(result.as_deref(), Some(b"Hello World".as_slice()));
     }
 
     #[test]
-    fn test_utf16le_step() {
+    fn decodes_utf16le() {
         let input = b"H\x00e\x00l\x00l\x00o\x00";
         let result = apply_step(input, &DecodeStep::Utf16Le);
         assert_eq!(result.as_deref(), Some(b"Hello".as_slice()));
     }
 
     #[test]
-    fn test_reverse_step() {
+    fn reverses_bytes() {
         let input = b"dlroW olleH";
         let result = apply_step(input, &DecodeStep::Reverse);
         assert_eq!(result.as_deref(), Some(b"Hello World".as_slice()));
     }
 
     #[test]
-    fn test_hex_step() {
+    fn decodes_hex() {
         let input = b"48656c6c6f";
         let result = apply_step(input, &DecodeStep::HexDecode);
         assert_eq!(result.as_deref(), Some(b"Hello".as_slice()));
     }
 
     #[test]
-    fn test_zlib_step() {
+    fn inflates_zlib() {
         use flate2::Compression;
         use flate2::write::ZlibEncoder;
         use std::io::Write;
@@ -275,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn test_chain_base64_then_xor() {
+    fn chains_base64_xor_with_description() {
         // Encode: "Hello" → XOR(0x42) → base64
         let xored: Vec<u8> = b"Hello".iter().map(|b| b ^ 0x42).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&xored);
@@ -288,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn test_chain_base64_zlib() {
+    fn chains_base64_zlib() {
         use flate2::Compression;
         use flate2::write::ZlibEncoder;
         use std::io::Write;
@@ -306,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn test_chain_base64_zlib_xor() {
+    fn chains_base64_zlib_xor() {
         use flate2::Compression;
         use flate2::write::ZlibEncoder;
         use std::io::Write;
@@ -325,19 +326,19 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_input_returns_none() {
+    fn rejects_empty_input() {
         let result = apply_chain(b"", &[DecodeStep::Base64]);
         assert!(result.is_none());
     }
 
     #[test]
-    fn test_empty_steps_returns_none() {
+    fn rejects_empty_chain() {
         let result = apply_chain(b"Hello", &[]);
         assert!(result.is_none());
     }
 
     #[test]
-    fn test_invalid_base64_returns_none() {
+    fn rejects_invalid_base64() {
         let result = apply_chain(b"not!valid!base64!!!", &[DecodeStep::Base64]);
         assert!(result.is_none());
     }

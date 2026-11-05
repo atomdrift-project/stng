@@ -24,7 +24,7 @@ fn load_strings() -> Vec<stng::ExtractedString> {
 }
 
 #[test]
-fn pe_inline_shell_command_recovered_without_r2() {
+fn pe_inline_shell_command_recovered() {
     let strings = load_strings();
 
     // Each MBR-wipe variant must appear as its own bounded string (not merely

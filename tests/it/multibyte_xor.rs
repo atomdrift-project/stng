@@ -6,7 +6,7 @@
 use stng::{ExtractOptions, StringMethod};
 
 #[test]
-fn test_multibyte_xor_basic() {
+fn decodes_strings_separated_by_garbage() {
     // Create test data with strings XOR'd independently
     let key = b"SECRET";
     let strings = vec!["hello world", "test string", "osascript command"];
@@ -55,7 +55,7 @@ fn test_multibyte_xor_basic() {
 }
 
 #[test]
-fn test_multibyte_xor_with_newlines() {
+fn decodes_multiline_string_whole() {
     // Test multi-line strings (common in malware AppleScript/shell commands)
     let key = b"KEY123";
     let multiline = "line one\nline two\nline three";
@@ -87,9 +87,9 @@ fn test_multibyte_xor_with_newlines() {
 }
 
 #[test]
-fn test_multibyte_xor_real_malware() {
+fn decodes_brew_agent_targets() {
     // Test against real malware sample (DPRK brew_agent)
-    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     // Skip if sample doesn't exist (e.g., in CI)
 
@@ -154,7 +154,7 @@ fn test_multibyte_xor_real_malware() {
 }
 
 #[test]
-fn test_multibyte_xor_offsets() {
+fn reports_offset_of_decoded_string() {
     // Test that offsets are correctly reported for multi-line strings
     let key = b"ABC";
     let text = "firstline\nsecondline\nthirdline";
@@ -196,7 +196,7 @@ fn test_multibyte_xor_offsets() {
 }
 
 #[test]
-fn test_multibyte_xor_independent_cycling() {
+fn restarts_key_at_each_string() {
     // Verify that each string cycles from key[0], not from file offset 0
     let key = b"ABCD";
 
@@ -245,7 +245,7 @@ fn test_multibyte_xor_independent_cycling() {
 }
 
 #[test]
-fn test_multibyte_xor_min_length() {
+fn drops_strings_below_min_length() {
     let key = b"KEY";
 
     let mut data = Vec::new();

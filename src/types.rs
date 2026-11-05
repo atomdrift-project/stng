@@ -36,11 +36,20 @@ impl StringBoundary {
 
 /// Represents a fragment of a multi-part string (e.g., stack strings from multiple instructions)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StringFragment {
     /// File offset where this fragment's data is located
     pub offset: u64,
     /// Length of this fragment in bytes
     pub length: usize,
+}
+
+impl StringFragment {
+    /// The `length` bytes at file offset `offset`.
+    #[must_use]
+    pub fn new(offset: u64, length: usize) -> Self {
+        Self { offset, length }
+    }
 }
 
 /// An extracted string with metadata.
@@ -76,16 +85,43 @@ pub struct ExtractedString {
     /// transient `ExtractedString`s at peak, so an inline `Option<Vec<_>>`
     /// (24 B on every string) dominated peak RSS. Behind `Option<Box<_>>` the
     /// common case is 8 bytes and the rare case pays one allocation.
+    /// Read with [`fragments`](Self::fragments).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fragments: Option<Box<Vec<StringFragment>>>,
+    #[expect(
+        clippy::box_collection,
+        reason = "8 bytes per string, not 24; see above"
+    )]
+    pub(crate) fragments: Option<Box<Vec<StringFragment>>>,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if signature
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
 fn is_zero_u32(v: &u32) -> bool {
     *v == 0
 }
 
+/// Drop each string whose value an earlier one has, keeping their order.
+/// Borrows the values rather than copying each into the set.
+pub(crate) fn dedup_by_value(strings: &mut Vec<ExtractedString>) {
+    let mut seen = std::collections::HashSet::with_capacity(strings.len());
+    let keep: Vec<bool> = strings
+        .iter()
+        .map(|s| seen.insert(s.value.as_str()))
+        .collect();
+    let mut keep = keep.into_iter();
+    strings.retain(|_| keep.next().unwrap_or(true));
+}
+
 impl ExtractedString {
+    /// The scattered source spans of a multi-part (stack-built) value, in
+    /// order; empty for a contiguous string.
+    #[must_use]
+    pub fn fragments(&self) -> &[StringFragment] {
+        self.fragments.as_deref().map_or(&[], Vec::as_slice)
+    }
+
     /// `value`, found at file offset `data_offset` by `method`, with no kind
     /// and a source as long as `value`. Adjust with the `with_*` methods.
     #[must_use]
@@ -189,7 +225,7 @@ impl Default for ExtractedString {
 /// hint get current behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
-pub enum Arch {
+pub(crate) enum Arch {
     /// 32-bit x86.
     X86,
     /// x86-64.
@@ -222,83 +258,8 @@ impl Arch {
     /// `true` for x86-family architectures (x86 and x86-64).  Used by
     /// rules that decode bytes assuming x86 instruction encoding.
     #[must_use]
-    pub fn is_x86_family(self) -> bool {
+    pub(crate) fn is_x86_family(self) -> bool {
         matches!(self, Self::X86 | Self::X86_64)
-    }
-
-    /// Parse the architecture name strings stng uses elsewhere
-    /// (Mach-O fat slice labels, ELF e_machine names) into a typed
-    /// `Arch`.  Returns `None` for unrecognised inputs so callers can
-    /// fall back to the no-arch-info default.
-    #[must_use]
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "x86_64" | "x64" | "amd64" => Some(Self::X86_64),
-            "x86" | "i386" | "i686" => Some(Self::X86),
-            "arm64" | "aarch64" => Some(Self::Aarch64),
-            "arm" | "armv7" | "armv6" => Some(Self::Arm),
-            "mips" => Some(Self::Mips),
-            "mips64" => Some(Self::Mips64),
-            "ppc" | "powerpc" => Some(Self::PowerPc),
-            "ppc64" | "powerpc64" => Some(Self::PowerPc64),
-            "riscv" | "riscv32" => Some(Self::RiscV),
-            "riscv64" => Some(Self::RiscV64),
-            "sparc" => Some(Self::Sparc),
-            "wasm" | "wasm32" | "wasm64" => Some(Self::Wasm),
-            _ => None,
-        }
-    }
-
-    /// Map an ELF `e_machine` value to a typed `Arch`. Returns `None`
-    /// for machines stng has no rule for. Constants per the ELF
-    /// specification.
-    #[must_use]
-    pub fn from_elf_machine(em: u16) -> Option<Self> {
-        match em {
-            2 | 18 | 43 => Some(Self::Sparc), // EM_SPARC, EM_SPARC32PLUS, EM_SPARCV9
-            3 => Some(Self::X86),             // EM_386
-            8 => Some(Self::Mips),            // EM_MIPS
-            20 => Some(Self::PowerPc),        // EM_PPC
-            21 => Some(Self::PowerPc64),      // EM_PPC64
-            40 => Some(Self::Arm),            // EM_ARM
-            62 => Some(Self::X86_64),         // EM_X86_64
-            183 => Some(Self::Aarch64),       // EM_AARCH64
-            243 => Some(Self::RiscV64),       // EM_RISCV — 32/64 distinguished by EI_CLASS
-            _ => None,
-        }
-    }
-
-    /// Map a PE `IMAGE_FILE_MACHINE_*` value to a typed `Arch`.
-    /// Constants per the PE/COFF specification.
-    #[must_use]
-    pub fn from_pe_machine(machine: u16) -> Option<Self> {
-        match machine {
-            0x014c => Some(Self::X86),          // IMAGE_FILE_MACHINE_I386
-            0x8664 => Some(Self::X86_64),       // IMAGE_FILE_MACHINE_AMD64
-            0x01c0 | 0x01c4 => Some(Self::Arm), // ARM, ARMNT
-            0xaa64 => Some(Self::Aarch64),      // ARM64
-            0x5032 => Some(Self::RiscV),        // IMAGE_FILE_MACHINE_RISCV32
-            0x5064 => Some(Self::RiscV64),      // IMAGE_FILE_MACHINE_RISCV64
-            _ => None,
-        }
-    }
-
-    /// Map a Mach-O `cputype` value to a typed `Arch`.
-    /// `CPU_ARCH_ABI64 = 0x01000000` flag distinguishes 64-bit variants.
-    #[must_use]
-    pub fn from_macho_cputype(cputype: u32) -> Option<Self> {
-        const CPU_ARCH_ABI64: u32 = 0x0100_0000;
-        let base = cputype & !CPU_ARCH_ABI64;
-        let is_64 = (cputype & CPU_ARCH_ABI64) != 0;
-        match (base, is_64) {
-            (7, false) => Some(Self::X86),
-            (7, true) => Some(Self::X86_64),
-            (12, false) => Some(Self::Arm),
-            (12, true) => Some(Self::Aarch64),
-            (18, false) => Some(Self::PowerPc),
-            (18, true) => Some(Self::PowerPc64),
-            _ => None,
-        }
     }
 }
 
@@ -314,35 +275,26 @@ impl Arch {
 /// save-sequence filter; a `.rodata` string skips it too).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub struct StringContext {
+pub(crate) struct StringContext {
     /// Semantic kind from the extractor (URL, Path, Section, …).
     /// What the extractor already recognised the string as, if anything.
-    pub kind: Option<StringKind>,
+    pub(crate) kind: Option<StringKind>,
     /// Whether the string lives in an executable (code) section, when
     /// known. `Some(false)` lets code-only rules (the x86 save-sequence
     /// detector) opt out; `None` means "unknown — apply the rule".
-    pub in_code_section: Option<bool>,
+    pub(crate) in_code_section: Option<bool>,
     /// CPU architecture, when known.  `None` means "no info — assume
     /// any rule may apply"; `Some(non-x86)` switches off x86-only
     /// rules without the caller having to know which they are.
-    pub arch: Option<Arch>,
+    pub(crate) arch: Option<Arch>,
 }
 
 impl StringContext {
     /// A context that assumes nothing: what [`is_garbage`](crate::is_garbage)
     /// uses.
     #[must_use]
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self::default()
-    }
-
-    /// Convenience: build a context carrying only a kind hint.
-    #[must_use]
-    pub fn with_kind(kind: Option<StringKind>) -> Self {
-        Self {
-            kind,
-            ..Self::default()
-        }
     }
 }
 
@@ -437,6 +389,23 @@ impl StringMethod {
         }
     }
 
+    /// Whether the string is another extracted string's text decoded in
+    /// place, and so shares that string's offset.
+    pub(crate) fn decodes_a_string(self) -> bool {
+        matches!(
+            self,
+            Self::Base64Decode
+                | Self::Base64ObfuscatedDecode
+                | Self::Base32Decode
+                | Self::Base85Decode
+                | Self::Rot13Base64Decode
+                | Self::HexDecode
+                | Self::UrlDecode
+                | Self::UnicodeEscapeDecode
+                | Self::ScriptDecode
+        )
+    }
+
     /// A short label for the method's column in the `stng` listing: what
     /// was decoded (`xor`, `b64`, `script`), or empty for plain extraction.
     #[must_use]
@@ -454,7 +423,16 @@ impl StringMethod {
             Self::WideString => "wide",
             Self::SpacedAscii => "spaced",
             Self::ScriptDecode => "script",
-            _ => "",
+            Self::Rot13Base64Decode => "rot13",
+            Self::Utf16LeDecode | Self::Utf16BeDecode => "utf16",
+            Self::CfmlDecode => "cfml",
+            Self::StackString => "stack",
+            // Plain extraction: no decoding to call out.
+            Self::Structure
+            | Self::InstructionPattern
+            | Self::RawScan
+            | Self::Heuristic
+            | Self::PclntabSymbol => "",
         }
     }
 }
@@ -585,14 +563,14 @@ pub enum StringKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Severity {
-    /// Critical IOCs: IPs, URLs, shell commands, suspicious paths
-    High = 0,
-    /// Important context: paths, env vars, imports
-    Medium = 1,
-    /// Supporting info: function names, exports
-    Low = 2,
     /// Default: constants, identifiers
-    Info = 3,
+    Info,
+    /// Supporting info: function names, exports
+    Low,
+    /// Important context: paths, env vars, imports
+    Medium,
+    /// Critical IOCs: IPs, URLs, shell commands, suspicious paths
+    High,
 }
 
 impl StringKind {
@@ -826,244 +804,4 @@ pub struct OverlayInfo {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_arch_from_name() {
-        assert_eq!(Arch::from_name("x86_64"), Some(Arch::X86_64));
-        assert_eq!(Arch::from_name("amd64"), Some(Arch::X86_64));
-        assert_eq!(Arch::from_name("x64"), Some(Arch::X86_64));
-        assert_eq!(Arch::from_name("aarch64"), Some(Arch::Aarch64));
-        assert_eq!(Arch::from_name("arm64"), Some(Arch::Aarch64));
-        assert_eq!(Arch::from_name("arm"), Some(Arch::Arm));
-        assert_eq!(Arch::from_name("riscv64"), Some(Arch::RiscV64));
-        assert_eq!(Arch::from_name("mips"), Some(Arch::Mips));
-        assert_eq!(Arch::from_name("powerpc"), Some(Arch::PowerPc));
-        assert_eq!(Arch::from_name("wasm"), Some(Arch::Wasm));
-        // Unknown returns None so callers fall back to the empty context
-        assert_eq!(Arch::from_name("alpha"), None);
-        assert_eq!(Arch::from_name(""), None);
-    }
-
-    #[test]
-    fn test_arch_is_x86_family() {
-        assert!(Arch::X86.is_x86_family());
-        assert!(Arch::X86_64.is_x86_family());
-        assert!(!Arch::Aarch64.is_x86_family());
-        assert!(!Arch::Arm.is_x86_family());
-        assert!(!Arch::Mips.is_x86_family());
-        assert!(!Arch::Wasm.is_x86_family());
-    }
-
-    #[test]
-    fn source_spans_use_recorded_extent_then_fall_back_then_fragments() {
-        // Recorded extent (e.g. a UTF-16LE string: source is 2× the value).
-        let wide = ExtractedString {
-            value: "Hi".into(),
-            data_offset: 0x40,
-            data_len: 4,
-            method: StringMethod::WideString,
-            ..Default::default()
-        };
-        assert_eq!(wide.source_spans().collect::<Vec<_>>(), vec![(0x40, 4)]);
-
-        // No recorded extent → byte-identical fallback to the value length.
-        let ascii = ExtractedString {
-            value: "abcd".into(),
-            data_offset: 0x10,
-            method: StringMethod::RawScan,
-            ..Default::default()
-        };
-        assert_eq!(ascii.source_spans().collect::<Vec<_>>(), vec![(0x10, 4)]);
-
-        // Scattered stack string → the fragments, not the (bogus) single extent.
-        let stack = ExtractedString {
-            value: "STACK".into(),
-            data_offset: 9999,
-            data_len: 0,
-            method: StringMethod::StackString,
-            fragments: Some(Box::new(vec![
-                StringFragment {
-                    offset: 0x100,
-                    length: 4,
-                },
-                StringFragment {
-                    offset: 0x200,
-                    length: 1,
-                },
-            ])),
-            ..Default::default()
-        };
-        assert_eq!(
-            stack.source_spans().collect::<Vec<_>>(),
-            vec![(0x100, 4), (0x200, 1)]
-        );
-    }
-
-    #[test]
-    fn test_binary_info_64bit_le() {
-        let info = BinaryInfo::from_elf(true, true);
-        assert!(info.is_64bit);
-        assert!(info.is_little_endian);
-        assert_eq!(info.ptr_size, 8);
-    }
-
-    #[test]
-    fn test_binary_info_32bit_le() {
-        let info = BinaryInfo::from_elf(false, true);
-        assert!(!info.is_64bit);
-        assert!(info.is_little_endian);
-        assert_eq!(info.ptr_size, 4);
-    }
-
-    #[test]
-    fn test_binary_info_64bit_be() {
-        let info = BinaryInfo::from_elf(true, false);
-        assert!(info.is_64bit);
-        assert!(!info.is_little_endian);
-        assert_eq!(info.ptr_size, 8);
-    }
-
-    #[test]
-    fn test_binary_info_32bit_be() {
-        let info = BinaryInfo::from_elf(false, false);
-        assert!(!info.is_64bit);
-        assert!(!info.is_little_endian);
-        assert_eq!(info.ptr_size, 4);
-    }
-
-    #[test]
-    fn test_binary_info_from_elf() {
-        let info64 = BinaryInfo::from_elf(true, true);
-        assert!(info64.is_64bit);
-        assert!(info64.is_little_endian);
-        assert_eq!(info64.ptr_size, 8);
-
-        let info32 = BinaryInfo::from_elf(false, false);
-        assert!(!info32.is_64bit);
-        assert!(!info32.is_little_endian);
-        assert_eq!(info32.ptr_size, 4);
-    }
-
-    #[test]
-    fn test_binary_info_from_macho() {
-        let info64 = BinaryInfo::from_macho(true);
-        assert!(info64.is_64bit);
-        assert!(info64.is_little_endian); // Mach-O always LE
-        assert_eq!(info64.ptr_size, 8);
-
-        let info32 = BinaryInfo::from_macho(false);
-        assert!(!info32.is_64bit);
-        assert!(info32.is_little_endian);
-        assert_eq!(info32.ptr_size, 4);
-    }
-
-    #[test]
-    fn test_binary_info_from_pe() {
-        let info64 = BinaryInfo::from_pe(true);
-        assert!(info64.is_64bit);
-        assert!(info64.is_little_endian); // PE always LE
-        assert_eq!(info64.ptr_size, 8);
-
-        let info32 = BinaryInfo::from_pe(false);
-        assert!(!info32.is_64bit);
-        assert!(info32.is_little_endian);
-        assert_eq!(info32.ptr_size, 4);
-    }
-
-    // ===== OverlayInfo Tests =====
-
-    #[test]
-    fn test_overlay_info_construction() {
-        let overlay = OverlayInfo {
-            start_offset: 0x10000,
-            size: 0x5000,
-        };
-
-        assert_eq!(overlay.start_offset, 0x10000);
-        assert_eq!(overlay.size, 0x5000);
-    }
-
-    #[test]
-    fn test_overlay_info_clone() {
-        let overlay = OverlayInfo {
-            start_offset: 0x20000,
-            size: 0x8000,
-        };
-
-        let cloned = overlay;
-        assert_eq!(overlay.start_offset, cloned.start_offset);
-        assert_eq!(overlay.size, cloned.size);
-    }
-
-    #[test]
-    fn test_overlay_info_equality() {
-        let overlay1 = OverlayInfo {
-            start_offset: 1000,
-            size: 500,
-        };
-
-        let overlay2 = OverlayInfo {
-            start_offset: 1000,
-            size: 500,
-        };
-
-        assert_eq!(overlay1, overlay2);
-    }
-
-    // ===== StringStruct Tests =====
-
-    #[test]
-    fn test_string_struct_construction() {
-        let s = StringStruct {
-            struct_offset: 0x1000,
-            ptr: 0x2000,
-            len: 42,
-        };
-
-        assert_eq!(s.struct_offset, 0x1000);
-        assert_eq!(s.ptr, 0x2000);
-        assert_eq!(s.len, 42);
-    }
-
-    #[test]
-    fn test_string_struct_equality() {
-        let s1 = StringStruct {
-            struct_offset: 100,
-            ptr: 200,
-            len: 10,
-        };
-
-        let s2 = StringStruct {
-            struct_offset: 100,
-            ptr: 200,
-            len: 10,
-        };
-
-        assert_eq!(s1, s2);
-    }
-
-    #[test]
-    fn test_string_struct_hash() {
-        use std::collections::HashSet;
-
-        let s1 = StringStruct {
-            struct_offset: 100,
-            ptr: 200,
-            len: 10,
-        };
-
-        let s2 = StringStruct {
-            struct_offset: 100,
-            ptr: 200,
-            len: 10,
-        };
-
-        let mut set = HashSet::new();
-        set.insert(s1);
-        assert!(set.contains(&s2)); // Should find duplicate
-    }
-
-    // ===== ExtractedString with Fragments Tests =====
-}
+mod tests;

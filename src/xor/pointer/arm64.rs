@@ -7,7 +7,10 @@
 //! (X19-X28) are read from the code. See
 //! `tests::saved_seed_register_renames_resolve_the_same_seed` and the mutation
 //! tests beside it.
-#![allow(clippy::cast_possible_truncation)]
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "a W register is the low 32 bits of its X register"
+)]
 use super::Region;
 use crate::arm64::RET;
 mod immediate;
@@ -41,8 +44,8 @@ fn shifted(value: u32, kind: u32, amount: u32) -> u32 {
     }
 }
 
-// Decode a 32-bit logical immediate, including repeated two-bit elements.
-/// A 32-bit logical immediate; 64-bit elements (N=1) are not modelled.
+/// A 32-bit logical immediate, repeated elements included; 64-bit elements
+/// (N=1) are not modelled.
 fn bitmask(inst: u32) -> Option<u32> {
     if inst & (1 << 22) != 0 {
         return None;
@@ -383,36 +386,13 @@ pub(super) fn extract(
         let Some(key) = fold(code, setup.helper, setup.base, seed) else {
             continue;
         };
-        let Some(cipher) = constants
-            .iter()
-            .find(|r| r.at(literal.cipher, literal.length).is_some())
-        else {
-            continue;
-        };
-        let Some(encoded) = cipher.at(literal.cipher, literal.length) else {
-            continue;
-        };
-        let Some(key) = constants.iter().find_map(|r| r.at(key, literal.length)) else {
-            continue;
-        };
-        let decoded: Vec<_> = encoded.iter().zip(key).map(|(a, b)| a ^ b).collect();
-        let Some(value) = crate::text::readable(decoded) else {
-            continue;
-        };
-        let Some(offset) = slice_base
-            .checked_add(cipher.offset)
-            .and_then(|n| n.checked_add(literal.cipher - cipher.addr))
-        else {
-            continue;
-        };
-        out.push(crate::ExtractedString {
-            kind: crate::classify_string(&value),
-            value,
-            data_offset: offset,
-            data_len: u32::try_from(literal.length).unwrap_or(u32::MAX),
-            method: crate::StringMethod::XorDecode,
-            ..Default::default()
-        });
+        out.extend(super::xor_pair(
+            constants,
+            literal.cipher,
+            key,
+            literal.length,
+            slice_base,
+        ));
     }
     out
 }

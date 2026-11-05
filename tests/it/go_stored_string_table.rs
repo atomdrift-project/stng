@@ -20,10 +20,6 @@ const TABLE: [&str; 4] = [
     "/.stng-fixture-table-delta1",
 ];
 
-fn fixture(name: &str) -> Vec<u8> {
-    crate::common::bytes(&format!("testdata/go_pclntab/{name}"))
-}
-
 /// Each table entry, recovered as itself — not merely contained in some
 /// longer string, which is what a stale length over Go's packed rodata yields.
 fn recovered<'a>(name: &str, strings: &'a [ExtractedString]) -> Vec<&'a ExtractedString> {
@@ -40,7 +36,7 @@ fn recovered<'a>(name: &str, strings: &'a [ExtractedString]) -> Vec<&'a Extracte
 
 #[test]
 fn darwin_arm64_recovers_stack_built_string_table() {
-    let data = fixture("darwin_arm64");
+    let data = crate::common::bytes("testdata/go_pclntab/darwin_arm64");
     let strings = extract_strings(&data, 4);
     for s in recovered("darwin_arm64", &strings) {
         let start = usize::try_from(s.data_offset).unwrap();
@@ -56,14 +52,20 @@ fn darwin_arm64_recovers_stack_built_string_table() {
 
 #[test]
 fn linux_arm64_recovers_stack_built_string_table() {
-    recovered("linux_arm64", &extract_strings(&fixture("linux_arm64"), 4));
+    recovered(
+        "linux_arm64",
+        &extract_strings(&crate::common::bytes("testdata/go_pclntab/linux_arm64"), 4),
+    );
 }
 
 #[test]
 fn windows_arm64_recovers_stack_built_string_table() {
     recovered(
         "windows_arm64",
-        &extract_strings(&fixture("windows_arm64"), 4),
+        &extract_strings(
+            &crate::common::bytes("testdata/go_pclntab/windows_arm64"),
+            4,
+        ),
     );
 }
 
@@ -82,7 +84,7 @@ fn go_decoded_strings_report_file_offsets() {
         "windows_amd64",
         "windows_arm64",
     ] {
-        let data = fixture(name);
+        let data = crate::common::bytes(&format!("testdata/go_pclntab/{name}"));
         let decoded: Vec<_> = extract_strings(&data, 4)
             .into_iter()
             .filter(|s| {
@@ -115,6 +117,12 @@ fn go_decoded_strings_report_file_offsets() {
 #[test]
 fn amd64_control_recovers_the_same_table() {
     for name in ["darwin_amd64", "linux_amd64", "windows_amd64"] {
-        recovered(name, &extract_strings(&fixture(name), 4));
+        recovered(
+            name,
+            &extract_strings(
+                &crate::common::bytes(&format!("testdata/go_pclntab/{name}")),
+                4,
+            ),
+        );
     }
 }

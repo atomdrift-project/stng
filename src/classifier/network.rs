@@ -9,7 +9,6 @@ use std::sync::LazyLock;
 /// Locations stealers and rootkits go after: credential stores, keychains,
 /// wallets, browser and messenger data, the loader's preload hook. Naming one makes a
 /// string a suspicious path wherever it appears in it, `%s/` prefix and all.
-#[allow(clippy::expect_used)]
 static TARGETED_LOCATIONS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         // Linux rootkits
@@ -60,7 +59,7 @@ static TARGETED_LOCATIONS: LazyLock<AhoCorasick> = LazyLock::new(|| {
         "bash_history",
         "loginusers.vdf",
     ])
-    .expect("valid locations")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Whether `s` names a location in [`TARGETED_LOCATIONS`].
@@ -70,40 +69,36 @@ pub(crate) fn names_targeted_location(s: &str) -> bool {
 
 /// Check if a string is a suspicious/security-relevant path
 pub(super) fn is_suspicious_path(s: &str) -> bool {
-    // Hidden paths (contain /. component) — fast memchr check
-    if memchr::memmem::find(s.as_bytes(), b"/.").is_some() {
+    // Hidden paths: a `/.` component.
+    if s.contains("/.") {
         return true;
     }
-
-    // Known suspicious locations — only check prefixes that could match.
-    // Most suspicious paths start with /etc, /dev, /proc, /sys, /tmp, /var, /Library.
     if s.starts_with("/etc/") {
-        return memchr::memmem::find(s.as_bytes(), b"ld.so.preload").is_some()
-            || memchr::memmem::find(s.as_bytes(), b"ld.so.conf").is_some()
-            || memchr::memmem::find(s.as_bytes(), b"cron").is_some()
-            || memchr::memmem::find(s.as_bytes(), b"init.d").is_some()
-            || memchr::memmem::find(s.as_bytes(), b"systemd").is_some()
-            || memchr::memmem::find(s.as_bytes(), b"rc.local").is_some();
+        return [
+            "ld.so.preload",
+            "ld.so.conf",
+            "cron",
+            "init.d",
+            "systemd",
+            "rc.local",
+        ]
+        .iter()
+        .any(|name| s.contains(name));
     }
     if s.starts_with("/dev/") {
-        return memchr::memmem::find(s.as_bytes(), b"shm").is_some()
-            || memchr::memmem::find(s.as_bytes(), b"mem").is_some()
-            || memchr::memmem::find(s.as_bytes(), b"kmem").is_some();
+        // `mem` covers `kmem` too.
+        return s.contains("shm") || s.contains("mem");
     }
-    if s.starts_with("/proc/") || s.starts_with("/sys/") {
-        return true;
-    }
-    if s.starts_with("/tmp/") || s.starts_with("/var/tmp/") {
-        return true;
-    }
-    if s.starts_with("/var/spool/cron") {
-        return true;
-    }
-    if s.starts_with("/Library/Launch") {
-        return true;
-    }
-
-    false
+    [
+        "/proc/",
+        "/sys/",
+        "/tmp/",
+        "/var/tmp/",
+        "/var/spool/cron",
+        "/Library/Launch",
+    ]
+    .iter()
+    .any(|prefix| s.starts_with(prefix))
 }
 
 /// Classify IP addresses and IP:port combinations
@@ -129,37 +124,14 @@ pub(super) fn classify_ip(s: &str) -> Option<StringKind> {
         return Some(StringKind::Ip);
     }
 
-    // IPv6 (contains multiple colons, hex chars)
-    if s.contains(':') && memchr::memchr_iter(b':', s.as_bytes()).count() >= 2 {
-        // Reject trailing colons (invalid IPv6)
-        if s.ends_with(':') && !s.ends_with("::") {
-            return None;
-        }
-        // Reject leading colons (invalid unless it's ::)
-        if s.starts_with(':') && !s.starts_with("::") {
-            return None;
-        }
-        // Reject 3+ consecutive colons (only :: is valid)
-        if s.contains(":::") {
-            return None;
-        }
-        // Reject multiple :: occurrences (only one allowed)
-        if s.matches("::").count() > 1 {
-            return None;
-        }
-        let valid_ipv6 = s
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.');
-        // Require at least one hextet of 2+ hex digits. Real IPv6 addresses
-        // carry a multi-digit prefix (2001, fe80, fc00, …) or interface
-        // identifier; forms made entirely of single-digit groups (e.g. "0::c",
-        // "4::e") are random binary noise, not credible IOCs.
-        let has_substantial_hextet = s
-            .split(':')
-            .any(|group| group.len() >= 2 && group.bytes().all(|b| b.is_ascii_hexdigit()));
-        if valid_ipv6 && has_substantial_hextet && s.len() >= 3 {
-            return Some(StringKind::Ip);
-        }
+    // IPv6, as the standard library parses it, with at least one hextet of
+    // two or more digits. Real addresses carry a multi-digit prefix (2001,
+    // fe80, fc00) or interface identifier; "0::c" and "4::e" are noise.
+    if s.parse::<std::net::Ipv6Addr>().is_ok()
+        && s.split(':')
+            .any(|group| group.len() >= 2 && group.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Some(StringKind::Ip);
     }
 
     None
@@ -167,17 +139,16 @@ pub(super) fn classify_ip(s: &str) -> Option<StringKind> {
 
 /// Check if a string is a valid IPv4 address (not a version number)
 pub(super) fn is_ipv4(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('.').collect();
-    if parts.len() != 4 {
-        return false;
-    }
-
+    let mut parts = s.split('.');
     let mut octets = [0u8; 4];
-    for (i, part) in parts.iter().enumerate() {
-        match part.parse::<u8>() {
-            Ok(n) => octets[i] = n,
-            Err(_) => return false,
+    for octet in &mut octets {
+        match parts.next().map(str::parse) {
+            Some(Ok(n)) => *octet = n,
+            _ => return false,
         }
+    }
+    if parts.next().is_some() {
+        return false;
     }
 
     // Whitelist well-known public DNS and infrastructure IPs
@@ -197,13 +168,10 @@ pub(super) fn is_ipv4(s: &str) -> bool {
         return true;
     }
 
-    // Filter out common version number patterns (false positives)
-    // Pattern: X.0.0.0 (e.g., 1.0.0.0, 4.0.0.0, 11.0.0.0) - assembly versions
-    if octets[1] == 0 && octets[2] == 0 && octets[3] == 0 {
-        return false;
-    }
-
-    // Pattern: X.Y.0.0 (e.g., 2.1.0.0, 4.5.0.0) - also common versions
+    // Version numbers. IOC extraction applies a stricter rule to bare quads
+    // (`ioc::looks_like_version`); this one must still accept a lone
+    // `192.168.1.1`.
+    // X.Y.0.0 (1.0.0.0, 2.1.0.0, 0.0.0.0) is an assembly or file version.
     if octets[2] == 0 && octets[3] == 0 {
         return false;
     }
@@ -221,11 +189,6 @@ pub(super) fn is_ipv4(s: &str) -> bool {
     // Two or more zero octets is almost always a version number (e.g. 18.0.0.23, ProductVersion)
     let zero_count = octets.iter().filter(|&&o| o == 0).count();
     if !is_private_range && zero_count >= 2 {
-        return false;
-    }
-
-    // 0.0.0.0 is not a useful IOC
-    if octets == [0, 0, 0, 0] {
         return false;
     }
 
@@ -247,86 +210,113 @@ pub(super) fn is_ipv4(s: &str) -> bool {
 /// Classify cryptocurrency wallet addresses
 pub(super) fn classify_crypto_address(s: &str) -> Option<StringKind> {
     let len = s.len();
+    let wallet = Some(StringKind::CryptoWallet);
 
-    // Bitcoin (legacy): starts with 1 or 3, 26-35 chars, Base58 (excludes 0, O, I, l)
-    if (s.starts_with('1') || s.starts_with('3')) && (26..=35).contains(&len) {
-        // Must be valid Base58: no 0, O, I, or l characters
-        if s.chars()
-            .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
-        {
-            return Some(StringKind::CryptoWallet);
-        }
+    // Base58Check: Bitcoin (version 0x00 `1…`, 0x05 `3…`), Litecoin (0x30
+    // `L…`, 0x32 `M…`) and Dogecoin (0x1e `D…`). The checksum separates an
+    // address from an identifier that merely avoids `0OIl`.
+    if (26..=35).contains(&len)
+        && base58check_version(s).is_some_and(|v| matches!(v, 0x00 | 0x05 | 0x30 | 0x32 | 0x1e))
+    {
+        return wallet;
     }
 
-    // Bitcoin (bech32): starts with bc1, 42+ chars
-    if s.starts_with("bc1") && len >= 42 {
-        let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
-        if alnum_count * 100 / len >= 95 {
-            return Some(StringKind::CryptoWallet);
-        }
+    // Bitcoin SegWit (bech32 or bech32m), checksum verified.
+    if (14..=90).contains(&len) && s.get(..3).is_some_and(|p| p.eq_ignore_ascii_case("bc1")) {
+        return is_bech32(s).then_some(StringKind::CryptoWallet);
     }
 
-    // Ethereum: starts with 0x, 42 chars hex
-    if s.starts_with("0x") && len == 42 {
-        let hex_count = s[2..].bytes().filter(u8::is_ascii_hexdigit).count();
-        if hex_count == 40 {
-            return Some(StringKind::CryptoWallet);
-        }
+    // Ethereum: 0x and 40 hex digits. Its mixed-case checksum (EIP-55) needs
+    // Keccak, so the shape alone decides.
+    if s.starts_with("0x") && len == 42 && s[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
+        return wallet;
     }
 
     // Monero: starts with 4 or 8, 95-108 chars
     if (s.starts_with('4') || s.starts_with('8')) && (95..=108).contains(&len) {
         let alnum_count = s.bytes().filter(u8::is_ascii_alphanumeric).count();
         if alnum_count * 100 / len >= 95 {
-            return Some(StringKind::CryptoWallet);
+            return wallet;
         }
-    }
-
-    // Litecoin: starts with L or M, 26-35 chars, Base58
-    if (s.starts_with('L') || s.starts_with('M')) && (26..=35).contains(&len) {
-        // Must be valid Base58: no 0, O, I, or l characters
-        if !s
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
-        {
-            return None;
-        }
-
-        // Reject CamelCase identifiers (multiple lowercase-to-uppercase transitions)
-        // Real Litecoin addresses have random-looking mixed case, not structured patterns
-        let mut camel_case_transitions = 0;
-        let mut prev_was_lower = false;
-
-        for c in s.chars() {
-            let is_lower = c.is_ascii_lowercase();
-            let is_upper = c.is_ascii_uppercase();
-
-            if prev_was_lower && is_upper {
-                camel_case_transitions += 1;
-            }
-
-            prev_was_lower = is_lower;
-        }
-
-        // Reject if it has 3+ CamelCase transitions (structured identifiers)
-        // Real crypto addresses may have 0-2 by chance, but 3+ indicates naming pattern
-        if camel_case_transitions >= 3 {
-            return None;
-        }
-
-        return Some(StringKind::CryptoWallet);
-    }
-
-    // Dogecoin: starts with D, 34 chars, Base58
-    if s.starts_with('D')
-        && len == 34
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
-    {
-        return Some(StringKind::CryptoWallet);
     }
 
     None
+}
+
+/// The version byte of a 25-byte Base58Check payload whose double-SHA-256
+/// checksum matches, as in a legacy cryptocurrency address.
+fn base58check_version(s: &str) -> Option<u8> {
+    use sha2::{Digest, Sha256};
+    const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    // Big-endian base-256 accumulator; a 35-digit address fits 26 bytes.
+    let mut bytes = [0u8; 26];
+    for c in s.bytes() {
+        let mut carry = u32::try_from(ALPHABET.iter().position(|&a| a == c)?).ok()?;
+        for byte in bytes.iter_mut().rev() {
+            carry += u32::from(*byte) * 58;
+            *byte = u8::try_from(carry & 0xff).ok()?;
+            carry >>= 8;
+        }
+        if carry != 0 {
+            return None;
+        }
+    }
+    // Each leading `1` is a leading zero byte.
+    let zeros = s.bytes().take_while(|&c| c == b'1').count();
+    let significant = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    if zeros + (bytes.len() - significant) != 25 {
+        return None;
+    }
+    let payload = &bytes[bytes.len() - 25..];
+    let (body, checksum) = payload.split_at(21);
+    let digest = Sha256::digest(Sha256::digest(body));
+    (digest[..4] == *checksum).then_some(body[0])
+}
+
+/// A valid bech32 (BIP 173) or bech32m (BIP 350) string: one case, an
+/// `hrp1data` split, and a checksum that verifies.
+fn is_bech32(s: &str) -> bool {
+    const CHARSET: &[u8; 32] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+    if s.bytes().any(|b| b.is_ascii_lowercase()) && s.bytes().any(|b| b.is_ascii_uppercase()) {
+        return false;
+    }
+    let s = s.to_ascii_lowercase();
+    let Some((hrp, data)) = s.rsplit_once('1') else {
+        return false;
+    };
+    if hrp.is_empty() || data.len() < 6 {
+        return false;
+    }
+    let mut values = Vec::with_capacity(hrp.len() * 2 + 1 + data.len());
+    values.extend(hrp.bytes().map(|b| b >> 5));
+    values.push(0);
+    values.extend(hrp.bytes().map(|b| b & 31));
+    for c in data.bytes() {
+        let Some(v) = CHARSET.iter().position(|&x| x == c) else {
+            return false;
+        };
+        values.push(u8::try_from(v).unwrap_or(0));
+    }
+    let polymod = values.iter().fold(1u32, |chk, &v| {
+        let top = chk >> 25;
+        let mut chk = ((chk & 0x01ff_ffff) << 5) ^ u32::from(v);
+        for (bit, generator) in [
+            0x3b6a_57b2,
+            0x2650_8e6d,
+            0x1ea1_19fa,
+            0x3d42_33dd,
+            0x2a14_62b3,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if (top >> bit) & 1 == 1 {
+                chk ^= generator;
+            }
+        }
+        chk
+    });
+    matches!(polymod, 1 | 0x2bc8_30a3)
 }
 
 /// Classify API keys and secrets

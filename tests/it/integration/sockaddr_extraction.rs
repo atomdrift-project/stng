@@ -2,7 +2,7 @@ use std::fs;
 use stng::{ExtractOptions, extract_strings_with_options};
 
 #[test]
-fn test_kimwolf_installer_string_deduplication() {
+fn keeps_one_string_at_kimwolf_0x1d4() {
     // Test that overlapping strings at same offset only keep the longest
     let path = crate::common::path("testdata/malware/kimwolf_installer");
     let data = fs::read(path).expect("Failed to read kimwolf_installer test sample");

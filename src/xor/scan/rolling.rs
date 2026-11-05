@@ -1,5 +1,5 @@
 //! Short (1-4 byte) rolling keys recovered from known plaintext, as .NET
-//! stealers like Redline use.
+//! stealers use for their configuration strings.
 
 use super::{Covered, REGION_RADIUS, is_printable_byte_for_file_xor};
 use crate::xor::classify::classify_xor_string;
@@ -39,8 +39,7 @@ pub(super) static ROLLING_XOR_ANCHORS: LazyLock<Vec<AhoCorasick>> = LazyLock::ne
             let signatures = ROLLING_XOR_PATTERNS
                 .iter()
                 .map(|p| (k..p.len()).map(|i| p[i] ^ p[i - k]).collect::<Vec<u8>>());
-            #[allow(clippy::expect_used)] // static, non-empty patterns
-            AhoCorasick::new(signatures).expect("rolling XOR anchors")
+            AhoCorasick::new(signatures).unwrap_or_else(crate::invalid_pattern)
         })
         .collect()
 });
@@ -57,7 +56,7 @@ pub(super) static ROLLING_XOR_ANCHORS: LazyLock<Vec<AhoCorasick>> = LazyLock::ne
 pub(crate) fn extract_rolling_xor_with_known_plaintext(
     data: &[u8],
     min_length: usize,
-    excluded_ranges: &[(usize, usize)],
+    excluded_ranges: &[std::ops::Range<usize>],
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();
     // Offsets inside these are never inspected: code sections up front, then

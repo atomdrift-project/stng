@@ -7,19 +7,19 @@ use stng::{ExtractedString, Severity, StringFragment, StringKind, StringMethod};
 // ===== ExtractedString Tests =====
 
 #[test]
-fn test_extracted_string_default() {
+fn default_extracted_string_is_empty_raw_scan() {
     let s = ExtractedString::default();
     assert_eq!(s.value, "");
     assert_eq!(s.data_offset, 0);
     assert_eq!(s.method, StringMethod::RawScan);
     assert_eq!(s.kind, None);
-    assert_eq!(s.fragments, None);
+    assert!(s.fragments().is_empty());
 }
 
 // ===== StringKind::severity() Tests =====
 
 #[test]
-fn test_severity_high_security() {
+fn network_and_encoding_kinds_are_high_severity() {
     // Test all High severity kinds
     assert_eq!(StringKind::Ip.severity(), Severity::High);
     assert_eq!(StringKind::IpPort.severity(), Severity::High);
@@ -33,7 +33,7 @@ fn test_severity_high_security() {
 }
 
 #[test]
-fn test_severity_high_crypto() {
+fn crypto_kinds_are_high_severity() {
     assert_eq!(StringKind::CryptoWallet.severity(), Severity::High);
     assert_eq!(StringKind::MiningPool.severity(), Severity::High);
     assert_eq!(StringKind::Email.severity(), Severity::High);
@@ -41,7 +41,7 @@ fn test_severity_high_crypto() {
 }
 
 #[test]
-fn test_severity_high_attacks() {
+fn attack_kinds_are_high_severity() {
     assert_eq!(StringKind::SqlInjection.severity(), Severity::High);
     assert_eq!(StringKind::XssPayload.severity(), Severity::High);
     assert_eq!(StringKind::CommandInjection.severity(), Severity::High);
@@ -49,7 +49,7 @@ fn test_severity_high_attacks() {
 }
 
 #[test]
-fn test_severity_high_secrets() {
+fn secret_kinds_are_high_severity() {
     assert_eq!(StringKind::Jwt.severity(), Severity::High);
     assert_eq!(StringKind::ApiKey.severity(), Severity::High);
     assert_eq!(StringKind::Mutex.severity(), Severity::High);
@@ -59,7 +59,7 @@ fn test_severity_high_secrets() {
 }
 
 #[test]
-fn test_severity_medium() {
+fn path_and_metadata_kinds_are_medium_severity() {
     assert_eq!(StringKind::Path.severity(), Severity::Medium);
     assert_eq!(StringKind::FilePath.severity(), Severity::Medium);
     assert_eq!(StringKind::Import.severity(), Severity::Medium);
@@ -71,13 +71,13 @@ fn test_severity_medium() {
 }
 
 #[test]
-fn test_severity_low() {
+fn func_and_export_are_low_severity() {
     assert_eq!(StringKind::FuncName.severity(), Severity::Low);
     assert_eq!(StringKind::Export.severity(), Severity::Low);
 }
 
 #[test]
-fn test_severity_info() {
+fn ident_kinds_are_info_severity() {
     assert_eq!(StringKind::Ident.severity(), Severity::Info);
     assert_eq!(StringKind::Arg.severity(), Severity::Info);
     assert_eq!(StringKind::MapKey.severity(), Severity::Info);
@@ -85,17 +85,16 @@ fn test_severity_info() {
 }
 
 #[test]
-fn test_severity_ordering() {
-    // Verify severity ordering: High < Medium < Low < Info
-    assert!(Severity::High < Severity::Medium);
-    assert!(Severity::Medium < Severity::Low);
-    assert!(Severity::Low < Severity::Info);
+fn severity_orders_from_info_to_high() {
+    assert!(Severity::Info < Severity::Low);
+    assert!(Severity::Low < Severity::Medium);
+    assert!(Severity::Medium < Severity::High);
 }
 
 // ===== StringKind::short_name() Tests =====
 
 #[test]
-fn test_short_name_basic() {
+fn short_names_for_basic_kinds() {
     assert_eq!(StringKind::FuncName.short_name(), "func");
     assert_eq!(StringKind::FilePath.short_name(), "file");
     assert_eq!(StringKind::MapKey.short_name(), "key");
@@ -109,21 +108,21 @@ fn test_short_name_basic() {
 }
 
 #[test]
-fn test_short_name_binary() {
+fn short_names_for_binary_kinds() {
     assert_eq!(StringKind::Section.short_name(), "section");
     assert_eq!(StringKind::Import.short_name(), "import");
     assert_eq!(StringKind::Export.short_name(), "export");
 }
 
 #[test]
-fn test_short_name_network() {
+fn short_names_for_network_kinds() {
     assert_eq!(StringKind::Ip.short_name(), "ip");
     assert_eq!(StringKind::IpPort.short_name(), "ip:port");
     assert_eq!(StringKind::Hostname.short_name(), "host");
 }
 
 #[test]
-fn test_short_name_security() {
+fn short_names_for_security_kinds() {
     assert_eq!(StringKind::ShellCmd.short_name(), "shell");
     assert_eq!(StringKind::SuspiciousPath.short_name(), "sus");
     assert_eq!(StringKind::Registry.short_name(), "registry");
@@ -131,7 +130,7 @@ fn test_short_name_security() {
 }
 
 #[test]
-fn test_short_name_encoding() {
+fn short_names_for_encoding_kinds() {
     assert_eq!(StringKind::Base64.short_name(), "base64");
     assert_eq!(StringKind::HexEncoded.short_name(), "hex");
     assert_eq!(StringKind::UnicodeEscaped.short_name(), "unicode");
@@ -142,13 +141,13 @@ fn test_short_name_encoding() {
 }
 
 #[test]
-fn test_short_name_overlay() {
+fn short_names_for_overlay_kinds() {
     assert_eq!(StringKind::Overlay.short_name(), "overlay");
     assert_eq!(StringKind::OverlayWide.short_name(), "overlay:16LE");
 }
 
 #[test]
-fn test_short_name_crypto() {
+fn short_names_for_crypto_kinds() {
     assert_eq!(StringKind::CryptoWallet.short_name(), "crypto");
     assert_eq!(StringKind::MiningPool.short_name(), "miner");
     assert_eq!(StringKind::Email.short_name(), "email");
@@ -156,7 +155,7 @@ fn test_short_name_crypto() {
 }
 
 #[test]
-fn test_short_name_attacks() {
+fn short_names_for_attack_kinds() {
     assert_eq!(StringKind::CtfFlag.short_name(), "ctf_flag");
     assert_eq!(StringKind::SqlInjection.short_name(), "sqli");
     assert_eq!(StringKind::XssPayload.short_name(), "xss");
@@ -164,7 +163,7 @@ fn test_short_name_attacks() {
 }
 
 #[test]
-fn test_short_name_secrets() {
+fn short_names_for_secret_kinds() {
     assert_eq!(StringKind::Jwt.short_name(), "jwt");
     assert_eq!(StringKind::ApiKey.short_name(), "api_key");
     assert_eq!(StringKind::Mutex.short_name(), "mutex");
@@ -174,7 +173,7 @@ fn test_short_name_secrets() {
 }
 
 #[test]
-fn test_short_name_macho() {
+fn short_names_for_macho_kinds() {
     assert_eq!(StringKind::StackString.short_name(), "stack");
     assert_eq!(StringKind::Entitlement.short_name(), "entitlement");
     assert_eq!(StringKind::AppId.short_name(), "appid");
@@ -187,7 +186,7 @@ fn test_short_name_macho() {
 // ===== Serialization Tests =====
 
 #[test]
-fn test_extracted_string_serialization() {
+fn serializes_value_and_offset() {
     let s = ExtractedString::new("test_value".to_string(), 0x1234, StringMethod::Structure)
         .with_kind(StringKind::FuncName);
 
@@ -197,7 +196,7 @@ fn test_extracted_string_serialization() {
 }
 
 #[test]
-fn test_extracted_string_serialization_skip_none() {
+fn serialization_omits_unset_fields() {
     let s = ExtractedString::new("test".to_string(), 100, stng::StringMethod::RawScan);
 
     let json = serde_json::to_string(&s).unwrap();
@@ -210,7 +209,7 @@ fn test_extracted_string_serialization_skip_none() {
 }
 
 #[test]
-fn test_extracted_string_data_len_roundtrip() {
+fn data_len_survives_json_roundtrip() {
     // UTF-16LE source extent, 2× the value
     let s = ExtractedString::new("Hi", 0x40, StringMethod::WideString).with_data_len(4);
 
@@ -229,19 +228,16 @@ fn test_extracted_string_data_len_roundtrip() {
 // ===== Edge Cases =====
 
 #[test]
-fn test_extracted_string_with_all_fields() {
+fn fragments_override_data_len_in_source_spans() {
     // A fragmented stack string carries its spans in `fragments`, so the
     // contiguous `data_len` is left unrecorded (0).
     let s = ExtractedString::new("complex_string", 0x5000, StringMethod::StackString)
         .with_kind(StringKind::StackString)
-        .with_fragments(vec![StringFragment {
-            offset: 0x5000,
-            length: 14,
-        }]);
+        .with_fragments(vec![StringFragment::new(0x5000, 14)]);
 
     assert_eq!(s.value, "complex_string");
     assert_eq!(s.data_offset, 0x5000);
-    assert!(s.fragments.is_some());
+    assert!(!s.fragments().is_empty());
     // Fragmented strings locate via their fragments, not the single extent.
     assert_eq!(
         s.source_spans().collect::<Vec<_>>(),
@@ -251,14 +247,7 @@ fn test_extracted_string_with_all_fields() {
 }
 
 #[test]
-fn test_string_kind_default() {
-    // Test that Default trait works
-    let kind: Option<StringKind> = None;
-    assert_eq!(kind, None);
-}
-
-#[test]
-fn test_severity_all_values() {
+fn severities_are_distinct() {
     // Ensure all Severity values are distinct
     assert_ne!(Severity::High, Severity::Medium);
     assert_ne!(Severity::Medium, Severity::Low);

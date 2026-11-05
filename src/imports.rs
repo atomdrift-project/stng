@@ -102,7 +102,9 @@ pub(crate) fn extract_macho_imports(
         // Undefined symbols have n_value == 0; merge_imports retags the located
         // raw-scan hit and keeps its real offset, so the address here only
         // matters for the rare symbol absent from the strtab scan.
-        let file_offset = macho_vaddr_to_file_offset(macho, nlist.n_value).saturating_add(base);
+        let file_offset = macho_vaddr_to_file_offset(macho, nlist.n_value)
+            .unwrap_or(nlist.n_value)
+            .saturating_add(base);
         strings.push(structure(name.to_string(), file_offset, kind));
     }
 

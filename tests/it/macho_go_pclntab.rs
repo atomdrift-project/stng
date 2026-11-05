@@ -23,10 +23,6 @@ const FUNCTIONS: [&str; 3] = [
     "main.stngFixturePrepareRemoteTarget",
 ];
 
-fn fixture(name: &str) -> Vec<u8> {
-    crate::common::bytes(&format!("testdata/go_pclntab/{name}"))
-}
-
 /// Every copy of `value` stng reported, as pclntab symbols.
 fn pclntab_hits<'a>(strings: &'a [ExtractedString], value: &str) -> Vec<&'a ExtractedString> {
     strings
@@ -66,19 +62,28 @@ fn assert_functions_recovered(name: &str, data: &[u8]) {
 
 #[test]
 fn thin_darwin_amd64_yields_function_names() {
-    assert_functions_recovered("darwin_amd64", &fixture("darwin_amd64"));
+    assert_functions_recovered(
+        "darwin_amd64",
+        &crate::common::bytes("testdata/go_pclntab/darwin_amd64"),
+    );
 }
 
 #[test]
 fn thin_darwin_arm64_yields_function_names() {
-    assert_functions_recovered("darwin_arm64", &fixture("darwin_arm64"));
+    assert_functions_recovered(
+        "darwin_arm64",
+        &crate::common::bytes("testdata/go_pclntab/darwin_arm64"),
+    );
 }
 
 /// The control: the same program as ELF. If this fails too, the fixture or
 /// the shared pclntab scanner broke, not the Mach-O path.
 #[test]
 fn linux_amd64_yields_function_names() {
-    assert_functions_recovered("linux_amd64", &fixture("linux_amd64"));
+    assert_functions_recovered(
+        "linux_amd64",
+        &crate::common::bytes("testdata/go_pclntab/linux_amd64"),
+    );
 }
 
 /// Build a universal binary from thin slices: a big-endian fat header, then
@@ -153,8 +158,8 @@ fn fat_pclntab_ranges(fat: &[u8]) -> Vec<std::ops::Range<u64>> {
 /// passed with the rebase deleted.
 #[test]
 fn fat_darwin_yields_function_names_at_file_offsets() {
-    let amd64 = fixture("darwin_amd64");
-    let arm64 = fixture("darwin_arm64");
+    let amd64 = crate::common::bytes("testdata/go_pclntab/darwin_amd64");
+    let arm64 = crate::common::bytes("testdata/go_pclntab/darwin_arm64");
     let (fat, _) = fat_binary(
         &[
             (&amd64, CPU_TYPE_X86_64, CPU_SUBTYPE_X86_64_ALL),
@@ -193,10 +198,12 @@ fn darwin_function_names_match_linux() {
             .map(|s| s.value)
             .collect()
     };
-    let linux = names(&fixture("linux_amd64"));
+    let linux = names(&crate::common::bytes("testdata/go_pclntab/linux_amd64"));
     assert!(!linux.is_empty(), "the ELF control yielded no main.* names");
     for darwin in ["darwin_amd64", "darwin_arm64"] {
-        let got = names(&fixture(darwin));
+        let got = names(&crate::common::bytes(&format!(
+            "testdata/go_pclntab/{darwin}"
+        )));
         let missing: Vec<_> = linux.difference(&got).collect();
         assert!(missing.is_empty(), "{darwin} lacks {missing:?}");
     }

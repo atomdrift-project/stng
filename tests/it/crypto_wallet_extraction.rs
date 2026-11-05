@@ -2,7 +2,7 @@
 use stng::{ExtractOptions, StringMethod};
 
 #[test]
-fn test_crypto_wallet_paths_from_brew_agent() {
+fn decodes_most_wallet_paths() {
     let data = crate::common::bytes("testdata/malware/brew_agent");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
@@ -65,7 +65,7 @@ fn test_crypto_wallet_paths_from_brew_agent() {
 }
 
 #[test]
-fn test_wallet_keyword_detection() {
+fn decodes_at_least_ten_wallet_strings() {
     // Verify that strings containing "wallet" are properly detected
     // even without exact path matches
     let data = crate::common::bytes("testdata/malware/brew_agent");
@@ -93,7 +93,7 @@ fn test_wallet_keyword_detection() {
 }
 
 #[test]
-fn test_crypto_terms_detection() {
+fn decodes_each_coin_name() {
     // Test detection of other cryptocurrency-related terms
     let data = crate::common::bytes("testdata/malware/brew_agent");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";

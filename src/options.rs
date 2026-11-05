@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// the input is text can pass `Text` to suppress expensive binary-only analyses
 /// (XOR scan, stack strings) that produce nothing on text input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum FormatHint {
     /// Let stng detect.
     #[default]
@@ -26,8 +27,9 @@ pub enum XorMode {
     #[default]
     Off,
     /// Single-byte scanning, auto-detected keys and x86 PE decoder recovery.
-    /// Skipped for Go binaries and platform-signed binaries, where XOR
-    /// obfuscation does not occur in practice.
+    /// Skipped for Go binaries, where XOR obfuscation does not occur in
+    /// practice, and on request for platform-signed binaries (see
+    /// [`ExtractOptions::with_platform_signed_skip`]).
     Auto,
     /// Everything `Auto` does, without those skips.
     Scan,
@@ -46,6 +48,7 @@ pub struct ExtractOptions {
     pub(crate) caller_provides_symbols: bool,
     pub(crate) cancel: Option<Arc<AtomicBool>>,
     pub(crate) format_hint: FormatHint,
+    pub(crate) skip_platform_signed: bool,
 }
 
 impl Default for ExtractOptions {
@@ -55,18 +58,19 @@ impl Default for ExtractOptions {
 }
 
 impl ExtractOptions {
-    /// Options for strings of at least `min_length` bytes, with every optional
-    /// pass (garbage filter, XOR) off.
+    /// Options for strings of at least `min_length` bytes (at least one),
+    /// with every optional pass (garbage filter, XOR) off.
     #[must_use]
     pub fn new(min_length: usize) -> Self {
         Self {
-            min_length,
+            min_length: min_length.max(1),
             filter_garbage: false,
             xor: XorMode::Off,
             xor_min_length: xor::DEFAULT_XOR_MIN_LENGTH,
             caller_provides_symbols: false,
             cancel: None,
             format_hint: FormatHint::Auto,
+            skip_platform_signed: false,
         }
     }
 
@@ -78,10 +82,14 @@ impl ExtractOptions {
         self
     }
 
-    /// Choose the XOR passes. See [`XorMode`].
+    /// Choose the XOR passes. See [`XorMode`]. An empty key decodes
+    /// nothing, so `XorMode::Key` with one is [`XorMode::Off`].
     #[must_use]
     pub fn with_xor(mut self, mode: XorMode) -> Self {
-        self.xor = mode;
+        self.xor = match mode {
+            XorMode::Key(key) if key.is_empty() => XorMode::Off,
+            mode => mode,
+        };
         self
     }
 
@@ -115,6 +123,18 @@ impl ExtractOptions {
     #[must_use]
     pub fn with_format_hint(mut self, hint: FormatHint) -> Self {
         self.format_hint = hint;
+        self
+    }
+
+    /// Skip [`XorMode::Auto`]'s XOR passes for a binary whose embedded code
+    /// signature names Apple's or Microsoft's platform signing CA: OS
+    /// binaries, where those passes find nothing and cost the most. Off by
+    /// default. Signatures are not verified, so a sample can carry a copied
+    /// platform signature to pass; turn this on only for corpora known to be
+    /// vendor builds.
+    #[must_use]
+    pub fn with_platform_signed_skip(mut self, skip: bool) -> Self {
+        self.skip_platform_signed = skip;
         self
     }
 

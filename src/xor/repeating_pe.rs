@@ -245,18 +245,9 @@ impl<'a> LazyKey<'a> {
 /// below `MAX_KEY_LEN` has a weighted position (`e_lfanew`'s residues reach
 /// the padding at `0x7c..0x80`), so the vote is never empty.
 ///
-/// `tally` is all zero on entry and on return: only the entries this vote
-/// touched are reset, so one table serves a whole recovery.
-#[cfg(test)]
-fn vote(
-    candidates: &[u8; TEMPLATE_LEN],
-    residue: usize,
-    period: usize,
-    tally: &mut [u16; 256],
-) -> u8 {
-    vote_at(candidates, 0, residue, period, tally)
-}
-
+/// `pe_offset` is where the template sits in the file, so residues are
+/// file-relative. `tally` is all zero on entry and on return: only the
+/// entries this vote touched are reset, so one table serves a whole recovery.
 fn vote_at(
     candidates: &[u8; TEMPLATE_LEN],
     pe_offset: usize,
@@ -364,10 +355,10 @@ mod tests {
             }
         }
         let mut tally = [0u16; 256];
-        assert_eq!(vote(&candidates, 0, 2, &mut tally), b);
+        assert_eq!(vote_at(&candidates, 0, 0, 2, &mut tally), b);
     }
 
-    /// `vote` against the obvious version: a first-seen-ordered tally over
+    /// `vote_at` against the obvious version: a first-seen-ordered tally over
     /// the weighted positions, highest total winning, earliest on a tie.
     #[test]
     fn vote_matches_a_first_seen_tally() {
@@ -400,7 +391,10 @@ mod tests {
                     .iter()
                     .find(|&&(_, w)| w == top)
                     .map_or(0, |&(k, _)| k);
-                assert_eq!(vote(&candidates, residue, period, &mut tally), expected);
+                assert_eq!(
+                    vote_at(&candidates, 0, residue, period, &mut tally),
+                    expected
+                );
                 assert!(tally.iter().all(|&t| t == 0), "tally left dirty");
             }
         }

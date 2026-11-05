@@ -1,7 +1,7 @@
 //! Repeating-key decoding from known-plaintext pattern hits: every key
 //! alignment of the hit is decoded, grown while printable, and filtered.
 
-use super::{Excluded, is_printable_byte_for_file_xor, key_preview};
+use super::{Excluded, is_path_key, is_printable_byte_for_file_xor};
 use crate::validation;
 use crate::xor::classify::{
     Verdict, classify_xor_string, clean_locale_trailing_garbage, clean_url_trailing_garbage,
@@ -11,11 +11,9 @@ use crate::xor::validate::is_locale_string;
 use crate::{ExtractedString, StringKind, StringMethod};
 use rayon::prelude::*;
 
-/// Maximum number of valid strings to find before early termination.
-/// After finding this many validated strings (of any kind), we can stop scanning.
-/// This provides diminishing returns - 50 strings is typically enough to identify
-/// XOR-encoded content and extract key IOCs without scanning the entire file.
-/// Testing shows this reduces scan time by 10-100x while preserving malware detection.
+/// Validated strings (of any kind) after which an early-terminating scan
+/// stops: enough to show a key is in use and recover its indicators, without
+/// decoding the whole file.
 pub(super) const MAX_STRINGS_BEFORE_EARLY_TERMINATION: usize = 50;
 
 /// First window scanned when terminating early; each later one doubles.
@@ -38,7 +36,7 @@ pub(super) const MAX_PATTERN_DECODE: usize = 1024;
 ///   MAX_STRINGS_BEFORE_EARLY_TERMINATION strings by offset. Should be true for
 ///   auto-detection (speeds up candidate testing) and false for user-provided
 ///   keys (ensures complete extraction).
-pub(super) fn extract_custom_xor_strings_pattern_based_simple(
+pub(super) fn repeating_key_candidates(
     data: &[u8],
     key: &[u8],
     min_length: usize,
@@ -50,14 +48,14 @@ pub(super) fn extract_custom_xor_strings_pattern_based_simple(
         (0..key.len().min(data.len())).map(Alignment::new).collect();
     let mut scan =
         |limit: usize| scan_alignments(&mut alignments, data, key, min_length, excluded, limit);
-    let key_preview = key_preview(key);
+    let strict = is_path_key(key);
     let finish = |&(pos, len): &(usize, usize)| {
         let decoded = data[pos..pos + len]
             .iter()
             .zip(key.iter().cycle())
             .map(|(b, k)| b ^ k)
             .collect();
-        finish_xor_candidate(pos, decoded, min_length, apply_filters, &key_preview)
+        finish_xor_candidate(pos, decoded, min_length, apply_filters, strict)
     };
     if !enable_early_termination {
         return scan(data.len())
@@ -285,7 +283,7 @@ pub(super) fn finish_xor_candidate(
     decoded: Vec<u8>,
     min_length: usize,
     apply_filters: bool,
-    key_preview: &str,
+    strict: bool,
 ) -> Option<ExtractedString> {
     // Convert to string - if full conversion fails, try to salvage valid UTF-8 prefix
     let s = match String::from_utf8(decoded) {
@@ -342,9 +340,6 @@ pub(super) fn finish_xor_candidate(
         Verdict::Reject => None,
     };
 
-    // Keys that are paths were auto-detected; hold their output to a
-    // stricter standard than a key the user gave.
-    let strict = key_preview.starts_with('/') || key_preview.starts_with("C:\\");
     if !plausible_letters(&trimmed_s, kind, strict) {
         return None;
     }

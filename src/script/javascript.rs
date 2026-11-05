@@ -15,23 +15,21 @@ use super::DeobfuscationResult;
 use super::decode_chain::DecodeStep;
 
 /// eval(atob("..."))
-#[allow(clippy::expect_used)]
 static EVAL_ATOB_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"eval\s*\(\s*atob\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#).expect("static regex")
+    Regex::new(r#"eval\s*\(\s*atob\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#)
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// eval(Buffer.from("...", "base64").toString())
-#[allow(clippy::expect_used)]
 static EVAL_BUFFER_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"eval\s*\(\s*Buffer\.from\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*,\s*['"]base64['"]\s*\)\.toString\s*\(\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// eval(String.fromCharCode(...)) or Function(String.fromCharCode(...))()
-#[allow(clippy::expect_used)]
 static EVAL_CHARCODE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:eval|Function)\s*\(\s*String\.fromCharCode\s*\(([0-9xXa-fA-F,\s]+)\)")
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// `[104,105,...].map(function(c){return String.fromCharCode(c)}).join("")`
@@ -44,16 +42,14 @@ static EVAL_CHARCODE_RE: LazyLock<Regex> = LazyLock::new(|| {
 ///
 /// The digit run is required to be long because a short `[1,2,3].map(...)` is
 /// ordinary application code; a packed payload is thousands of codes.
-#[allow(clippy::expect_used)]
 static CHARCODE_ARRAY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[([0-9][0-9,\s]{200,})\]\s*\.\s*map\s*\(").expect("static regex")
+    Regex::new(r"\[([0-9][0-9,\s]{200,})\]\s*\.\s*map\s*\(").unwrap_or_else(crate::invalid_pattern)
 });
 
 /// eval("...".split("").reverse().join(""))
-#[allow(clippy::expect_used)]
 static EVAL_REVERSE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"eval\s*\(\s*['"]([^'"]+)['"]\s*\.split\s*\(\s*['"]['"]?\s*\)\s*\.reverse\s*\(\s*\)\s*\.join\s*\(\s*['"]['"]?\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Extract all obfuscated payloads from a JavaScript source.
@@ -69,7 +65,12 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
     ));
     results.extend(try_eval_charcode(source));
     results.extend(try_charcode_array(source));
-    results.extend(try_eval_reverse(source));
+    results.extend(super::decode_captures(
+        source,
+        &[&EVAL_REVERSE_RE],
+        &[DecodeStep::Reverse],
+        ScriptLanguage::JavaScript,
+    ));
 
     results
 }
@@ -111,8 +112,8 @@ fn javascript_likeness(text: &str) -> usize {
 /// shift when the packer applied one.
 ///
 /// Two layers, because they travel together. The array yields a string that is
-/// itself rotated — the sample this was written for wraps the join in a
-/// `replace(/[a-zA-Z]/g, ...)` that shifts by 6 before evaluating — so decoding
+/// itself rotated — the packer wraps the join in a
+/// `replace(/[a-zA-Z]/g, ...)` that shifts it (by 6, say) before evaluating — so decoding
 /// the codes alone produces plausible-looking mojibake and nothing matches it.
 ///
 /// The shift is recovered rather than assumed: ROT13 is the one people try, so
@@ -151,8 +152,8 @@ fn try_charcode_array(source: &str) -> Vec<DeobfuscationResult> {
             let window: String = decoded.chars().take(SCORE_WINDOW).collect();
             let plain = javascript_likeness(&window);
             // Already readable: the packer used no rotation.
-            let (payload, steps) = if plain >= MIN_SCORE {
-                (decoded, vec![DecodeStep::CharCodes(Vec::new())])
+            let (payload, chain) = if plain >= MIN_SCORE {
+                (decoded, "charcodes".to_owned())
             } else {
                 let (shift, score) = (1u8..26)
                     .map(|n| (n, javascript_likeness(&rot(&window, n))))
@@ -160,14 +161,8 @@ fn try_charcode_array(source: &str) -> Vec<DeobfuscationResult> {
                 if score < MIN_SCORE {
                     return None;
                 }
-                (rot(&decoded, shift), vec![DecodeStep::Rot(shift)])
+                (rot(&decoded, shift), DecodeStep::Rot(shift).to_string())
             };
-
-            let chain = steps
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("+");
             Some(DeobfuscationResult {
                 decoded: payload,
                 offset: whole.start(),
@@ -181,24 +176,6 @@ fn try_charcode_array(source: &str) -> Vec<DeobfuscationResult> {
 /// Caesar-shift ASCII letters, leaving everything else alone.
 fn rot(text: &str, n: u8) -> String {
     text.chars().map(|c| crate::text::rot(c, n)).collect()
-}
-
-fn try_eval_reverse(source: &str) -> Vec<DeobfuscationResult> {
-    EVAL_REVERSE_RE
-        .captures_iter(source)
-        .filter_map(|cap| {
-            let reversed = cap.get(1)?.as_str();
-            let offset = cap.get(0)?.start();
-            let steps = vec![DecodeStep::Reverse];
-            let result = super::decode_chain::apply_chain(reversed.as_bytes(), &steps)?;
-            Some(DeobfuscationResult {
-                decoded: result.payload,
-                offset,
-                chain_description: format!("javascript:{}", result.chain_description),
-                language: ScriptLanguage::JavaScript,
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -273,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_atob() {
+    fn decodes_eval_atob() {
         let src = r#"eval(atob("YWxlcnQoMSk="))"#; // alert(1)
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -282,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_atob_single_quotes() {
+    fn decodes_single_quoted_atob() {
         let src = r"eval(atob('YWxlcnQoMSk='))";
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -290,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_buffer_from() {
+    fn decodes_eval_buffer_from_base64() {
         let src = r#"eval(Buffer.from("YWxlcnQoMSk=", "base64").toString())"#;
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -298,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_charcode_decimal() {
+    fn decodes_decimal_from_char_code() {
         // "alert(1)" as char codes
         let src = r"eval(String.fromCharCode(97, 108, 101, 114, 116, 40, 49, 41))";
         let results = extract_obfuscated_payloads(src);
@@ -307,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_charcode_hex() {
+    fn decodes_hex_from_char_code() {
         let src = r"eval(String.fromCharCode(0x61, 0x6c, 0x65, 0x72, 0x74, 0x28, 0x31, 0x29))";
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -315,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_reverse() {
+    fn decodes_split_reverse_join() {
         let src = r#"eval(")1(trela".split("").reverse().join(""))"#;
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -323,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_false_positive_on_atob_in_variable() {
+    fn ignores_atob_outside_eval() {
         // atob not inside eval should not trigger
         let src = r#"var data = atob("YWxlcnQoMSk=");"#;
         let results = extract_obfuscated_payloads(src);

@@ -137,10 +137,12 @@ fn malformed_network_shapes_never_emit() {
 }
 
 #[test]
-#[cfg(unix)] // reads Unix system binaries
-fn clean_system_binary_iocs_have_structural_evidence() {
-    for path in ["/bin/ls", "/bin/cat"] {
-        let data = std::fs::read(path).unwrap();
+fn clean_binary_iocs_have_structural_evidence() {
+    for path in [
+        "testdata/elf/hello_linux_amd64",
+        "testdata/pe/msvc_console_amd64.exe",
+    ] {
+        let data = crate::common::bytes(path);
         let strings = extract_strings_with_options(&data, &ExtractOptions::new(10));
         let iocs = extract_iocs(&strings);
         for ioc in iocs {

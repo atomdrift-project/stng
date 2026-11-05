@@ -149,7 +149,7 @@ pub(super) fn decode_blocks(input: &[u8]) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let mut search = 0;
 
-    while let Some(rel) = find_bytes(&input[search..], START) {
+    while let Some(rel) = memchr::memmem::find(&input[search..], START) {
         let start = search + rel;
         let header_end = start + START.len() + 6;
         if input.get(header_end..header_end + 2) != Some(b"==") {
@@ -157,7 +157,7 @@ pub(super) fn decode_blocks(input: &[u8]) -> Vec<(usize, String)> {
             continue;
         }
         let body_start = header_end + 2;
-        let Some(end_rel) = find_bytes(&input[body_start..], END) else {
+        let Some(end_rel) = memchr::memmem::find(&input[body_start..], END) else {
             break;
         };
         let marker_end = body_start + end_rel;
@@ -176,12 +176,6 @@ pub(super) fn decode_blocks(input: &[u8]) -> Vec<(usize, String)> {
         search = marker_end + END.len();
     }
     out
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 fn decode_body(body: &[u8]) -> String {

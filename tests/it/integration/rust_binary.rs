@@ -8,7 +8,7 @@ fn rust_binary() -> Vec<u8> {
 }
 
 #[test]
-fn test_self_binary_detection() {
+fn detects_rust() {
     // Test against our own binary
     let data = rust_binary();
 
@@ -19,28 +19,38 @@ fn test_self_binary_detection() {
 }
 
 #[test]
-fn test_self_binary_with_options() {
+fn filter_keeps_backtrace_hint() {
     let data = rust_binary();
 
     // Test with various options
     let opts = ExtractOptions::new(6).with_garbage_filter(true);
     let strings = extract_strings_with_options(&data, &opts);
-    assert!(!strings.is_empty());
-
-    // All strings should be >= 6 chars (mostly - imports might be shorter)
-    // Just verify it doesn't panic
+    // std's panic hint survives the filter. `contains`: neighbouring
+    // rodata may run into it.
+    assert!(
+        strings
+            .iter()
+            .any(|s| s.value.contains("run with `RUST_BACKTRACE=full`")),
+        "std backtrace hint not found"
+    );
 }
 
 #[test]
-fn test_self_binary_extract_from_object() {
+fn finds_option_unwrap_panic_message() {
     let data = rust_binary();
     let opts = ExtractOptions::new(4);
     let strings = stng::extract_strings_with_options(&data, &opts);
-    assert!(!strings.is_empty());
+    // core's panic message; `contains`: neighbouring rodata may run into it.
+    assert!(
+        strings.iter().any(|s| s
+            .value
+            .contains("called `Option::unwrap()` on a `None` value")),
+        "Option::unwrap panic message not found"
+    );
 }
 
 #[test]
-fn test_self_binary_string_kinds() {
+fn finds_untyped_or_import_strings() {
     let data = rust_binary();
     let strings = extract_strings(&data, 4);
 
@@ -55,15 +65,21 @@ fn test_self_binary_string_kinds() {
 }
 
 #[test]
-fn test_extract_strings_rust_binary() {
+fn finds_result_unwrap_panic_message() {
     let data = rust_binary();
 
     let strings = extract_strings(&data, 4);
-    assert!(!strings.is_empty(), "Rust binary should have strings");
+    // core's panic message; `contains`: neighbouring rodata may run into it.
+    assert!(
+        strings.iter().any(|s| s
+            .value
+            .contains("called `Result::unwrap()` on an `Err` value")),
+        "Result::unwrap panic message not found"
+    );
 }
 
 #[test]
-fn test_rust_binary_has_rust_strings() {
+fn finds_rust_hints() {
     let data = rust_binary();
 
     let strings = extract_strings(&data, 4);

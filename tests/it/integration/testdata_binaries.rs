@@ -4,7 +4,7 @@ use std::path::Path;
 use stng::{ExtractOptions, StringKind, extract_strings_with_options};
 
 #[test]
-fn test_linux_elf_imports() {
+fn static_go_elf_has_no_imports() {
     let path = Path::new(crate::common::path("testdata/elf/hello_linux_amd64"));
 
     let data = std::fs::read(path).unwrap();
@@ -12,18 +12,17 @@ fn test_linux_elf_imports() {
 
     let strings = extract_strings_with_options(&data, &opts);
 
-    // Should have some imports
-    let _imports: Vec<_> = strings
+    // A statically linked Go binary imports nothing.
+    let imports: Vec<_> = strings
         .iter()
         .filter(|s| s.kind == Some(StringKind::Import))
+        .map(|s| &s.value)
         .collect();
-
-    // Go binaries may not have traditional imports, but should have strings
-    assert!(!strings.is_empty(), "Should extract strings from ELF");
+    assert!(imports.is_empty(), "{imports:?}");
 }
 
 #[test]
-fn test_windows_pe_extraction() {
+fn finds_runtime_strings_in_go_pe() {
     let path = Path::new(crate::common::path("testdata/pe/hello_windows.exe"));
 
     let data = std::fs::read(path).unwrap();
@@ -42,7 +41,7 @@ fn test_windows_pe_extraction() {
 }
 
 #[test]
-fn test_linux_elf_with_min_length() {
+fn higher_min_length_finds_fewer_in_go_elf() {
     let path = Path::new(crate::common::path("testdata/elf/hello_linux_amd64"));
 
     let data = std::fs::read(path).unwrap();
@@ -65,7 +64,7 @@ fn test_linux_elf_with_min_length() {
 /// including environment variable lookups, the C2 hostname, and multi-chunk
 /// merged results longer than a single 8-byte encoding chunk.
 #[test]
-fn test_brickstorm_xor_pair_extraction() {
+fn recovers_brickstorm_xor_pairs() {
     use stng::StringMethod;
 
     let path = Path::new(crate::common::path(

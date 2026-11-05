@@ -21,7 +21,7 @@ pub(crate) mod repeating_pe;
 mod scan;
 mod validate;
 
-// Re-export the public API that lib.rs calls as `xor::*`
+// What the pipeline and lib.rs use.
 pub(crate) use self::autodetect::auto_detect_xor_key;
 pub(crate) use self::classify::report_kinds;
 pub(crate) use self::expand::extract_xor_strings;
@@ -30,8 +30,6 @@ pub(crate) use self::scan::extract_incremental_xor_strings;
 pub(crate) use self::scan::{
     extract_custom_xor_strings_with_hints, extract_rolling_xor_with_known_plaintext,
 };
-
-// Note: Private functions are re-imported in the tests module below
 
 /// Minimum length for XOR-decoded strings (default).
 pub(crate) const DEFAULT_XOR_MIN_LENGTH: usize = 10;
@@ -45,7 +43,10 @@ pub(crate) const MAX_AUTO_DETECT_SIZE: usize = 512 * 1024;
 
 /// Maximum file size for single-byte XOR scanning (5 MB).
 /// Larger files take too long to scan and rarely contain simple XOR obfuscation.
-pub const MAX_XOR_SCAN_SIZE: usize = 5 * 1024 * 1024;
+pub(crate) const MAX_XOR_SCAN_SIZE: usize = 5 * 1024 * 1024;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod filter_tests;

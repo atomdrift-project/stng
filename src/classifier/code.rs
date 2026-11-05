@@ -7,7 +7,6 @@ use aho_corasick::AhoCorasick;
 use std::sync::LazyLock;
 
 /// AppleScript source indicators (matched case-insensitively).
-#[allow(clippy::expect_used)]
 static APPLESCRIPT_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::builder()
         .ascii_case_insensitive(true)
@@ -23,7 +22,10 @@ static APPLESCRIPT_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
             " dialog",
             "choose file",
             "choose folder",
-            "duplicate ",
+            // Finder's verb, with what it copies: "duplicate key" is SQL.
+            "duplicate file",
+            "duplicate folder",
+            "duplicate every",
             " to posix file",
             "repeat with",
             "end repeat",
@@ -31,12 +33,11 @@ static APPLESCRIPT_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
             " with replacing",
             "set volume",
         ])
-        .expect("valid applescript patterns")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Error-message patterns used to reject format-string placeholders that look
 /// like shell commands (e.g. "Error: could not {0} the {1}").
-#[allow(clippy::expect_used)]
 static SHELL_ERROR_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         "Error",
@@ -54,37 +55,35 @@ static SHELL_ERROR_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
         "[Click",
         "prompt",
     ])
-    .expect("valid error patterns")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Comparison operators that indicate programming expressions, not shell commands.
-#[allow(clippy::expect_used)]
 static SHELL_COMPARISON_OPS: LazyLock<AhoCorasick> = LazyLock::new(|| {
-    AhoCorasick::new(["!=", "==", "<=", ">="]).expect("valid comparison patterns")
+    AhoCorasick::new(["!=", "==", "<=", ">="]).unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Shell redirection patterns that are strong shell indicators.
-#[allow(clippy::expect_used)]
 static SHELL_REDIRECTS: LazyLock<AhoCorasick> = LazyLock::new(|| {
-    AhoCorasick::new([">/dev/null", "2>/dev/null", "2>&1"]).expect("valid redirect patterns")
+    AhoCorasick::new([">/dev/null", "2>/dev/null", "2>&1"]).unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Shell command keywords that confirm a pipe `|` is part of a real pipeline.
-#[allow(clippy::expect_used)]
 static SHELL_PIPE_COMMANDS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         "grep", "awk", "sed", "sort", "uniq", "head", "tail", "cat ", "xargs", "wc ", "cut ", "tr ",
     ])
-    .expect("valid pipe-command patterns")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
-/// Trigger substrings for Python detection. A positive `is_python_code` result
+/// Trigger substrings for Python detection in one string. Script language
+/// detection (`script/detect.rs`) scores whole files with its own list.
+/// A positive `is_python_code` result
 /// always requires at least two of the `matches += 1` checks below to fire, and
 /// every one of those checks needs one of these substrings — so a string
 /// containing none of them cannot be Python. A single Aho-Corasick scan rejects
 /// such strings (the overwhelming majority, e.g. Go symbol-table entries) in
 /// place of ~20 sequential `contains` probes.
-#[allow(clippy::expect_used)]
 static PYTHON_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         "import ",
@@ -105,13 +104,12 @@ static PYTHON_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
         "os.getcwd",
         "__name__",
     ])
-    .expect("valid python indicators")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Trigger substrings for JavaScript detection. As with [`PYTHON_INDICATORS`],
 /// a match needs at least two of the keyword checks, each of which requires one
 /// of these substrings, so a single scan can reject everything else.
-#[allow(clippy::expect_used)]
 static JAVASCRIPT_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         "function ",
@@ -124,7 +122,7 @@ static JAVASCRIPT_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
         "console.log",
         "=>",
     ])
-    .expect("valid javascript indicators")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Command prefixes (with trailing space, or absolute interpreter paths) that
@@ -175,17 +173,35 @@ const SHELL_CMD_PREFIXES: &[&str] = &[
     "nohup ",
     "setsid ",
     "eval ",
-    // macOS: stealers screenshot the desktop
+    // macOS: stealers screenshot the desktop and script the GUI
     "screencapture ",
+    "osascript ",
+    // Windows interpreters and the system tools droppers run through them,
+    // with the switch each takes so prose naming them does not match.
+    "powershell -",
+    "PowerShell -",
+    "powershell.exe -",
+    "pwsh -",
+    "cmd /c ",
+    "cmd.exe /c ",
+    "cmd /k ",
+    "cmd.exe /k ",
+    "schtasks /",
+    "reg add ",
+    "reg delete ",
+    "certutil -",
+    "bitsadmin /",
+    "vssadmin delete ",
+    "wmic ",
+    "regsvr32 /",
 ];
 
 /// Gate for the [`is_shell_command`] prefix probe. A command match needs one of
 /// `SHELL_CMD_PREFIXES` as a substring (via `starts_with` or a space-preceded
 /// `find`), so if this single scan finds none, the ~40 per-prefix searches can
 /// be skipped entirely — the common case for binary symbol-table strings.
-#[allow(clippy::expect_used)]
 static SHELL_CMD_PREFIX_AC: LazyLock<AhoCorasick> =
-    LazyLock::new(|| AhoCorasick::new(SHELL_CMD_PREFIXES).expect("valid shell cmd prefixes"));
+    LazyLock::new(|| AhoCorasick::new(SHELL_CMD_PREFIXES).unwrap_or_else(crate::invalid_pattern));
 
 /// Check if a string looks like Python code
 pub(super) fn is_python_code(s: &str) -> bool {
@@ -431,46 +447,6 @@ pub(super) fn is_applescript(s: &str) -> bool {
         return false;
     }
 
-    // Quick rejection: must contain at least one common AppleScript keyword fragment
-    // This avoids lowercase conversion for most strings
-    let bytes = s.as_bytes();
-    let has_indicator = bytes.windows(4).any(|w| {
-        // Check for "tell", "path", "file", "end ", "set ", "with", "shel", "dial", "alia" (case insensitive)
-        matches!(
-            w,
-            b"tell"
-                | b"Tell"
-                | b"TELL"
-                | b"path"
-                | b"Path"
-                | b"PATH"
-                | b"file"
-                | b"File"
-                | b"FILE"
-                | b"end "
-                | b"End "
-                | b"END "
-                | b"set "
-                | b"Set "
-                | b"SET "
-                | b"with"
-                | b"With"
-                | b"WITH"
-                | b"shel"
-                | b"Shel"
-                | b"SHEL"
-                | b"dial"
-                | b"Dial"
-                | b"DIAL"
-                | b"alia"
-                | b"Alia"
-                | b"ALIA"
-        )
-    });
-    if !has_indicator {
-        return false;
-    }
-
     if APPLESCRIPT_PATTERNS.is_match(s.as_bytes()) {
         return true;
     }
@@ -483,11 +459,7 @@ pub(super) fn is_applescript(s: &str) -> bool {
         || contains_ignore_ascii_case(bytes, b"\nset ")
         || contains_ignore_ascii_case(bytes, b"\tset ")
         || contains_ignore_ascii_case(bytes, b" set ");
-    if has_set && (contains_ignore_ascii_case(bytes, b" to ") || s.contains('=')) {
-        return true;
-    }
-
-    false
+    has_set && (contains_ignore_ascii_case(bytes, b" to ") || s.contains('='))
 }
 
 /// Strings that cannot be shell commands: no shell punctuation, error
@@ -508,7 +480,6 @@ fn cannot_be_shell(s: &str) -> bool {
     // Reject common error message patterns (not shell commands)
     // Format string placeholders, error codes, UI text markers
     if s.contains("{0}") || s.contains("{1}") || s.contains("%s") || s.contains("%d") {
-        // Check if it looks like an error message or UI string
         let is_error_message = SHELL_ERROR_PATTERNS.is_match(s);
         if is_error_message {
             return true;
@@ -563,11 +534,7 @@ fn cannot_be_shell(s: &str) -> bool {
 
     // Skip strings that look like code/programming expressions
     // These contain comparison operators that wouldn't appear in shell commands
-    if SHELL_COMPARISON_OPS.is_match(s) {
-        return true;
-    }
-
-    false
+    SHELL_COMPARISON_OPS.is_match(s)
 }
 
 /// Whether `s` has a `$(...)` substitution holding a command: something with
@@ -639,7 +606,6 @@ pub(super) fn is_shell_command(s: &str) -> bool {
 
     // && requires shell context too - common in error messages
     if s.contains(" && ") {
-        // Check for actual command patterns
         let has_shell_context = s.contains("cd ") || s.contains("mkdir ") || s.contains("rm ");
         if has_shell_context {
             return true;
@@ -681,13 +647,30 @@ pub(super) fn is_shell_command(s: &str) -> bool {
     // symbol-table strings.
     SHELL_CMD_PREFIX_AC.is_match(s)
         && SHELL_CMD_PREFIXES.iter().any(|&prefix| {
-            // The first occurrence, at the start or after a space.
-            let Some(at) = s.find(prefix).filter(|&p| p == 0 || s[..p].ends_with(' ')) else {
-                return false;
-            };
-            // "service restart" is a command; "service provider" is prose.
-            let verbs = ["start", "stop", "restart", "status", "enable", "disable"];
-            prefix != "service " || verbs.iter().any(|v| s[at + prefix.len()..].starts_with(v))
+            s.match_indices(prefix).any(|(at, _)| {
+                // "service restart" is a command; "service provider" is prose.
+                let verbs = ["start", "stop", "restart", "status", "enable", "disable"];
+                in_command_position(&s[..at])
+                    && (prefix != "service "
+                        || verbs.iter().any(|v| s[at + prefix.len()..].starts_with(v)))
+            })
+        })
+}
+
+/// Whether a word after `before` is where a shell reads a command name: the
+/// start, after a separator or substitution, or after a word that runs the
+/// rest of the line (`sudo rm`). "the cat sat" puts `cat` mid-sentence.
+fn in_command_position(before: &str) -> bool {
+    const RUNNERS: &[&str] = &[
+        "sudo", "exec", "nohup", "xargs", "env", "then", "do", "else",
+    ];
+    let before = before.trim_end_matches([' ', '\t']);
+    before.is_empty()
+        || before.ends_with([';', '|', '&', '\n', '\r', '(', '`', '{', '"', '\''])
+        || RUNNERS.iter().any(|runner| {
+            before.strip_suffix(runner).is_some_and(|head| {
+                head.is_empty() || head.ends_with([' ', '\t', ';', '|', '&', '('])
+            })
         })
 }
 

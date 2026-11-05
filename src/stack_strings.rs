@@ -9,12 +9,9 @@
 //! Tracks register state and memory offsets to correctly reconstruct
 //! strings that are built out-of-order or with overlaps.
 
-// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
-#![allow(clippy::cast_possible_truncation)]
-
 use crate::types::{ExtractedString, StringFragment, StringKind, StringMethod};
 use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Check if bytes are printable ASCII and meet minimum length.
 fn check_printable(bytes: &[u8], min_length: usize) -> Option<String> {
@@ -54,10 +51,13 @@ fn score_decoded_string(s: &str) -> i32 {
     score
 }
 
-/// Extract strings constructed on the stack.
-pub(crate) fn extract_stack_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
-    let extractor = StackStringExtractor::new(data, min_length, None, 0, 0);
-    extractor.extract()
+/// Extract strings constructed on the stack by `bits`-bit x86 code.
+pub(crate) fn extract_stack_strings(
+    data: &[u8],
+    min_length: usize,
+    bits: u32,
+) -> Vec<ExtractedString> {
+    StackStringExtractor::new(data, min_length, None, 0, 0, bits).extract()
 }
 
 /// Extract strings with full file context for resolving RIP-relative addresses.
@@ -67,15 +67,17 @@ pub(crate) fn extract_stack_strings_with_context(
     full_data: &[u8],
     section_vma: u64,
     image_base: u64,
+    bits: u32,
 ) -> Vec<ExtractedString> {
-    let extractor = StackStringExtractor::new(
+    StackStringExtractor::new(
         section_data,
         min_length,
         Some(full_data),
         section_vma,
         image_base,
-    );
-    extractor.extract()
+        bits,
+    )
+    .extract()
 }
 
 struct StackStringExtractor<'a> {
@@ -84,6 +86,8 @@ struct StackStringExtractor<'a> {
     full_data: Option<&'a [u8]>,
     section_vma: u64,
     image_base: u64,
+    /// x86 decoder width: 32 or 64.
+    bits: u32,
     // Register state: (value, instruction offset).
     regs: HashMap<Register, (String, u64)>,
     // Raw (non-printable) immediate bytes held in registers, kept for XOR pairing.
@@ -91,9 +95,9 @@ struct StackStringExtractor<'a> {
     // XMM register state: raw bytes (16 bytes each) for SSE operations.
     xmm_regs: HashMap<Register, [u8; 16]>,
     // Captured stack writes: grouped by Base Register index -> Vec<StackWrite>
-    writes: HashMap<Register, Vec<StackWrite>>,
+    writes: BTreeMap<Register, Vec<StackWrite>>,
     // Non-printable raw blobs written to the stack, grouped by base register.
-    raw_blobs: HashMap<Register, Vec<RawBlob>>,
+    raw_blobs: BTreeMap<Register, Vec<RawBlob>>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +122,7 @@ impl<'a> StackStringExtractor<'a> {
         full_data: Option<&'a [u8]>,
         section_vma: u64,
         image_base: u64,
+        bits: u32,
     ) -> Self {
         Self {
             data,
@@ -125,11 +130,12 @@ impl<'a> StackStringExtractor<'a> {
             full_data,
             section_vma,
             image_base,
+            bits,
             regs: HashMap::with_capacity(16),
             raw_regs: HashMap::with_capacity(16),
             xmm_regs: HashMap::with_capacity(16),
-            writes: HashMap::with_capacity(8),
-            raw_blobs: HashMap::with_capacity(8),
+            writes: BTreeMap::new(),
+            raw_blobs: BTreeMap::new(),
         }
     }
 
@@ -235,14 +241,16 @@ impl<'a> StackStringExtractor<'a> {
     fn extract(mut self) -> Vec<ExtractedString> {
         let mut results = Vec::new();
 
-        // First pass: look for loop-based string building patterns
-        results.extend(self.extract_loop_built_strings());
         results.extend(self.extract_strcat_chains());
 
-        let mut decoder = Decoder::with_ip(64, self.data, self.section_vma, DecoderOptions::NONE);
+        let mut decoder =
+            Decoder::with_ip(self.bits, self.data, self.section_vma, DecoderOptions::NONE);
 
         while decoder.can_decode() {
             let instr = decoder.decode();
+            // The first invalid instruction ends the scan. Resyncing past it
+            // decodes the data that follows as code, and the pair matcher
+            // then turns that into thousands of junk fragments.
             if instr.is_invalid() {
                 break;
             }
@@ -254,7 +262,7 @@ impl<'a> StackStringExtractor<'a> {
                 Mnemonic::Movups | Mnemonic::Movaps | Mnemonic::Movdqu | Mnemonic::Movdqa => {
                     self.on_sse_mov(&instr, instr_off);
                 }
-                // --- 3. ALU XOR (vget case) ---
+                // `xor` of a stored immediate: a stack string decoded in place.
                 Mnemonic::Xor => {
                     let op1_kind = instr.op1_kind();
                     let imm_val = match op1_kind {
@@ -326,7 +334,8 @@ impl<'a> StackStringExtractor<'a> {
             let next_rip = instr.next_ip();
             let disp = instr.memory_displacement64();
             let target_vma = next_rip.wrapping_add(disp);
-            let target_file_offset = target_vma.saturating_sub(self.image_base) as usize;
+            let target_file_offset =
+                usize::try_from(target_vma.saturating_sub(self.image_base)).unwrap_or(usize::MAX);
 
             let read_from = self.full_data.unwrap_or(self.data);
             if let Some(end) = target_file_offset.checked_add(size)
@@ -359,77 +368,47 @@ impl<'a> StackStringExtractor<'a> {
         let writes_map = std::mem::take(&mut self.writes);
 
         for (base, mut writes) in writes_map {
-            if writes.is_empty() {
-                continue;
-            }
-
             writes.sort_by_key(|write| write.disp);
-
-            let mut iter = writes.into_iter();
-            let Some(first) = iter.next() else { continue };
-
-            let mut current = ExtractedString {
-                value: first.string,
-                data_offset: first.instr_off,
-                data_len: 0,
+            // Writes at most this far past the string so far extend it.
+            let allowed_gap = if base == Register::None { 16 } else { 4 };
+            let start = |w: StackWrite| ExtractedString {
+                data_offset: w.instr_off,
                 method: StringMethod::StackString,
                 kind: Some(StringKind::StackString),
                 fragments: Some(Box::new(vec![StringFragment {
-                    offset: first.instr_off,
-                    length: 0, // updated below
+                    offset: w.instr_off,
+                    length: w.string.len(),
                 }])),
+                value: w.string,
+                ..Default::default()
             };
-            // Set first fragment length correctly
-            if let Some(frags) = &mut current.fragments {
-                frags[0].length = current.value.len();
-            }
 
-            let mut current_end_disp = first.disp + current.value.len() as i64;
+            let mut iter = writes.into_iter();
+            let Some(first) = iter.next() else { continue };
+            // RIP-relative displacements are absolute addresses derived from
+            // header fields, so this arithmetic saturates instead of wrapping.
+            let mut current_end_disp = first.disp.saturating_add(first.string.len() as i64);
+            let mut current = start(first);
 
             for w in iter {
-                let gap = w.disp - current_end_disp;
-                let allowed_gap = if base == Register::None { 16 } else { 4 };
-
-                if gap <= allowed_gap {
-                    if gap >= 0 {
-                        current.value.push_str(&w.string);
-                        if let Some(frags) = &mut current.fragments {
-                            frags.push(StringFragment {
-                                offset: w.instr_off,
-                                length: w.string.len(),
-                            });
-                        }
-                        current_end_disp = w.disp + w.string.len() as i64;
-                    } else {
-                        // Overlap
-                        let overlap = current_end_disp - w.disp;
-                        if overlap >= 0 && overlap < w.string.len() as i64 {
-                            let new_part = &w.string[usize::try_from(overlap).unwrap_or(0)..];
-                            current.value.push_str(new_part);
-                            if let Some(frags) = &mut current.fragments {
-                                frags.push(StringFragment {
-                                    offset: w.instr_off,
-                                    length: w.string.len(),
-                                });
-                            }
-                            current_end_disp = w.disp + w.string.len() as i64;
-                        }
-                    }
-                } else {
-                    results.push(current);
-                    let string_len = w.string.len();
-                    current = ExtractedString {
-                        value: w.string,
-                        data_offset: w.instr_off,
-                        data_len: 0,
-                        method: StringMethod::StackString,
-                        kind: Some(StringKind::StackString),
-                        fragments: Some(Box::new(vec![StringFragment {
+                let end_disp = w.disp.saturating_add(w.string.len() as i64);
+                if w.disp.saturating_sub(current_end_disp) > allowed_gap {
+                    results.push(std::mem::replace(&mut current, start(w)));
+                    current_end_disp = end_disp;
+                    continue;
+                }
+                // A write may overlap the end of the string so far; only the
+                // bytes past it are new.
+                let overlap = usize::try_from(current_end_disp.saturating_sub(w.disp)).unwrap_or(0);
+                if let Some(new_part) = w.string.get(overlap..).filter(|p| !p.is_empty()) {
+                    current.value.push_str(new_part);
+                    if let Some(frags) = &mut current.fragments {
+                        frags.push(StringFragment {
                             offset: w.instr_off,
-                            length: string_len,
-                        }])),
-                    };
-                    current_end_disp = w.disp + string_len as i64;
+                            length: w.string.len(),
+                        });
+                    }
+                    current_end_disp = end_disp;
                 }
             }
             results.push(current);
@@ -477,14 +456,8 @@ impl<'a> StackStringExtractor<'a> {
         merged
     }
 
+    /// Join a run of two or more adjacent fragments into one string.
     fn merge_group(&self, group: &[ExtractedString]) -> ExtractedString {
-        if group.is_empty() {
-            return Default::default();
-        }
-        if group.len() == 1 {
-            return group[0].clone();
-        }
-
         let mut merged_value = String::new();
         let first_offset = group[0].data_offset;
         let mut merged_fragments = Vec::new();
@@ -519,7 +492,7 @@ impl<'a> StackStringExtractor<'a> {
                 continue;
             }
 
-            let mut by_len: HashMap<usize, Vec<usize>> = HashMap::new();
+            let mut by_len: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
             for (idx, blob) in blobs.iter().enumerate() {
                 by_len.entry(blob.bytes.len()).or_default().push(idx);
             }
@@ -587,24 +560,24 @@ impl<'a> StackStringExtractor<'a> {
 
                 let chunk_stride = chunk_size as i64;
                 pairs.sort_unstable_by(|a, b| {
-                    let ka = a.disp_hi - a.disp_lo;
-                    let kb = b.disp_hi - b.disp_lo;
+                    let ka = a.disp_lo.abs_diff(a.disp_hi);
+                    let kb = b.disp_lo.abs_diff(b.disp_hi);
                     ka.cmp(&kb).then(a.disp_lo.cmp(&b.disp_lo))
                 });
 
                 let mut seen: HashSet<String> = HashSet::new();
                 let mut i = 0;
                 while i < pairs.len() {
-                    let key_offset = pairs[i].disp_hi - pairs[i].disp_lo;
+                    let key_offset = pairs[i].disp_lo.abs_diff(pairs[i].disp_hi);
                     let mut value = pairs[i].decoded.clone();
                     let mut min_off = pairs[i].instr_off;
                     let mut j = i + 1;
                     while j < pairs.len() {
                         let p = &pairs[j];
-                        if p.disp_hi - p.disp_lo != key_offset {
+                        if p.disp_lo.abs_diff(p.disp_hi) != key_offset {
                             break;
                         }
-                        if p.disp_lo != pairs[j - 1].disp_lo + chunk_stride {
+                        if pairs[j - 1].disp_lo.checked_add(chunk_stride) != Some(p.disp_lo) {
                             break;
                         }
                         value.push_str(&p.decoded);
@@ -630,63 +603,6 @@ impl<'a> StackStringExtractor<'a> {
         results
     }
 
-    fn extract_loop_built_strings(&self) -> Vec<ExtractedString> {
-        let mut results = Vec::new();
-        let mut i = 0;
-        while i + 4 < self.data.len() {
-            if self.data[i] == 0x66 && self.data[i + 1] == 0xC7 && self.data[i + 2] == 0x00 {
-                let b1 = self.data[i + 3];
-                let b2 = self.data[i + 4];
-                if (b1.is_ascii_graphic() || b1 == b' ')
-                    && (b2.is_ascii_graphic() || b2 == b' ' || b2 == 0)
-                {
-                    let start_pos = i;
-                    let mut chunk = String::new();
-                    chunk.push(b1 as char);
-                    if b2 != 0 {
-                        chunk.push(b2 as char);
-                    }
-
-                    let mut k = i + 5;
-                    while k + 4 < self.data.len() {
-                        if self.data[k] == 0x66
-                            && self.data[k + 1] == 0xC7
-                            && self.data[k + 2] == 0x00
-                        {
-                            let b3 = self.data[k + 3];
-                            let b4 = self.data[k + 4];
-                            chunk.push(b3 as char);
-                            if b4 != 0 {
-                                chunk.push(b4 as char);
-                            } else {
-                                k += 5;
-                                break;
-                            }
-                            k += 5;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if chunk.len() >= self.min_length && self.looks_like_real_string(&chunk) {
-                        results.push(ExtractedString {
-                            value: chunk,
-                            data_offset: start_pos as u64,
-                            data_len: 0,
-                            method: StringMethod::StackString,
-                            kind: Some(StringKind::StackString),
-                            ..Default::default()
-                        });
-                    }
-                    i = k;
-                    continue;
-                }
-            }
-            i += 1;
-        }
-        results
-    }
-
     /// GCC inlines `strcat(buf, "lit")` for a short literal: it computes
     /// `buf + strlen(buf)` and stores the literal, NUL included, as
     /// immediates at that pointer.
@@ -703,7 +619,8 @@ impl<'a> StackStringExtractor<'a> {
         /// Instructions an append may take between its stores and the next.
         const MAX_GAP: usize = 12;
         let mut results = Vec::new();
-        let mut decoder = Decoder::with_ip(64, self.data, self.section_vma, DecoderOptions::NONE);
+        let mut decoder =
+            Decoder::with_ip(self.bits, self.data, self.section_vma, DecoderOptions::NONE);
         // The frame buffer whose address `rax` holds, then its end.
         let mut start_in_rax: Option<(Register, i64)> = None;
         let mut end_in_rax: Option<(Register, i64)> = None;
@@ -778,15 +695,17 @@ impl<'a> StackStringExtractor<'a> {
                             OpKind::Immediate8 | OpKind::Immediate16 | OpKind::Immediate32
                         ) =>
                 {
-                    let at = instr.memory_displacement64() as usize;
+                    let at = usize::try_from(instr.memory_displacement64()).unwrap_or(usize::MAX);
                     let bytes = instr.immediate32().to_le_bytes();
                     let size = match instr.op1_kind() {
                         OpKind::Immediate8 => 1,
                         OpKind::Immediate16 => 2,
                         _ => 4,
                     };
-                    if at + size <= chunk.len() {
-                        chunk[at..at + size].copy_from_slice(&bytes[..size]);
+                    // A negative displacement reads as a huge `at`; `get_mut`
+                    // rejects it along with any store past the chunk.
+                    if let Some(dst) = at.checked_add(size).and_then(|end| chunk.get_mut(at..end)) {
+                        dst.copy_from_slice(&bytes[..size]);
                         fragments.push(StringFragment {
                             offset: instr.ip().wrapping_sub(self.section_vma),
                             length: size,
@@ -845,3 +764,6 @@ impl<'a> StackStringExtractor<'a> {
         alphanumeric_runs >= 2
     }
 }
+
+#[cfg(test)]
+mod tests;

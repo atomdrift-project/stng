@@ -8,7 +8,7 @@
 use stng::ExtractOptions;
 
 #[test]
-fn test_sample_stealer_short_strings() {
+fn finds_short_exec_command_arguments() {
     let sample_path = crate::common::path("testdata/malware/sample-stealer");
 
     let data = std::fs::read(sample_path).expect("Failed to read sample");

@@ -59,7 +59,8 @@ pub(super) fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats
         && !has_suspicious_leading_digit;
 
     // Lowercase strings of four or more letters with no vowel are random.
-    if is_all_lower && len >= 4 && stats.vowels == 0 {
+    // `y` stands in for one (`sync`, `lynx`); the short-word rules judge those.
+    if is_all_lower && len >= 4 && stats.vowels == 0 && !s.contains('y') {
         return true;
     }
 
@@ -91,10 +92,7 @@ pub(super) fn is_short_identifier_garbage(s: &str, len: usize, stats: &CharStats
     if stats.upper > 0 && stats.lower > 0 {
         return true;
     }
-    if stats.whitespace > 0 {
-        return true;
-    }
-    false
+    stats.whitespace > 0
 }
 
 /// Returns true if a short string (<=6 chars) looks like misaligned binary data.
@@ -379,17 +377,11 @@ pub(super) fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bo
     // Detect repetitive single-char patterns like "zçz&zÇz..." where one letter
     // appears very frequently (>30% of chars) with non-ASCII mixed in
     if non_ascii_bytes >= 1 && len >= 10 {
-        let mut char_counts = [0u8; 128]; // ASCII frequency counter
-        for c in s.chars() {
-            if c.is_ascii() {
-                let idx = c as usize;
-                if idx < 128 && char_counts[idx] < 255 {
-                    char_counts[idx] += 1;
-                }
-            }
+        let mut char_counts = [0usize; 128];
+        for b in s.bytes().filter(u8::is_ascii) {
+            char_counts[usize::from(b)] += 1;
         }
-        // Find max frequency
-        let max_freq = char_counts.iter().max().copied().unwrap_or(0) as usize;
+        let max_freq = char_counts.iter().max().copied().unwrap_or(0);
         // If any single ASCII char appears in more than 30% of positions, suspicious
         if max_freq * 100 / len > 30 {
             return true;
@@ -399,11 +391,7 @@ pub(super) fn has_excess_non_ascii(s: &str, len: usize, stats: &CharStats) -> bo
     // Short strings (4-8 chars) starting with digit + non-ASCII are garbage
     // e.g., "7üĐō", "4ÛŷƮ", "6Æťƒ" - random bytes decoded as UTF-8
     // Use char_count for proper Unicode handling
-    if non_ascii_bytes >= 1 && stats.char_count <= 8 && stats.first_char.is_ascii_digit() {
-        return true;
-    }
-
-    false
+    non_ascii_bytes >= 1 && stats.char_count <= 8 && stats.first_char.is_ascii_digit()
 }
 
 /// Returns true if the string is a plausible identifier or word-like sequence
@@ -684,25 +672,6 @@ pub(super) fn is_short_word_garbage(s: &str, len: usize, stats: &CharStats) -> b
         }
     }
 
-    // Very short all-digit strings (4-5 chars) with very limited variety are usually garbage
-    // e.g., "3333", "1111" - unless they're port numbers, years, or known patterns
-    if (4..=5).contains(&len) && stats.digit == len && stats.upper == 0 && stats.lower == 0 {
-        let chars: Vec<char> = s.chars().collect();
-        // Check for year-like patterns (19xx, 20xx)
-        if chars.len() == 4 {
-            let first_two: String = chars[0..2].iter().collect();
-            if first_two == "19" || first_two == "20" {
-                // Likely a year - don't filter
-            } else {
-                // Only filter if ALL digits are the same (e.g., "3333", "1111")
-                let unique_digits: std::collections::HashSet<_> = chars.iter().collect();
-                if unique_digits.len() == 1 {
-                    return true;
-                }
-            }
-        }
-    }
-
     // Short strings with noise punctuation are garbage — unless the string
     // also contains whitespace, in which case it's likely a multi-word
     // fragment (assembly output like `MOV EAX, 0`, list literals, formatted
@@ -827,7 +796,7 @@ pub(super) fn is_statistical_garbage(
     // Random hex/binary data (all hex chars, no non-hex letters, not prefixed 0x)
     if len >= 8
         && !stats.has_non_hex_letter
-        && stats.hex_only == len
+        && stats.ascii_alnum == len
         && stats.digit > 0
         && stats.alpha > 0
         && !s.contains('.')
@@ -873,9 +842,5 @@ pub(super) fn is_statistical_garbage(
     }
 
     // All-ASCII reloc table patterns (checked separately since has_excess_non_ascii skips ASCII)
-    if is_reloc_table_pattern(s, len) {
-        return true;
-    }
-
-    false
+    is_reloc_table_pattern(s, len)
 }

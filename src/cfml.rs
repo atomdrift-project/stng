@@ -6,7 +6,7 @@
 //! and validate the plaintext as CFML before returning it to string extraction.
 
 use des::Des;
-use des::cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray};
+use des::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 
 const HEADER: &[u8] = b"Allaire Cold Fusion Template\nHeader Size: ";
 const NEW_VERSION: &[u8] = b"New Version";
@@ -52,7 +52,7 @@ pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
     let (chunks, remainder) = ciphertext.as_chunks::<8>();
     let mut plaintext = Vec::with_capacity(ciphertext.len());
     for chunk in chunks {
-        let mut block = GenericArray::clone_from_slice(chunk);
+        let mut block = (*chunk).into();
         cipher.decrypt_block(&mut block);
         plaintext.extend_from_slice(&block);
     }
@@ -86,8 +86,7 @@ pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
     if plaintext.len() < 64 || printable * 100 / plaintext.len() < 90 {
         return None;
     }
-    let lower = String::from_utf8_lossy(&plaintext).to_ascii_lowercase();
-    if !lower.contains("<cf") || !lower.contains('>') {
+    if !crate::bytes::contains_ignore_ascii_case(&plaintext, b"<cf") || !plaintext.contains(&b'>') {
         return None;
     }
 
@@ -114,7 +113,7 @@ fn des_string_to_key(input: &[u8]) -> Option<[u8; 8]> {
         for (byte, previous) in block.iter_mut().zip(iv) {
             *byte ^= previous;
         }
-        let mut block = GenericArray::clone_from_slice(&block);
+        let mut block = block.into();
         cipher.encrypt_block(&mut block);
         iv.copy_from_slice(&block);
     }
@@ -126,5 +125,43 @@ fn set_odd_parity(key: &mut [u8; 8]) {
     for byte in key {
         let upper = *byte & 0xfe;
         *byte = upper | u8::from(upper.count_ones() % 2 == 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KEY, decode, des_string_to_key};
+
+    /// A template encrypted with the `des` 0.8 implementation this decoder
+    /// was first validated against; it pins the key derivation and the
+    /// block layout across cipher-crate upgrades.
+    const TEMPLATE: &str = "416c6c6169726520436f6c6420467573696f6e2054656d706c6174650a486561646572\
+        2053697a653a203434a666546d117b24358acad825bdd6b1ad4f2b8bf8db3d0202e589996069745e5e18\
+        bfb953bc15e8a65594a30f40d435c4ce0cf4b9c4ff5686b981e83d801355e3591f87f11cf647da2fede6\
+        3bdbeeaecc5bb501118dbb9aa5879cb065257ae786";
+
+    #[test]
+    fn derives_the_historical_key() {
+        assert_eq!(
+            des_string_to_key(KEY),
+            Some([0x62, 0x31, 0xef, 0xba, 0x16, 0x31, 0xe0, 0x15])
+        );
+    }
+
+    #[test]
+    fn decrypts_a_known_template() {
+        let file = crate::bytes::from_hex(TEMPLATE.as_bytes()).unwrap();
+        let source = decode(&file).unwrap();
+        assert_eq!(
+            String::from_utf8(source).unwrap(),
+            "<cfset secret = \"http://c2.example/drop\">\n<cfoutput>#secret#</cfoutput>\n<!-- padding padding -->"
+        );
+    }
+
+    #[test]
+    fn refuses_a_template_with_a_damaged_block() {
+        let mut file = crate::bytes::from_hex(TEMPLATE.as_bytes()).unwrap();
+        file[44] ^= 0xff; // the first ciphertext block
+        assert!(decode(&file).is_none_or(|s| !s.starts_with(b"<cfset secret")));
     }
 }

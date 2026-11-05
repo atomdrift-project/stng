@@ -1,7 +1,7 @@
 use stng::{ExtractOptions, StringKind};
 
 #[test]
-fn test_stack_strings_themeforestrat() {
+fn assembles_themeforestrat_c2_stack_strings() {
     let sample_path = crate::common::path("testdata/malware/themeforestrat");
 
     let data = std::fs::read(sample_path).expect("Failed to read malware sample");

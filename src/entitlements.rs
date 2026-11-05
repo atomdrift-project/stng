@@ -3,50 +3,63 @@
 use crate::types::{ExtractedString, StringKind, StringMethod};
 use goblin::mach::MachO;
 
-/// Extract entitlements from Mach-O code signature as raw XML.
+/// The XML entitlements in a Mach-O's code signature.
 ///
-/// Returns the full XML plist as a single string for inline display.
+/// Read from the signature's entitlements slot: a code signature also embeds
+/// other plists (the CMS `cdhashes` attribute), so the first `<?xml` in the
+/// blob is not necessarily the entitlements.
 pub(crate) fn extract_macho_entitlements(macho: &MachO<'_>, data: &[u8]) -> Vec<ExtractedString> {
     use goblin::mach::load_command::CommandVariant;
 
-    let mut entitlements = Vec::new();
+    macho
+        .load_commands
+        .iter()
+        .filter_map(|cmd| match cmd.command {
+            CommandVariant::CodeSignature(ref cs) => Some(cs),
+            _ => None,
+        })
+        .filter_map(|cs| {
+            let blob =
+                crate::binary::file_range(data, u64::from(cs.dataoff), u64::from(cs.datasize))?;
+            let (at, xml) = entitlements_xml(blob)?;
+            Some(ExtractedString {
+                value: String::from_utf8(xml.to_vec()).ok()?,
+                data_offset: u64::from(cs.dataoff) + at as u64,
+                method: StringMethod::CodeSignature,
+                kind: Some(StringKind::EntitlementsXml),
+                ..Default::default()
+            })
+        })
+        .collect()
+}
 
-    // Find LC_CODE_SIGNATURE load command
-    for cmd in &macho.load_commands {
-        if let CommandVariant::CodeSignature(ref cs) = cmd.command {
-            let offset = cs.dataoff as usize;
-            let size = cs.datasize as usize;
-            let Some(end) = offset.checked_add(size) else {
-                continue;
-            };
-
-            if end > data.len() {
-                continue;
-            }
-
-            let cs_data = &data[offset..end];
-
-            // Look for XML plist (starts with <?xml)
-            if let Some(xml_start) = cs_data.windows(5).position(|w| w == b"<?xml") {
-                let xml_data = &cs_data[xml_start..];
-
-                // Find end of plist
-                if let Some(plist_end) = xml_data.windows(8).position(|w| w == b"</plist>") {
-                    let xml_content = &xml_data[..plist_end + 8]; // include </plist>
-
-                    if let Ok(xml_str) = String::from_utf8(xml_content.to_vec()) {
-                        entitlements.push(ExtractedString {
-                            value: xml_str,
-                            data_offset: (offset + xml_start) as u64,
-                            method: StringMethod::CodeSignature,
-                            kind: Some(StringKind::EntitlementsXml),
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-        }
+/// The entitlements plist in a code-signature SuperBlob, with its offset in
+/// the blob. Big-endian: `magic, length, count`, then `count` index entries
+/// of `(slot type, offset)`; slot 5 holds a `0xfade7171` blob whose payload
+/// is the XML.
+fn entitlements_xml(blob: &[u8]) -> Option<(usize, &[u8])> {
+    const SUPERBLOB: u32 = 0xfade_0cc0;
+    const ENTITLEMENTS_SLOT: u32 = 5;
+    const ENTITLEMENTS: u32 = 0xfade_7171;
+    let be32 = |at: usize| crate::bytes::u32_be(blob, at);
+    if be32(0)? != SUPERBLOB {
+        return None;
     }
-
-    entitlements
+    let count = usize::try_from(be32(8)?).ok()?;
+    let index = (0..count.min(blob.len() / 8)).find_map(|i| {
+        let entry = 12usize.checked_add(i.checked_mul(8)?)?;
+        (be32(entry)? == ENTITLEMENTS_SLOT)
+            .then(|| be32(entry + 4))
+            .flatten()
+    })?;
+    let start = usize::try_from(index).ok()?;
+    if be32(start)? != ENTITLEMENTS {
+        return None;
+    }
+    let len = usize::try_from(be32(start.checked_add(4)?)?).ok()?;
+    let payload = blob.get(start.checked_add(8)?..start.checked_add(len)?)?;
+    let xml_start = memchr::memmem::find(payload, b"<?xml")?;
+    let xml = &payload[xml_start..];
+    let end = memchr::memmem::find(xml, b"</plist>")? + b"</plist>".len();
+    Some((start + 8 + xml_start, &xml[..end]))
 }

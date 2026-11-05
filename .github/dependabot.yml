@@ -11,7 +11,7 @@ updates:
       actions:
         patterns: ["*"]
   - package-ecosystem: cargo
-    directory: "/"
+    directories: ["/", "/fuzz"]
     schedule:
       interval: weekly
     groups:

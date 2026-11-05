@@ -8,15 +8,23 @@ fn fat_binary() -> Vec<u8> {
 }
 
 #[test]
-fn test_fat_binary_extract_strings() {
+fn finds_libsystem_load_command() {
     let data = fat_binary();
 
     let strings = extract_strings(&data, 4);
-    assert!(!strings.is_empty(), "Fat binary should have strings");
+    // The x86_64 slice's LC_LOAD_DYLIB for libSystem, at its fat-file offset.
+    assert!(
+        strings
+            .iter()
+            .any(|s| s.value == "/usr/lib/libSystem.B.dylib"
+                && s.data_offset == 0x45b0
+                && s.kind == Some(StringKind::Path)),
+        "libSystem load command not found"
+    );
 }
 
 #[test]
-fn test_fat_binary_detect_language() {
+fn detects_unknown_language() {
     let data = fat_binary();
 
     let lang = detect_language(&data);
@@ -25,14 +33,14 @@ fn test_fat_binary_detect_language() {
 }
 
 #[test]
-fn test_fat_binary_not_go() {
+fn is_not_go() {
     let data = fat_binary();
 
     assert!(!is_go_binary(&data), "Fat system binary should not be Go");
 }
 
 #[test]
-fn test_fat_binary_not_rust() {
+fn is_not_rust() {
     let data = fat_binary();
 
     assert!(
@@ -42,16 +50,22 @@ fn test_fat_binary_not_rust() {
 }
 
 #[test]
-fn test_fat_binary_with_options() {
+fn min_length_drops_short_imports() {
     let data = fat_binary();
 
     let opts = ExtractOptions::new(8);
     let strings = extract_strings_with_options(&data, &opts);
-    assert!(!strings.is_empty());
+    // A 17-byte import clears the bar; the 7-byte `_system` does not.
+    assert!(
+        strings
+            .iter()
+            .any(|s| s.value == "___stack_chk_fail" && s.kind == Some(StringKind::Import))
+    );
+    assert!(!strings.iter().any(|s| s.value == "_system"));
 }
 
 #[test]
-fn test_fat_binary_has_imports() {
+fn finds_imports() {
     let data = fat_binary();
 
     let strings = extract_strings(&data, 4);

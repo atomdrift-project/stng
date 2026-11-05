@@ -13,13 +13,11 @@
 
 use stng::{StringMethod, extract_strings, is_rust_binary};
 
-fn fixture(rel: &str) -> Vec<u8> {
-    crate::common::bytes(&format!("testdata/{rel}"))
-}
-
 #[test]
 fn stripped_rust_executable_is_detected() {
-    assert!(is_rust_binary(&fixture("rust_elf/linux_amd64")));
+    assert!(is_rust_binary(&crate::common::bytes(
+        "testdata/rust_elf/linux_amd64"
+    )));
 }
 
 #[test]
@@ -29,7 +27,10 @@ fn non_rust_binaries_are_not_detected() {
         "go_pclntab/darwin_arm64",
         "go_pclntab/windows_amd64",
     ] {
-        assert!(!is_rust_binary(&fixture(rel)), "{rel} detected as Rust");
+        assert!(
+            !is_rust_binary(&crate::common::bytes(&format!("testdata/{rel}"))),
+            "{rel} detected as Rust"
+        );
     }
 }
 
@@ -37,7 +38,7 @@ fn non_rust_binaries_are_not_detected() {
 /// not as a fragment of a longer raw-scan run over the packed blob.
 #[test]
 fn rust_literals_are_sliced_from_the_packed_blob() {
-    let data = fixture("rust_elf/linux_amd64");
+    let data = crate::common::bytes("testdata/rust_elf/linux_amd64");
     let strings = extract_strings(&data, 4);
     for literal in [
         "stng-rust-fixture-alpha-literal",
@@ -70,7 +71,7 @@ fn rust_literals_are_sliced_from_the_packed_blob() {
 /// strings -- must still be reported now that Rust executables take this path.
 #[test]
 fn raw_scan_strings_survive_the_rust_path() {
-    let strings = extract_strings(&fixture("rust_elf/linux_amd64"), 4);
+    let strings = extract_strings(&crate::common::bytes("testdata/rust_elf/linux_amd64"), 4);
     for raw in ["libc.so.6", "GLIBC_2.2.5"] {
         assert!(
             strings.iter().any(|s| s.value == raw),

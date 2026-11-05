@@ -4,7 +4,9 @@
 
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
+use std::io::{self, Write};
 use std::path::Path;
+use stng::goblin::{Object, mach::Mach};
 use stng::{ExtractedString, Severity, StringKind, StringMethod};
 
 const RESET: &str = "\x1b[0m";
@@ -20,20 +22,21 @@ const BRIGHT_YELLOW: &str = "\x1b[93m";
 const PREFIX_WIDTH: usize = 33;
 
 /// How to render: in color or not, and how wide a value may run before it
-/// wraps.
+/// wraps (0: never).
 pub(crate) struct Style {
     color: bool,
     value_width: usize,
 }
 
 impl Style {
-    /// The style for this run, reading the terminal width once.
-    pub(crate) fn new(color: bool) -> Self {
-        let width = terminal_size::terminal_size().map_or(120, |(w, _)| usize::from(w.0));
-        let value_width = if width > PREFIX_WIDTH + 20 {
-            width - PREFIX_WIDTH
+    /// The style for this run. Values wrap to the terminal's width only when
+    /// `wrap`: piped output keeps each string on one line for `grep`.
+    pub(crate) fn new(color: bool, wrap: bool) -> Self {
+        let value_width = if wrap {
+            let width = terminal_size::terminal_size().map_or(120, |(w, _)| usize::from(w.0));
+            width.saturating_sub(PREFIX_WIDTH).max(20)
         } else {
-            120
+            0
         };
         Self { color, value_width }
     }
@@ -46,15 +49,16 @@ impl Style {
 /// The full listing for one file: header, rows in offset order, a note for
 /// an overlay with no strings, and the notable summary.
 pub(crate) fn print_listing(
+    out: &mut impl Write,
     path: &Path,
     data: &[u8],
+    object: Option<&Object<'_>>,
     strings: &mut [ExtractedString],
     xor_key: Option<&[u8]>,
     style: &Style,
-) {
+) -> io::Result<()> {
     if strings.is_empty() {
-        println!("No strings found in {}", safe_path(path));
-        return;
+        return writeln!(out, "No strings found in {}", safe_path(path));
     }
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let key = xor_key.map(String::from_utf8_lossy).or_else(|| {
@@ -64,36 +68,41 @@ pub(crate) fn print_listing(
             .map(|s| Cow::Borrowed(s.value.as_str()))
     });
     let key = key.map_or(String::new(), |k| format!(" · xor:{}", terminal_safe(&k)));
-    println!(
+    writeln!(
+        out,
         "{}{}{} · {} · {} bytes · {} strings · {}{key}{}",
         style.paint(BOLD),
         style.paint(DIM),
         terminal_safe(&name),
-        binary_format(data),
+        binary_format(object),
         data.len(),
         strings.len(),
-        super::hex(&Sha256::digest(data)),
+        Sha256::digest(data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
         style.paint(RESET),
-    );
-    println!();
+    )?;
+    writeln!(out)?;
 
     strings.sort_by_key(|s| s.data_offset);
     for s in strings.iter() {
-        print_string(s, style);
+        print_string(out, s, style)?;
     }
 
-    if let Some(overlay) = stng::detect_elf_overlay(data)
+    if let Some(overlay) = object.and_then(|object| stng::detect_overlay(object, data))
         && !strings
             .iter()
             .any(|s| s.data_offset >= overlay.start_offset)
     {
         let (dim, reset) = (style.paint(DIM), style.paint(RESET));
-        println!();
-        println!("{dim}── overlay ──{reset}");
-        println!(
+        writeln!(out)?;
+        writeln!(out, "{dim}── overlay ──{reset}")?;
+        writeln!(
+            out,
             "  {dim}{:>8x}{reset} {dim}{:<12}{reset} {dim}{} bytes (unprintable){reset}",
             overlay.start_offset, "-", overlay.size
-        );
+        )?;
     }
 
     // High-severity strings, most actionable first: addresses, then commands
@@ -115,22 +124,22 @@ pub(crate) fn print_listing(
     });
     notable.truncate(8);
     if !notable.is_empty() {
-        println!();
+        writeln!(out)?;
         if style.color {
-            println!("{RED}{BOLD}▌ Notable{RESET}");
+            writeln!(out, "{RED}{BOLD}▌ Notable{RESET}")?;
         } else {
-            println!("── Notable ──");
+            writeln!(out, "── Notable ──")?;
         }
         for s in notable {
-            print_string(s, style);
+            print_string(out, s, style)?;
         }
     }
-    println!();
+    writeln!(out)
 }
 
 /// One string as one or more rows: offset, method, kind, value. Multi-line
 /// values and long ones wrap, each row keeping its own offset.
-fn print_string(s: &ExtractedString, style: &Style) {
+fn print_string(out: &mut impl Write, s: &ExtractedString, style: &Style) -> io::Result<()> {
     let kind = s.kind.map_or("-", StringKind::short_name);
     if s.kind == Some(StringKind::EntitlementsXml) {
         let mut offset = s.data_offset;
@@ -141,27 +150,33 @@ fn print_string(s: &ExtractedString, style: &Style) {
             } else {
                 safe
             };
-            print_row(
-                offset,
-                "",
-                "entitlement",
-                &shown,
-                style.paint(CYAN),
-                "",
-                style,
-            );
-            offset += line.len() as u64 + 1;
+            let label = Label {
+                method: "",
+                kind: "entitlement",
+                color: style.paint(CYAN),
+            };
+            print_row(out, style, Some(offset), &label, &shown, "")?;
+            offset = offset.saturating_add(line.len() as u64 + 1);
         }
-        return;
+        return Ok(());
     }
 
+    // What stng decoded or decrypted, rather than found as it is.
     let decoded = matches!(
         s.method,
         StringMethod::XorDecode
             | StringMethod::XorStackPair
             | StringMethod::XorRepeatingKey
+            | StringMethod::Base64Decode
             | StringMethod::Base64ObfuscatedDecode
+            | StringMethod::Base32Decode
+            | StringMethod::Base85Decode
+            | StringMethod::Rot13Base64Decode
+            | StringMethod::HexDecode
+            | StringMethod::UrlDecode
+            | StringMethod::UnicodeEscapeDecode
             | StringMethod::ScriptDecode
+            | StringMethod::CfmlDecode
     );
     let (color, kind_color) = if decoded {
         (BRIGHT_YELLOW, BRIGHT_YELLOW)
@@ -177,50 +192,77 @@ fn print_string(s: &ExtractedString, style: &Style) {
     };
     let (color, kind_color) = (style.paint(color), style.paint(kind_color));
     // An overlay's wide strings are labelled by their kind alone.
-    let method = if s.kind == Some(StringKind::OverlayWide) {
-        ""
-    } else {
-        s.method.short_name()
+    let label = Label {
+        method: if s.kind == Some(StringKind::OverlayWide) {
+            ""
+        } else {
+            s.method.short_name()
+        },
+        kind,
+        color: kind_color,
     };
 
+    // Only the first row has an offset: positions inside a decoded or
+    // wrapped value are not positions in the file.
     let value = s.value.trim_end_matches(|c: char| c.is_control());
     if decoded && value.contains('\n') {
-        let mut offset = s.data_offset;
-        for line in value.lines() {
+        for (i, line) in value.lines().enumerate() {
             let shown = terminal_safe(line.trim_end_matches(|c: char| c.is_control()));
-            print_row(offset, method, kind, &shown, kind_color, color, style);
-            offset += line.len() as u64 + 1;
+            print_row(
+                out,
+                style,
+                (i == 0).then_some(s.data_offset),
+                &label,
+                &shown,
+                color,
+            )?;
         }
-        return;
+        return Ok(());
     }
     let shown = terminal_safe(value);
-    for (offset, line) in wrap_string_lines(&shown, s.data_offset, style.value_width) {
-        print_row(offset, method, kind, &line, kind_color, color, style);
+    for (i, (offset, line)) in wrap_string_lines(&shown, s.data_offset, style.value_width)
+        .into_iter()
+        .enumerate()
+    {
+        print_row(out, style, (i == 0).then_some(offset), &label, &line, color)?;
     }
+    Ok(())
+}
+
+/// The method and kind columns, shared by every row of one string.
+struct Label<'a> {
+    method: &'a str,
+    kind: &'a str,
+    color: &'a str,
 }
 
 fn print_row(
-    offset: u64,
-    method: &str,
-    kind: &str,
-    value: &str,
-    kind_color: &str,
-    color: &str,
+    out: &mut impl Write,
     style: &Style,
-) {
+    offset: Option<u64>,
+    label: &Label<'_>,
+    value: &str,
+    color: &str,
+) -> io::Result<()> {
     let (dim, reset) = (style.paint(DIM), style.paint(RESET));
-    println!(
-        "  {dim}{offset:>8x}{reset} {kind_color}{method:<8}{reset} {kind_color}{kind:<12}{reset} {color}{value}{reset}"
-    );
+    let Label {
+        method,
+        kind,
+        color: label_color,
+    } = label;
+    let offset = offset.map_or_else(|| " ".repeat(8), |at| format!("{at:>8x}"));
+    writeln!(
+        out,
+        "  {dim}{offset}{reset} {label_color}{method:<8}{reset} {label_color}{kind:<12}{reset} {color}{value}{reset}"
+    )
 }
 
 /// The container format and architecture, as `ELF x64` or `Mach-O fat`.
-fn binary_format(data: &[u8]) -> String {
-    use stng::goblin::Object;
+fn binary_format(object: Option<&Object<'_>>) -> String {
     use stng::goblin::{elf::header as elf, mach::cputype as mach, pe::header as pe};
 
-    match Object::parse(data) {
-        Ok(Object::Elf(e)) => {
+    match object {
+        Some(Object::Elf(e)) => {
             let arch = match e.header.e_machine {
                 elf::EM_X86_64 => "x64",
                 elf::EM_386 => "x86",
@@ -235,7 +277,7 @@ fn binary_format(data: &[u8]) -> String {
             };
             format!("ELF {arch}")
         }
-        Ok(Object::PE(p)) => {
+        Some(Object::PE(p)) => {
             let arch = match p.header.coff_header.machine {
                 pe::COFF_MACHINE_X86_64 => "x64",
                 pe::COFF_MACHINE_X86 => "x86",
@@ -245,7 +287,7 @@ fn binary_format(data: &[u8]) -> String {
             };
             format!("PE {arch}")
         }
-        Ok(Object::Mach(stng::goblin::mach::Mach::Binary(m))) => {
+        Some(Object::Mach(Mach::Binary(m))) => {
             let arch = match m.header.cputype() {
                 mach::CPU_TYPE_X86_64 => "x64",
                 mach::CPU_TYPE_X86 => "x86",
@@ -257,7 +299,7 @@ fn binary_format(data: &[u8]) -> String {
             };
             format!("Mach-O {arch}")
         }
-        Ok(Object::Mach(stng::goblin::mach::Mach::Fat(_))) => "Mach-O fat".to_string(),
+        Some(Object::Mach(Mach::Fat(_))) => "Mach-O fat".to_string(),
         _ => "unknown".to_string(),
     }
 }
@@ -295,12 +337,18 @@ fn wrap_string_lines(text: &str, start_offset: u64, max_width: usize) -> Vec<(u6
     let mut start = 0;
     for (count, (pos, _)) in text.char_indices().enumerate() {
         if count > 0 && count % max_width == 0 {
-            result.push((start_offset + start as u64, text[start..pos].to_string()));
+            result.push((
+                start_offset.saturating_add(start as u64),
+                text[start..pos].to_string(),
+            ));
             start = pos;
         }
     }
     if start < text.len() {
-        result.push((start_offset + start as u64, text[start..].to_string()));
+        result.push((
+            start_offset.saturating_add(start as u64),
+            text[start..].to_string(),
+        ));
     }
     result
 }
@@ -312,13 +360,7 @@ fn wrap_string_lines(text: &str, start_offset: u64, max_width: usize) -> Vec<(u6
 /// bare CR or newline overwrites or fakes a row; bidirectional overrides
 /// reorder what is shown. Tab is harmless and stays.
 pub(crate) fn terminal_safe(text: &str) -> Cow<'_, str> {
-    let unsafe_char = |c: char| {
-        (c.is_control() && c != '\t')
-            || matches!(
-                c,
-                '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
-            )
-    };
+    let unsafe_char = |c: char| c != '\t' && is_terminal_unsafe(c);
     if !text.chars().any(unsafe_char) {
         return Cow::Borrowed(text);
     }
@@ -331,6 +373,24 @@ pub(crate) fn terminal_safe(text: &str) -> Cow<'_, str> {
         }
     }
     Cow::Owned(out)
+}
+
+/// Whether `c` can act on a terminal or disguise text: a C0 or C1 control
+/// (ESC begins a sequence; so does CSI, U+009B, on terminals that honour 8-bit
+/// controls), a line separator, or a bidirectional override that reorders
+/// what the reader sees.
+pub(crate) fn is_terminal_unsafe(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// A path for a terminal message; file names are as hostile as contents.

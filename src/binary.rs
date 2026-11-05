@@ -4,22 +4,22 @@ mod language;
 mod signature;
 
 pub(crate) use language::{
-    elf_go_skip_ranges, elf_is_rust, macho_go_skip_ranges, macho_has_go_sections, macho_is_rust,
-    pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
+    elf_go_skip_ranges, elf_has_go_sections, elf_is_rust, macho_go_skip_ranges,
+    macho_has_go_sections, macho_is_rust, pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
 };
 pub use language::{is_go_binary, is_rust_binary};
 pub(crate) use signature::is_platform_signed;
 
 use goblin::mach::MachO;
+use std::ops::Range;
 
 /// Executable-section byte ranges, sorted, with overlapping ranges merged.
 ///
-/// XOR-obfuscated strings never live in `.text`/`__TEXT.__text` — that's
-/// machine code. Skipping these ranges during XOR scanning typically drops
-/// the scanned-byte count by 60-80% on normal binaries with near-zero risk
-/// of missing legitimate hits.
+/// XOR-obfuscated strings live in data, not in `.text`/`__TEXT.__text`, which
+/// is machine code, so XOR scanning skips these ranges: on most binaries the
+/// bulk of the file.
 #[must_use]
-pub(crate) fn code_ranges_from_sections(sections: &[SectionInfo]) -> Vec<(usize, usize)> {
+pub(crate) fn code_ranges_from_sections(sections: &[SectionInfo]) -> Vec<Range<usize>> {
     merge_overlapping(
         sections
             .iter()
@@ -32,17 +32,35 @@ pub(crate) fn code_ranges_from_sections(sections: &[SectionInfo]) -> Vec<(usize,
 /// `ranges` sorted, with any that overlap merged into one; adjacent ranges
 /// stay apart. Section headers can declare the same code thousands of times,
 /// and each scan of a copy decoded it all again.
-pub(crate) fn merge_overlapping(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
-    ranges.retain(|&(start, end)| end > start);
-    ranges.sort_unstable();
-    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
-    for (start, end) in ranges {
+pub(crate) fn merge_overlapping(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    ranges.retain(|r| !r.is_empty());
+    ranges.sort_unstable_by_key(|r| (r.start, r.end));
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
         match merged.last_mut() {
-            Some(last) if start < last.1 => last.1 = last.1.max(end),
-            _ => merged.push((start, end)),
+            Some(last) if range.start < last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
         }
     }
     merged
+}
+
+/// Byte ranges, sorted and disjoint, for membership tests. Built in
+/// `O(n log n)`; a lookup is a binary search, since a binary can declare
+/// tens of thousands of ranges.
+#[derive(Debug, Default)]
+pub(crate) struct RangeSet(Vec<Range<usize>>);
+
+impl RangeSet {
+    /// The union of `[start, end)` ranges; empty ones are dropped.
+    pub(crate) fn new(ranges: impl IntoIterator<Item = Range<usize>>) -> Self {
+        Self(merge_overlapping(ranges.into_iter().collect()))
+    }
+
+    pub(crate) fn contains(&self, offset: usize) -> bool {
+        let i = self.0.partition_point(|r| r.start <= offset);
+        i > 0 && offset < self.0[i - 1].end
+    }
 }
 
 /// `data[offset..offset + size]` when that range lies wholly in `data`.
@@ -56,10 +74,16 @@ pub(crate) fn file_range(data: &[u8], offset: u64, size: u64) -> Option<&[u8]> {
 /// The part of `data[offset..offset + size]` the file actually holds, cut at
 /// the end of `data` as in a truncated sample. `None` when nothing remains.
 pub(crate) fn file_range_clamped(data: &[u8], offset: u64, size: u64) -> Option<&[u8]> {
+    clamped_range(data.len(), offset, size).map(|r| &data[r])
+}
+
+/// The part of `offset..offset + size` a file of `len` bytes holds; `None`
+/// when nothing remains. See [`file_range_clamped`].
+pub(crate) fn clamped_range(len: usize, offset: u64, size: u64) -> Option<Range<usize>> {
     let start = usize::try_from(offset).ok()?;
     let size = usize::try_from(size).unwrap_or(usize::MAX);
-    let end = start.saturating_add(size).min(data.len());
-    (start < end).then(|| &data[start..end])
+    let end = start.saturating_add(size).min(len);
+    (start < end).then_some(start..end)
 }
 
 /// The first ELF section named `name`: its virtual address and bytes, when
@@ -99,17 +123,13 @@ pub(crate) struct SectionInfo {
 }
 
 impl SectionInfo {
-    /// `[start, end)` file-offset range covered by this section.
-    ///
-    /// On 32-bit targets, a file offset or size beyond `usize::MAX` is
-    /// saturated — this can only happen for inputs larger than 4 GiB, which
-    /// we don't support for loading into memory.
+    /// File-offset range covered by this section, saturated
+    /// at `usize::MAX` for header values past the end of any loadable file.
     #[must_use]
-    pub(crate) fn range(&self) -> (usize, usize) {
+    pub(crate) fn range(&self) -> Range<usize> {
         let start = usize::try_from(self.file_offset).unwrap_or(usize::MAX);
         let size = usize::try_from(self.size).unwrap_or(usize::MAX);
-        let end = start.saturating_add(size);
-        (start, end)
+        start..start.saturating_add(size)
     }
 }
 
@@ -125,23 +145,22 @@ pub(crate) fn macho_sections<'m, 'a>(
         .flatten()
 }
 
-/// Collect segment and section names from a Mach-O binary.
+/// Segment and section names of a Mach-O binary: each segment's name, then
+/// its sections'.
 #[must_use]
-pub(crate) fn collect_macho_segments(macho: &MachO<'_>) -> Vec<String> {
-    let mut segments = Vec::new();
+pub(crate) fn macho_section_names(macho: &MachO<'_>) -> Vec<String> {
+    let mut names = Vec::new();
     for seg in &macho.segments {
-        if let Ok(name) = seg.name() {
-            segments.push(name.to_string());
-        }
+        names.extend(seg.name().ok().map(str::to_string));
         if let Ok(sections) = seg.sections() {
-            for (sec, _) in sections {
-                if let Ok(name) = sec.name() {
-                    segments.push(name.to_string());
-                }
-            }
+            names.extend(
+                sections
+                    .iter()
+                    .filter_map(|(sec, _)| sec.name().ok().map(str::to_string)),
+            );
         }
     }
-    segments
+    names
 }
 
 /// Section metadata of a Mach-O binary, in load-command order. Names repeat
@@ -150,39 +169,34 @@ pub(crate) fn collect_macho_segments(macho: &MachO<'_>) -> Vec<String> {
 #[must_use]
 pub(crate) fn collect_macho_section_info(macho: &MachO<'_>) -> Vec<SectionInfo> {
     use goblin::mach::constants::S_ATTR_SOME_INSTRUCTIONS;
-    let mut sections = Vec::new();
-
-    for seg in &macho.segments {
-        if let Ok(secs) = seg.sections() {
-            for (sec, _) in secs {
-                if let Ok(name) = sec.name() {
-                    let is_executable = (sec.flags & S_ATTR_SOME_INSTRUCTIONS) != 0;
-                    let is_writable = seg.initprot & 0x2 != 0; // VM_PROT_WRITE
-
-                    sections.push(SectionInfo {
-                        name: name.to_string(),
+    const VM_PROT_WRITE: u32 = 0x2;
+    macho
+        .segments
+        .iter()
+        .flat_map(|seg| {
+            let is_writable = seg.initprot & VM_PROT_WRITE != 0;
+            seg.sections()
+                .into_iter()
+                .flatten()
+                .filter_map(move |(sec, _)| {
+                    Some(SectionInfo {
+                        name: sec.name().ok()?.to_string(),
                         file_offset: u64::from(sec.offset),
                         size: sec.size,
-                        is_executable,
+                        is_executable: sec.flags & S_ATTR_SOME_INSTRUCTIONS != 0,
                         is_writable,
-                    });
-                }
-            }
-        }
-    }
-    sections
+                    })
+                })
+        })
+        .collect()
 }
 
-/// Collect section names from an ELF binary.
+/// Section names of an ELF binary, in section-header order.
 #[must_use]
-pub(crate) fn collect_elf_segments(elf: &goblin::elf::Elf<'_>) -> Vec<String> {
+pub(crate) fn elf_section_names(elf: &goblin::elf::Elf<'_>) -> Vec<String> {
     elf.section_headers
         .iter()
-        .filter_map(|sh| {
-            elf.shdr_strtab
-                .get_at(sh.sh_name)
-                .map(std::string::ToString::to_string)
-        })
+        .filter_map(|sh| elf.shdr_strtab.get_at(sh.sh_name).map(str::to_string))
         .collect()
 }
 
@@ -190,46 +204,34 @@ pub(crate) fn collect_elf_segments(elf: &goblin::elf::Elf<'_>) -> Vec<String> {
 #[must_use]
 pub(crate) fn collect_elf_section_info(elf: &goblin::elf::Elf<'_>) -> Vec<SectionInfo> {
     use goblin::elf::section_header::{SHF_EXECINSTR, SHF_WRITE};
-    let mut sections = Vec::new();
-
-    for sh in &elf.section_headers {
-        if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
-            let is_executable = (sh.sh_flags & u64::from(SHF_EXECINSTR)) != 0;
-            let is_writable = (sh.sh_flags & u64::from(SHF_WRITE)) != 0;
-
-            sections.push(SectionInfo {
-                name: name.to_string(),
+    elf.section_headers
+        .iter()
+        .filter_map(|sh| {
+            Some(SectionInfo {
+                name: elf.shdr_strtab.get_at(sh.sh_name)?.to_string(),
                 file_offset: sh.sh_offset,
                 size: sh.sh_size,
-                is_executable,
-                is_writable,
-            });
-        }
-    }
-    sections
+                is_executable: sh.sh_flags & u64::from(SHF_EXECINSTR) != 0,
+                is_writable: sh.sh_flags & u64::from(SHF_WRITE) != 0,
+            })
+        })
+        .collect()
 }
 
 /// Section metadata of a PE binary, in section-table order.
 #[must_use]
 pub(crate) fn collect_pe_section_info(pe: &goblin::pe::PE<'_>) -> Vec<SectionInfo> {
     use goblin::pe::section_table::{IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE};
-    let mut sections = Vec::new();
-
-    for sec in &pe.sections {
-        let name = pe_section_name(&sec.name).into_owned();
-
-        let is_executable = (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
-        let is_writable = (sec.characteristics & IMAGE_SCN_MEM_WRITE) != 0;
-
-        sections.push(SectionInfo {
-            name,
+    pe.sections
+        .iter()
+        .map(|sec| SectionInfo {
+            name: pe_section_name(&sec.name).into_owned(),
             file_offset: u64::from(sec.pointer_to_raw_data),
             size: u64::from(sec.size_of_raw_data),
-            is_executable,
-            is_writable,
-        });
-    }
-    sections
+            is_executable: sec.characteristics & IMAGE_SCN_MEM_EXECUTE != 0,
+            is_writable: sec.characteristics & IMAGE_SCN_MEM_WRITE != 0,
+        })
+        .collect()
 }
 
 /// Convert a virtual address to a file offset for ELF binaries.
@@ -240,31 +242,25 @@ pub(crate) fn collect_pe_section_info(pe: &goblin::pe::PE<'_>) -> Vec<SectionInf
 /// virtual addresses; left unconverted they report a string at an address that
 /// is off by the load bias (0x400000 for a non-PIE amd64 Go binary, 0x10000
 /// for arm64), pointing at unrelated bytes or past the end of the file.
-/// Addresses in no segment's file image (`.bss`, or no program headers at
-/// all) are returned unchanged, as the Mach-O helper does.
+/// `None` for an address in no segment's file image (`.bss`, or no program
+/// headers at all): there are no bytes in the file to point at.
 #[must_use]
-pub(crate) fn elf_vaddr_to_file_offset(elf: &goblin::elf::Elf<'_>, vaddr: u64) -> u64 {
+pub(crate) fn elf_vaddr_to_file_offset(elf: &goblin::elf::Elf<'_>, vaddr: u64) -> Option<u64> {
     elf.program_headers
         .iter()
         .filter(|ph| ph.p_type == goblin::elf::program_header::PT_LOAD)
         .find(|ph| vaddr >= ph.p_vaddr && vaddr - ph.p_vaddr < ph.p_filesz)
-        .map_or(vaddr, |ph| (vaddr - ph.p_vaddr).saturating_add(ph.p_offset))
+        .map(|ph| (vaddr - ph.p_vaddr).saturating_add(ph.p_offset))
 }
 
-/// Convert virtual address to file offset for Mach-O binaries.
+/// The file offset of virtual address `vaddr` in a Mach-O, or `None` when
+/// no segment's file-backed part (`filesize`, not `vmsize`) holds it.
 #[must_use]
-pub(crate) fn macho_vaddr_to_file_offset(macho: &MachO<'_>, vaddr: u64) -> u64 {
+pub(crate) fn macho_vaddr_to_file_offset(macho: &MachO<'_>, vaddr: u64) -> Option<u64> {
     // Segment fields are the file's to choose, so no sum of them is trusted
     // not to wrap.
-    for seg in &macho.segments {
-        if let Some(delta) = vaddr.checked_sub(seg.vmaddr)
-            && delta < seg.vmsize
-        {
-            // file_offset = (virtual_address - segment_vmaddr) + segment_fileoff
-            return delta.saturating_add(seg.fileoff);
-        }
-    }
-
-    // If not found in any segment, return the vaddr as-is
-    vaddr
+    macho.segments.iter().find_map(|seg| {
+        let delta = vaddr.checked_sub(seg.vmaddr)?;
+        (delta < seg.filesize).then(|| delta.saturating_add(seg.fileoff))
+    })
 }

@@ -92,13 +92,11 @@ pub(super) const COMMON_WORDS: &[&str] = &[
     "plist",
     "json",
     "conf",
-    "config",
     "sqlite",
     "wallet",
     "keystore",
     "screenshot",
     "Bookmarks",
-    "Cookies",
     "History",
     "Preferences",
     // Application names
@@ -109,8 +107,6 @@ pub(super) const COMMON_WORDS: &[&str] = &[
     "Discord",
     "Slack",
     // Crypto/Security (exfiltration targets)
-    "Wallet",
-    "Wallets",
     "Ethereum",
     "Exodus",
     "Electrum",
@@ -125,17 +121,17 @@ pub(super) const COMMON_WORDS: &[&str] = &[
     "secret",
 ];
 
-/// Case-insensitive automaton for [`COMMON_WORDS`].
-#[allow(clippy::expect_used)]
+/// Case-insensitive automaton for [`COMMON_WORDS`]. Matching is standard
+/// (non-overlapping, earliest end), so a word that extends another listed
+/// word, as `config` extends `conf`, could never be reported; none is listed.
 pub(super) static COMMON_WORDS_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::builder()
         .ascii_case_insensitive(true)
         .build(COMMON_WORDS)
-        .expect("static patterns")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Automaton for common file extensions.
-#[allow(clippy::expect_used)]
 pub(super) static FILE_EXTENSION_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         ".plist",
@@ -154,7 +150,7 @@ pub(super) static FILE_EXTENSION_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
         ".dll",
         ".exe",
     ])
-    .expect("static patterns")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Count how many distinct COMMON_WORDS appear in `s` (matched case-insensitively).

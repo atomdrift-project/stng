@@ -9,6 +9,8 @@
 
 use crate::{ExtractedString, StringFragment, StringMethod};
 use goblin::pe::PE;
+use goblin::pe::header::COFF_MACHINE_X86;
+use goblin::pe::section_table::IMAGE_SCN_MEM_EXECUTE;
 use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
 
 const MAX_SCAN: usize = 4 * 1024 * 1024;
@@ -45,7 +47,7 @@ impl Image<'_, '_> {
     fn offset(&self, va: u32, len: usize, executable: bool) -> Option<usize> {
         let rva = u64::from(va).checked_sub(self.pe.image_base)?;
         for sec in &self.pe.sections {
-            if executable && sec.characteristics & 0x2000_0000 == 0 {
+            if executable && sec.characteristics & IMAGE_SCN_MEM_EXECUTE == 0 {
                 continue;
             }
             let delta = rva.checked_sub(u64::from(sec.virtual_address));
@@ -149,9 +151,9 @@ fn operand(
                 return None;
             }
             let n = if size == 1 {
-                u32::from(image.data[at])
+                u32::from(*image.data.get(at)?)
             } else {
-                u32::from_le_bytes(image.data[at..at + 4].try_into().ok()?)
+                crate::bytes::u32_le(image.data, at)?
             };
             Value {
                 source: Some(at),
@@ -232,16 +234,16 @@ fn accept(
             return None;
         }
     }
-    output.key = (first, key_len);
+    output.key = first..first + key_len;
     Some(output)
 }
 
 struct Output {
     start: usize,
     bytes: Vec<u8>,
-    /// File offset and length of the repeating key, known once `interpret`
-    /// has proven the write provenance cyclic.
-    key: (usize, usize),
+    /// File range of the repeating key, known once `interpret` has proven
+    /// the write provenance cyclic.
+    key: std::ops::Range<usize>,
 }
 fn interpret(
     image: &Image<'_, '_>,
@@ -257,7 +259,7 @@ fn interpret(
     let mut output = Output {
         start: 0,
         bytes: Vec::new(),
-        key: (0, 0),
+        key: 0..0,
     };
     // Key byte each output byte came from, proven cyclic before accepting.
     let mut keys: Vec<usize> = Vec::new();
@@ -382,7 +384,7 @@ fn interpret(
 /// Recover strings without guessing keys or scanning every possible alignment.
 /// Budgets are per file, not per section or candidate.
 pub(crate) fn extract(pe: &PE<'_>, data: &[u8], min_length: usize) -> Vec<ExtractedString> {
-    if pe.header.coff_header.machine != 0x14c || pe.is_64 || pe.sections.len() > 96 {
+    if pe.header.coff_header.machine != COFF_MACHINE_X86 || pe.is_64 || pe.sections.len() > 96 {
         return Vec::new();
     }
     let image = Image { pe, data };
@@ -392,7 +394,7 @@ pub(crate) fn extract(pe: &PE<'_>, data: &[u8], min_length: usize) -> Vec<Extrac
     let mut steps = MAX_STEPS;
     let mut results = Vec::new();
     'sections: for sec in &pe.sections {
-        if sec.characteristics & 0x2000_0000 == 0 {
+        if sec.characteristics & IMAGE_SCN_MEM_EXECUTE == 0 {
             continue;
         }
         let start = sec.pointer_to_raw_data as usize;
@@ -477,8 +479,8 @@ pub(crate) fn extract(pe: &PE<'_>, data: &[u8], min_length: usize) -> Vec<Extrac
                      {:#x}, yielding {} strings",
                     output.bytes.len(),
                     output.start,
-                    output.key.1,
-                    output.key.0,
+                    output.key.len(),
+                    output.key.start,
                     results.len() - before
                 );
             } else {
@@ -503,7 +505,7 @@ pub(crate) fn extract(pe: &PE<'_>, data: &[u8], min_length: usize) -> Vec<Extrac
 }
 
 fn append_strings(output: &Output, min_length: usize, out: &mut Vec<ExtractedString>) {
-    let (key_start, key_len) = output.key;
+    let (key_start, key_len) = (output.key.start, output.key.len());
     // ASCII and UTF-16LE; do not recursively invoke the full extraction pipeline.
     for width in [1, 2] {
         let mut at = 0;
@@ -702,7 +704,7 @@ mod tests {
         let output = Output {
             start: 0x300,
             bytes: vec![0],
-            key: (0x600, 1),
+            key: 0x600..0x601,
         };
         assert!(operand(&instruction, 1, &regs, &image, &output).is_none());
         regs[7].n += 1;
@@ -733,7 +735,7 @@ mod tests {
         let mut output = Output {
             start: 0x800,
             bytes: Vec::new(),
-            key: (0x600, 3),
+            key: 0x600..0x603,
         };
         for c in "Wide content".encode_utf16().chain([0]) {
             output.bytes.extend_from_slice(&c.to_le_bytes());

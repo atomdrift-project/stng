@@ -46,14 +46,14 @@ fn minimal_pe_with_wide_strings(wide_strings: &[&str]) -> Vec<u8> {
 }
 
 #[test]
-fn test_wide_string_method_exists() {
+fn wide_string_debug_name() {
     // Verify the WideString method variant is available
     let method = StringMethod::WideString;
     assert_eq!(format!("{method:?}"), "WideString");
 }
 
 #[test]
-fn test_pe_with_embedded_wide_strings() {
+fn finds_wide_strings_in_go_pe() {
     // Use the real Windows binary which is a valid PE
     let path = std::path::Path::new(crate::common::path("testdata/pe/hello_windows.exe"));
 
@@ -64,7 +64,7 @@ fn test_pe_with_embedded_wide_strings() {
 }
 
 #[test]
-fn test_wide_strings_have_correct_method() {
+fn tags_utf16_as_wide_string() {
     let data = minimal_pe_with_wide_strings(&["TestString"]);
     let strings = extract_strings(&data, 4);
 
@@ -78,7 +78,7 @@ fn test_wide_strings_have_correct_method() {
 }
 
 #[test]
-fn test_real_windows_binary_wide_strings() {
+fn finds_wide_strings_in_hello_windows() {
     // Test with the real Windows Go binary in testdata
     let path = std::path::Path::new(crate::common::path("testdata/pe/hello_windows.exe"));
 
@@ -89,7 +89,7 @@ fn test_real_windows_binary_wide_strings() {
 }
 
 #[test]
-fn test_wide_strings_classified_correctly() {
+fn classifies_wide_url_path_registry() {
     let data = minimal_pe_with_wide_strings(&[
         "https://example.com",
         "C:\\Users\\Test",
@@ -98,36 +98,22 @@ fn test_wide_strings_classified_correctly() {
 
     let strings = extract_strings(&data, 4);
 
-    // Check URL classification
-    if let Some(url) = strings.iter().find(|s| s.value.contains("example.com")) {
-        assert_eq!(
-            url.kind,
-            Some(StringKind::Url),
-            "URL should be classified as Url"
-        );
-    }
-
-    // Check path classification
-    if let Some(path) = strings.iter().find(|s| s.value.contains("Users")) {
-        assert_eq!(
-            path.kind,
-            Some(StringKind::Path),
-            "Windows path should be classified as Path"
-        );
-    }
-
-    // Check registry classification
-    if let Some(reg) = strings.iter().find(|s| s.value.contains("HKEY_")) {
-        assert_eq!(
-            reg.kind,
-            Some(StringKind::Registry),
-            "Registry path should be classified as Registry"
-        );
+    for (value, kind) in [
+        ("https://example.com", StringKind::Url),
+        ("C:\\Users\\Test", StringKind::Path),
+        ("HKEY_LOCAL_MACHINE\\SOFTWARE", StringKind::Registry),
+    ] {
+        let s = strings
+            .iter()
+            .find(|s| s.value == value)
+            .unwrap_or_else(|| panic!("{value} is extracted"));
+        assert_eq!(s.method, StringMethod::WideString, "{s:?}");
+        assert_eq!(s.kind, Some(kind), "{s:?}");
     }
 }
 
 #[test]
-fn test_wide_strings_with_garbage_filter() {
+fn filter_keeps_wide_identifiers() {
     let data = minimal_pe_with_wide_strings(&["ValidString", "Test1234"]);
 
     let opts = ExtractOptions::new(4).with_garbage_filter(true);
@@ -150,7 +136,7 @@ fn test_wide_strings_with_garbage_filter() {
 }
 
 #[test]
-fn test_wide_string_min_length() {
+fn min_length_applies_to_wide_strings() {
     // Test min_length filtering with the real Windows binary
     let path = std::path::Path::new(crate::common::path("testdata/pe/hello_windows.exe"));
 
@@ -187,7 +173,7 @@ fn test_wide_string_min_length() {
 }
 
 #[test]
-fn test_wide_strings_deduplication() {
+fn dedups_repeated_wide_string() {
     let data = minimal_pe_with_wide_strings(&["Duplicate", "Duplicate", "Unique"]);
 
     let strings = extract_strings(&data, 4);
@@ -198,16 +184,16 @@ fn test_wide_strings_deduplication() {
 }
 
 #[test]
-fn test_wide_strings_offset_tracking() {
+fn wide_offset_is_past_header() {
     let data = minimal_pe_with_wide_strings(&["FirstString"]);
 
     let strings = extract_strings(&data, 4);
 
-    if let Some(s) = strings.iter().find(|s| s.value == "FirstString") {
-        // Offset should be >= 0x200 (where we embedded the string)
-        assert!(
-            s.data_offset >= 0x200,
-            "Wide string offset should reflect position in binary"
-        );
-    }
+    let s = strings
+        .iter()
+        .find(|s| s.value == "FirstString")
+        .expect("FirstString is extracted");
+    assert_eq!(s.method, StringMethod::WideString, "{s:?}");
+    // The helper embeds the first wide string at 0x200.
+    assert_eq!(s.data_offset, 0x200, "{s:?}");
 }

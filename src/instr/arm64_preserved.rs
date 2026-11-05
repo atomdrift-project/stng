@@ -59,21 +59,19 @@ impl<'a> Context<'a> {
         if self.helpers.len() == MAX_HELPERS {
             return None;
         }
-        let value = self.summarize(entry);
+        // Every register the helper writes. A framed helper (it moves SP)
+        // that writes callee-saved X19..X28 may only be spilling them, so the
+        // stack model narrows the set; where that model cannot follow, the
+        // union stands.
+        let value = self.addr.checked_add(entry as u64).and_then(|address| {
+            let writes = walk::walk(self.code, self.addr, address, Writes(0), 2)?;
+            if writes & (1 << 31) != 0 && writes & 0x1ff8_0000 != 0 {
+                return Some(frame::clobbers(self.code, self.addr, address).unwrap_or(writes));
+            }
+            Some(writes)
+        });
         self.helpers.insert(i, (entry, value));
         value
-    }
-    /// Every register the helper at `entry` writes. A framed helper (it moves
-    /// SP) that writes callee-saved X19..X28 may only be spilling them, so the
-    /// stack model narrows the set; where that model cannot follow, the union
-    /// stands.
-    fn summarize(&self, entry: usize) -> Option<u32> {
-        let address = self.addr.checked_add(entry as u64)?;
-        let writes = walk::walk(self.code, self.addr, address, Writes(0), 2)?;
-        if writes & (1 << 31) != 0 && writes & 0x1ff8_0000 != 0 {
-            return Some(frame::clobbers(self.code, self.addr, address).unwrap_or(writes));
-        }
-        Some(writes)
     }
     /// Establish a literal on a path from a local ADRP/ADD to a pointer copy.
     /// This does not claim that the call executes or that every incoming path

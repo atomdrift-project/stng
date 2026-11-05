@@ -4,15 +4,12 @@
 //! rolling/index-based XOR detection for Windows environment variables,
 //! and all `extract_custom_xor_strings` variants.
 
-// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
-#![allow(clippy::cast_possible_truncation)]
-
 mod incremental;
 mod repeating;
 mod rolling;
 
 pub(crate) use incremental::extract_incremental_xor_strings;
-use repeating::extract_custom_xor_strings_pattern_based_simple;
+use repeating::repeating_key_candidates;
 pub(crate) use rolling::extract_rolling_xor_with_known_plaintext;
 
 use super::SKIP_XOR_KEYS;
@@ -76,8 +73,7 @@ static SINGLE_BYTE_ANCHORS: LazyLock<(AhoCorasick, Vec<(usize, bool)>)> = LazyLo
         signatures.push(wide.windows(2).map(|w| w[0] ^ w[1]).collect());
         info.push((i, true));
     }
-    #[allow(clippy::expect_used)] // static, non-empty patterns
-    let ac = AhoCorasick::new(&signatures).expect("single-byte XOR anchors");
+    let ac = AhoCorasick::new(&signatures).unwrap_or_else(crate::invalid_pattern);
     (ac, info)
 });
 
@@ -146,7 +142,7 @@ pub(crate) fn extract_custom_xor_strings_with_hints(
     }
 
     // Track regions that have been successfully decoded with high quality
-    let mut excluded_ranges: Vec<(usize, usize)> = Vec::new();
+    let mut excluded_ranges: Vec<std::ops::Range<usize>> = Vec::new();
 
     // Step 1: decode the string extents first, if any.
     let mut hint_results = Vec::new();
@@ -156,9 +152,8 @@ pub(crate) fn extract_custom_xor_strings_with_hints(
         // Mark high-quality hint results as excluded from file-wide scanning
         for result in &hint_results {
             if is_high_quality_string(result) {
-                let start = result.data_offset as usize;
-                let end = start + result.value.len();
-                excluded_ranges.push((start, end));
+                let start = usize::try_from(result.data_offset).unwrap_or(usize::MAX);
+                excluded_ranges.push(start..start.saturating_add(result.value.len()));
             }
         }
     }
@@ -180,7 +175,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
     key: &[u8],
     min_length: usize,
     apply_filters: bool,
-    excluded_ranges: &[(usize, usize)],
+    excluded_ranges: &[std::ops::Range<usize>],
     hint_results: Vec<ExtractedString>,
     enable_early_termination: bool,
 ) -> Vec<ExtractedString> {
@@ -188,7 +183,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
         return Vec::new();
     }
     let mut kept = Disjoint::new(key.len(), min_length);
-    let excluded = Excluded::new(excluded_ranges);
+    let excluded = Excluded::new(excluded_ranges.iter().cloned());
     if let [key] = key {
         // Maximal printable runs, disjoint by construction.
         kept.extend(single_byte_xor_strings(data, *key, min_length, &excluded));
@@ -196,7 +191,7 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
         // Every offset is a candidate, so they overlap: prefer high-value
         // IOCs, then the longest string. Network IOCs (URL, IP) beat longer
         // Const strings.
-        let mut candidates = extract_custom_xor_strings_pattern_based_simple(
+        let mut candidates = repeating_key_candidates(
             data,
             key,
             min_length,
@@ -224,30 +219,8 @@ fn extract_custom_xor_strings_filtered_with_exclusions(
 /// Bytes on each side of a validated key that its region decodes.
 const REGION_RADIUS: usize = 4096;
 
-/// Caller-excluded byte ranges, sorted and merged so one binary search
-/// answers. A list checked in full for every candidate was quadratic: a
-/// binary can declare tens of thousands of code sections.
-pub(super) struct Excluded(Vec<(usize, usize)>);
-
-impl Excluded {
-    pub(super) fn new(ranges: &[(usize, usize)]) -> Self {
-        let mut sorted: Vec<_> = ranges.iter().copied().filter(|&(s, e)| s < e).collect();
-        sorted.sort_unstable();
-        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(sorted.len());
-        for (start, end) in sorted {
-            match merged.last_mut() {
-                Some(last) if start <= last.1 => last.1 = last.1.max(end),
-                _ => merged.push((start, end)),
-            }
-        }
-        Self(merged)
-    }
-
-    fn contains(&self, offset: usize) -> bool {
-        let i = self.0.partition_point(|&(s, _)| s <= offset);
-        i > 0 && offset < self.0[i - 1].1
-    }
-}
+/// Caller-excluded byte ranges.
+pub(super) type Excluded = crate::binary::RangeSet;
 
 /// Byte ranges a scan must not inspect again: caller exclusions, then each
 /// region already decoded. A file of repeated encoded anchors adds a region
@@ -261,9 +234,9 @@ struct Covered {
 }
 
 impl Covered {
-    fn new(excluded: &[(usize, usize)]) -> Self {
+    fn new(excluded: &[std::ops::Range<usize>]) -> Self {
         Self {
-            excluded: Excluded::new(excluded),
+            excluded: Excluded::new(excluded.iter().cloned()),
             regions: BTreeMap::new(),
         }
     }
@@ -316,15 +289,21 @@ impl Disjoint {
 
     fn extend(&mut self, candidates: impl IntoIterator<Item = ExtractedString>) {
         for mut candidate in candidates {
-            let start = candidate.data_offset as usize;
-            let mut end = start + candidate.value.len();
+            let start = usize::try_from(candidate.data_offset).unwrap_or(usize::MAX);
+            let mut end = start.saturating_add(candidate.value.len());
             if let Some((&kept_start, &(kept_end, i))) = self.ranges.range(..=start).next_back()
                 && kept_end > start
                 && kept_end - start <= MAX_TAIL_OVERRUN
                 && !(start - kept_start).is_multiple_of(self.period)
                 && (candidate.kind.is_some()
-                    || (candidate.value.len() > 2 * MAX_TAIL_OVERRUN
-                        && !splits_word(&self.strings[i].value, start - kept_start)))
+                    || (candidate.value.len() > 2 * MAX_TAIL_OVERRUN && {
+                        // Never cut inside an alphanumeric run.
+                        let (b, at) = (self.strings[i].value.as_bytes(), start - kept_start);
+                        !(at > 0
+                            && at < b.len()
+                            && b[at - 1].is_ascii_alphanumeric()
+                            && b[at].is_ascii_alphanumeric())
+                    }))
                 && trim_tail(
                     &mut self.strings[i].value,
                     start - kept_start,
@@ -351,12 +330,6 @@ impl Disjoint {
             self.strings.push(candidate);
         }
     }
-}
-
-/// Whether cutting `value` at byte `at` splits an alphanumeric run.
-fn splits_word(value: &str, at: usize) -> bool {
-    let b = value.as_bytes();
-    at > 0 && at < b.len() && b[at - 1].is_ascii_alphanumeric() && b[at].is_ascii_alphanumeric()
 }
 
 /// Cut `value` to `len` bytes if that leaves a whole string of at least
@@ -460,7 +433,7 @@ fn single_byte_xor_strings(
 
         // A single printable run can span several NUL-padded records: each stored
         // string is surrounded by NUL padding that XOR-decodes to a constant printable
-        // byte (key 0x7a renders NUL as 'z', as in the 3CX libffmpeg C2 config). Split
+        // byte (key 0x7a renders NUL as 'z'). Split
         // the run at each NUL that ends a string (see `nul_ends_string`) and validate
         // each segment on its own, so a real string is neither trimmed away with the
         // padding that precedes it nor rejected as part of a null-heavy run.
@@ -549,13 +522,11 @@ fn is_printable_byte_for_file_xor(b: u8) -> bool {
     (0x80..=0xF7).contains(&b)
 }
 
-/// Short, printable rendering of a key for `source` provenance strings.
-fn key_preview(key: &[u8]) -> String {
-    if key.len() > 8 {
-        format!("{}...", String::from_utf8_lossy(&key[..8]))
-    } else {
-        String::from_utf8_lossy(key).into_owned()
-    }
+/// Whether `key` is shaped like a path. Auto-detection finds keys among a
+/// binary's strings, and path-shaped ones are the commonest false keys, so
+/// what they decode is held to a stricter standard.
+fn is_path_key(key: &[u8]) -> bool {
+    key.starts_with(b"/") || key.starts_with(b"C:\\")
 }
 
 /// Try XOR decoding at the caller's string-extent hints: where a
@@ -572,8 +543,7 @@ fn extract_xor_strings_from_hints(
     let mut seen: HashSet<(u64, String)> = HashSet::new();
 
     for hint in hints {
-        let offset = hint.offset as usize;
-        let max_len = hint.length;
+        let offset = usize::try_from(hint.offset).unwrap_or(usize::MAX);
 
         if offset >= data.len() {
             continue;
@@ -581,22 +551,13 @@ fn extract_xor_strings_from_hints(
 
         // Try file-level cycling (all key offsets)
         for key_offset in 0..key.len() {
-            let mut decoded = Vec::new();
-            let mut end = offset;
-
-            // Decode up to hint.length bytes or until we hit non-printable
-            while end < data.len() && (end - offset) < max_len {
-                let actual_offset = end;
-                let ki = (actual_offset + key_offset) % key.len();
-                let decoded_byte = data[end] ^ key[ki];
-
-                if is_printable_byte_for_file_xor(decoded_byte) {
-                    decoded.push(decoded_byte);
-                    end += 1;
-                } else {
-                    break;
-                }
-            }
+            // Decode up to the hint's length, stopping at a non-printable byte.
+            let decoded: Vec<u8> = (offset..data.len())
+                .take(hint.length)
+                .map(|at| data[at] ^ key[(at + key_offset) % key.len()])
+                .take_while(|&b| is_printable_byte_for_file_xor(b))
+                .collect();
+            let end = offset + decoded.len();
 
             if decoded.len() < min_length {
                 continue;
@@ -652,51 +613,34 @@ StringKind::Ip)
         }
 }
 
-/// Check if a decoded string is likely just the XOR key itself (or fragments).
-/// This happens when `XORing` null bytes with the key.
+/// Whether `s` is the key showing through rather than plaintext: XOR over a
+/// run of zero bytes yields the key, starting at whatever phase the run
+/// begins. So: the key and `s` contain one another, `s` is mostly the key
+/// repeated from some phase, or `s` holds eight consecutive key bytes.
 fn is_xor_key_artifact(s: &str, key: &[u8]) -> bool {
-    // Convert key to string for comparison
-    let key_str = String::from_utf8_lossy(key);
-
-    // Exact match or substring of key
-    if key_str.contains(s) || s.contains(key_str.as_ref()) {
+    let s = s.as_bytes();
+    if key.is_empty() {
+        return false;
+    }
+    if memchr::memmem::find(key, s).is_some() || memchr::memmem::find(s, key).is_some() {
         return true;
     }
-
-    // Check if string is mostly composed of repeating key pattern
-    // (happens when XORing the key with itself or null bytes)
     if s.len() >= key.len() {
-        // Count how many characters match the key pattern
-        let mut matches = 0usize;
-        for (i, c) in s.chars().enumerate() {
-            let key_char = key[i % key.len()] as char;
-            if c == key_char {
-                matches += 1;
-            }
-        }
-
-        // If >70% of the string matches the key pattern, it's likely an artifact
-        if (matches * 100) / s.len() > 70 {
+        let best = (0..key.len())
+            .map(|phase| {
+                s.iter()
+                    .enumerate()
+                    .filter(|&(i, &b)| b == key[(i + phase) % key.len()])
+                    .count()
+            })
+            .max()
+            .unwrap_or(0);
+        if best * 100 / s.len() > 70 {
             return true;
         }
     }
-
-    // Check for key fragments (at least 8 consecutive chars from the key)
-    if key.len() >= 8 {
-        for window_size in (8..=key.len().min(s.len())).rev() {
-            let key_str_bytes = key_str.as_bytes();
-            for key_start in 0..=(key.len().saturating_sub(window_size)) {
-                let key_fragment = &key_str_bytes[key_start..key_start + window_size];
-                if let Ok(fragment_str) = std::str::from_utf8(key_fragment)
-                    && s.contains(fragment_str)
-                {
-                    return true;
-                }
-            }
-        }
-    }
-
-    false
+    key.windows(8)
+        .any(|window| memchr::memmem::find(s, window).is_some())
 }
 
 #[cfg(test)]

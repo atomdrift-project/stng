@@ -2,9 +2,6 @@
 //!
 //! Extracts strings from Go binaries using structure analysis and instruction patterns.
 
-// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
-#![allow(clippy::cast_possible_truncation)]
-
 use crate::extraction::pair_strings;
 use crate::instr::inline_strings;
 use crate::types::{Arch, BinaryInfo, ExtractedString, StringMethod};
@@ -66,11 +63,12 @@ impl GoStringExtractor {
         self.extend_packed_literals(&mut strings, rodata);
         strings.extend(super::struct_tags::extract(macho, self.min_length));
 
+        // A string read through a pointer came from file bytes, so its
+        // address maps; one that does not is left at its address.
         for s in &mut strings {
-            s.data_offset = file_base.saturating_add(crate::binary::macho_vaddr_to_file_offset(
-                macho,
-                s.data_offset,
-            ));
+            if let Some(offset) = crate::binary::macho_vaddr_to_file_offset(macho, s.data_offset) {
+                s.data_offset = file_base.saturating_add(offset);
+            }
         }
         strings
     }
@@ -98,7 +96,9 @@ impl GoStringExtractor {
         let mut strings = self.pointer_strings(sections, rodata, text, arch, &info);
 
         for s in &mut strings {
-            s.data_offset = crate::binary::elf_vaddr_to_file_offset(elf, s.data_offset);
+            if let Some(offset) = crate::binary::elf_vaddr_to_file_offset(elf, s.data_offset) {
+                s.data_offset = offset;
+            }
         }
         strings
     }
@@ -430,15 +430,6 @@ fn long_hex_run_start(s: &str) -> Option<usize> {
     None
 }
 
-/// Extract strings from a Go pclntab `pkgnamestab`-style table.
-///
-/// Go 1.18+ packs package paths and reflect type names in a table where
-/// each entry is a single-byte varint length followed by that many printable
-/// ASCII bytes, optionally separated by `0x00`. Stripped Go PEs fold this
-/// table into `.rdata` so it isn't reachable via `{ptr,len}` structures.
-///
-/// We only emit a run of entries when at least three valid entries appear
-/// back-to-back, which suppresses false positives in regular text.
 /// Go's pclntab names in `table`, which starts at file `offset`: the
 /// NUL-separated funcnametab and the varint-prefixed pkgnamestab, scanned
 /// concurrently. Returns `(nul_separated, varint_prefixed)`.
@@ -454,13 +445,45 @@ pub(crate) fn pclntab_strings(
     )
 }
 
+/// The UTF-8 `entries` (offset within the section, bytes) of a symbol
+/// table run, as `PclntabSymbol` strings of at least `min_length` bytes.
+fn push_symbols(
+    results: &mut Vec<ExtractedString>,
+    entries: &[(usize, &[u8])],
+    section_data_offset: u64,
+    min_length: usize,
+) {
+    for &(off, bytes) in entries {
+        if bytes.len() < min_length {
+            continue;
+        }
+        let Ok(value) = std::str::from_utf8(bytes) else {
+            continue;
+        };
+        results.push(ExtractedString {
+            value: value.to_string(),
+            data_offset: section_data_offset + off as u64,
+            method: StringMethod::PclntabSymbol,
+            kind: classify_string(value),
+            ..Default::default()
+        });
+    }
+}
+
+/// Extract strings from a Go pclntab `pkgnamestab`-style table.
+///
+/// Go 1.18+ packs package paths and reflect type names in a table where
+/// each entry is a single-byte varint length followed by that many printable
+/// ASCII bytes, optionally separated by `0x00`. Stripped Go PEs fold this
+/// table into `.rdata` so it isn't reachable via `{ptr,len}` structures.
+///
+/// We only emit a run of entries when at least three valid entries appear
+/// back-to-back, which suppresses false positives in regular text.
 fn extract_varint_prefixed_strings(
     data: &[u8],
     section_data_offset: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    use crate::types::StringMethod;
-
     // Cap pkgnamestab entries at 64 bytes — the actual Go module paths and
     // reflect type names we care about (`github.com/.../sub`, `*[8]*pkg.Type`)
     // sit well under that. Bytes in the packed string-pool encoding overlap
@@ -527,22 +550,7 @@ fn extract_varint_prefixed_strings(
             }
         }
         if entries.len() >= 3 {
-            for (off, bytes) in &entries {
-                if bytes.len() < min_length {
-                    continue;
-                }
-                let Ok(value) = std::str::from_utf8(bytes) else {
-                    continue;
-                };
-                let kind = classify_string(value);
-                results.push(ExtractedString {
-                    value: value.to_string(),
-                    data_offset: section_data_offset + *off as u64,
-                    method: StringMethod::PclntabSymbol,
-                    kind,
-                    ..Default::default()
-                });
-            }
+            push_symbols(&mut results, &entries, section_data_offset, min_length);
             i = cursor.max(i + 1);
         } else {
             i += 1;
@@ -567,8 +575,6 @@ fn extract_null_separated_strings(
     section_data_offset: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    use crate::types::StringMethod;
-
     // Funcnametab entries are Go function or type names, and a full name
     // carries its module path: `github.com/org/repo/internal/pkg.Func` is
     // routinely past 80 characters, and a generic instantiation spells its
@@ -660,22 +666,7 @@ fn extract_null_separated_strings(
             cursor = next;
         }
         if entries.len() >= 3 {
-            for (off, bytes) in &entries {
-                if bytes.len() < min_length {
-                    continue;
-                }
-                let Ok(value) = std::str::from_utf8(bytes) else {
-                    continue;
-                };
-                let kind = classify_string(value);
-                results.push(ExtractedString {
-                    value: value.to_string(),
-                    data_offset: section_data_offset + *off as u64,
-                    method: StringMethod::PclntabSymbol,
-                    kind,
-                    ..Default::default()
-                });
-            }
+            push_symbols(&mut results, &entries, section_data_offset, min_length);
             i = cursor.max(i + 1);
         } else if let Some((_, first)) = entries.first() {
             // A start inside the first entry reads a suffix of it followed by

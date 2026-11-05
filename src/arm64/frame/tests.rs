@@ -1,4 +1,3 @@
-#![allow(clippy::cast_possible_truncation)]
 use super::*;
 fn pair(load: bool, pre: bool, a: u32, b: u32) -> u32 {
     // STP [SP,#-16]! / LDP [SP],#16.

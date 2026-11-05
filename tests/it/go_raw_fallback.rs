@@ -108,7 +108,7 @@ fn build_go_elf_with_noptrdata(rodata_strings: &[&str], noptrdata_strings: &[&st
 
 /// Verify the synthetic ELF is detected as Go by goblin + stng.
 #[test]
-fn test_go_elf_detected_as_go() {
+fn detects_synthetic_elf_as_go() {
     let elf = build_go_elf_with_noptrdata(&["runtime.main"], &["github.com/shirou/gopsutil/v3"]);
     assert!(
         stng::is_go_binary(&elf),
@@ -118,7 +118,7 @@ fn test_go_elf_detected_as_go() {
 
 /// Core test: strings in .noptrdata must be found via raw scan fallback.
 #[test]
-fn test_noptrdata_strings_found() {
+fn finds_noptrdata_strings() {
     let elf = build_go_elf_with_noptrdata(
         &["runtime.main"],
         &[
@@ -144,7 +144,7 @@ fn test_noptrdata_strings_found() {
 
 /// Structure-extracted strings (from .rodata) must still be present.
 #[test]
-fn test_rodata_structure_strings_still_found() {
+fn keeps_rodata_structure_strings() {
     let elf = build_go_elf_with_noptrdata(
         &["runtime.main", "crypto/tls", "net/http"],
         &["github.com/example/extra"],
@@ -171,7 +171,7 @@ fn test_rodata_structure_strings_still_found() {
 /// No duplicate values: a string found by both structure and raw scan
 /// should appear only once, and the structure version (higher priority) wins.
 #[test]
-fn test_no_duplicate_values() {
+fn emits_runtime_main_once() {
     // "runtime.main" is in .rodata (structure-extracted) AND will also appear
     // in the raw scan of the full binary. It must not be duplicated.
     let elf = build_go_elf_with_noptrdata(&["runtime.main"], &["github.com/extra/pkg"]);
@@ -189,7 +189,7 @@ fn test_no_duplicate_values() {
 /// When a string exists in both .rodata (structure) and raw scan, the
 /// structure-extracted version (higher method priority) should be kept.
 #[test]
-fn test_structure_method_preferred_over_raw() {
+fn prefers_structure_over_raw_scan() {
     let elf = build_go_elf_with_noptrdata(&["runtime.main"], &["github.com/extra/pkg"]);
 
     let opts = ExtractOptions::new(4);
@@ -209,7 +209,7 @@ fn test_structure_method_preferred_over_raw() {
 
 /// Raw-scan-only strings should be tagged as RawScan.
 #[test]
-fn test_raw_fallback_strings_tagged_as_raw_scan() {
+fn tags_noptrdata_strings_raw_scan() {
     let elf = build_go_elf_with_noptrdata(&["runtime.main"], &["github.com/shirou/gopsutil/v3"]);
 
     let opts = ExtractOptions::new(4);
@@ -227,7 +227,7 @@ fn test_raw_fallback_strings_tagged_as_raw_scan() {
 
 /// Both structure and raw strings present together without loss.
 #[test]
-fn test_combined_extraction_completeness() {
+fn finds_rodata_and_noptrdata_strings_together() {
     let rodata = &["runtime.main", "sync.Mutex", "fmt.Println"];
     let noptrdata = &[
         "github.com/shirou/gopsutil/v3",
@@ -259,7 +259,7 @@ fn test_combined_extraction_completeness() {
 
 /// Go ELF with no .noptrdata at all should still work (no panic, no regression).
 #[test]
-fn test_go_elf_without_noptrdata() {
+fn finds_rodata_strings_without_noptrdata() {
     // Build an ELF with only .rodata and .go.buildinfo (no .noptrdata)
     let mut rodata_blob = Vec::new();
     let s = "runtime.main";
@@ -299,7 +299,7 @@ fn test_go_elf_without_noptrdata() {
 
 /// Verify no value appears more than once across all extraction methods.
 #[test]
-fn test_no_value_duplicates_across_methods() {
+fn emits_each_value_once() {
     let rodata = &["runtime.main", "sync.Mutex", "fmt.Println"];
     let noptrdata = &[
         "github.com/shirou/gopsutil/v3",
@@ -333,7 +333,7 @@ fn test_no_value_duplicates_across_methods() {
 /// The structure-based extractor already covers `.rodata` with correct
 /// boundaries, so the raw scan must skip that section for Go binaries.
 #[test]
-fn test_rodata_blob_not_emitted_as_merged_string() {
+fn splits_packed_rodata_strings() {
     // Pack adjacent strings without nulls — this is exactly how Go lays out
     // its string blob.
     let parts = [

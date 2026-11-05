@@ -1,6 +1,7 @@
 //! The XOR passes over a whole input: single-byte, auto-detected,
 //! user-supplied, rolling and incremental keys.
 
+use crate::XorMode;
 use crate::types::StringBoundary;
 use crate::{
     ExtractOptions, ExtractedString, FormatHint, StringKind, StringMethod, binary, detect, xor,
@@ -35,7 +36,7 @@ fn string_extents(strings: &[ExtractedString], data: &[u8]) -> Vec<StringBoundar
     // from the NUL before it, where an encoded entry starts. Neither alone
     // suffices: a table's entries begin at the NUL, but a key whose phase
     // follows the run, not the entry, decodes only from the run's start.
-    let mut extents: Vec<(usize, usize)> = starts
+    let mut extents: Vec<std::ops::Range<usize>> = starts
         .into_iter()
         .filter_map(|start| {
             let head = data.get(start.saturating_sub(MAX_EXTENT)..start)?;
@@ -52,15 +53,15 @@ fn string_extents(strings: &[ExtractedString], data: &[u8]) -> Vec<StringBoundar
                     .take(MAX_EXTENT)
                     .position(|&b| b == 0)
                     .unwrap_or(rest.len().min(MAX_EXTENT));
-            Some([(begin, end), (start, end)])
+            Some([begin..end, start..end])
         })
         .flatten()
         .collect();
-    extents.sort_unstable();
+    extents.sort_unstable_by_key(|r| (r.start, r.end));
     extents.dedup();
     extents
         .into_iter()
-        .map(|(begin, end)| StringBoundary::new(begin as u64, end - begin))
+        .map(|r| StringBoundary::new(r.start as u64, r.len()))
         .collect()
 }
 
@@ -132,10 +133,10 @@ pub(crate) fn apply_xor_scan(
     data: &[u8],
     opts: &ExtractOptions,
     is_pe: bool,
-    excluded_ranges: &[(usize, usize)],
+    excluded_ranges: &[std::ops::Range<usize>],
 ) {
     tracing::debug!(mode = ?opts.xor, "apply_xor_scan");
-    if data.is_empty() || opts.is_cancelled() {
+    if opts.xor == XorMode::Off || data.is_empty() || opts.is_cancelled() {
         return;
     }
     // Every return below precedes the first string this scan adds.
@@ -146,21 +147,19 @@ pub(crate) fn apply_xor_scan(
         return;
     }
 
-    // Platform-signed binaries (Apple/Microsoft OS binaries) are vetted
-    // upstream; malware-vs-legitimate single-byte XOR obfuscation never
-    // survives platform signing. Skipping XOR on these is the single biggest
-    // throughput win for typical system-binary corpora. Third-party
-    // Developer ID signatures are NOT matched — those CAN be signed malware.
-    // An explicit key or `XorMode::Scan` bypasses this.
-    if !opts.xor_explicit() && binary::is_platform_signed(data) {
+    // On request, OS binaries (a platform signing CA in the embedded
+    // signature) skip the XOR passes: the largest saving on system-binary
+    // corpora. Off by default because the signature is not verified. An
+    // explicit key or `XorMode::Scan` scans regardless.
+    if opts.skip_platform_signed && !opts.xor_explicit() && binary::is_platform_signed(data) {
         tracing::debug!("Skipping XOR scan: platform-signed binary");
         return;
     }
 
     let t_xor = std::time::Instant::now();
 
-    // For PE binaries, also try rolling XOR with known plaintext patterns
-    // This catches .NET malware like Redline that uses short cycling keys
+    // PEs also get rolling XOR from known plaintext: .NET stealers encrypt
+    // their configuration strings with short cycling keys.
     if is_pe && data.len() <= xor::MAX_XOR_SCAN_SIZE {
         let rolling_results = xor::extract_rolling_xor_with_known_plaintext(
             data,
@@ -194,16 +193,16 @@ pub(crate) fn apply_xor_scan(
         };
         if let Some((key, key_str, key_offset)) = auto_key {
             // Mark ALL occurrences of the key string as XorKey. Fat binaries
-            // contain the same string at multiple arch offsets; the value-dedup
-            // in main.rs keeps whichever copy comes first, so every copy must
-            // carry the XorKey kind to survive as the correct kind.
+            // contain the same string at multiple arch offsets, and a caller
+            // that keeps one copy per value (the CLI does) keeps the first, so
+            // every copy must carry the XorKey kind.
             let mut marked = false;
             for ks in strings.iter_mut().filter(|s| s.value == key_str) {
                 ks.kind = Some(StringKind::XorKey);
                 marked = true;
             }
             if !marked {
-                tracing::warn!(
+                tracing::debug!(
                     key = ?key_str,
                     "XOR key not found in extracted strings — injecting"
                 );
@@ -235,5 +234,80 @@ pub(crate) fn apply_xor_scan(
     }
 
     xor::report_kinds(&mut strings[first_added..]);
-    tracing::debug!("TIME: XOR key scanning took {:?}", t_xor.elapsed());
+    tracing::debug!(elapsed = ?t_xor.elapsed(), "XOR key scan finished");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_xor_scan;
+    use crate::{ExtractOptions, XorMode};
+
+    /// Two of the rolling pass's known plaintexts under the key 0x42, inside
+    /// binary padding: what the PE rolling-XOR pass decodes.
+    fn encoded() -> Vec<u8> {
+        let mut data = vec![0u8; 200];
+        for (i, b) in b"%USERPROFILE%\\Microsoft\\Windows".iter().enumerate() {
+            data[30 + i] = b ^ 0x42;
+        }
+        data
+    }
+
+    #[test]
+    fn off_runs_no_xor_pass_even_for_pe() {
+        let mut strings = Vec::new();
+        apply_xor_scan(&mut strings, &encoded(), &ExtractOptions::new(4), true, &[]);
+        assert!(strings.is_empty(), "{strings:?}");
+    }
+
+    /// `encoded()` inside a PE whose certificate table names Microsoft's
+    /// platform CA: what a sample with a copied signature looks like.
+    fn platform_signed() -> Vec<u8> {
+        let mut data = vec![0u8; 0x400];
+        let mut put = |at: usize, bytes: &[u8]| data[at..at + bytes.len()].copy_from_slice(bytes);
+        put(0, b"MZ");
+        put(0x3c, &0x80u32.to_le_bytes());
+        put(0x80, b"PE\0\0");
+        let optional = 0x80 + 24;
+        put(optional, &0x20bu16.to_le_bytes());
+        put(optional + 108, &16u32.to_le_bytes());
+        put(optional + 112 + 32, &0x300u32.to_le_bytes());
+        put(optional + 112 + 36, &0x100u32.to_le_bytes());
+        put(0x320, b"Microsoft Windows Production PCA 2011");
+        put(0x180, &encoded()[..64]);
+        data
+    }
+
+    #[test]
+    fn platform_signatures_are_scanned_unless_asked_to_skip() {
+        let data = platform_signed();
+        assert!(crate::binary::is_platform_signed(&data));
+        let auto = ExtractOptions::new(4).with_xor(XorMode::Auto);
+        let mut scanned = Vec::new();
+        apply_xor_scan(&mut scanned, &data, &auto, true, &[]);
+        assert!(
+            scanned.iter().any(|s| s.value.contains("USERPROFILE")),
+            "{scanned:?}"
+        );
+        let mut skipped = Vec::new();
+        apply_xor_scan(
+            &mut skipped,
+            &data,
+            &auto.with_platform_signed_skip(true),
+            true,
+            &[],
+        );
+        assert!(skipped.is_empty(), "{skipped:?}");
+    }
+
+    /// The control: the same bytes do decode once XOR is on.
+    #[test]
+    fn a_key_decodes_the_same_input() {
+        let mut strings = Vec::new();
+        let opts = ExtractOptions::new(4).with_xor(XorMode::Key(vec![0x42]));
+        apply_xor_scan(&mut strings, &encoded(), &opts, true, &[]);
+        assert!(
+            strings.iter().any(|s| s.value.contains("USERPROFILE")),
+            "{strings:?}"
+        );
+    }
 }

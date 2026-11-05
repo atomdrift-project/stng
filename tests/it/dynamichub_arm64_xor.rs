@@ -1,7 +1,7 @@
 use stng::{ExtractOptions, StringKind, StringMethod};
 
 #[test]
-fn test_dynamichub_arm64_stack_xor_system_arg() {
+fn decodes_arm64_stack_xor_strings_and_key() {
     let sample_path = crate::common::path("testdata/malware/dynamichub/DynamicHub");
 
     let data = std::fs::read(sample_path).expect("failed to read DynamicHub sample");
@@ -29,7 +29,8 @@ fn test_dynamichub_arm64_stack_xor_system_arg() {
     assert!(xor_key.data_offset < decoded.data_offset);
 
     for expected in [
-        "dscl . -auth",
+        // dscl's flag is `-authonly`; the user name follows at run time.
+        "dscl . -authonly '",
         "Library/Keychains/login.keychain",
         "BraveSoftware/Brave-Browser",
         "Cookies",

@@ -3,16 +3,29 @@
 
 use std::fmt::Write as _;
 
+/// The `N` bytes at `at`.
+pub(crate) fn array<const N: usize>(data: &[u8], at: usize) -> Option<[u8; N]> {
+    data.get(at..)?.first_chunk().copied()
+}
+
 pub(crate) fn u16_le(data: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(
-        data.get(at..at.checked_add(2)?)?.try_into().ok()?,
-    ))
+    array(data, at).map(u16::from_le_bytes)
 }
 
 pub(crate) fn u32_le(data: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        data.get(at..at.checked_add(4)?)?.try_into().ok()?,
-    ))
+    array(data, at).map(u32::from_le_bytes)
+}
+
+pub(crate) fn u32_be(data: &[u8], at: usize) -> Option<u32> {
+    array(data, at).map(u32::from_be_bytes)
+}
+
+pub(crate) fn u64_le(data: &[u8], at: usize) -> Option<u64> {
+    array(data, at).map(u64::from_le_bytes)
+}
+
+pub(crate) fn u64_be(data: &[u8], at: usize) -> Option<u64> {
+    array(data, at).map(u64::from_be_bytes)
 }
 
 /// Whether `needle` occurs in `haystack`, ignoring ASCII case. An empty

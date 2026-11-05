@@ -3,7 +3,7 @@
 use stng::ExtractOptions;
 
 #[test]
-fn test_shell_commands_with_redirections() {
+fn keeps_xor_shell_commands_with_redirections() {
     // Shell commands with redirections should NOT be filtered
     // Note: We check for the most distinctive part of each command that's
     // likely to be preserved during XOR scanning at various positions
@@ -41,7 +41,7 @@ fn test_shell_commands_with_redirections() {
 }
 
 #[test]
-fn test_shell_commands_with_garbage_prefix() {
+fn keeps_osascript_after_garbage_prefix() {
     // Shell commands with garbage bytes before them (like from XOR misalignment)
     // should still be recognized
     let key = b"XOR";
@@ -76,7 +76,7 @@ fn test_shell_commands_with_garbage_prefix() {
 }
 
 #[test]
-fn test_locale_strings_pass_filter() {
+fn keeps_xor_locale_strings() {
     let key = b"KEY";
     let locales = vec!["en_US", "zh_CN", "ja_JP", "ru_RU", "fr_FR"];
 
@@ -99,7 +99,7 @@ fn test_locale_strings_pass_filter() {
 }
 
 #[test]
-fn test_xml_tags_pass_filter() {
+fn keeps_xor_xml_tags() {
     let key = b"KEY";
     let tags = vec!["<array>", "<dict>", "<key>", "<string>", "</plist>"];
 
@@ -122,7 +122,7 @@ fn test_xml_tags_pass_filter() {
 }
 
 #[test]
-fn test_heredoc_patterns() {
+fn keeps_xor_heredoc_markers() {
     let key = b"KEY";
     let heredocs = vec!["<<EOD", "<<EOF", "command <<END\ncontent\nEND"];
 
@@ -149,7 +149,7 @@ fn test_heredoc_patterns() {
 }
 
 #[test]
-fn test_stderr_redirection_patterns() {
+fn keeps_xor_stderr_redirections() {
     let key = b"KEY";
     let redirections = vec!["2>&1", "2>/dev/null", "command 2>&1", "script 2>/dev/null"];
 
@@ -176,7 +176,7 @@ fn test_stderr_redirection_patterns() {
 use stng::is_garbage;
 
 #[test]
-fn test_c2_url_not_garbage() {
+fn accepts_brew_agent_c2_url() {
     // The actual C2 URL from brew_agent malware
     let c2_url = "http://46.30.191.141n;uJ";
 

@@ -25,7 +25,7 @@ const C2_DOMAINS: &[&str] = &[
 ];
 
 #[test]
-fn test_3cx_libffmpeg_xor_config() {
+fn decodes_3cx_c2_config() {
     let sample_path = crate::common::path("testdata/xor/libffmpeg_3cx_x64_xor");
 
     // Skip if sample doesn't exist (large real-world binary may be omitted).

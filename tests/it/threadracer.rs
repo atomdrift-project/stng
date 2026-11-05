@@ -6,7 +6,7 @@
 use stng::{ExtractOptions, StringKind};
 
 #[test]
-fn test_no_version_info_ip_false_positive() {
+fn rejects_product_version_as_ip() {
     let data = crate::common::bytes("testdata/malware/threadracer.exe");
 
     let opts = ExtractOptions::new(4);

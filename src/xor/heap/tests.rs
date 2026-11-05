@@ -1,4 +1,3 @@
-#![allow(clippy::cast_possible_truncation)]
 use super::*;
 use goblin::{Object, mach::Mach};
 use sha2::{Digest, Sha256};

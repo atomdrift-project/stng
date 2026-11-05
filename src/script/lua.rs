@@ -76,6 +76,19 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// stng must link the tree-sitter fork from the root manifest's
+    /// `[patch.crates-io]`; a dependent that omits the patch gets upstream
+    /// tree-sitter, whose parser lacks the fork's hostile-input bounds. The
+    /// fork's `QueryCursor::pattern_exceeded` does not exist upstream, so
+    /// this only compiles against the fork.
+    #[test]
+    fn links_the_patched_tree_sitter_fork() {
+        let fork_only: fn(&tree_sitter::QueryCursor, usize) -> bool =
+            tree_sitter::QueryCursor::pattern_exceeded;
+        let _ = fork_only;
+    }
+
     #[test]
     fn permutations_are_data_only() {
         let source = r#"local pack=function(t) local out="" for i=1,#t/2,1 do out=out..t[#t/2+t[i]] end return out end local message=pack({2,1,"world","hello "})"#;

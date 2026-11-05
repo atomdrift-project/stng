@@ -18,6 +18,9 @@
 #                     keep enough alloc concurrency for the CLI's rayon fan-out
 #                     while making prompt reclamation essentially free.
 #
-# Measured: 26-55% lower peak RSS for +1-2% wall across Go ELF/PE samples.
+# Measured: 26-55% lower peak RSS for +1-2% wall across Go ELF/PE samples. To
+# compare on a sample, run the release binary under `/usr/bin/time` as built,
+# then with jemalloc's stock decay restored at run time:
+#   _RJEM_MALLOC_CONF=dirty_decay_ms:10000,muzzy_decay_ms:0 target/release/stng <sample>
 [env]
 JEMALLOC_SYS_WITH_MALLOC_CONF = "narenas:4,dirty_decay_ms:0,muzzy_decay_ms:0"

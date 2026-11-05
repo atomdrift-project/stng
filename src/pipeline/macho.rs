@@ -1,25 +1,20 @@
 //! Mach-O: thin and universal binaries.
 
-use super::Scan;
-use super::extract_stack_strings_from_ranges;
-use super::{extend_unclaimed, merge_imports};
-use crate::GoStringExtractor;
-use crate::RustStringExtractor;
-use crate::StringKind;
-use crate::StringMethod;
-use crate::binary;
-use crate::collect_macho_section_info;
-use crate::collect_macho_segments;
-use crate::entitlements;
-use crate::extract_macho_imports;
-use crate::extract_raw_strings;
+use super::{Scan, extend_unclaimed, extract_stack_strings_from_ranges, merge_imports};
+use crate::binary::{
+    self, collect_macho_section_info, macho_go_skip_ranges, macho_has_go_sections,
+    macho_section_names,
+};
+use crate::go::{GoStringExtractor, pclntab_strings};
+use crate::imports::extract_macho_imports;
 use crate::layouts::Layouts;
-use crate::macho_go_skip_ranges;
-use crate::macho_has_go_sections;
-use crate::pclntab_strings;
-use crate::swift_small_strings;
-use crate::xor;
-use crate::{ExtractOptions, ExtractedString};
+use crate::raw::extract_raw_strings;
+use crate::rust::RustStringExtractor;
+use crate::types::dedup_by_value;
+use crate::{
+    ExtractOptions, ExtractedString, StringKind, StringMethod, entitlements, swift_small_strings,
+    xor,
+};
 use goblin::Object;
 use goblin::mach::{MachO, MultiArch};
 use std::collections::HashSet;
@@ -78,13 +73,9 @@ fn extend_with_section_scan(
     segments: &[String],
     section_info: &[binary::SectionInfo],
 ) {
-    let mut seen: HashSet<String> = HashSet::new();
-    let candidates: Vec<ExtractedString> =
-        scan_macho_sections(data, min_length, segments, section_info)
-            .into_iter()
-            .chain(extract_raw_strings(data, min_length, segments, &[]))
-            .filter(|s| seen.insert(s.value.clone()))
-            .collect();
+    let mut candidates = scan_macho_sections(data, min_length, segments, section_info);
+    candidates.extend(extract_raw_strings(data, min_length, segments, &[]));
+    dedup_by_value(&mut candidates);
     extend_unclaimed(strings, candidates);
 }
 
@@ -98,7 +89,7 @@ pub(super) fn scan_thin<'d>(
     let min_length = opts.min_length;
     let mut strings = Vec::new();
     let mut is_go_binary = false;
-    let segments = collect_macho_segments(macho);
+    let segments = macho_section_names(macho);
     let section_info = collect_macho_section_info(macho);
     // Thin binary: the slice is the whole file, so no slice base.
     strings.extend(slice_decoders(macho, data, 0, min_length));
@@ -159,6 +150,7 @@ pub(super) fn scan_thin<'d>(
             data,
             min_length,
             &exec_ranges,
+            crate::x86::bits_macho(macho.header.cputype),
         ));
         let xor_strings = xor::arm64_stack::extract_arm64_stack_xor_strings(
             macho,
@@ -176,7 +168,7 @@ pub(super) fn scan_thin<'d>(
         });
         merge_imports(&mut strings, imports);
     }
-    apply_entitlements(&mut strings, macho, data);
+    apply_entitlements(&mut strings, macho, data, 0);
     Scan {
         strings,
         sections: section_info,
@@ -194,16 +186,13 @@ pub(super) fn scan_fat<'d>(
 ) -> Scan {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
-    let mut is_go_binary = false;
     let mut section_info = Vec::new();
     // Fat binary - check for Go/Rust first
     let mut is_go = false;
     let mut is_rust = false;
     let mut segments = Vec::new();
-    let mut first_macho: Option<MachO<'_>> = None;
-    // Where `first_macho`'s slice starts in the file, and its size.
-    let mut first_base = 0u64;
-    let mut first_size = 0u64;
+    // Every Mach-O slice, with where it starts in the file and its size.
+    let mut slices: Vec<(MachO<'_>, u64, u64)> = Vec::new();
     // Fat-header offsets of each slice within the whole file, so a slice's
     // strings can be rebased onto the file (a slice's own load commands are
     // slice-relative). Indexed in lockstep with the iteration below.
@@ -224,7 +213,7 @@ pub(super) fn scan_fat<'d>(
             // x86-first universal file may carry ARM-only encodings.
             // Keep whole-file raw scanning below to one pass.
             strings.extend(slice_decoders(&macho, data, slice_base, min_length));
-            if first_macho.is_some() {
+            if !slices.is_empty() {
                 if macho_has_go_sections(&macho) {
                     let extractor = GoStringExtractor::new(min_length);
                     strings.extend(extractor.extract_macho(&macho, slice_base));
@@ -235,9 +224,10 @@ pub(super) fn scan_fat<'d>(
                     let extractor = RustStringExtractor::new(min_length);
                     strings.extend(extractor.extract_macho(&macho, slice_base));
                 }
+                slices.push((macho, slice_base, slice_size));
                 continue;
             }
-            segments = collect_macho_segments(&macho);
+            segments = macho_section_names(&macho);
             // A slice's load commands are slice-relative; the
             // whole-file passes here and after the match need file
             // offsets.
@@ -247,7 +237,6 @@ pub(super) fn scan_fat<'d>(
             }
             if macho_has_go_sections(&macho) {
                 is_go = true;
-                is_go_binary = true;
                 let extractor = GoStringExtractor::new(min_length);
                 strings.extend(extractor.extract_macho(&macho, slice_base));
                 strings.extend(extract_macho_pclntab_strings(
@@ -270,9 +259,7 @@ pub(super) fn scan_fat<'d>(
                 let extractor = RustStringExtractor::new(min_length);
                 strings.extend(extractor.extract_macho(&macho, slice_base));
             }
-            first_macho = Some(macho);
-            first_base = slice_base;
-            first_size = slice_size;
+            slices.push((macho, slice_base, slice_size));
         }
     }
     // Non-Go fat binaries get a raw scan. Rust
@@ -286,15 +273,19 @@ pub(super) fn scan_fat<'d>(
             strings.extend(raw);
         }
     }
-    if !is_go_binary {
+    if !is_go {
         // See the thin Mach-O branch: measure opacity before adding
         // instruction-derived stack strings.
         let profile = arm64_stack_xor_profile(data.len(), &strings);
+        // `section_info` is the first slice's.
         let exec_ranges = binary::code_ranges_from_sections(&section_info);
         strings.extend(extract_stack_strings_from_ranges(
             data,
             min_length,
             &exec_ranges,
+            slices
+                .first()
+                .and_then(|(macho, ..)| crate::x86::bits_macho(macho.header.cputype)),
         ));
         if let Ok(arches) = fat.arches() {
             for (idx, arch) in arches.iter().enumerate() {
@@ -331,21 +322,22 @@ pub(super) fn scan_fat<'d>(
             }
         }
     }
-    if let Some(ref macho) = first_macho {
+    // Each slice has its own imports and code signature.
+    for (macho, base, size) in &slices {
+        let slice = binary::file_range_clamped(data, *base, *size).unwrap_or_default();
         if !opts.caller_provides_symbols {
-            let slice =
-                binary::file_range_clamped(data, first_base, first_size).unwrap_or_default();
-            let imports = layouts.with(first_base, slice, |layout| {
-                extract_macho_imports(macho, layout, slice, first_base, min_length)
+            let imports = layouts.with(*base, slice, |layout| {
+                extract_macho_imports(macho, layout, slice, *base, min_length)
             });
             merge_imports(&mut strings, imports);
         }
-        apply_entitlements(&mut strings, macho, data);
+        // A slice's load commands hold slice-relative offsets.
+        apply_entitlements(&mut strings, macho, slice, *base);
     }
     Scan {
         strings,
         sections: section_info,
-        is_go: is_go_binary,
+        is_go,
     }
 }
 
@@ -375,18 +367,13 @@ fn scan_macho_sections(
         if info.is_executable || info.size == 0 {
             continue;
         }
-        // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only).
-        #[allow(clippy::cast_possible_truncation)]
-        let start = info.file_offset as usize;
-        #[allow(clippy::cast_possible_truncation)]
-        let end = start.saturating_add(info.size as usize);
-        let Some(section_bytes) = data.get(start..end) else {
+        let Some(section_bytes) = binary::file_range(data, info.file_offset, info.size) else {
             continue;
         };
         for mut s in extract_raw_strings(section_bytes, min_length, segments, &[]) {
             // The raw scanner offsets are relative to `section_bytes`; lift them
             // to the file by adding the section's file offset.
-            s.rebase(start as u64);
+            s.rebase(info.file_offset);
             if seen.insert(s.value.clone()) {
                 out.push(s);
             }
@@ -396,8 +383,17 @@ fn scan_macho_sections(
 }
 
 /// Apply Mach-O entitlements: remove overlapping strings, then append entitlement XML.
-fn apply_entitlements(strings: &mut Vec<ExtractedString>, macho: &MachO<'_>, data: &[u8]) {
-    let entitlements = entitlements::extract_macho_entitlements(macho, data);
+/// `image` is the Mach-O's bytes, at file offset `base`.
+fn apply_entitlements(
+    strings: &mut Vec<ExtractedString>,
+    macho: &MachO<'_>,
+    image: &[u8],
+    base: u64,
+) {
+    let mut entitlements = entitlements::extract_macho_entitlements(macho, image);
+    for ent in &mut entitlements {
+        ent.rebase(base);
+    }
     for ent in &entitlements {
         if ent.kind == Some(StringKind::EntitlementsXml) {
             let ent_start = ent.data_offset;
@@ -453,11 +449,7 @@ fn extract_macho_pclntab_strings(
     // varint-prefixed pkgnamestab.
     let (mut nulls, varints) = pclntab_strings(section_bytes, start as u64, min_length);
     nulls.extend(varints);
-    tracing::debug!(
-        "TIME: Go Mach-O __gopclntab scan took {:?} ({} symbols)",
-        t_pcln.elapsed(),
-        nulls.len()
-    );
+    tracing::debug!(elapsed = ?t_pcln.elapsed(), symbols = nulls.len(), "Go Mach-O __gopclntab scan finished");
     nulls
 }
 
@@ -465,12 +457,12 @@ fn extract_macho_pclntab_strings(
 /// code-signature blob). Returns one range for a thin binary and one per slice
 /// for a fat binary; empty for non-Mach-O. Strings carry no section name, so
 /// code-signature reclassification is scoped by these offsets.
-pub(crate) fn macho_linkedit_ranges(object: &Object<'_>) -> Vec<(u64, u64)> {
-    fn from_macho(macho: &MachO<'_>, base: u64) -> Option<(u64, u64)> {
+pub(crate) fn macho_linkedit_ranges(object: &Object<'_>) -> Vec<std::ops::Range<u64>> {
+    fn from_macho(macho: &MachO<'_>, base: u64) -> Option<std::ops::Range<u64>> {
         macho.segments.iter().find_map(|seg| {
             (seg.name().ok() == Some("__LINKEDIT")).then(|| {
                 let start = base.saturating_add(seg.fileoff);
-                (start, start.saturating_add(seg.filesize))
+                start..start.saturating_add(seg.filesize)
             })
         })
     }
@@ -583,13 +575,9 @@ fn is_certificate_string(s: &str) -> bool {
         return true;
     }
 
-    // Apple Inc. and related organizational units (but not just "Apple")
-    if (s.contains("Apple Inc.") || s.contains("Apple Software")) && s.len() < 50 {
-        // Keep it short to avoid false positives
-        return true;
-    }
-
-    false
+    // Apple Inc. and related organizational units (but not just "Apple"),
+    // kept short to avoid false positives.
+    (s.contains("Apple Inc.") || s.contains("Apple Software")) && s.len() < 50
 }
 
 fn arm64_stack_xor_profile(
@@ -619,10 +607,7 @@ fn arm64_stack_xor_profile(
 pub(super) fn classify_code_signature(strings: &mut [ExtractedString], object: &Object<'_>) {
     let linkedit_ranges = macho_linkedit_ranges(object);
     for s in strings.iter_mut() {
-        if linkedit_ranges
-            .iter()
-            .any(|&(start, end)| s.data_offset >= start && s.data_offset < end)
-        {
+        if linkedit_ranges.iter().any(|r| r.contains(&s.data_offset)) {
             // Base64 strings in __LINKEDIT that decode to SHA-1 (20 bytes) or
             // SHA-256 (32 bytes) are CD hashes. Other base64 content (certificate
             // data, etc.) decodes to different sizes and must not be promoted.

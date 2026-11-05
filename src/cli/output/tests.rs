@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn test_wrap_string_lines_no_wrap_needed() {
+fn wrap_keeps_short_line_whole() {
     let text = "Short string";
     let result = wrap_string_lines(text, 0, 100);
     assert_eq!(result.len(), 1);
@@ -10,7 +10,7 @@ fn test_wrap_string_lines_no_wrap_needed() {
 }
 
 #[test]
-fn test_wrap_string_lines_exact_width() {
+fn wrap_keeps_exact_width_line_whole() {
     let text = "Exactly10!";
     let result = wrap_string_lines(text, 0, 10);
     assert_eq!(result.len(), 1);
@@ -19,7 +19,7 @@ fn test_wrap_string_lines_exact_width() {
 }
 
 #[test]
-fn test_wrap_string_lines_basic_wrap() {
+fn wrap_splits_long_line_contiguously() {
     let text = "This is a longer string that needs wrapping";
     let result = wrap_string_lines(text, 0, 20);
 
@@ -39,7 +39,7 @@ fn test_wrap_string_lines_basic_wrap() {
 }
 
 #[test]
-fn test_wrap_string_lines_offset_tracking() {
+fn wrap_offsets_start_at_base() {
     let text = "AAAABBBBCCCCDDDD";
     let result = wrap_string_lines(text, 100, 4);
 
@@ -60,7 +60,7 @@ fn test_wrap_string_lines_offset_tracking() {
 }
 
 #[test]
-fn test_wrap_string_lines_utf8() {
+fn wrap_counts_chars_and_offsets_bytes() {
     // Each emoji is 4 bytes
     let text = "🔥🔥🔥🔥";
     let result = wrap_string_lines(text, 0, 2);
@@ -78,7 +78,7 @@ fn test_wrap_string_lines_utf8() {
 }
 
 #[test]
-fn test_wrap_string_lines_mixed_width_chars() {
+fn wrap_handles_mixed_width_chars() {
     // Mix of ASCII and multi-byte UTF-8
     let text = "Hi🔥there";
     let result = wrap_string_lines(text, 0, 4);
@@ -92,14 +92,14 @@ fn test_wrap_string_lines_mixed_width_chars() {
 }
 
 #[test]
-fn test_wrap_string_lines_empty() {
+fn wrap_of_empty_is_empty() {
     let text = "";
     let result = wrap_string_lines(text, 42, 100);
     assert_eq!(result.len(), 0);
 }
 
 #[test]
-fn test_wrap_string_lines_zero_width() {
+fn wrap_zero_width_keeps_whole() {
     let text = "Some text";
     let result = wrap_string_lines(text, 0, 0);
 
@@ -109,7 +109,7 @@ fn test_wrap_string_lines_zero_width() {
 }
 
 #[test]
-fn test_wrap_string_lines_preserves_content() {
+fn wrap_preserves_content() {
     let text = "abcdefghijklmnopqrstuvwxyz0123456789";
     let result = wrap_string_lines(text, 0, 10);
 
@@ -119,7 +119,7 @@ fn test_wrap_string_lines_preserves_content() {
 }
 
 #[test]
-fn test_wrap_string_lines_single_char_width() {
+fn wrap_width_one_splits_every_char() {
     let text = "ABCDEF";
     let result = wrap_string_lines(text, 0, 1);
 
@@ -139,7 +139,7 @@ fn test_wrap_string_lines_single_char_width() {
 }
 
 #[test]
-fn test_terminal_safe_escapes_control_sequences() {
+fn escapes_terminal_control_sequences() {
     // OSC 52 (clipboard write), CSI conceal, CR overwrite, and a
     // right-to-left override: all shown, none acted on.
     assert_eq!(
@@ -174,14 +174,14 @@ fn colorize_xml_line_tolerates_misordered_tags() {
 }
 
 #[test]
-fn test_terminal_safe_borrows_clean_text() {
+fn borrows_clean_text_unescaped() {
     for text in ["plain", "tab\tseparated", "ünïcødé 🔥", ""] {
         assert!(matches!(terminal_safe(text), Cow::Borrowed(t) if t == text));
     }
 }
 
 #[test]
-fn test_wrap_string_lines_long_input_is_linear() {
+fn wrap_is_linear_on_huge_input() {
     // Quadratic wrapping took minutes on a string this size.
     let text = "a".repeat(4 * 1024 * 1024);
     let result = wrap_string_lines(&text, 0, 80);

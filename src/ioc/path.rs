@@ -141,6 +141,8 @@ fn is_go_toolchain_path(path: &str) -> bool {
 }
 
 pub(super) fn is_common_system_path(path: &str) -> bool {
+    // `/dev/*` and `/usr/lib/` libraries and `dyld` are matched by the prefix
+    // rules below.
     const POSIX: &[&str] = &[
         "/bin/bash",
         "/bin/cat",
@@ -151,16 +153,6 @@ pub(super) fn is_common_system_path(path: &str) -> bool {
         "/bin/sh",
         "/bin/true",
         "/bin/zsh",
-        "/dev/egd-pool",
-        "/dev/null",
-        "/dev/random",
-        "/dev/srandom",
-        "/dev/stderr",
-        "/dev/stdin",
-        "/dev/stdout",
-        "/dev/tty",
-        "/dev/ubskey",
-        "/dev/urandom",
         "/etc/egd-pool",
         "/etc/entropy",
         "/etc/apache/mime.types",
@@ -204,7 +196,6 @@ pub(super) fn is_common_system_path(path: &str) -> bool {
         "/usr/bin/wget",
         "/usr/bin/zsh",
         "/usr/bin/ntlm_auth",
-        "/usr/lib/dyld",
         "/usr/local/share/mime/globs2",
         "/usr/share/mime/globs2",
         "/var/run/egd-pool",

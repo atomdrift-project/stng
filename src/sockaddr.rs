@@ -5,97 +5,70 @@
 //! from random 4-byte sequences.
 
 use crate::types::{ExtractedString, StringKind, StringMethod};
-use std::collections::HashSet;
+use std::ops::Range;
 
 /// Machine type constant for M68000 (Motorola 68000)
 /// M68000 instructions contain 0x0002 patterns naturally, causing false positives
 const EM_68K: u16 = 4;
 
-/// Checks if a section name indicates a data section (writable or relocatable)
-/// Real hardcoded C2 IPs should be in data sections, not code sections
-fn is_data_section_elf(section: &str) -> bool {
-    matches!(
-        section,
-        ".data"
-            | ".data.rel.ro"
-            | ".rodata"
-            | ".rodata.cst"
-            | ".bss"
-            | ".fini_array"
-            | ".init_array"
-    )
+/// Addresses reported per file. Real samples hard-code a handful of C2
+/// endpoints; more candidates than this are mostly lookalike data.
+const MAX_ADDRESSES: usize = 4;
+/// Candidates ranked when choosing them, bounding the work and memory a
+/// file of lookalike records costs.
+const MAX_CANDIDATES: usize = 1024;
+
+/// The verdict of the first section, in header order, that covers each
+/// offset. Section headers are attacker-controlled, so they may overlap and
+/// number in the tens of thousands; a lookup per candidate is a binary search
+/// rather than a walk over every header.
+struct SectionMap {
+    /// Sorted, distinct range boundaries; segment `k` is `bounds[k]..bounds[k + 1]`.
+    bounds: Vec<u64>,
+    verdict: Vec<Option<bool>>,
 }
 
-/// Check if this is a Go binary by examining section names or embedded strings.
-/// Go binaries have .gopclntab/.go.buildinfo (ELF) or gopclntab/go.buildinfo (PE).
-/// Also checks for "Go build ID:" string which is present even in stripped binaries.
-fn is_go_binary_from_sections(
-    elf_opt: Option<&crate::goblin::elf::Elf<'_>>,
-    pe_opt: Option<&crate::goblin::pe::PE<'_>>,
-    data: &[u8],
-) -> bool {
-    // Check ELF for Go sections
-    if let Some(elf) = elf_opt
-        && elf.section_headers.iter().any(|sh| {
-            if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
-                name == ".gopclntab" || name == ".go.buildinfo"
-            } else {
-                false
+impl SectionMap {
+    /// `sections` yields each section's file range and verdict, in header
+    /// order.
+    fn new(sections: impl Iterator<Item = (Range<u64>, bool)>) -> Self {
+        let sections: Vec<_> = sections.filter(|(range, _)| !range.is_empty()).collect();
+        let mut bounds: Vec<u64> = sections
+            .iter()
+            .flat_map(|(range, _)| [range.start, range.end])
+            .collect();
+        bounds.sort_unstable();
+        bounds.dedup();
+        let segments = bounds.len().saturating_sub(1);
+        let mut verdict = vec![None; segments];
+        // `next[k]` leads to the first unclaimed segment at or after `k`, so each
+        // segment is claimed once, by the earliest section that covers it.
+        let mut next: Vec<usize> = (0..=segments).collect();
+        let find = |next: &mut [usize], mut k: usize| {
+            while next[k] != k {
+                next[k] = next[next[k]];
+                k = next[k];
             }
-        })
-    {
-        return true;
-    }
-
-    // Check PE for Go sections
-    if let Some(pe) = pe_opt
-        && pe.sections.iter().any(|section| {
-            let name = crate::binary::pe_section_name(&section.name).to_lowercase();
-            name.contains("gopclntab") || name.contains("go.buildinfo")
-        })
-    {
-        return true;
-    }
-
-    // Fallback: check for "Go build ID:" string in first 4KB of binary
-    // This catches Go binaries that lack standard section names
-    let search_len = data.len().min(4096);
-    if data[..search_len].windows(12).any(|w| w == b"Go build ID:") {
-        return true;
-    }
-
-    false
-}
-
-/// Check if this is a .NET binary by examining the CLR header directory.
-/// .NET binaries have a COM descriptor (CLR header) and don't use C-style sockaddr_in.
-fn is_dotnet_binary(pe_opt: Option<&crate::goblin::pe::PE<'_>>, data: &[u8]) -> bool {
-    if let Some(pe) = pe_opt {
-        // Check if PE has CLR runtime header (index 14 = COM_DESCRIPTOR / CLR header)
-        if let Some(optional_header) = pe.header.optional_header {
-            let data_directories = &optional_header.data_directories.data_directories;
-            // Index 14 is IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR (CLR header)
-            if data_directories.len() > 14
-                && let Some((_, clr_dir)) = &data_directories[14]
-                && clr_dir.virtual_address != 0
-                && clr_dir.size != 0
-            {
-                return true;
+            k
+        };
+        for (range, accept) in sections {
+            let mut k = find(&mut next, bounds.partition_point(|&b| b < range.start));
+            while k < segments && bounds[k] < range.end {
+                verdict[k] = Some(accept);
+                next[k] = k + 1;
+                k = find(&mut next, k + 1);
             }
         }
-
-        // Also check for BSJB signature in data (indicates CLI metadata header)
-        // This is a backup check for native images (.ni.dll) which may not have CLR header
-        if data.len() > 4 {
-            // Search in first 1MB for "BSJB" (CLI metadata signature)
-            let search_len = data.len().min(1024 * 1024);
-            if data[..search_len].windows(4).any(|w| w == b"BSJB") {
-                return true;
-            }
-        }
+        Self { bounds, verdict }
     }
 
-    false
+    fn verdict(&self, offset: u64) -> Option<bool> {
+        let k = self
+            .bounds
+            .partition_point(|&b| b <= offset)
+            .checked_sub(1)?;
+        *self.verdict.get(k)?
+    }
 }
 
 /// Returns true if the bytes surrounding `offset` look like a densely-packed
@@ -112,23 +85,17 @@ fn is_dotnet_binary(pe_opt: Option<&crate::goblin::pe::PE<'_>>, data: &[u8]) -> 
 /// density of u16 LE values below 0x0200 is far higher than in heterogeneous
 /// data sections that hold real sockaddr_in structures.
 fn looks_like_packed_u16_table(data: &[u8], offset: usize) -> bool {
-    // ±32 bytes around the 8-byte candidate, even-aligned to the candidate.
-    let parity = offset & 1;
-    let start = (offset.saturating_sub(32) + parity) & !1 | parity;
+    // ±32 bytes around the 8-byte candidate, in u16 cells aligned to it.
+    let start = offset.saturating_sub(32);
+    let start = start + ((start ^ offset) & 1);
     let end = offset.saturating_add(40).min(data.len());
 
-    let mut small_nonzero = 0usize;
-    let mut nonzero = 0usize;
-    let mut p = start;
-    while p + 1 < end {
-        let v = u16::from_le_bytes([data[p], data[p + 1]]);
-        if v != 0 {
-            nonzero += 1;
-            if v < 0x0200 {
-                small_nonzero += 1;
-            }
-        }
-        p += 2;
+    let window = data.get(start..end).unwrap_or_default();
+    let (mut nonzero, mut small_nonzero) = (0usize, 0usize);
+    for &cell in window.as_chunks::<2>().0 {
+        let v = u16::from_le_bytes(cell);
+        nonzero += usize::from(v != 0);
+        small_nonzero += usize::from(v != 0 && v < 0x0200);
     }
     // UNWIND_CODE arrays have many distinct small-but-non-zero u16 entries
     // (variants of CodeOffset + UnwindOp). The ≥ 8 floor avoids tripping on
@@ -160,12 +127,10 @@ fn sits_in_periodic_table(data: &[u8], offset: usize) -> bool {
     }
     let window = &data[start..end];
 
-    let mut matches = 0usize;
-    for i in 0..window.len() - 2 {
-        if window[i] != 0 && window[i] == window[i + 2] {
-            matches += 1;
-        }
-    }
+    let matches = window
+        .windows(3)
+        .filter(|w| w[0] != 0 && w[0] == w[2])
+        .count();
     let comparisons = window.len() - 2;
 
     // 25% leaves a wide margin above the 0% seen in real data sections while
@@ -200,26 +165,39 @@ pub(crate) enum Endianness {
 pub(crate) fn scan_binary_ips(
     data: &[u8],
     min_length: usize,
-    e_machine: u16,
+    elf_machine: u16,
     elf_opt: Option<&crate::goblin::elf::Elf<'_>>,
     pe_opt: Option<&crate::goblin::pe::PE<'_>>,
 ) -> Vec<ExtractedString> {
     // Skip M68000 binaries - their instruction stream naturally contains 0x0002 patterns
-    if e_machine == EM_68K {
+    if elf_machine == EM_68K {
+        tracing::debug!("skipping sockaddr scan: M68000 code");
         return Vec::new();
     }
 
-    // Skip Go binaries - they don't use C-style sockaddr_in structures
-    // Go has its own network abstractions and stores addresses differently
-    // Scanning for sockaddr_in in Go binaries produces false positives from runtime metadata
-    if is_go_binary_from_sections(elf_opt, pe_opt, data) {
-        return Vec::new();
-    }
-
-    // Skip .NET binaries - they don't use C-style sockaddr_in structures
-    // .NET has managed networking APIs and doesn't embed raw socket addresses
-    // Native images (.ni.dll) contain compiled IL/JIT code that produces many false positives
-    if is_dotnet_binary(pe_opt, data) {
+    // Go and .NET binaries don't use C-style sockaddr_in structures: Go has
+    // its own network abstractions, and scanning its runtime metadata finds
+    // false positives; .NET has managed networking APIs, and native images
+    // (.ni.dll) hold compiled IL/JIT code that finds many. Only structure
+    // decides: a "Go build ID:" string is bytes any sample can carry to
+    // switch the scan off.
+    let is_go = elf_opt.is_some_and(crate::binary::elf_has_go_sections)
+        || pe_opt.is_some_and(|pe| {
+            pe.sections.iter().any(|section| {
+                let name = crate::binary::pe_section_name(&section.name).to_lowercase();
+                name.contains("gopclntab") || name.contains("go.buildinfo")
+            })
+        });
+    let is_dotnet = pe_opt
+        .and_then(|pe| pe.header.optional_header)
+        .and_then(|h| h.data_directories.get_clr_runtime_header().copied())
+        .is_some_and(|clr| clr.virtual_address != 0 && clr.size != 0);
+    if is_go || is_dotnet {
+        tracing::debug!(
+            is_go,
+            is_dotnet,
+            "skipping sockaddr scan: Go or .NET binary"
+        );
         return Vec::new();
     }
 
@@ -238,68 +216,79 @@ pub(crate) fn scan_binary_ips(
         _ => Endianness::Unknown,
     };
 
-    let mut results = Vec::new();
-
-    // Only scan for sockaddr_in structures - these have the AF_INET marker
-    // which provides context that this is actually a socket structure
-    results.extend(scan_sockaddr_in(data, min_length, endianness));
-
-    // For ELF binaries with section info, filter to only accept data sections
-    // Real hardcoded C2 IPs are in .data, .rodata, etc., not in .text (code)
-    if let Some(elf) = elf_opt {
-        results.retain(|s| {
-            // Find which section this offset belongs to
-            for sh in &elf.section_headers {
-                if s.data_offset >= sh.sh_offset
-                    && s.data_offset < sh.sh_offset.saturating_add(sh.sh_size)
-                    && let Some(name) = elf.shdr_strtab.get_at(sh.sh_name)
-                {
-                    // Accept if in a data section, reject if in code section
-                    return is_data_section_elf(name);
+    // Real hard-coded C2 addresses live in data sections (.data, .rodata, …),
+    // not in code. An offset no section covers is rejected.
+    let sections = if let Some(elf) = elf_opt {
+        Some(SectionMap::new(elf.section_headers.iter().filter_map(
+            |sh| {
+                // `.bss` and other NOBITS sections occupy no file bytes;
+                // their header range would claim whatever follows them.
+                if sh.sh_type == goblin::elf::section_header::SHT_NOBITS {
+                    return None;
                 }
-            }
-            // If section can't be determined, reject to be safe
-            false
-        });
-    }
+                let name = elf.shdr_strtab.get_at(sh.sh_name)?;
+                Some((
+                    sh.sh_offset..sh.sh_offset.saturating_add(sh.sh_size),
+                    matches!(
+                        name,
+                        ".data" | ".data.rel.ro" | ".rodata" | ".fini_array" | ".init_array"
+                    ) || name.starts_with(".rodata."),
+                ))
+            },
+        )))
+    } else {
+        pe_opt.map(|pe| {
+            SectionMap::new(pe.sections.iter().map(|section| {
+                let start = u64::from(section.pointer_to_raw_data);
+                let name = crate::binary::pe_section_name(&section.name);
+                (
+                    start..start + u64::from(section.size_of_raw_data),
+                    matches!(
+                        &*name,
+                        ".data" | ".rdata" | ".bss" | ".idata" | ".edata" | ".rsrc"
+                    ),
+                )
+            }))
+        })
+    };
 
-    // For PE binaries with section info, filter to only accept data sections
-    // Real hardcoded C2 IPs are in .data, .rdata, etc., not in .text (code)
-    if let Some(pe) = pe_opt {
-        results.retain(|s| {
-            // Drop candidates sitting inside compiler-emitted u16 tables
-            // (UNWIND_INFO / C++ EH metadata / jump tables) that mimic
-            // sockaddr_in byte sequences.
-            if let Ok(off) = usize::try_from(s.data_offset)
+    // Only sockaddr_in structures are scanned: the AF_INET marker gives the
+    // context that four bytes really are an address.
+    let mut results: Vec<ExtractedString> = scan_sockaddr_in(data, min_length, endianness)
+        .filter(|s| {
+            // Drop PE candidates inside compiler-emitted u16 tables (UNWIND_INFO,
+            // C++ EH metadata, jump tables) that mimic sockaddr_in bytes.
+            if pe_opt.is_some()
+                && let Ok(off) = usize::try_from(s.data_offset)
                 && (looks_like_packed_u16_table(data, off) || sits_in_periodic_table(data, off))
             {
                 return false;
             }
-            // Find which section this offset belongs to
-            for section in &pe.sections {
-                let section_start = u64::from(section.pointer_to_raw_data);
-                let section_end = section_start + u64::from(section.size_of_raw_data);
-                if s.data_offset >= section_start && s.data_offset < section_end {
-                    let name = crate::binary::pe_section_name(&section.name);
-                    return matches!(
-                        &*name,
-                        ".data" | ".rdata" | ".bss" | ".idata" | ".edata" | ".rsrc"
-                    );
-                }
-            }
-            // If section can't be determined, reject to be safe
-            false
-        });
-    }
+            sections
+                .as_ref()
+                .is_none_or(|map| map.verdict(s.data_offset) == Some(true))
+        })
+        .take(MAX_CANDIDATES)
+        .collect();
 
-    // Deduplicate by offset to avoid reporting same location multiple times
-    let mut seen = HashSet::new();
-    results.retain(|s| seen.insert((s.data_offset, s.value.clone())));
-
-    // Cap results: if more than 4 unique IPs detected, it's likely noise
-    // Real malware rarely has more than a handful of hardcoded C2 addresses
-    if results.len() > 4 {
-        return Vec::new();
+    // Past a handful, keep the best-evidenced: a `sin_zero` that is all
+    // zero, then file order. Dropping every candidate instead would let a
+    // sample hide its real address behind a few decoys.
+    if results.len() > MAX_ADDRESSES {
+        tracing::debug!(
+            candidates = results.len(),
+            kept = MAX_ADDRESSES,
+            "sockaddr: more candidates than a sample hard-codes; keeping the best padded"
+        );
+        let padding = |s: &ExtractedString| {
+            usize::try_from(s.data_offset)
+                .ok()
+                .and_then(|at| data.get(at + 8..at + 16))
+                .map_or(0, |zero| zero.iter().filter(|&&b| b == 0).count())
+        };
+        results.sort_by_key(|s| (std::cmp::Reverse(padding(s)), s.data_offset));
+        results.truncate(MAX_ADDRESSES);
+        results.sort_by_key(|s| s.data_offset);
     }
 
     results
@@ -324,18 +313,9 @@ fn is_valid_ip(octets: [u8; 4]) -> bool {
         return false;
     }
 
-    // Reject IPs ending in .255 (broadcast addresses)
-    if octets[3] == 255 {
-        return false;
-    }
-
-    // Reject IPs with last octet >= 250 (often artifacts/broadcast-like patterns)
-    if octets[3] >= 250 {
-        return false;
-    }
-
-    // Reject IPs with any octet == 255 (broadcast patterns)
-    if octets.contains(&255) {
+    // A last octet of 250 or more is broadcast-like, and a 255 anywhere is a
+    // mask or broadcast pattern.
+    if octets[3] >= 250 || octets.contains(&255) {
         return false;
     }
 
@@ -374,9 +354,7 @@ fn scan_sockaddr_in(
     data: &[u8],
     min_length: usize,
     endianness: Endianness,
-) -> Vec<ExtractedString> {
-    let mut results = Vec::new();
-
+) -> impl Iterator<Item = ExtractedString> + '_ {
     // Skip file headers (ELF, PE, Mach-O) which often contain similar byte patterns
     // Use 1024 byte skip to cover headers and metadata sections that often contain
     // false positive patterns. Real sockaddr_in structs are in data sections further in.
@@ -385,7 +363,7 @@ fn scan_sockaddr_in(
     let accept_le = matches!(endianness, Endianness::Little | Endianness::Unknown);
     let accept_be = matches!(endianness, Endianness::Big | Endianness::Unknown);
 
-    for i in start..data.len().saturating_sub(7) {
+    (start..data.len().saturating_sub(7)).filter_map(move |i| {
         // Check for AF_INET marker (value 2) in the binary's native order.
         // Accepting the wrong byte order produces false positives because
         // unrelated structures (COM GUIDs in PE .rdata, small-int tables) often
@@ -394,32 +372,32 @@ fn scan_sockaddr_in(
         let af_inet_be = accept_be && data[i] == 0x00 && data[i + 1] == 0x02;
 
         if !af_inet_le && !af_inet_be {
-            continue;
+            return None;
         }
 
         let port = u16::from_be_bytes([data[i + 2], data[i + 3]]);
 
         // Skip port 0 (invalid)
         if port == 0 {
-            continue;
+            return None;
         }
 
         // Skip very high ports (>= 61000) - unlikely to be real C2, often artifacts
         if port >= 61000 {
-            continue;
+            return None;
         }
 
         let octets = [data[i + 4], data[i + 5], data[i + 6], data[i + 7]];
 
         // Skip if IP is invalid
         if !is_valid_ip(octets) {
-            continue;
+            return None;
         }
 
         // Skip if IP octets look like text (3+ ASCII printable characters)
         let ascii_count = octets.iter().filter(|&&b| (32..=126).contains(&b)).count();
         if ascii_count >= 3 {
-            continue;
+            return None;
         }
 
         // A real sockaddr_in is a 16-byte struct whose trailing sin_zero[8]
@@ -432,11 +410,9 @@ fn scan_sockaddr_in(
         // those coincidental matches without rejecting genuine socket literals.
         // If the struct is truncated by end-of-data the padding cannot be
         // confirmed, so reject to be safe (consistent with the section filter).
-        let Some(sin_zero) = data.get(i + 8..i + 16) else {
-            continue;
-        };
+        let sin_zero = data.get(i + 8..i + 16)?;
         if sin_zero.iter().filter(|&&b| b == 0).count() < 6 {
-            continue;
+            return None;
         }
 
         let ip_str = format!(
@@ -446,19 +422,17 @@ fn scan_sockaddr_in(
 
         // Respect min_length parameter
         if ip_str.len() < min_length {
-            continue;
+            return None;
         }
 
-        results.push(ExtractedString {
+        Some(ExtractedString {
             value: ip_str,
             data_offset: i as u64,
             method: StringMethod::RawScan,
             kind: Some(StringKind::IpPort),
             ..Default::default()
-        });
-    }
-
-    results
+        })
+    })
 }
 
 #[cfg(test)]

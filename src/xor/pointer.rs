@@ -95,35 +95,37 @@ pub(crate) fn extract_macho(
         let Some(key) = fold_helper(&code, setup.helper, setup.base, setup.seed) else {
             continue;
         };
-        let Some(cipher_region) = constants.iter().find(|r| r.at(cipher, len).is_some()) else {
-            continue;
-        };
-        let Some(encoded) = cipher_region.at(cipher, len) else {
-            continue;
-        };
-        let Some(key_bytes) = constants.iter().find_map(|r| r.at(key, len)) else {
-            continue;
-        };
-        let decoded: Vec<u8> = encoded.iter().zip(key_bytes).map(|(a, b)| a ^ b).collect();
-        let Some(value) = crate::text::readable(decoded) else {
-            continue;
-        };
-        let Some(offset) = slice_base
-            .checked_add(cipher_region.offset)
-            .and_then(|n| n.checked_add(cipher - cipher_region.addr))
-        else {
-            continue;
-        };
-        output.push(ExtractedString {
-            kind: classify_string(&value),
-            value,
-            data_offset: offset,
-            data_len: u32::try_from(len).unwrap_or(u32::MAX),
-            method: StringMethod::XorDecode,
-            ..Default::default()
-        });
+        output.extend(xor_pair(&constants, cipher, key, len, slice_base));
     }
     output
+}
+
+/// The text `len` bytes at virtual address `cipher` decode to under the key
+/// bytes at `key`, both read from `constants`; located at the ciphertext.
+fn xor_pair(
+    constants: &[Region<'_>],
+    cipher: u64,
+    key: u64,
+    len: usize,
+    slice_base: u64,
+) -> Option<ExtractedString> {
+    let (region, encoded) = constants
+        .iter()
+        .find_map(|r| Some((r, r.at(cipher, len)?)))?;
+    let key_bytes = constants.iter().find_map(|r| r.at(key, len))?;
+    let decoded: Vec<u8> = encoded.iter().zip(key_bytes).map(|(a, b)| a ^ b).collect();
+    let value = crate::text::readable(decoded)?;
+    let offset = slice_base
+        .checked_add(region.offset)?
+        .checked_add(cipher - region.addr)?;
+    Some(ExtractedString {
+        kind: classify_string(&value),
+        value,
+        data_offset: offset,
+        data_len: u32::try_from(len).unwrap_or(u32::MAX),
+        method: StringMethod::XorDecode,
+        ..Default::default()
+    })
 }
 
 fn rip_lea(i: &Instruction) -> bool {
@@ -449,7 +451,10 @@ fn operand(regs: &[Option<u64>; 5], i: &Instruction, op: u32) -> Option<u64> {
     }
 }
 
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "32-bit operations and shift counts truncate as the CPU does"
+)]
 fn fold_helper(code: &Region<'_>, addr: u64, base: u64, seed: u64) -> Option<u64> {
     let mut d = code.decoder(addr, 128)?;
     let push = d.decode();

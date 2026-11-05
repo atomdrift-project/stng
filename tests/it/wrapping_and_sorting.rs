@@ -11,17 +11,8 @@ fn run_stng(args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
-fn run_stng_stderr(args: &[&str]) -> String {
-    let output = crate::stng()
-        .args(args)
-        .output()
-        .expect("failed to execute stng");
-
-    String::from_utf8_lossy(&output.stderr).to_string()
-}
-
 #[test]
-fn test_text_file_offset_sorting() {
+fn sorts_text_lines_by_offset() {
     // Create a temporary text file with known content
     let content = "First line\nSecond line\nThird line with more content\n";
     let test_file = crate::common::temp_file("sorting.txt", content);
@@ -59,7 +50,7 @@ fn test_text_file_offset_sorting() {
 }
 
 #[test]
-fn test_string_wrapping_long_lines() {
+fn shows_long_line_at_offset_zero() {
     // Create a file with a very long line
     let long_line = "A".repeat(200);
     let test_file = crate::common::temp_file("wrapping.txt", &long_line);
@@ -86,7 +77,7 @@ fn test_string_wrapping_long_lines() {
 }
 
 #[test]
-fn test_offset_calculation_multiline() {
+fn reports_each_line_offset() {
     // Create a file with multiple lines of known lengths
     // Line 1: "AAAA\n" = 5 bytes (offset 0)
     // Line 2: "BBBBBBBB\n" = 9 bytes (offset 5)
@@ -123,19 +114,25 @@ fn test_offset_calculation_multiline() {
 }
 
 #[test]
-fn test_utf8_wrapping() {
+fn exits_cleanly_on_emoji_only_text() {
     // Create a file with UTF-8 characters to ensure proper byte boundary handling
     // Each emoji is 4 bytes in UTF-8
     let content = "🔥".repeat(50); // 200 bytes
     let test_file = crate::common::temp_file("utf8.txt", content);
 
-    let output = run_stng(&[test_file]);
+    let output = crate::stng()
+        .arg(test_file)
+        .output()
+        .expect("failed to execute stng");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Should not panic or produce garbled output
-    // Just verify we get output without errors
+    // The raw scan reads printable ASCII runs, and this file has none: it must
+    // say so and exit cleanly, not panic on a split character.
+    assert!(output.status.success(), "stderr: {stderr}");
     assert!(
-        !output.is_empty() || !run_stng_stderr(&[test_file]).contains("error"),
-        "Should handle UTF-8 without errors"
+        stdout.contains("No strings found"),
+        "stdout: {stdout}, stderr: {stderr}"
     );
 
     // Clean up
@@ -143,7 +140,7 @@ fn test_utf8_wrapping() {
 }
 
 #[test]
-fn test_empty_file() {
+fn reports_no_strings_for_empty_file() {
     let test_file = crate::common::temp_file("empty.txt", "");
 
     // Run command and capture both stdout and stderr
@@ -166,53 +163,29 @@ fn test_empty_file() {
 }
 
 #[test]
-fn test_single_long_line_wrapping() {
-    // Create a file with a single very long line to test wrapping
+fn keeps_long_string_unwrapped_when_piped() {
+    // Values wrap only on a terminal; piped output keeps each string on one
+    // row so it can be grepped. (Wrapped offsets are unit-tested in cli::output.)
     let long_line = "X".repeat(300);
-    let test_file = crate::common::temp_file("single_long.txt", long_line);
+    let test_file = crate::common::temp_file("single_long.txt", &long_line);
 
-    let output = run_stng(&[test_file]);
+    // A one-character run is garbage, so only --unfiltered shows it.
+    assert!(run_stng(&[test_file]).starts_with("No strings found"));
 
-    // All wrapped lines should start at offset 0 since it's one continuous string
-    let lines_with_offset: Vec<&str> = output
+    let output = run_stng(&["--unfiltered", test_file]);
+    let rows: Vec<Vec<&str>> = output
         .lines()
-        .filter(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            parts.len() >= 3 && parts[0].parse::<u64>().is_ok()
-        })
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .filter(|parts| parts.len() >= 3 && u64::from_str_radix(parts[0], 16).is_ok())
         .collect();
-
-    // For wrapping to work correctly, we should see the offset incrementing
-    // as the line wraps. The first part is at offset 0, subsequent parts
-    // should have increasing offsets based on how much content came before
-    if lines_with_offset.len() > 1 {
-        // Get the offsets
-        let offsets: Vec<u64> = lines_with_offset
-            .iter()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                u64::from_str_radix(parts[0], 16).ok()
-            })
-            .collect();
-
-        // First offset should be 0
-        assert_eq!(offsets[0], 0, "First offset should be 0");
-
-        // Subsequent offsets should be greater (due to wrapping)
-        for i in 1..offsets.len() {
-            assert!(
-                offsets[i] > offsets[i - 1],
-                "Wrapped line offsets should increase: {offsets:?}"
-            );
-        }
-    }
+    assert_eq!(rows, [vec!["0", "-", long_line.as_str()]], "{output}");
 
     // Clean up
     fs::remove_file(test_file).ok();
 }
 
 #[test]
-fn test_sorting_preserves_all_strings() {
+fn keeps_every_line_when_sorting() {
     let content = "line1\nline2\nline3\nline4\nline5\n";
     let test_file = crate::common::temp_file("count.txt", content);
 
@@ -238,7 +211,7 @@ fn test_sorting_preserves_all_strings() {
 }
 
 #[test]
-fn test_listing_is_sorted_by_offset() {
+fn sorts_unfiltered_listing_by_offset() {
     let content = "First\nSecond\nThird\n";
     let test_file = crate::common::temp_file("flat.txt", content);
 

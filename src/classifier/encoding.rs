@@ -14,8 +14,6 @@ fn hex_pairs(s: &str) -> impl Iterator<Item = u8> + '_ {
         .filter_map(|&[h, l]| Some(hex_digit(h)? << 4 | hex_digit(l)?))
 }
 
-/// Case-insensitive ASCII substring search without allocation.
-#[inline]
 /// Check if a string looks like a cryptographic hash (MD5, SHA1, SHA256, SHA512).
 ///
 /// Returns true for hex strings of length 32/40/64/128 that decode to mostly non-printable bytes.
@@ -120,10 +118,24 @@ pub(super) fn is_base64(s: &str) -> bool {
     }
 
     // The remaining disambiguation needs the decoded bytes: if the input reads like
-    // text but decodes to garbage, it's an identifier, not base64. A failed decode
-    // falls through to `true`, matching prior behavior.
-    let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s) else {
-        return true;
+    // text but decodes to garbage, it's an identifier, not base64. Input that
+    // only decodes leniently (unpadded, or with non-zero trailing bits, as many
+    // encoders emit) is accepted as it stands; input that cannot decode at
+    // all (an `=` mid-string, an impossible length) is not base64.
+    let decoded = {
+        use base64::Engine;
+        use base64::engine::DecodePaddingMode;
+        use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, STANDARD};
+        const LENIENT: GeneralPurpose = GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            GeneralPurposeConfig::new()
+                .with_decode_padding_mode(DecodePaddingMode::Indifferent)
+                .with_decode_allow_trailing_bits(true),
+        );
+        match STANDARD.decode(s) {
+            Ok(decoded) => decoded,
+            Err(_) => return LENIENT.decode(s).is_ok(),
+        }
     };
     let (input_quality, input_vowel_ratio) = crate::text::quality(s.as_bytes());
 
@@ -229,7 +241,7 @@ pub(super) fn is_unicode_escaped(s: &str) -> bool {
     }
 
     // Try to decode and check if result is mostly printable
-    let decoded = decode_unicode_escapes(s);
+    let decoded = unescape_to_bytes(s);
     if decoded.is_empty() {
         return false;
     }
@@ -243,9 +255,9 @@ pub(super) fn is_unicode_escaped(s: &str) -> bool {
     printable * 10 > decoded.len() * 6
 }
 
-/// Decode Unicode escape sequences from a string
+/// The bytes `\xHH` and `\uHHHH` escapes in `s` spell; `\xHH` is one byte.
 #[must_use]
-pub(crate) fn decode_unicode_escapes(s: &str) -> Vec<u8> {
+pub(crate) fn unescape_to_bytes(s: &str) -> Vec<u8> {
     let mut result = Vec::new();
     let mut chars = s.chars();
 
@@ -271,15 +283,11 @@ pub(crate) fn decode_unicode_escapes(s: &str) -> Vec<u8> {
                     'u' => {
                         let hex: String = chars.by_ref().take(4).collect();
                         if hex.len() == 4
-                            && let Some(codepoint) = hex_number(&hex)
+                            && let Some(ch) = hex_number(&hex).and_then(char::from_u32)
                         {
-                            // Convert to UTF-8
-                            if let Some(ch) = char::from_u32(codepoint) {
-                                let mut buf = [0u8; 4];
-                                let encoded = ch.encode_utf8(&mut buf);
-                                result.extend_from_slice(encoded.as_bytes());
-                                continue;
-                            }
+                            let mut buf = [0u8; 4];
+                            result.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                            continue;
                         }
                         // Failed to parse, add literal characters
                         result.push(b'\\');
@@ -339,10 +347,11 @@ pub(super) fn is_url_encoded(s: &str) -> bool {
                 valid_percent_count += 1;
 
                 // Check what this decodes to
-                if let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3])
-                    .ok()
-                    .and_then(|h| u8::from_str_radix(h, 16).ok())
-                {
+                if let (Some(hi), Some(lo)) = (
+                    crate::bytes::hex_digit(bytes[i + 1]),
+                    crate::bytes::hex_digit(bytes[i + 2]),
+                ) {
+                    let byte = hi << 4 | lo;
                     // Control characters (0x00-0x1F except tab/newline/carriage return, and 0x7F)
                     // are unusual in real URL encoding and common in C format strings
                     // (e.g., %02d where %02 decodes to STX)
@@ -394,7 +403,9 @@ pub(super) fn is_url_encoded(s: &str) -> bool {
     printable * 10 > decoded.len() * 6
 }
 
-/// Decode URL-encoded string (%XX format)
+/// Decode `%XX` escapes. `+` stays a plus, as in the extraction decoder
+/// (`decoders::decode_url_string`) and IOC host parsing: form encoding's
+/// space is not what obfuscators use.
 #[must_use]
 pub(crate) fn decode_url_encoding(s: &str) -> Vec<u8> {
     let mut result = Vec::new();
@@ -402,7 +413,6 @@ pub(crate) fn decode_url_encoding(s: &str) -> Vec<u8> {
 
     while let Some(c) = chars.next() {
         if c == '%' {
-            // Try to read two hex digits
             let hex: String = chars.by_ref().take(2).collect();
             if hex.len() == 2
                 && let Some(byte) = hex_number(&hex).and_then(|n| u8::try_from(n).ok())
@@ -413,9 +423,6 @@ pub(crate) fn decode_url_encoding(s: &str) -> Vec<u8> {
             // Failed to parse, add literal characters
             result.push(b'%');
             result.extend(hex.as_bytes());
-        } else if c == '+' {
-            // In URL encoding, + represents space
-            result.push(b' ');
         } else {
             // Regular character
             let mut buf = [0u8; 4];
@@ -566,11 +573,10 @@ pub(super) fn is_base85(s: &str) -> bool {
         return false;
     }
 
-    // Check for ASCII85 delimiters (<~ and ~>)
     let has_delimiters = s.starts_with("<~") && s.ends_with("~>");
 
-    // If it has proper delimiters and reasonable length, validate by decoding
-    if has_delimiters && s.len() < 10000 {
+    // Delimited data is judged by decoding it.
+    if has_delimiters {
         return validate_base85_by_decoding(s);
     }
 
@@ -586,33 +592,23 @@ pub(super) fn is_base85(s: &str) -> bool {
     // Single pass: validate base85 charset AND collect rejection signals.
     // This avoids separate .contains() scans over the same string data.
     let bytes = s.as_bytes();
-    let mut valid_count = 0u32;
+    let mut valid_count = 0;
     let mut has_lowercase = false;
-    let mut has_punctuation = false;
     let mut is_env_var_like = true;
-    let mut unique_char_count = 0u32;
     let mut seen_chars = 0u128;
-    let mut punct_count = 0u32;
-    let mut dot_count = 0u32;
-    let mut colon_count = 0u32;
+    let mut punct_count = 0;
+    let mut dot_count = 0;
+    let mut colon_count = 0;
     let mut has_plus = false;
     let mut has_slash = false;
 
     for &b in bytes {
         if matches!(b, b'!'..=b'u' | b'z') {
             valid_count += 1;
-            let bit_pos = u32::from(b);
-            if bit_pos < 128 && (seen_chars & (1u128 << bit_pos)) == 0 {
-                seen_chars |= 1u128 << bit_pos;
-                unique_char_count += 1;
-            }
+            // Every base85 character is below 128.
+            seen_chars |= 1u128 << b;
         }
-
-        match b {
-            b'a'..=b'z' => has_lowercase = true,
-            b'!'..=b'/' | b':'..=b'@' | b'['..=b'`' | b'{'..=b'~' => has_punctuation = true,
-            _ => {}
-        }
+        has_lowercase |= b.is_ascii_lowercase();
 
         if b.is_ascii_punctuation() {
             punct_count += 1;
@@ -634,14 +630,9 @@ pub(super) fn is_base85(s: &str) -> bool {
         return false;
     }
 
-    // Reject URLs, paths, common identifiers — using signals from the single pass
-    if (has_slash && colon_count > 0 && contains_ignore_ascii_case(bytes, b"://"))
-        || contains_ignore_ascii_case(bytes, b"http")
-        || contains_ignore_ascii_case(bytes, b"apple")
-        || s.contains("Authority")
-        || s.contains("plist")
-        || s.contains("version")
-        || (dot_count > 2)
+    // URLs and dotted names. Words in readable strings are rejected below by
+    // the vowel ratio and the decode check, not by a word list.
+    if (has_slash && colon_count > 0 && contains_ignore_ascii_case(bytes, b"://")) || dot_count > 2
     {
         return false;
     }
@@ -654,7 +645,7 @@ pub(super) fn is_base85(s: &str) -> bool {
         return false;
     }
 
-    if punct_count as usize * 2 > s.len() {
+    if punct_count * 2 > s.len() {
         return false;
     }
 
@@ -663,14 +654,14 @@ pub(super) fn is_base85(s: &str) -> bool {
         return false;
     }
 
-    if !has_lowercase && !has_punctuation {
+    if !has_lowercase && punct_count == 0 {
         return false;
     }
 
     // For longer strings (>= 50), be very strict to reduce false positives
-    #[allow(clippy::cast_possible_truncation)]
-    let len = s.len() as u32;
-    if s.len() >= 50 {
+    let len = s.len();
+    let unique_char_count = seen_chars.count_ones();
+    if len >= 50 {
         // Require 98% valid chars AND good character distribution
         if valid_count * 100 < len * 98 || unique_char_count < 15 {
             return false;
@@ -705,7 +696,6 @@ fn validate_base85_by_decoding(s: &str) -> bool {
 
     let original_quality = crate::text::quality(s.as_bytes()).0;
 
-    // Try to decode
     if let Some(decoded_bytes) = decode_ascii85(s) {
         // Check if decoded is valid UTF-8 and higher quality
         if let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
@@ -720,3 +710,6 @@ fn validate_base85_by_decoding(s: &str) -> bool {
     // If we can't decode or result is worse, it's not real base85
     false
 }
+
+#[cfg(test)]
+mod tests;

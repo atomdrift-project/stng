@@ -2,7 +2,55 @@
 
 All notable changes to stng. Versions follow [semantic versioning](README.md#versioning).
 
-## 3.0.0-beta.1 (unreleased)
+## Unreleased
+
+### Features
+
+- Extract strings from data appended to PE files, as was already done for ELF.
+- Add `detect_overlay` for parsed ELF and PE files; the CLI now reports PE overlays.
+- Breaking: XOR-scan platform-signed binaries by default; opt out with `--skip-platform-signed`.
+- Breaking: make the classifier and script detection modules private; import `ScriptLanguage` from script.
+- Breaking: remove `extract_strings_from_object`; pass parsed objects to extract_strings_from_parsed.
+- Breaking: read string fragments through `fragments()`, and build layouts with Layout::new.
+- Breaking: return a Result with `LcgError` from decode_lcg_xor instead of an Option.
+- Breaking: order Severity from Info up to High, so higher severities compare greater.
+- Breaking: reject conflicting XOR or output flags, and a zero `--min-length`, on the command line.
+
+### Fixes
+
+- Stop panicking on crafted x86 stack stores with negative displacements.
+- Exit quietly when stdout closes, and log to stderr so `--json` output stays parseable.
+- Exit non-zero when any file in a directory fails, naming the file in the error.
+- Refuse FIFOs and devices instead of hanging on them.
+- Keep encoded strings beside what they decode to, instead of replacing them.
+- Read entitlements from each slice's signature slot, not the first plist found.
+- Report UTF-16 text and nested script payloads at their offsets in the file.
+- Stop calling times, MAC addresses, prose and x509 errors IPs, shell commands or AppleScript.
+- Verify wallet checksums and require real onion labels before classifying addresses.
+- Decode every `-EncodedCommand` spelling PowerShell accepts, including -ec and partial prefixes.
+- Keep sync, strcpy and similar words the garbage filter wrongly dropped.
+- Keep the best four sockaddr addresses instead of none when decoys exceed the cap.
+- Make `--no-xor` disable every XOR pass, including PE rolling XOR.
+- Wrap long values only on a terminal, so piped output keeps one string per line.
+- Model ARM64 vector loads, stores and XOR, dropping about 200 spliced stack-XOR strings.
+- Keep the leading slash of absolute paths that happen to start with a length byte.
+- Classify PowerShell, cmd and Windows system-tool commands as shell commands.
+- Decode a bare FromBase64String as UTF-8 unless its bytes look like UTF-16.
+- Stop decoding the `\x64` in Windows paths as an escape sequence.
+- Stop reporting a URL's own path as a separate path string.
+- Detect Go PE binaries by their build-info header; `--detect` reported them as unknown.
+
+### Optimizations
+
+- Bound URL, PowerShell, sockaddr and ARM64 stack-XOR scans that crafted input made quadratic.
+
+### Security
+
+- Escape C1 controls and bidi overrides in JSON, which serde_json printed raw to terminals.
+- Refuse files swapped for symlinks or devices mid-scan, and read growing files only to their listed size.
+- Report a panic on one file and continue the directory scan instead of aborting.
+
+## 3.0.0-beta.1 (2026-11-04)
 
 ### Features
 
@@ -140,7 +188,7 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
 
 ### Breaking
 
-- String cache and cache sweeper removed; caching now belongs to callers like filefacts.
+- String cache and cache sweeper removed; caching now belongs to callers.
 - rizin/radare2 integration moved into the CLI; `with_r2` removed.
 - Section-info collectors return `Vec<SectionInfo>`, since names repeat across segments.
 
@@ -340,7 +388,7 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
 ### Build
 
 - Optional jemalloc on Unix (skipped on the *BSDs / illumos / Solaris).
-- New profiling profile and bench-build / heap-build / sampled-benchmark / heap-benchmark targets for cleave-tuna.
+- New profiling profile and bench-build / heap-build / sampled-benchmark / heap-benchmark targets.
 - `MAKEFLAGS` scrubbed so jemalloc-sys's nested make doesn't choke.
 
 ### Testing

@@ -1,7 +1,7 @@
 use stng::{ExtractOptions, StringKind};
 
 #[test]
-fn test_stack_strings_vget() {
+fn assembles_cpu_vendor_and_proc_stack_strings() {
     let sample_path = crate::common::path("testdata/malware/vget_sample");
 
     let data = std::fs::read(sample_path).expect("Failed to read malware sample");

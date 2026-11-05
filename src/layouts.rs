@@ -4,10 +4,23 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-/// A layout binform read from the bytes stng scans, and where in them: the
-/// file offset of the bytes it was read from, zero for a whole binary and a
-/// slice's offset for one architecture of a universal binary.
-pub type Layout<'l, 'd> = (u64, &'l binform::Binary<'d>);
+/// A layout binform read from the bytes stng scans, and where in them.
+#[derive(Debug, Clone, Copy)]
+pub struct Layout<'l, 'd> {
+    /// File offset of the bytes it was read from: zero for a whole binary,
+    /// a slice's offset for one architecture of a universal binary.
+    pub offset: u64,
+    /// What binform read.
+    pub binary: &'l binform::Binary<'d>,
+}
+
+impl<'l, 'd> Layout<'l, 'd> {
+    /// `binary`, read from the bytes at file offset `offset`.
+    #[must_use]
+    pub fn new(offset: u64, binary: &'l binform::Binary<'d>) -> Self {
+        Self { offset, binary }
+    }
+}
 
 /// The layouts of one scan's binary, by where each was read from.
 pub(crate) struct Layouts<'l, 'd> {
@@ -35,8 +48,8 @@ impl<'l, 'd> Layouts<'l, 'd> {
         bytes: &'d [u8],
         f: impl FnOnce(Option<&binform::Binary<'d>>) -> R,
     ) -> R {
-        if let Some((_, layout)) = self.given.iter().find(|(at, _)| *at == base) {
-            return f(Some(layout));
+        if let Some(layout) = self.given.iter().find(|layout| layout.offset == base) {
+            return f(Some(layout.binary));
         }
         let layout = Arc::clone(
             self.read
@@ -67,7 +80,7 @@ mod tests {
         assert_eq!(layouts.read.lock().unwrap().len(), 1);
 
         let given = binform::parse(elf).unwrap();
-        let given = [(0, &given)];
+        let given = [super::Layout::new(0, &given)];
         let layouts = Layouts::new(&given);
         layouts.with(0, &[], |l| assert!(l.is_some()));
         assert!(layouts.read.lock().unwrap().is_empty());

@@ -1,24 +1,23 @@
 //! Fuzzy base64 extraction for obfuscated malware samples.
 //!
 //! This module handles base64 strings that have been obfuscated through:
-//! - Character substitution (e.g., 'A' -> '+', '9' -> '/')
+//! - base64url characters concatenated in (`'_'` for `/`, `'-'` for `+`)
 //! - String concatenation artifacts (e.g., ' + ', '" + "')
 //! - Interspersed garbage characters
 //! - Partial corruption
 
-use crate::types::{ExtractedString, StringKind, StringMethod};
+use crate::types::{ExtractedString, StringMethod};
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-#[allow(clippy::expect_used)]
 static CONCAT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"['"]\s*\+\s*['"]([A-Za-z0-9])['"]\s*\+\s*['"]"#).expect("static regex")
+    Regex::new(r#"['"]\s*\+\s*['"]([A-Za-z0-9])['"]\s*\+\s*['"]"#)
+        .unwrap_or_else(crate::invalid_pattern)
 });
-#[allow(clippy::expect_used)]
 static ASSIGNMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"=\s*["']([^"']+)["']"#).expect("static regex"));
+    LazyLock::new(|| Regex::new(r#"=\s*["']([^"']+)["']"#).unwrap_or_else(crate::invalid_pattern));
 
 /// Minimum length for a base64 segment to be considered valid
 const MIN_BASE64_SEGMENT: usize = 32;
@@ -29,8 +28,9 @@ const MIN_BASE64_PURITY: f32 = 0.65;
 /// Common obfuscation patterns found in JavaScript/VBScript malware
 const JS_CONCAT_PATTERNS: &[&str] = &["' + '", "\" + \"", "' +  '", "\" +  \"", " + ", "'+", "\"+"];
 
-/// Common character substitution patterns (placeholder -> real)
-const COMMON_SUBSTITUTIONS: &[(char, char)] = &[('A', '+'), ('9', '/'), ('_', '/'), ('-', '+')];
+/// base64url characters and their standard-alphabet equivalents. Valid
+/// base64 characters are never substituted: a concatenated `'A'` is an `A`.
+const COMMON_SUBSTITUTIONS: &[(char, char)] = &[('_', '/'), ('-', '+')];
 
 /// Extract and decode obfuscated base64 strings from extracted strings.
 ///
@@ -84,9 +84,8 @@ pub(crate) fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<Extracted
 
 /// Attempt to deobfuscate JavaScript-style base64 obfuscation.
 ///
-/// Handles patterns like:
-/// - `"abc' + 'A' + 'def"` where 'A' should be '+'
-/// - `"xyz' + '9' + 'qrs"` where '9' should be '/'
+/// Handles concatenated pieces (`"abc' + 'def"`), with base64url `'_'` and
+/// `'-'` pieces read as `/` and `+`.
 fn try_deobfuscate_js_base64(input: &str) -> Option<String> {
     // First, try to detect what the placeholder characters are
     let substitutions = detect_substitutions(input);
@@ -138,12 +137,10 @@ fn try_deobfuscate_js_base64(input: &str) -> Option<String> {
         .filter(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '/' || *c == '=')
         .collect();
 
-    // Check if this looks like base64
     if !is_base64_like(&base64_only, MIN_BASE64_PURITY) {
         return None;
     }
 
-    // Try to decode
     decode_base64_fuzzy(&base64_only)
 }
 
@@ -162,20 +159,8 @@ fn detect_substitutions(input: &str) -> Vec<(char, char)> {
         }
     }
 
-    // Common heuristic: 'A' is often used for '+', '9' for '/'
-    if candidates.contains_key(&'A') {
-        substitutions.push(('A', '+'));
-    }
-    if candidates.contains_key(&'9') {
-        substitutions.push(('9', '/'));
-    }
-
-    // Try other common substitutions if frequency is high
     for (from, to) in COMMON_SUBSTITUTIONS {
-        if let Some(&count) = candidates.get(from)
-            && count > 2
-            && !substitutions.iter().any(|(f, _)| f == from)
-        {
+        if candidates.get(from).is_some_and(|&count| count > 2) {
             substitutions.push((*from, *to));
         }
     }
@@ -187,16 +172,10 @@ fn detect_substitutions(input: &str) -> Vec<(char, char)> {
 ///
 /// Handles: `var x = "base64data..."`
 fn extract_from_assignment(input: &str) -> Option<String> {
-    for cap in ASSIGNMENT_RE.captures_iter(input) {
-        if let Some(value) = cap.get(1) {
-            // Try to deobfuscate this substring
-            if let Some(result) = try_deobfuscate_js_base64(value.as_str()) {
-                return Some(result);
-            }
-        }
-    }
-
-    None
+    ASSIGNMENT_RE
+        .captures_iter(input)
+        .filter_map(|cap| cap.get(1))
+        .find_map(|value| try_deobfuscate_js_base64(value.as_str()))
 }
 
 /// Fuzzy extraction: find longest runs of mostly-base64 characters.
@@ -365,15 +344,7 @@ fn is_meaningful_decoded(s: &str) -> bool {
 
 /// Create a new ExtractedString from a decoded value.
 fn create_decoded_string(original: &ExtractedString, decoded: String) -> ExtractedString {
-    // Determine the kind based on the decoded content
-    let kind = if decoded.contains("http://") || decoded.contains("https://") {
-        Some(StringKind::Url)
-    } else if decoded.contains("powershell") || decoded.contains("cmd.exe") {
-        Some(StringKind::ShellCmd)
-    } else {
-        None
-    };
-
+    let kind = crate::classifier::classify_string(&decoded);
     ExtractedString {
         value: decoded,
         data_offset: original.data_offset,
@@ -390,7 +361,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_detect_js_obfuscation() {
+    fn joins_split_js_base64() {
         // This encodes to "function powershell -command ..." which meets meaningful_decoded requirements
         // Base64 for: "function powershell -command invoke-expression"
         let input = "ZnVuY3Rpb24gcG93ZXJzaGVsbCAtY29tbWFuZCBpbnZva2' + 'A' + 'ZS1leHByZXNzaW9u";
@@ -401,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fuzzy_extract() {
+    fn extracts_embedded_base64() {
         // Must have >= MIN_BASE64_SEGMENT (32 chars) and decode to meaningful content (>= 10 chars, >= 60% printable)
         // "function powershell script code" in base64
         let input = "xxx ZnVuY3Rpb24gcG93ZXJzaGVsbCBzY3JpcHQgY29kZQ== yyy";
@@ -410,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_base64_like() {
+    fn base64_like_needs_32_chars() {
         // Must be >= MIN_BASE64_SEGMENT (32 chars)
         assert!(is_base64_like(
             "SGVsbG8gV29ybGQhCg==SGVsbG8gV29ybGQhCg==",

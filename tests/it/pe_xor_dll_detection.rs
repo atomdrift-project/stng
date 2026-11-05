@@ -14,7 +14,7 @@ use stng::{ExtractOptions, StringMethod, extract_strings_with_options};
 ///   Process/window API:   CreateProcessW, ShowWindow, FindWindowExW,
 ///                         GetWindowThreadProcessId
 #[test]
-fn test_pe_xor_c6_dll_and_api_detection() {
+fn decodes_xor_c6_dll_and_api_names() {
     let sample_path = crate::common::path("testdata/pe/rtc.dll");
 
     let data = match std::fs::read(sample_path) {

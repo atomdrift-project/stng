@@ -10,16 +10,18 @@ description = "strings(1) for malware analysis: decodes obfuscated strings and u
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/atomdrift-project/stng"
-keywords = ["binary", "strings", "go", "rust", "reverse-engineering"]
-categories = ["command-line-utilities", "development-tools"]
-# The crate itself. Samples, tests and CI stay in the repository: testdata alone
-# is ~90 MB.
-include = ["/src", "/README.md", "/LICENSE"]
+# Distributed from git, not crates.io: the tree-sitter `[patch]` below must
+# apply to every build, and Cargo applies patches only from the top-level
+# manifest. See README, "Library".
+publish = false
 
 [dependencies]
 # Binary parsing
 goblin = "0.10"
-binform = { git = "https://github.com/atomdrift-project/binform.git", default-features = false }
+# No `rev`: callers hand stng their own `binform::Binary` values, so they must
+# resolve binform from the same source; Cargo treats `git = url` and
+# `git = url, rev = …` as different crates. Cargo.lock records the commit.
+binform = { git = "https://github.com/atomdrift-project/binform.git", version = "0.9", default-features = false }
 
 # Pattern matching
 regex = "1.13"
@@ -36,8 +38,6 @@ aho-corasick = "1.1"
 # The `stng` command only; see the `cli` feature.
 clap = { version = "4.6", features = ["derive"], optional = true }
 anyhow = { version = "1.0", optional = true }
-# SHA-256 of each input in CLI output. No `asm` feature: its assembly does not build with MSVC.
-sha2 = { version = "0.11", optional = true }
 terminal_size = { version = "0.4", optional = true }
 
 # Serialization (for JSON output)
@@ -47,8 +47,12 @@ serde_json = "1.0"
 # Base64 decoding
 base64 = "0.22"
 
+# SHA-256: Base58Check wallet checksums, and each input's digest in CLI
+# output. No `asm` feature: its assembly does not build with MSVC.
+sha2 = "0.11"
+
 # DES is used only by the signature-gated legacy ColdFusion template decoder.
-des = "0.8"
+des = "0.9"
 
 # Hostname canonicalization and public-suffix validation. `psl` embeds a static
 # snapshot, so analysis never performs network I/O and remains reproducible.
@@ -87,7 +91,6 @@ default = ["cli"]
 cli = [
     "dep:clap",
     "dep:anyhow",
-    "dep:sha2",
     "dep:terminal_size",
     "dep:tracing-subscriber",
     "dep:tikv-jemallocator",
@@ -221,8 +224,7 @@ manual_let_else = "warn"                 # match/if-let that diverges → let-el
 match_same_arms = "warn"                 # merge identical match arms
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["html_reports"] }
-sha2 = "0.11"
+criterion = "0.7"
 
 [[bench]]
 name = "classify"
@@ -236,13 +238,15 @@ harness = false
 name = "corpus"
 harness = false
 
-# tree-sitter fork, pinned: hard caps on query states, cursor depth and stack
-# use for hostile input, an ambiguous-parse fix, and query caching, none of
-# them upstream yet. The engine and its language ABI must come from the same
-# tree, and Cargo links only one copy.
+# tree-sitter fork, pinned. stng relies on three of its parser changes, none
+# upstream yet: bounded parse-stack growth on deeply ambiguous input, a fix
+# for an ambiguous-parse error, and the illumos build. The engine and its
+# language ABI must come from the same tree, and Cargo links only one copy.
+# Dependents must copy this block; `script::lua` has a test that fails
+# without it.
 [patch.crates-io]
-tree-sitter = { git = "https://github.com/tstromberg/tree-sitter" }
-tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter" }
+tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", rev = "10d5d1372be200e04480a6b1d6780229c5b1ee79" }
+tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", rev = "10d5d1372be200e04480a6b1d6780229c5b1ee79" }
 
 [profile.dev]
 # `false` still permits local Thin LTO in optimized crates.

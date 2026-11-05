@@ -1,0 +1,30 @@
+# cargo-fuzz targets. Not part of the stng build: run with
+#   cargo +nightly fuzz run extract
+# (cargo install cargo-fuzz). Crashes land in fuzz/artifacts/.
+[package]
+name = "stng-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+stng = { path = "..", default-features = false }
+
+[[bin]]
+name = "extract"
+path = "fuzz_targets/extract.rs"
+test = false
+doc = false
+bench = false
+
+# Its own workspace: stng's manifest has none.
+[workspace]
+
+# The same tree-sitter fork stng builds with; see stng's Cargo.toml.
+[patch.crates-io]
+tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", rev = "10d5d1372be200e04480a6b1d6780229c5b1ee79" }
+tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", rev = "10d5d1372be200e04480a6b1d6780229c5b1ee79" }

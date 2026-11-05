@@ -2,7 +2,7 @@ use std::fs;
 use stng::{ExtractOptions, extract_strings_with_options};
 
 #[test]
-fn test_overlapping_strings_keep_longest() {
+fn keeps_one_string_per_offset() {
     // Create binary with overlapping strings at same offset
     let data = b"\x00\x00\x00\x00HelloWorld\x00Extra\x00";
 
@@ -34,7 +34,7 @@ fn test_overlapping_strings_keep_longest() {
 }
 
 #[test]
-fn test_kimwolf_installer_section_names() {
+fn finds_kimwolf_section_names() {
     // Test that we extract all section names that GNU strings finds
     let path = crate::common::path("testdata/malware/kimwolf_installer");
     let data = fs::read(path).expect("Failed to read kimwolf_installer test sample");

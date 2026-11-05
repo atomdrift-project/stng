@@ -11,7 +11,7 @@ use crate::types::StringMethod;
 use std::collections::HashSet;
 
 #[test]
-fn test_is_valid_utf8_string() {
+fn accepts_printable_rejects_empty_or_control() {
     assert!(is_valid_utf8_string("hello"));
     assert!(is_valid_utf8_string("Hello World!"));
     assert!(!is_valid_utf8_string(""));
@@ -19,14 +19,14 @@ fn test_is_valid_utf8_string() {
 }
 
 #[test]
-fn test_is_valid_utf8_string_unicode() {
+fn accepts_non_ascii_text() {
     assert!(is_valid_utf8_string("Héllo Wörld"));
     assert!(is_valid_utf8_string("日本語"));
     assert!(is_valid_utf8_string("emoji: 🎉"));
 }
 
 #[test]
-fn test_is_valid_utf8_string_mostly_printable() {
+fn requires_majority_printable() {
     // More than 50% printable should pass
     assert!(is_valid_utf8_string("ab\x01")); // 2/3 printable
     // Less than 50% should fail
@@ -34,7 +34,7 @@ fn test_is_valid_utf8_string_mostly_printable() {
 }
 
 #[test]
-fn test_decode_arm_mov_immediate() {
+fn decodes_movz_immediate() {
     // MOVZ X0, #5 would be: D2 80 00 A0 (0xD28000A0)
     // imm16 = 5, shift = 0
     let inst = 0xD28000A0;
@@ -43,7 +43,7 @@ fn test_decode_arm_mov_immediate() {
 }
 
 #[test]
-fn test_decode_arm_mov_immediate_zero() {
+fn decodes_movz_zero() {
     // MOVZ with 0 value
     let inst = 0xD2800000;
     let result = decode_arm_mov_immediate(inst);
@@ -51,7 +51,7 @@ fn test_decode_arm_mov_immediate_zero() {
 }
 
 #[test]
-fn test_decode_arm_mov_immediate_with_shift() {
+fn decodes_shifted_movz() {
     // MOVZ X0, #1, LSL #16 would have shift = 1
     // Value 1 shifted left by 16 = 0x10000
     let inst = 0xD2A00020;
@@ -59,7 +59,7 @@ fn test_decode_arm_mov_immediate_with_shift() {
 }
 
 #[test]
-fn test_decode_arm_mov_immediate_invalid() {
+fn rejects_non_mov_instruction() {
     // Not a MOV instruction
     let inst = 0x00000000;
     let result = decode_arm_mov_immediate(inst);
@@ -67,7 +67,7 @@ fn test_decode_arm_mov_immediate_invalid() {
 }
 
 #[test]
-fn test_looks_like_key_basic() {
+fn recognizes_map_keys() {
     assert!(looks_like_key("name"));
     assert!(looks_like_key("user_id"));
     assert!(looks_like_key("config.timeout"));
@@ -75,38 +75,38 @@ fn test_looks_like_key_basic() {
 }
 
 #[test]
-fn test_looks_like_key_too_long() {
+fn rejects_long_keys() {
     let long_string = "a".repeat(50);
     assert!(!looks_like_key(&long_string));
 }
 
 #[test]
-fn test_looks_like_key_with_spaces() {
+fn rejects_keys_with_spaces() {
     assert!(!looks_like_key("has spaces"));
     assert!(!looks_like_key("hello world"));
 }
 
 #[test]
-fn test_looks_like_key_paths() {
+fn rejects_paths_as_keys() {
     assert!(!looks_like_key("/usr/bin"));
     assert!(!looks_like_key("./config"));
 }
 
 #[test]
-fn test_looks_like_key_urls() {
+fn rejects_urls_as_keys() {
     assert!(!looks_like_key("http://example.com"));
     assert!(!looks_like_key("https://api.server.com"));
 }
 
 #[test]
-fn test_looks_like_key_special_chars() {
+fn rejects_keys_with_symbols() {
     assert!(!looks_like_key("key@value"));
     assert!(!looks_like_key("key#value"));
     assert!(!looks_like_key("key$value"));
 }
 
 #[test]
-fn test_extract_inline_strings_arm64_empty() {
+fn arm64_empty_text_finds_nothing() {
     let text_data = &[];
     let rodata_data = b"Hello World";
 
@@ -116,7 +116,7 @@ fn test_extract_inline_strings_arm64_empty() {
 }
 
 #[test]
-fn test_extract_inline_strings_arm64_no_bl() {
+fn arm64_without_bl_finds_nothing() {
     // Code without BL instructions
     let text_data = vec![0x00u8; 100];
     let rodata_data = b"Hello World";
@@ -127,7 +127,7 @@ fn test_extract_inline_strings_arm64_no_bl() {
 }
 
 #[test]
-fn test_extract_inline_strings_amd64_empty() {
+fn amd64_empty_text_finds_nothing() {
     let text_data = &[];
     let rodata_data = b"Hello World";
 
@@ -137,7 +137,7 @@ fn test_extract_inline_strings_amd64_empty() {
 }
 
 #[test]
-fn test_extract_inline_strings_amd64_no_call() {
+fn amd64_without_call_finds_nothing() {
     // Code without CALL instructions
     let text_data = vec![0x90u8; 100]; // NOP instructions
     let rodata_data = b"Hello World";
@@ -148,7 +148,7 @@ fn test_extract_inline_strings_amd64_no_call() {
 }
 
 #[test]
-fn test_extract_inline_strings_amd64_with_call() {
+fn amd64_call_without_lea_finds_nothing() {
     // Create code with a CALL instruction but no valid string pattern
     let mut text_data = vec![0x90u8; 100];
     text_data[50] = 0xE8; // CALL opcode
@@ -163,7 +163,7 @@ fn test_extract_inline_strings_amd64_with_call() {
 }
 
 #[test]
-fn test_extract_arm64_pattern_short_lookback() {
+fn arm64_short_text_finds_nothing() {
     // Test with code too short for lookback
     let text_data = vec![0x00u8; 8];
     let rodata_data = b"Test";
@@ -174,7 +174,7 @@ fn test_extract_arm64_pattern_short_lookback() {
 }
 
 #[test]
-fn test_decode_arm64_string_invalid_addr() {
+fn arm64_rejects_address_outside_rodata() {
     // Address outside rodata range
     let scan = Scan::new(&[], 0x1000, &[0u8; 100], 0x5000, 4);
     let result = decode_arm64_string(
@@ -188,7 +188,7 @@ fn test_decode_arm64_string_invalid_addr() {
 }
 
 #[test]
-fn test_decode_arm64_string_invalid_length() {
+fn arm64_rejects_oversized_length() {
     // Length too long
     let scan = Scan::new(&[], 0x5000, &[0u8; 100], 0x5000, 4);
     let result = decode_arm64_string(
@@ -201,7 +201,7 @@ fn test_decode_arm64_string_invalid_length() {
 }
 
 #[test]
-fn test_amd64_value_string_short_data() {
+fn amd64_value_string_ignores_truncated_text() {
     let text_data = vec![0xE8u8, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let rodata_data = b"Test";
     let mut strings = Vec::new();
@@ -397,20 +397,20 @@ fn amd64_stored_length_must_be_near_the_pointer_store() {
 }
 
 #[test]
-fn test_empty_inputs_both_arches() {
+fn empty_inputs_find_nothing() {
     assert!(extract_inline_strings_arm64(&[], 0x100000, &[], 0x101000, 4).is_empty());
     assert!(extract_inline_strings_amd64(&[], 0x100000, &[], 0x101000, 4).is_empty());
 }
 
 #[test]
-fn test_truncated_arm64_instructions() {
+fn arm64_ignores_partial_instruction() {
     let text_data = vec![0x00, 0x00]; // Only 2 bytes, incomplete ARM64 instruction
     let results = extract_inline_strings_arm64(&text_data, 0x100000, &[], 0x101000, 4);
     assert!(results.is_empty());
 }
 
 #[test]
-fn test_large_code_section_arm64() {
+fn arm64_scans_large_text_without_panic() {
     let text_data: Vec<u8> = (0..65536u32)
         .map(|i| u8::try_from(i % 256).unwrap_or(0))
         .collect();
@@ -422,20 +422,19 @@ fn test_large_code_section_arm64() {
 }
 
 #[test]
-fn test_out_of_bounds_addresses_arm64() {
+fn arm64_out_of_bounds_pattern_finds_nothing() {
     let text_data = vec![
         0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x91, 0x41, 0x01, 0x80, 0xD2, 0x00, 0x00, 0x00,
         0x94,
     ];
     let rodata_data = vec![0u8; 0x100];
     let results = extract_inline_strings_arm64(&text_data, 0x100000, &rodata_data, 0x101000, 4);
-    for s in results {
-        assert!(!s.value.is_empty());
-    }
+    // Must not panic; no pointer resolves into rodata, so nothing is recovered.
+    assert!(results.is_empty(), "{results:?}");
 }
 
 #[test]
-fn test_min_length_enforcement_both_arches() {
+fn enforces_min_length_on_both_arches() {
     let text_arm64 = vec![
         0x00, 0x00, 0x00, 0x90, 0x00, 0x00, 0x00, 0x91, 0x41, 0x01, 0x80, 0xD2, 0x00, 0x00, 0x00,
         0x94,
@@ -467,7 +466,7 @@ fn test_min_length_enforcement_both_arches() {
 /// must be recovered. The length lands in ECX, which no fixed register-pair
 /// list covered, so this whole class of literals was previously dropped.
 #[test]
-fn test_amd64_non_arg_register_pair() {
+fn amd64_finds_lea_rbx_mov_ecx_pair() {
     // 48 8D 1D F9 0F 00 00  LEA RBX, [rip+0xFF9]   -> 0x101000
     // B9 10 00 00 00        MOV ECX, 16            (length, not in ESI/EDX/EBX/EDI)
     // E8 00 00 00 00        CALL
@@ -490,7 +489,7 @@ fn test_amd64_non_arg_register_pair() {
 /// pair and the runtime call that consumes it. The association must remain
 /// bounded, but must cover that legitimate shape.
 #[test]
-fn test_amd64_long_setup_before_call() {
+fn amd64_finds_pair_far_before_call() {
     let mut text = vec![
         0x48, 0x8D, 0x05, 0xF9, 0x0F, 0x00, 0x00, // LEA RAX, [rip+0xff9]
         0xBB, 0x10, 0x00, 0x00, 0x00, // MOV EBX, 16
@@ -512,7 +511,7 @@ fn test_amd64_long_setup_before_call() {
 /// A Go branch can place the immediate length directly before the pointer
 /// LEA rather than after it.
 #[test]
-fn test_amd64_preceding_length_before_lea() {
+fn amd64_finds_length_before_lea() {
     let mut text = vec![
         0xBB, 0x10, 0x00, 0x00, 0x00, // MOV EBX, 16
         0x48, 0x8D, 0x05, 0xF4, 0x0F, 0x00, 0x00, // LEA RAX, [rip+0xff4]
@@ -535,7 +534,7 @@ fn test_amd64_preceding_length_before_lea() {
 /// register pair `runtime.stringtoslicebyte` uses, outside the old x0/x1 and
 /// x2/x3 cases.
 #[test]
-fn test_arm64_non_arg_register_pair() {
+fn arm64_finds_adrp_x1_movz_x2_pair() {
     // ADRP x1, +0x10 pages ; ADD x1, x1, #0 ; MOVZ x2, #16 ; BL
     let text = vec![
         0x81, 0x00, 0x00, 0x90, 0x21, 0x00, 0x00, 0x91, 0x02, 0x02, 0x80, 0xD2, 0x00, 0x00, 0x00,

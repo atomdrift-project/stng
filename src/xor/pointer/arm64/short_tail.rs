@@ -1,7 +1,10 @@
 //! Bounded 5..7/9..11-byte XOR literals: a verified word loop and integer tail.
 //! Literal instruction words of the same single build as `setup`; the
 //! mutation tests show each required word.
-#![allow(clippy::cast_possible_truncation)]
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "a W register is the low 32 bits of its X register"
+)]
 use super::{Region, Setup, bitmask, branch_target, fold, local_seed, sequence, word};
 use crate::arm64::RET;
 const MAX_STEPS: usize = 64;

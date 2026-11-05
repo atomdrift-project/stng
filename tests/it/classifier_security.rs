@@ -5,7 +5,7 @@ use stng::{StringKind, classify_string};
 
 /// Test JWT (JSON Web Token) detection
 #[test]
-fn test_jwt_detection() {
+fn classifies_jwt() {
     // Valid JWT structure: header.payload.signature (3 base64 parts separated by dots)
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
     assert_eq!(classify_string(jwt), Some(StringKind::Jwt));
@@ -17,7 +17,7 @@ fn test_jwt_detection() {
 
 /// Test JWT rejection for non-JWT base64
 #[test]
-fn test_jwt_rejection() {
+fn rejects_non_jwt_dotted_strings() {
     // Not enough parts (only 2 dots)
     assert_ne!(classify_string("aaa.bbb"), Some(StringKind::Jwt));
 
@@ -33,7 +33,7 @@ fn test_jwt_rejection() {
 
 /// Test API key detection (AWS, GitHub, Stripe, etc.)
 #[test]
-fn test_api_key_detection() {
+fn classifies_api_keys() {
     // AWS access keys (starts with AKIA, 20+ chars, >90% alphanumeric)
     assert_eq!(
         classify_string("AKIAIOSFODNN7EXAMPLE"),
@@ -77,7 +77,7 @@ fn test_api_key_detection() {
 
 /// Test API key rejection for similar patterns
 #[test]
-fn test_api_key_rejection() {
+fn rejects_short_or_test_api_keys() {
     // AKIA but too short (needs 20+ chars)
     assert_ne!(classify_string("AKIA12345"), Some(StringKind::ApiKey));
 
@@ -99,7 +99,7 @@ fn test_api_key_rejection() {
 
 /// Test ransom note detection
 #[test]
-fn test_ransom_note_detection() {
+fn classifies_ransom_notes() {
     // Common ransom note patterns (requires ENCRYPTED/DECRYPT/RANSOM + >50% uppercase)
     assert_eq!(
         classify_string("YOUR FILES HAVE BEEN ENCRYPTED"),
@@ -135,7 +135,7 @@ fn test_ransom_note_detection() {
 
 /// Test ransom note rejection for normal text
 #[test]
-fn test_ransom_note_rejection() {
+fn rejects_benign_crypto_text_as_ransom_note() {
     // Should not trigger on normal file encryption mentions
     assert_ne!(
         classify_string("encryption enabled"),
@@ -153,7 +153,7 @@ fn test_ransom_note_rejection() {
 
 /// Test SQL injection payload detection
 #[test]
-fn test_sql_injection_detection() {
+fn classifies_sql_injection() {
     // Classic SQL injection patterns (requires ' OR ' or 1'='1 patterns)
     assert_eq!(
         classify_string("' OR '1'='1"),
@@ -180,7 +180,7 @@ fn test_sql_injection_detection() {
 
 /// Test SQL injection rejection for normal SQL
 #[test]
-fn test_sql_injection_rejection() {
+fn rejects_plain_sql_as_injection() {
     // Normal SQL queries shouldn't trigger
     assert_ne!(
         classify_string("SELECT * FROM users"),
@@ -198,7 +198,7 @@ fn test_sql_injection_rejection() {
 
 /// Test XSS (Cross-Site Scripting) payload detection
 #[test]
-fn test_xss_payload_detection() {
+fn classifies_xss_payloads() {
     // Script tag injections (requires both <script> and </script>)
     assert_eq!(
         classify_string("<script>alert('XSS')</script>"),
@@ -232,7 +232,7 @@ fn test_xss_payload_detection() {
 
 /// Test XSS rejection for normal HTML/JS
 #[test]
-fn test_xss_rejection() {
+fn rejects_benign_html_as_xss() {
     // Normal script tags with actual code
     assert_ne!(
         classify_string("<script src=\"app.js\"></script>"),
@@ -254,7 +254,7 @@ fn test_xss_rejection() {
 
 /// Test command injection detection
 #[test]
-fn test_command_injection_detection() {
+fn classifies_command_injection() {
     // Shell command injection patterns (requires "; " + cat/wget/curl)
     assert_eq!(
         classify_string("; cat /etc/passwd"),
@@ -308,7 +308,7 @@ fn test_command_injection_detection() {
 
 /// Test command injection rejection for normal commands
 #[test]
-fn test_command_injection_rejection() {
+fn rejects_plain_commands_as_injection() {
     // Normal file paths shouldn't trigger
     assert_ne!(
         classify_string("/etc/config"),
@@ -332,7 +332,7 @@ fn test_command_injection_rejection() {
 
 /// Test cryptocurrency mining pool detection
 #[test]
-fn test_mining_pool_detection() {
+fn classifies_mining_pools() {
     // Stratum URLs (requires stratum+tcp:// or stratum+ssl://)
     assert_eq!(
         classify_string("stratum+tcp://pool.example.com:3333"),
@@ -372,7 +372,7 @@ fn test_mining_pool_detection() {
 
 /// Test mining pool rejection for normal URLs
 #[test]
-fn test_mining_pool_rejection() {
+fn rejects_ordinary_urls_as_mining_pool() {
     // Normal URLs shouldn't trigger
     assert_ne!(
         classify_string("https://example.com"),
@@ -392,7 +392,7 @@ fn test_mining_pool_rejection() {
 
 /// Test GUID detection
 #[test]
-fn test_guid_detection() {
+fn classifies_braced_guids() {
     // Standard GUID format
     assert_eq!(
         classify_string("{12345678-1234-1234-1234-123456789ABC}"),
@@ -416,7 +416,7 @@ fn test_guid_detection() {
 
 /// Test GUID rejection for similar patterns
 #[test]
-fn test_guid_rejection() {
+fn rejects_malformed_guids() {
     // Wrong number of dashes
     assert_ne!(
         classify_string("{12345678-1234-1234-123456789ABC}"),
@@ -446,7 +446,7 @@ fn test_guid_rejection() {
 
 /// Test CTF flag detection
 #[test]
-fn test_ctf_flag_detection() {
+fn classifies_ctf_flags() {
     // Standard CTF formats
     assert_eq!(
         classify_string("CTF{this_is_a_flag_12345}"),
@@ -474,7 +474,7 @@ fn test_ctf_flag_detection() {
 
 /// Test CTF flag rejection
 #[test]
-fn test_ctf_flag_rejection() {
+fn rejects_malformed_ctf_flags() {
     // Missing closing brace
     assert_ne!(
         classify_string("CTF{incomplete_flag"),
@@ -493,7 +493,7 @@ fn test_ctf_flag_rejection() {
 
 /// Test email detection edge cases
 #[test]
-fn test_email_edge_cases() {
+fn classifies_emails() {
     // Valid emails
     assert_eq!(classify_string("user@example.com"), Some(StringKind::Email));
     assert_eq!(
@@ -520,7 +520,7 @@ fn test_email_edge_cases() {
 
 /// Test email rejection for invalid formats
 #[test]
-fn test_email_rejection() {
+fn rejects_malformed_emails() {
     // Multiple @ signs
     assert_ne!(
         classify_string("user@@example.com"),
@@ -542,13 +542,19 @@ fn test_email_rejection() {
 
 /// Test cryptocurrency address edge cases
 #[test]
-fn test_crypto_address_edge_cases() {
+fn classifies_crypto_wallets() {
     // Bitcoin addresses (starts with 1, 3, or bc1)
     assert_eq!(
         classify_string("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
         Some(StringKind::CryptoWallet)
     );
+    // BIP 16's example P2SH address.
     assert_eq!(
+        classify_string("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy"),
+        Some(StringKind::CryptoWallet)
+    );
+    // The same with one character changed: the Base58Check checksum fails.
+    assert_ne!(
         classify_string("3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy"),
         Some(StringKind::CryptoWallet)
     );
@@ -578,7 +584,7 @@ fn test_crypto_address_edge_cases() {
 
 /// Test crypto address rejection for similar patterns
 #[test]
-fn test_crypto_rejection() {
+fn rejects_truncated_crypto_wallets() {
     // Too short for Bitcoin
     assert_ne!(
         classify_string("1A1zP1eP5Q"),
@@ -600,7 +606,7 @@ fn test_crypto_rejection() {
 
 /// Test environment variable detection
 #[test]
-fn test_env_var_comprehensive() {
+fn classifies_env_vars() {
     // Standard env vars
     assert_eq!(classify_string("PATH"), Some(StringKind::EnvVar));
     assert_eq!(classify_string("HOME"), Some(StringKind::EnvVar));
@@ -617,7 +623,7 @@ fn test_env_var_comprehensive() {
 
 /// Test environment variable rejection
 #[test]
-fn test_env_var_rejection() {
+fn rejects_non_env_var_words() {
     // Too short without underscore
     assert_ne!(classify_string("AB"), Some(StringKind::EnvVar));
 
@@ -631,7 +637,7 @@ fn test_env_var_rejection() {
 
 /// Test very long strings are skipped
 #[test]
-fn test_very_long_string_skip() {
+fn skips_strings_over_1000_chars() {
     // Strings > 1000 chars should return None (skip expensive checks)
     let long_string = "A".repeat(1001);
     assert_eq!(classify_string(&long_string), None);
@@ -639,7 +645,7 @@ fn test_very_long_string_skip() {
 
 /// Test very short strings are skipped
 #[test]
-fn test_very_short_string_skip() {
+fn skips_strings_under_3_chars() {
     // Strings < 3 chars should return None
     assert_eq!(classify_string(""), None);
     assert_eq!(classify_string("a"), None);

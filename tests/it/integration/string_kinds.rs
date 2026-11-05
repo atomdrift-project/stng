@@ -18,23 +18,22 @@ fn minimal_elf_with_string(s: &str) -> Vec<u8> {
 }
 
 #[test]
-fn test_url_detection() {
+fn classifies_url() {
     let data = minimal_elf_with_string("https://malware.example.com/payload");
     let strings = extract_strings(&data, 4);
 
-    let url_strings: Vec<_> = strings
-        .iter()
-        .filter(|s| s.kind == Some(StringKind::Url))
-        .collect();
-
     assert!(
-        !url_strings.is_empty() || strings.iter().any(|s| s.value.contains("https://")),
-        "Should detect URL"
+        strings
+            .iter()
+            .any(|s| s.value == "https://malware.example.com/payload"
+                && s.data_offset == 0x200
+                && s.kind == Some(StringKind::Url)),
+        "{strings:?}"
     );
 }
 
 #[test]
-fn test_ip_detection() {
+fn classifies_ip_port() {
     let data = minimal_elf_with_string("192.168.1.1:8080");
     let strings = extract_strings(&data, 4);
 
@@ -47,20 +46,23 @@ fn test_ip_detection() {
 }
 
 #[test]
-fn test_path_detection() {
+fn finds_etc_passwd() {
     let data = minimal_elf_with_string("/etc/passwd");
     let strings = extract_strings(&data, 4);
 
-    let path_strings: Vec<_> = strings
-        .iter()
-        .filter(|s| s.kind == Some(StringKind::SuspiciousPath) || s.value.contains("/etc/"))
-        .collect();
-
-    assert!(!path_strings.is_empty(), "Should detect suspicious path");
+    // `/etc/passwd` is a common system path, not a suspicious one, so its
+    // kind carries no evidence worth asserting: this header-only ELF makes
+    // everything past the header overlay data.
+    assert!(
+        strings
+            .iter()
+            .any(|s| s.value == "/etc/passwd" && s.data_offset == 0x200),
+        "{strings:?}"
+    );
 }
 
 #[test]
-fn test_base64_detection() {
+fn decodes_base64_text() {
     // Valid base64 that decodes to readable text
     let data = minimal_elf_with_string("SGVsbG8gV29ybGQhIFRoaXMgaXMgYSB0ZXN0Lg==");
     let strings = extract_strings(&data, 4);
@@ -75,7 +77,7 @@ fn test_base64_detection() {
 }
 
 #[test]
-fn test_hex_encoded_detection() {
+fn decodes_hex_text() {
     // Hex-encoded JavaScript (from actual malware)
     // Decodes to: "const _0x1c310003=_0x230d;function _0x230d"
     let hex_str =
@@ -99,7 +101,7 @@ fn test_hex_encoded_detection() {
 }
 
 #[test]
-fn test_hex_encoded_not_sha256() {
+fn does_not_hex_decode_sha256() {
     // SHA256 hash should not be detected as hex-encoded text
     let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     let data = minimal_elf_with_string(hash);
@@ -117,7 +119,7 @@ fn test_hex_encoded_not_sha256() {
 }
 
 #[test]
-fn test_unicode_escaped_detection() {
+fn decodes_x_escapes() {
     // JavaScript with \xXX escapes (from actual malware)
     let unicode_str = "\\x27;\\x20const\\x20fs\\x20=\\x20require(\\x27fs\\x27);";
     let expected_decoded = "'; const fs = require('fs');";
@@ -138,7 +140,7 @@ fn test_unicode_escaped_detection() {
 }
 
 #[test]
-fn test_unicode_escaped_u_format() {
+fn decodes_u_escapes() {
     // \uXXXX format
     let unicode_str =
         "\\u0048\\u0065\\u006c\\u006c\\u006f\\u0020\\u0057\\u006f\\u0072\\u006c\\u0064";
@@ -160,7 +162,7 @@ fn test_unicode_escaped_u_format() {
 }
 
 #[test]
-fn test_unicode_escaped_not_few_escapes() {
+fn ignores_single_escape() {
     // Too few escape sequences should not be detected
     let text = "Hello \\x20 World";
     let data = minimal_elf_with_string(text);
@@ -178,7 +180,7 @@ fn test_unicode_escaped_not_few_escapes() {
 }
 
 #[test]
-fn test_url_encoded_detection() {
+fn decodes_url_encoded_xss() {
     // XSS payload
     let url_str = "%3Cscript%3Ealert%28%27XSS%27%29%3C%2Fscript%3E";
     let expected_decoded = "<script>alert('XSS')</script>";
@@ -199,7 +201,7 @@ fn test_url_encoded_detection() {
 }
 
 #[test]
-fn test_url_encoded_sql_injection() {
+fn decodes_url_encoded_sqli() {
     // SQL injection payload
     let url_str = "%27%20OR%20%271%27%3D%271%27%3B%20DROP%20TABLE%20users%3B--";
     let expected_decoded = "' OR '1'='1'; DROP TABLE users;--";
@@ -220,7 +222,7 @@ fn test_url_encoded_sql_injection() {
 }
 
 #[test]
-fn test_url_encoded_not_few_percent() {
+fn ignores_single_percent_escape() {
     // Too few percent signs should not be detected
     let text = "Hello%20World";
     let data = minimal_elf_with_string(text);
@@ -238,7 +240,7 @@ fn test_url_encoded_not_few_percent() {
 }
 
 #[test]
-fn test_base32_detection() {
+fn classifies_onion_base32() {
     // Tor v2 onion address
     let base32_str = "THEHIDDENWIKI3IKNKD7A";
     let data = minimal_elf_with_string(base32_str);
@@ -254,7 +256,7 @@ fn test_base32_detection() {
 }
 
 #[test]
-fn test_base32_not_lowercase() {
+fn rejects_lowercase_base32() {
     // Lowercase should not be detected as Base32
     let text = "jbswy3dpeblw64tmmq";
     let data = minimal_elf_with_string(text);
@@ -272,7 +274,7 @@ fn test_base32_not_lowercase() {
 }
 
 #[test]
-fn test_base58_detection() {
+fn classifies_bitcoin_address_as_wallet() {
     // Bitcoin address - now classified as CryptoWallet (more specific than Base58)
     let base58_str = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
     let data = minimal_elf_with_string(base58_str);
@@ -291,7 +293,7 @@ fn test_base58_detection() {
 }
 
 #[test]
-fn test_base58_not_with_confusing_chars() {
+fn rejects_base58_with_zero() {
     // Contains 0 (not valid Base58)
     let text = "1A1zP1eP5QGefi2DMP0fTL5SLmv7DivfNa";
     let data = minimal_elf_with_string(text);
@@ -309,7 +311,7 @@ fn test_base58_not_with_confusing_chars() {
 }
 
 #[test]
-fn test_hex_encoded_xor_data() {
+fn decodes_hex_then_xor() {
     // Test double-layered obfuscation: XOR + Hex encoding
     // This tests whether we can automatically decode data that was:
     // 1. XOR-encoded with a single-byte key (0x42)

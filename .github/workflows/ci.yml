@@ -83,7 +83,7 @@ jobs:
         run: cargo install cargo-machete --locked --version 0.9.2
 
       # The same checks as a local `make lint`: rustfmt, clippy on the
-      # workspace and on the library alone (no `cli` dependencies), rustdoc
+      # whole crate and on the library alone (no `cli` dependencies), rustdoc
       # with warnings denied, and unused dependencies.
       - run: make lint
 
@@ -114,6 +114,41 @@ jobs:
 
       - run: cargo deny --locked check
 
+  # Coverage-guided fuzzing of every extraction path (fuzz/). Nightly and on
+  # demand only: it needs a nightly toolchain and runs for minutes. A crash
+  # fails the job and is uploaded as an artifact to reproduce with
+  # `cargo +nightly fuzz run extract <artifact>`.
+  fuzz:
+    name: fuzz
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          rustup toolchain install nightly-2026-10-15 --profile minimal --no-self-update
+          rustup default nightly-2026-10-15
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.12.0
+
+      - name: Fuzz for ten minutes
+        working-directory: fuzz
+        run: cargo fuzz run extract --locked -- -max_total_time=600 -rss_limit_mb=4096
+
+      - name: Keep crashes
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+
   # Not gated on `guard`: serializing the builds behind clippy would only add
   # wall clock.
   build:
@@ -131,3 +166,36 @@ jobs:
       # (An empty wave runs both; `'' || x` would always pick x, hence the inversion.)
       wave: ${{ github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' && 'fast' || '' }}
     # No secrets passed. CI never touches the signing identity.
+
+  # The VM and cross jobs in build.yml are `continue-on-error`, so a broken
+  # platform leaves the run green and nobody hears of it. On the nightly and
+  # manual runs, list every job that failed anyway and fail here, so the
+  # breakage shows as a red run.
+  soft-failures:
+    name: soft failures
+    needs: build
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: List failed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          failed=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/attempts/$ATTEMPT/jobs" \
+            --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | .name')
+          if [ -z "$failed" ]; then
+            echo "Every job passed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          printf '### Failed best-effort jobs\n\n' >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r job; do
+            echo "- $job" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::$job failed"
+          done <<< "$failed"
+          exit 1

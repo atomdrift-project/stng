@@ -1,11 +1,16 @@
 //! ARM64 strings addressed by ADRP+ADD with a MOV length: passed as call
 //! arguments, or stored as `{ptr, len}` pairs on the stack.
 
-use super::{Scan, arm64_preserved, decode_rodata_string, is_valid_utf8_string, looks_like_key};
+use super::{Scan, arm64_preserved, decode_rodata_string, looks_like_key};
 use crate::classifier::classify_string;
 use crate::types::{ExtractedString, StringKind, StringMethod};
 use std::collections::HashSet;
 
+/// Inline strings in ARM64 code: for each BL, the `ADRP+ADD` before it that
+/// computes a rodata pointer and the `MOVZ`/`ORR` immediate that loads its
+/// length. As on AMD64, the pair lands in whatever registers the call takes
+/// (`runtime.stringtoslicebyte` uses x1/x2), so any `ADRP+ADD` into rodata
+/// followed by a length load into a different register counts.
 pub(super) fn extract_inline_strings_arm64(
     text_data: &[u8],
     text_addr: u64,
@@ -117,7 +122,7 @@ pub(super) fn extract_arm64_stored_strings(
     struct Slot {
         reg: Reg,
         epoch: u32,
-        at: u32,
+        at: usize,
     }
 
     let rodata_end = rodata_addr.saturating_add(rodata_data.len() as u64);
@@ -127,15 +132,14 @@ pub(super) fn extract_arm64_stored_strings(
         at: 0,
     }; 32];
     let mut epoch: u32 = 1;
-    let window = ARM64_STORED_WINDOW as u32;
 
     for (idx, word) in text_data.as_chunks::<4>().0.iter().enumerate() {
         let inst = u32::from_le_bytes(*word);
-        let now = idx as u32;
+        let now = idx;
         let rd = (inst & 0x1F) as usize;
         let get = |slots: &[Slot; 32], r: usize| {
             let s = slots[r];
-            if s.epoch == epoch && now - s.at <= window {
+            if s.epoch == epoch && now - s.at <= ARM64_STORED_WINDOW {
                 s.reg
             } else {
                 Reg::Unknown
@@ -353,42 +357,11 @@ pub(super) fn decode_arm64_string(
     pos: usize,
     scan: &Scan<'_>,
 ) -> Option<(String, u64)> {
-    let Scan {
-        text_addr,
-        rodata: rodata_data,
-        rodata_addr,
-        rodata_end,
-        ..
-    } = *scan;
-    // ADRP + ADD: the string's address.
-    let str_addr = crate::arm64::adrp_add(text_addr.checked_add(pos as u64)?, inst1, inst2)?;
-
-    // Decode MOV/ORR: extract length
-    let str_len = decode_arm_mov_immediate(inst3)?;
-
-    // Validate
-    if str_addr < rodata_addr || str_addr >= rodata_end {
-        return None;
-    }
-
-    if str_len == 0 || str_len > 1000 {
-        return None;
-    }
-
-    let rodata_offset = str_addr.checked_sub(rodata_addr)? as usize;
-    let end = rodata_offset.checked_add(str_len as usize)?;
-    if end > rodata_data.len() {
-        return None;
-    }
-
-    let bytes = &rodata_data[rodata_offset..end];
-    let s = std::str::from_utf8(bytes).ok()?;
-
-    if is_valid_utf8_string(s) {
-        Some((s.to_string(), str_addr))
-    } else {
-        None
-    }
+    // ADRP + ADD: the string's address; MOV/ORR: its length.
+    let addr = crate::arm64::adrp_add(scan.text_addr.checked_add(pos as u64)?, inst1, inst2)?;
+    let len = decode_arm_mov_immediate(inst3)?;
+    let s = decode_rodata_string(addr, len, scan.rodata, scan.rodata_addr)?;
+    Some((s, addr))
 }
 
 /// Decode ARM64 MOV/ORR immediate value.

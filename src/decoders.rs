@@ -55,14 +55,23 @@ fn decoded_to_text(decoded: Vec<u8>) -> Option<String> {
     if let Some(s) = decode_utf16le(&decoded) {
         return Some(s);
     }
-    std::str::from_utf8(&decoded).ok().map(str::to_string)
+    // Non-ASCII UTF-8 text, but not control bytes: those are what decoding
+    // something that was never encoded (a long decimal constant read as hex,
+    // a `%02d` read as a URL escape) produces.
+    std::str::from_utf8(&decoded)
+        .ok()
+        .filter(|s| {
+            !s.chars()
+                .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+        })
+        .map(str::to_string)
 }
 
 /// Cheap test for the little-endian UTF-16 wide-text signature: an even length
 /// and a clear majority of zero high bytes — the shape of wide-encoded Latin
 /// text such as Windows commands, paths, and URLs. Random binary has a ~0.4%
 /// chance per code unit of a zero high byte, so this reliably rejects it.
-fn looks_like_utf16le(bytes: &[u8]) -> bool {
+pub(crate) fn looks_like_utf16le(bytes: &[u8]) -> bool {
     bytes.len() >= 4
         && bytes.len().is_multiple_of(2)
         && bytes
@@ -86,7 +95,7 @@ fn decode_utf16le(bytes: &[u8]) -> Option<String> {
         .as_chunks::<2>()
         .0
         .iter()
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .map(|&c| u16::from_le_bytes(c))
         .collect();
     let decoded = String::from_utf16(&code_units).ok()?;
     // Drop a leading byte-order mark and reject control-heavy results that
@@ -104,11 +113,41 @@ fn decode_utf16le(bytes: &[u8]) -> Option<String> {
 ///
 /// Returns a vector of newly decoded strings with `StringMethod::HexDecode`.
 pub(crate) fn decode_hex_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
-    strings
+    // Decoded bytes the XOR rescan may cover per call. Each candidate costs a
+    // full scan plus one pass per hinted key, so a file of large hex lines
+    // would otherwise cost seconds each. Granted in input order, before the
+    // parallel pass, so output does not depend on scheduling.
+    const MAX_XOR_BYTES: usize = 8 * crate::xor::MAX_AUTO_DETECT_SIZE;
+    let mut xor_left = MAX_XOR_BYTES;
+    let mut logged = false;
+    let candidates: Vec<(&ExtractedString, bool)> = strings
+        .iter()
+        .filter(|s| {
+            s.kind == Some(StringKind::HexEncoded)
+                || (s.value.len() >= MIN_HEX_LENGTH
+                    && s.value.len().is_multiple_of(2)
+                    && s.value.bytes().all(|b| b.is_ascii_hexdigit()))
+        })
+        .map(|s| {
+            let len = s.value.trim().len() / 2;
+            if len > crate::xor::MAX_AUTO_DETECT_SIZE {
+                return (s, false);
+            }
+            let Some(left) = xor_left.checked_sub(len) else {
+                if !logged {
+                    tracing::debug!(MAX_XOR_BYTES, "hex XOR rescan budget spent");
+                    logged = true;
+                }
+                return (s, false);
+            };
+            xor_left = left;
+            (s, true)
+        })
+        .collect();
+    candidates
         .par_iter()
         .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
-        .filter(|s| s.kind == Some(StringKind::HexEncoded) || is_likely_hex(&s.value))
-        .flat_map_iter(decode_hex_variants)
+        .flat_map_iter(|&(s, xor)| decode_hex_variants(s, xor))
         .collect()
 }
 
@@ -118,9 +157,7 @@ pub(crate) fn decode_hex_strings(strings: &[ExtractedString]) -> Vec<ExtractedSt
 /// the plaintext from the XOR scanner. Keep this second pass bounded: encoded
 /// inputs over 1 MiB would exceed the existing 512 KiB XOR key-detection
 /// budget once decoded and are unlikely to be useful as string carriers.
-fn decode_hex_variants(s: &ExtractedString) -> Vec<ExtractedString> {
-    const MAX_DECODED_XOR_BYTES: usize = crate::xor::MAX_AUTO_DETECT_SIZE;
-
+fn decode_hex_variants(s: &ExtractedString, xor: bool) -> Vec<ExtractedString> {
     if s.value.len() < MIN_HEX_LENGTH || !s.value.len().is_multiple_of(2) {
         return Vec::new();
     }
@@ -129,7 +166,7 @@ fn decode_hex_variants(s: &ExtractedString) -> Vec<ExtractedString> {
     };
 
     let mut xor_results = Vec::new();
-    if decoded.len() <= MAX_DECODED_XOR_BYTES {
+    if xor {
         let xor_hits = crate::xor::extract_xor_strings(&decoded, 10, false);
         let mut key_counts = [0usize; 256];
         for hit in &xor_hits {
@@ -145,11 +182,20 @@ fn decode_hex_variants(s: &ExtractedString) -> Vec<ExtractedString> {
         // Pattern hits identify the likely key cheaply. Expand only keys with
         // an independent trigger so strings such as CallWindowProcA,
         // which may lack their own trigger (for example mixed-case `.Dll`),
-        // are recovered without trying all 255 keys.
-        for (key, count) in (0..=u8::MAX).zip(key_counts) {
-            if count == 0 || crate::xor::SKIP_XOR_KEYS.contains(&key) {
-                continue;
-            }
+        // are recovered without trying all 255 keys. A real carrier uses one
+        // key, so a blob that hints at many gets only its best-supported few.
+        const MAX_HINTED_KEYS: usize = 8;
+        let mut keys: Vec<u8> = (0..=u8::MAX)
+            .filter(|&key| {
+                key_counts[usize::from(key)] > 0 && !crate::xor::SKIP_XOR_KEYS.contains(&key)
+            })
+            .collect();
+        if keys.len() > MAX_HINTED_KEYS {
+            keys.sort_by_key(|&key| std::cmp::Reverse(key_counts[usize::from(key)]));
+            keys.truncate(MAX_HINTED_KEYS);
+            keys.sort_unstable();
+        }
+        for key in keys {
             xor_results.extend(crate::xor::extract_custom_xor_strings_with_hints(
                 &decoded,
                 &[key],
@@ -205,26 +251,13 @@ pub(crate) fn decode_url_strings(strings: &[ExtractedString]) -> Vec<ExtractedSt
 /// characters; percent-encoding an alphanumeric (`%75` = `u`) is the signature
 /// of deliberate obfuscation, not normal URL syntax.
 fn encodes_unreserved_char(s: &str) -> bool {
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i + 2 < bytes.len() {
-        if bytes[i] == b'%'
-            && let (Some(hi), Some(lo)) = (
-                (bytes[i + 1] as char).to_digit(16),
-                (bytes[i + 2] as char).to_digit(16),
+    s.as_bytes().windows(3).any(|w| {
+        w[0] == b'%'
+            && matches!(
+                (crate::bytes::hex_digit(w[1]), crate::bytes::hex_digit(w[2])),
+                (Some(hi), Some(lo)) if (hi << 4 | lo).is_ascii_alphanumeric()
             )
-        {
-            #[allow(clippy::cast_possible_truncation)]
-            let decoded = (hi * 16 + lo) as u8;
-            if decoded.is_ascii_alphanumeric() {
-                return true;
-            }
-            i += 3;
-            continue;
-        }
-        i += 1;
-    }
-    false
+    })
 }
 
 /// Attempt to decode a single URL-encoded string.
@@ -269,26 +302,16 @@ fn decode_url_string(s: &ExtractedString) -> Option<ExtractedString> {
     }
     let decoded = String::from_utf8(bytes).ok()?;
 
-    // Must be different from original (actually encoded)
-    if decoded == s.value {
+    // Must be different from original (actually encoded), and text: a control
+    // byte means a `printf` directive (`%02d`) was read as an escape.
+    if decoded == s.value
+        || decoded
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
         return None;
     }
-
-    // Reject if too short
-    if decoded.trim().len() < 4 {
-        return None;
-    }
-
-    // Classify before moving
-    let kind = crate::classify_string(&decoded);
-
-    Some(ExtractedString {
-        value: decoded,
-        data_offset: s.data_offset,
-        method: StringMethod::UrlDecode,
-        kind,
-        ..Default::default()
-    })
+    decoded_from(s, decoded, StringMethod::UrlDecode)
 }
 
 /// Decode unicode escape sequences from a list of extracted strings.
@@ -298,12 +321,6 @@ pub(crate) fn decode_unicode_escape_strings(strings: &[ExtractedString]) -> Vec<
     strings
         .par_iter()
         .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
-        .filter(|s| {
-            s.kind == Some(StringKind::UnicodeEscaped)
-                || s.value.contains("\\x")
-                || s.value.contains("\\u")
-                || s.value.contains("\\U")
-        })
         .filter_map(decode_unicode_escape_string)
         .collect()
 }
@@ -316,27 +333,10 @@ fn decode_unicode_escape_string(s: &ExtractedString) -> Option<ExtractedString> 
     }
 
     let decoded = decode_unicode_escapes(&s.value)?;
-
-    // Must be different from original
     if decoded == s.value {
         return None;
     }
-
-    // Reject if too short
-    if decoded.trim().len() < 4 {
-        return None;
-    }
-
-    // Classify before moving
-    let kind = crate::classify_string(&decoded);
-
-    Some(ExtractedString {
-        value: decoded,
-        data_offset: s.data_offset,
-        method: StringMethod::UnicodeEscapeDecode,
-        kind,
-        ..Default::default()
-    })
+    decoded_from(s, decoded, StringMethod::UnicodeEscapeDecode)
 }
 
 /// Decode unicode escape sequences in a string.
@@ -354,7 +354,7 @@ fn decode_unicode_escapes(s: &str) -> Option<String> {
     let chars: Vec<char> = s.chars().collect();
     let mut result = String::with_capacity(s.len());
     let mut i = 0;
-    let mut changed = false;
+    let (mut escapes, mut other_backslashes) = (0usize, 0usize);
 
     while i < chars.len() {
         if chars[i] == '\\' {
@@ -379,7 +379,7 @@ fn decode_unicode_escapes(s: &str) -> Option<String> {
                 && let Some(decoded) = char::from_u32(code)
             {
                 result.push(decoded);
-                changed = true;
+                escapes += 1;
                 i = esc + 1 + width;
                 continue;
             }
@@ -387,6 +387,7 @@ fn decode_unicode_escapes(s: &str) -> Option<String> {
             // character after it is reprocessed on the next iteration, so no
             // trailing hex digits are dropped.
             result.push('\\');
+            other_backslashes += 1;
             i += 1;
         } else {
             result.push(chars[i]);
@@ -394,16 +395,9 @@ fn decode_unicode_escapes(s: &str) -> Option<String> {
         }
     }
 
-    if changed { Some(result) } else { None }
-}
-
-/// Check if a string looks like hex-encoded data.
-fn is_likely_hex(s: &str) -> bool {
-    if s.len() < MIN_HEX_LENGTH || !s.len().is_multiple_of(2) {
-        return false;
-    }
-
-    s.chars().all(|c| c.is_ascii_hexdigit())
+    // Text whose backslashes are mostly something else is a path or a
+    // pattern: the `\x64` in `C:\Users\nil\x64\Release` names a directory.
+    (escapes > 0 && other_backslashes <= escapes).then_some(result)
 }
 
 /// Check if a string looks like URL-encoded data.
@@ -451,31 +445,11 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
         return None;
     }
 
-    // Try decoding with padding
     let decoded = BASE32
         .decode(s.value.trim().as_bytes())
         .or_else(|_| BASE32_NOPAD.decode(s.value.trim().as_bytes()))
         .ok()?;
-
-    let decoded_str = decoded_to_text(decoded)?;
-
-    // Reject if decoded string is too short or just whitespace
-    let trimmed = decoded_str.trim();
-    if trimmed.len() < 4 {
-        return None;
-    }
-
-    // Classify before moving
-    let kind = crate::classify_string(&decoded_str);
-
-    // Create new ExtractedString with decoded content
-    Some(ExtractedString {
-        value: decoded_str,
-        data_offset: s.data_offset,
-        method: StringMethod::Base32Decode,
-        kind,
-        ..Default::default()
-    })
+    decoded_from(s, decoded_to_text(decoded)?, StringMethod::Base32Decode)
 }
 
 /// Decode strings that are base64 only after a rot13 rotation.
@@ -491,9 +465,9 @@ fn decode_base32_string(s: &ExtractedString) -> Option<ExtractedString> {
 ///
 /// The shape this exists for hides a payload in plain sight: the chunks sit in
 /// the source as long alphanumeric literals, and only the ones that were also
-/// rotated fail to decode for a reader who tries base64 first. A W4SP-family
-/// PyPI stealer splits its payload across four such literals, rot13-ing two of
-/// them, and reassembles the pieces with `codecs.decode(chunk, 'rot13')` --
+/// rotated fail to decode for a reader who tries base64 first. A packer may
+/// split its payload across several such literals, rot13-ing some of them,
+/// and reassemble the pieces with `codecs.decode(chunk, 'rot13')` --
 /// where even the string `rot13` is written as hex escapes so it cannot be
 /// grepped.
 pub(crate) fn decode_rot13_base64_strings(strings: &[ExtractedString]) -> Vec<ExtractedString> {
@@ -516,29 +490,28 @@ fn decode_rot13_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
     // them is which one decodes to plausible text: at most one will, since the
     // other is the same bytes read 13 letters out of phase. If the string
     // decodes as-is, it is ordinary base64 and belongs to the plain decoder.
-    let unrotated_decodes = |v: &str| -> bool {
-        let whole = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, v)
-            .ok()
-            .and_then(decoded_to_text);
-        if whole.is_some() {
-            return true;
-        }
-        // Truncate to a whole base64 quartet, but only on a char boundary. The
-        // input is an arbitrary extracted string, so it can hold multi-byte
-        // UTF-8, and a byte index landing mid-scalar panics the slice.
-        let keep = v.len() - v.len() % 4;
-        let keep = if v.is_char_boundary(keep) {
-            keep
-        } else {
-            return false;
-        };
-        keep >= MIN_BASE64_LENGTH
-            && base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &v[..keep])
+    //
+    // A payload split across several literals leaves each piece with an
+    // arbitrary length mod 4, so the whole string may not decode while its
+    // longest valid prefix does: try the string as it stands, then the prefix.
+    let decode_text = |v: &str| {
+        let decode = |v: &str| {
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, v)
                 .ok()
                 .and_then(decoded_to_text)
-                .is_some()
+        };
+        decode(v).or_else(|| {
+            // Truncate to a whole quartet, but only on a char boundary: the
+            // input is an arbitrary extracted string, so it can hold
+            // multi-byte UTF-8, and a byte index mid-scalar panics the slice.
+            let keep = v.len() - v.len() % 4;
+            if keep < MIN_BASE64_LENGTH || !v.is_char_boundary(keep) {
+                return None;
+            }
+            decode(&v[..keep])
+        })
     };
-    if unrotated_decodes(value) {
+    if decode_text(value).is_some() {
         return None;
     }
 
@@ -547,33 +520,24 @@ fn decode_rot13_base64_string(s: &ExtractedString) -> Option<ExtractedString> {
         return None;
     }
 
-    // Same fragment problem the fuzzy path handles: a payload split across
-    // several literals leaves each piece with an arbitrary length mod 4, so the
-    // whole string may not decode while its longest valid prefix does. Try the
-    // string as it stands, then the prefix.
-    let decoded_str =
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, rotated.as_str())
-            .ok()
-            .and_then(decoded_to_text)
-            .or_else(|| {
-                let keep = rotated.len() - rotated.len() % 4;
-                if keep < MIN_BASE64_LENGTH || !rotated.is_char_boundary(keep) {
-                    return None;
-                }
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &rotated[..keep])
-                    .ok()
-                    .and_then(decoded_to_text)
-            })?;
-    if decoded_str.trim().len() < 4 {
+    decoded_from(s, decode_text(&rotated)?, StringMethod::Rot13Base64Decode)
+}
+
+/// `text`, decoded from `s` by `method`, unless it is under four characters
+/// once trimmed. It is located where `s` is.
+fn decoded_from(
+    s: &ExtractedString,
+    text: String,
+    method: StringMethod,
+) -> Option<ExtractedString> {
+    if text.trim().len() < 4 {
         return None;
     }
-
-    let kind = crate::classify_string(&decoded_str);
     Some(ExtractedString {
-        value: decoded_str,
+        kind: crate::classify_string(&text),
+        value: text,
         data_offset: s.data_offset,
-        method: StringMethod::Rot13Base64Decode,
-        kind,
+        method,
         ..Default::default()
     })
 }
@@ -596,28 +560,8 @@ fn decode_base85_string(s: &ExtractedString) -> Option<ExtractedString> {
         return None;
     }
 
-    // Try ASCII85 decoding
-    let input = s.value.trim();
-    let decoded = decode_ascii85(input)?;
-
-    let decoded_str = decoded_to_text(decoded)?;
-
-    // Reject if decoded string is too short or just whitespace
-    let trimmed = decoded_str.trim();
-    if trimmed.len() < 4 {
-        return None;
-    }
-
-    // Classify before moving
-    let kind = crate::classify_string(&decoded_str);
-
-    Some(ExtractedString {
-        value: decoded_str,
-        data_offset: s.data_offset,
-        method: StringMethod::Base85Decode,
-        kind,
-        ..Default::default()
-    })
+    let decoded = decode_ascii85(s.value.trim())?;
+    decoded_from(s, decoded_to_text(decoded)?, StringMethod::Base85Decode)
 }
 
 /// Decode ASCII85 encoded data; `None` if it is not valid ASCII85.
@@ -719,78 +663,43 @@ fn is_likely_base32(s: &str) -> bool {
     has_letters && has_digits && (valid_count * 10 >= s.len() * 9)
 }
 
+/// Check if a string looks like ASCII85-encoded data that decodes to text.
 fn is_likely_base85(s: &str) -> bool {
-    // Require minimum length
     if s.len() < 20 {
         return false;
     }
-
-    // Check for ASCII85 delimiters (<~ and ~>)
-    let has_delimiters = s.starts_with("<~") && s.ends_with("~>");
-
-    // If it has delimiters, validate by attempting to decode
-    if has_delimiters {
-        let original_quality = crate::text::quality(s.as_bytes()).0;
-        if let Some(decoded) = decode_ascii85(s)
-            && let Ok(decoded_str) = String::from_utf8(decoded)
-        {
-            let decoded_quality = crate::text::quality(decoded_str.as_bytes()).0;
-            // Decoded should be better quality (at least 5 points higher)
-            return decoded_quality > original_quality + 5;
-        }
-        // If decode fails or quality is worse, reject
-        return false;
-    }
-
-    // Count valid ASCII85 characters
-    let bytes = s.as_bytes();
-    let mut valid_count = 0;
-    let mut has_special_chars = false;
-
-    for &b in bytes {
-        if matches!(b, b'!'..=b'u' | b'z') {
+    // Text inside ASCII85's `<~ … ~>` delimiters goes straight to the decode
+    // check; otherwise the alphabet must dominate.
+    if !(s.starts_with("<~") && s.ends_with("~>")) {
+        let mut valid_count = 0;
+        let mut has_special_chars = false;
+        for b in s.bytes().filter(|b| matches!(b, b'!'..=b'u' | b'z')) {
             valid_count += 1;
-            // Look for special chars that are unlikely in normal text
-            if matches!(
-                b,
-                b'!' | b'"' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b','
-            ) {
-                has_special_chars = true;
-            }
+            // `!` through `,` are unlikely in normal text.
+            has_special_chars |= matches!(b, b'!'..=b',');
         }
-    }
-
-    // For shorter strings (< 50), use moderate threshold + special char check
-    if s.len() < 50 {
-        if !has_special_chars || valid_count * 10 < s.len() * 9 {
-            return false;
-        }
-    } else {
-        // For longer strings, be stricter
-        if valid_count * 100 < s.len() * 95 {
+        // Short strings need one of those; longer ones a stricter ratio.
+        let plausible = if s.len() < 50 {
+            has_special_chars && valid_count * 10 >= s.len() * 9
+        } else {
+            valid_count * 100 >= s.len() * 95
+        };
+        if !plausible {
             return false;
         }
     }
-
-    // Final validation: try decoding and check quality
+    // Real base85 decodes to text at least 5 quality points better.
     let original_quality = crate::text::quality(s.as_bytes()).0;
-    if let Some(decoded) = decode_ascii85(s)
-        && let Ok(decoded_str) = String::from_utf8(decoded)
-    {
-        let decoded_quality = crate::text::quality(decoded_str.as_bytes()).0;
-        // Decoded should be better quality (at least 5 points higher)
-        return decoded_quality > original_quality + 5;
-    }
-
-    // If can't decode or quality is worse, it's not real base85
-    false
+    decode_ascii85(s)
+        .and_then(|decoded| String::from_utf8(decoded).ok())
+        .is_some_and(|decoded| crate::text::quality(decoded.as_bytes()).0 > original_quality + 5)
 }
 
 /// Decode "spaced" ASCII — text whose characters are each followed by a NUL
 /// or a space (`H e l l o`), as UTF-16LE text looks when read as bytes.
 /// `None` unless at least 70% of the byte pairs have that shape.
 #[must_use]
-pub fn decode_spaced_ascii(s: &str) -> Option<String> {
+pub(crate) fn decode_spaced_ascii(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
     if bytes.len() < 6 {
         return None;

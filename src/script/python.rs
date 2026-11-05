@@ -19,77 +19,69 @@ use super::decode_chain::DecodeStep;
 // --- Regex patterns ---
 
 /// Direct exec(base64.b64decode("...")) or exec(b64decode("..."))
-#[allow(clippy::expect_used)]
 static EXEC_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"exec\s*\(\s*(?:base64\.)?b64decode\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// exec(zlib.decompress(base64.b64decode("...")))
-#[allow(clippy::expect_used)]
 static EXEC_ZLIB_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:zlib\.)?decompress\s*\(\s*(?:base64\.)?b64decode\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// exec(bytes.fromhex("...").decode()) or exec(bytes.fromhex("..."))
-#[allow(clippy::expect_used)]
 static EXEC_FROMHEX_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"exec\s*\(\s*bytes\.fromhex\s*\(\s*['"]([0-9a-fA-F]+)['"]\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// exec("".join(chr(x) for x in [...])) — character code array
-#[allow(clippy::expect_used)]
 static EXEC_CHR_ARRAY_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"exec\s*\(\s*""\s*\.join\s*\(\s*(?:chr\s*\(\s*x\s*\)\s*for\s*x\s*in|map\s*\(\s*chr\s*,)\s*\[([0-9,\s]+)\]"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// exec(codecs.decode("...", "rot_13")) — double-quoted
-#[allow(clippy::expect_used)]
 static EXEC_ROT13_DOUBLE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"exec\s*\(\s*(?:codecs\.)?decode\s*\(\s*"([^"]+)"\s*,\s*['"]rot[_-]?13['"]\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// exec(codecs.decode('...', 'rot_13')) — single-quoted
-#[allow(clippy::expect_used)]
 static EXEC_ROT13_SINGLE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"exec\s*\(\s*(?:codecs\.)?decode\s*\(\s*'([^']+)'\s*,\s*['"]rot[_-]?13['"]\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Aliased import pattern: varname = __import__('module')
-#[allow(clippy::expect_used)]
 static IMPORT_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(\w+)\s*=\s*__import__\s*\(\s*['"](base64|zlib|codecs|marshal)['"]\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// String literal assignment: varname = 'long_base64_string'
-#[allow(clippy::expect_used)]
-static STRING_ASSIGN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\w+)\s*=\s*'([A-Za-z0-9+/=\s]{20,})'").expect("static regex"));
+static STRING_ASSIGN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(\w+)\s*=\s*'([A-Za-z0-9+/=\s]{20,})'").unwrap_or_else(crate::invalid_pattern)
+});
 
 /// Integer constant assignment: varname = 134
-#[allow(clippy::expect_used)]
-static INT_ASSIGN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\w+)\s*=\s*(\d{1,3})\s*$").expect("static regex"));
+static INT_ASSIGN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(\w+)\s*=\s*(\d{1,3})\s*$").unwrap_or_else(crate::invalid_pattern)
+});
 
 /// XOR lambda pattern: varname = lambda ...: bytes([x ^ key_var for x in ...])
-#[allow(clippy::expect_used)]
 static XOR_LAMBDA_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"\w+\s*=\s*lambda\s+\w+(?:\s*,\s*\w+)*\s*:\s*bytes\s*\(\s*\[\s*\w+\s*\^\s*(\w+)\s+for",
     )
-    .expect("static regex")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// b64decode(varname) call — used to find the blob variable reference
-#[allow(clippy::expect_used)]
-static B64DECODE_VAR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\.b64decode\s*\(\s*(\w+)\s*\)").expect("static regex"));
+static B64DECODE_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\.b64decode\s*\(\s*(\w+)\s*\)").unwrap_or_else(crate::invalid_pattern)
+});
 
 /// Extract all obfuscated payloads from a Python script.
 pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResult> {
@@ -108,12 +100,17 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
         &[DecodeStep::Base64, DecodeStep::Zlib],
         ScriptLanguage::Python,
     ));
-    results.extend(try_exec_fromhex(source));
+    results.extend(super::decode_captures(
+        source,
+        &[&EXEC_FROMHEX_RE],
+        &[DecodeStep::HexDecode],
+        ScriptLanguage::Python,
+    ));
     results.extend(try_exec_chr_array(source));
     results.extend(super::decode_captures(
         source,
         &[&EXEC_ROT13_DOUBLE_RE, &EXEC_ROT13_SINGLE_RE],
-        &[DecodeStep::Rot13],
+        &[DecodeStep::Rot(13)],
         ScriptLanguage::Python,
     ));
 
@@ -121,25 +118,6 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
     results.extend(try_aliased_import_chain(source));
 
     results
-}
-
-/// exec(bytes.fromhex("..."))
-fn try_exec_fromhex(source: &str) -> Vec<DeobfuscationResult> {
-    EXEC_FROMHEX_RE
-        .captures_iter(source)
-        .filter_map(|cap| {
-            let hex_str = cap.get(1)?.as_str();
-            let offset = cap.get(0)?.start();
-            let steps = vec![DecodeStep::HexDecode];
-            let result = super::decode_chain::apply_chain(hex_str.as_bytes(), &steps)?;
-            Some(DeobfuscationResult {
-                decoded: result.payload,
-                offset,
-                chain_description: format!("python:{}", result.chain_description),
-                language: ScriptLanguage::Python,
-            })
-        })
-        .collect()
 }
 
 /// exec("".join(chr(x) for x in [104, 116, ...]))
@@ -277,7 +255,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_exec_b64decode_direct() {
+    fn decodes_exec_base64_b64decode() {
         let src = r#"exec(base64.b64decode("aW1wb3J0IG9z"))"#;
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -286,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_b64decode_single_quotes() {
+    fn decodes_single_quoted_b64decode() {
         let src = r"exec(base64.b64decode('aW1wb3J0IG9z'))";
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -294,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_b64decode_no_module() {
+    fn decodes_bare_b64decode() {
         let src = r#"exec(b64decode("aW1wb3J0IG9z"))"#;
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -302,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_fromhex() {
+    fn decodes_exec_bytes_fromhex() {
         let src = r#"exec(bytes.fromhex("696d706f7274206f73"))"#;
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -310,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_chr_array() {
+    fn decodes_exec_chr_join() {
         // "import os" as char codes
         let src = r#"exec("".join(chr(x) for x in [105, 109, 112, 111, 114, 116, 32, 111, 115]))"#;
         let results = extract_obfuscated_payloads(src);
@@ -319,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_rot13() {
+    fn decodes_exec_codecs_rot13() {
         let src = r#"exec(codecs.decode("vzcbeg bf", "rot_13"))"#;
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -327,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_false_positive_on_normal_b64_usage() {
+    fn ignores_b64decode_outside_exec() {
         // Normal base64 usage (not in exec) should not trigger
         let src = r#"
 import base64
@@ -339,7 +317,7 @@ print(data)
     }
 
     #[test]
-    fn test_aliased_import_chain_simple() {
+    fn aliased_import_chain_is_python_or_nothing() {
         let src = r"
 abc = __import__('base64')
 xyz = __import__('zlib')

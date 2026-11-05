@@ -3,76 +3,70 @@
 use super::deduplicate_by_offset;
 use crate::raw::extract_raw_strings;
 use crate::{
-    ExtractOptions, ExtractedString, StringMethod, classifier, decode_encoded_strings,
-    is_text_file, script,
+    ExtractOptions, ExtractedString, StringMethod, classifier, decode_encoded_strings, script,
 };
 
-/// Extract strings from a UTF-16 encoded file (detected by BOM).
+/// Extract strings from a UTF-16 file (one with a byte-order mark).
 ///
-/// When a UTF-16 BOM is detected at the start of a file, this function:
-/// 1. Decodes the entire file from UTF-16 to UTF-8
-/// 2. Extracts strings from the decoded UTF-8 content
-/// 3. Marks all strings with the appropriate StringMethod (Utf16LeDecode or Utf16BeDecode)
-///
-/// This is common for JavaScript malware, PowerShell scripts, and other text files
-/// saved in UTF-16 encoding on Windows systems.
+/// The text is decoded to UTF-8 and scanned as text; every offset and length
+/// is mapped back to the UTF-16 bytes it came from, so a string found at
+/// character `n` is reported at file offset `2 + 2n` (BMP text). Raw strings
+/// get `Utf16LeDecode` or `Utf16BeDecode`; decoded ones keep their method.
 pub(crate) fn extract_from_utf16_file(
     data: &[u8],
     opts: &ExtractOptions,
     is_little_endian: bool,
 ) -> Vec<ExtractedString> {
-    let mut strings = Vec::new();
-
-    // Skip the 2-byte BOM and decode the rest
-    if data.len() < 2 {
-        return strings;
+    let Some(utf16) = data.get(2..) else {
+        return Vec::new();
+    };
+    if !utf16.len().is_multiple_of(2) {
+        tracing::debug!("UTF-16 file has an odd byte count; the last byte is ignored");
     }
-
-    let utf16_data = &data[2..];
-
-    // Convert bytes to u16 code units
-    if !utf16_data.len().is_multiple_of(2) {
-        // Odd number of bytes - can't be valid UTF-16, truncate last byte
-        tracing::warn!("UTF-16 file has odd byte count, truncating last byte");
-    }
-
-    // Decode UTF-16 to UTF-8, streaming code units straight from the byte
-    // slice so the whole-file Vec<u16> intermediate is never materialized.
-    let code_units = utf16_data.as_chunks::<2>().0.iter().map(|chunk| {
+    let units = utf16.as_chunks::<2>().0.iter().map(|&pair| {
         if is_little_endian {
-            u16::from_le_bytes([chunk[0], chunk[1]])
+            u16::from_le_bytes(pair)
         } else {
-            u16::from_be_bytes([chunk[0], chunk[1]])
+            u16::from_be_bytes(pair)
         }
     });
-    let decoded: String = char::decode_utf16(code_units)
-        .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
-        .collect();
-    let decoded_bytes = decoded.as_bytes();
 
-    // Extract strings from the decoded UTF-8 content
-    let mut raw_strings = extract_raw_strings(decoded_bytes, opts.min_length, &[], &[]);
+    // Decode, recording the file offset where each character starts.
+    let mut text = String::with_capacity(utf16.len() / 2);
+    let mut starts: Vec<(usize, u64)> = Vec::with_capacity(utf16.len() / 2);
+    let mut at = 2u64;
+    for unit in char::decode_utf16(units) {
+        starts.push((text.len(), at));
+        let (c, units) = match unit {
+            Ok(c) => (c, c.len_utf16()),
+            Err(_) => (char::REPLACEMENT_CHARACTER, 1),
+        };
+        at += 2 * units as u64;
+        text.push(c);
+    }
+    let end = at;
+    let locate = |offset: u64| -> u64 {
+        let Ok(offset) = usize::try_from(offset) else {
+            return end;
+        };
+        starts
+            .binary_search_by_key(&offset, |&(decoded, _)| decoded)
+            .map_or(end, |i| starts[i].1)
+    };
 
-    // Apply decoders (base64, hex, URL-encoding, etc.) to the extracted strings
-    // This allows us to find base64-encoded PowerShell, hex-encoded URLs, etc.
-    let decoded_strings = decode_encoded_strings(&raw_strings);
-
-    // Update the method for all extracted strings to indicate they came from UTF-16 decoding
-    // (but preserve the method for decoded strings - they should show Base64Decode, etc.)
+    let mut strings = extract_raw_strings(text.as_bytes(), opts.min_length, &[], &[]);
+    for s in &mut strings {
+        let start = locate(s.data_offset);
+        let stop = locate(s.data_offset.saturating_add(s.value.len() as u64));
+        s.data_offset = start;
+        s.data_len = u32::try_from(stop - start).unwrap_or(u32::MAX);
+    }
     let method = if is_little_endian {
         StringMethod::Utf16LeDecode
     } else {
         StringMethod::Utf16BeDecode
     };
-
-    for string in &mut raw_strings {
-        string.method = method;
-    }
-
-    strings.extend(raw_strings);
-    strings.extend(decoded_strings);
-
-    deduplicate_by_offset(strings)
+    finish_text(strings, text.as_bytes(), opts, &locate, Some(method))
 }
 
 /// Recover a text file whose UTF-16 BOM was prepended to ordinary bytes.
@@ -92,18 +86,50 @@ pub(crate) fn extract_from_malformed_utf16_bom_file(
     if memchr::memchr_iter(0, payload).count().saturating_mul(8) > payload.len() {
         return None;
     }
-
     let mut strings = extract_raw_strings(payload, opts.min_length, &[], &[]);
-    for string in &mut strings {
-        // `payload` omits the BOM, but consumers expect file-relative offsets.
-        string.data_offset = string.data_offset.saturating_add(2);
+    // `payload` omits the BOM; offsets are file offsets.
+    let locate = |offset: u64| offset.saturating_add(2);
+    for s in &mut strings {
+        s.data_offset = locate(s.data_offset);
     }
-    let decoded = decode_encoded_strings(&strings);
+    Some(finish_text(strings, payload, opts, &locate, None))
+}
+
+/// The passes a text file's strings share: the decoders, the garbage filter
+/// and script deobfuscation of `text`, then offset deduplication. `locate`
+/// maps an offset in `text` to one in the file; `method`, if given, relabels
+/// the raw strings after the decoders have seen them.
+fn finish_text(
+    mut strings: Vec<ExtractedString>,
+    text: &[u8],
+    opts: &ExtractOptions,
+    locate: &dyn Fn(u64) -> u64,
+    method: Option<StringMethod>,
+) -> Vec<ExtractedString> {
+    let decoded = if opts.is_cancelled() {
+        Vec::new()
+    } else {
+        decode_encoded_strings(&strings)
+    };
+    if let Some(method) = method {
+        for s in &mut strings {
+            s.method = method;
+        }
+    }
     strings.extend(decoded);
+    if opts.filter_garbage {
+        strings.retain(|s| super::passes_garbage_filter(s, &[]));
+    }
     // Not gated on `is_text_file`: the BOM already claims text, and one
     // planted byte must not switch deobfuscation off.
-    append_script_deobfuscation(&mut strings, payload, opts);
-    Some(strings)
+    if !opts.is_cancelled() {
+        let first = strings.len();
+        append_script_deobfuscation(&mut strings, text, opts);
+        for s in &mut strings[first..] {
+            s.data_offset = locate(s.data_offset);
+        }
+    }
+    deduplicate_by_offset(strings)
 }
 
 /// Run script deobfuscation and append decoded strings.
@@ -136,13 +162,4 @@ pub(crate) fn append_script_deobfuscation(
 
         strings.extend(payload_strings);
     }
-}
-
-/// Script deobfuscation normally runs only for inputs identified as text. A
-/// self-identifying VBScript.Encode marker is also sufficient evidence: its
-/// encoded body can contain enough control/high bytes to classify an ASP page
-/// as binary. Check strings already extracted by the normal scan so binary
-/// inputs without the marker pay no additional full-file scan.
-pub(crate) fn should_deobfuscate_script(data: &[u8], strings: &[ExtractedString]) -> bool {
-    is_text_file(data) || strings.iter().any(|s| s.value.contains("#@~^"))
 }

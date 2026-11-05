@@ -20,13 +20,14 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use cli::args::{LcgRange, XorKey};
 use cli::output::{self, Style, safe_path};
 use std::collections::HashSet;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use stng::{ExtractedString, StringMethod, XorMode};
 
 mod cli;
@@ -49,7 +50,7 @@ EXAMPLES:
     stng -i malware.elf                # Filter out raw scan noise
     stng --xor 0xAB malware.elf        # Decode with a hex XOR key
     stng --xor secretkey malware.elf   # Decode with a text XOR key
-    stng --xorscan malware.elf         # XOR-scan Go and platform-signed binaries too
+    stng --xorscan malware.elf         # XOR-scan Go binaries too
     stng --no-xor malware.elf          # Disable all XOR detection
     stng --json malware.elf            # JSON output for tooling
     stng --json samples/               # One JSON object per file
@@ -59,8 +60,8 @@ struct Cli {
     target: PathBuf,
 
     /// Minimum string length to extract
-    #[arg(short = 'm', long, default_value = "4")]
-    min_length: usize,
+    #[arg(short = 'm', long, default_value = "4", value_parser = clap::value_parser!(u16).range(1..))]
+    min_length: u16,
 
     /// Output as JSON: an array of strings, or for a directory one
     /// `{"path", "strings"}` object per line
@@ -68,7 +69,7 @@ struct Cli {
     json: bool,
 
     /// Simple output (one string per line, no columns)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "json")]
     simple: bool,
 
     /// Show detected language and exit
@@ -79,11 +80,6 @@ struct Cli {
     #[arg(long)]
     unfiltered: bool,
 
-    /// Accepted for compatibility; stng no longer runs rizin.
-    #[arg(long, hide = true)]
-    #[allow(dead_code)]
-    no_rizin: bool,
-
     /// Disable colored output
     #[arg(long)]
     no_color: bool,
@@ -93,7 +89,7 @@ struct Cli {
     interesting: bool,
 
     /// Disable XOR-encoded string detection
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["xor", "xorscan", "xor_lcg"])]
     no_xor: bool,
 
     /// XOR key: hex digits after `0x` or `hex:` (`0xABCD`), otherwise the
@@ -111,9 +107,14 @@ struct Cli {
     )]
     xor_lcg: Option<LcgRange>,
 
-    /// XOR-scan even Go and platform-signed binaries, which are skipped by default
-    #[arg(long)]
+    /// XOR-scan Go binaries too, which are skipped by default
+    #[arg(long, conflicts_with = "xor")]
     xorscan: bool,
+
+    /// Skip XOR scanning for binaries carrying an Apple or Microsoft platform
+    /// signature (not verified, so a sample can fake one)
+    #[arg(long)]
+    skip_platform_signed: bool,
 
     /// Enable debug logging
     #[arg(long)]
@@ -125,7 +126,7 @@ struct Cli {
 /// 15–40% slower than 16 threads and used 4–8× the CPU.
 const MAX_THREADS: usize = 16;
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
     let cli = Cli::parse();
     if std::env::var_os("RAYON_NUM_THREADS").is_none() {
         let n = std::thread::available_parallelism().map_or(1, |n| n.get().min(MAX_THREADS));
@@ -139,78 +140,162 @@ fn main() -> Result<()> {
     } else {
         tracing::Level::WARN
     };
+    // Diagnostics go to stderr so they never mix with the listing or JSON.
     tracing_subscriber::fmt()
         .with_max_level(level)
         .with_target(false)
+        .with_writer(io::stderr)
+        .with_ansi(io::stderr().is_terminal())
         .init();
 
-    let style = Style::new(!cli.no_color && !cli.json && io::stdout().is_terminal());
+    let tty = io::stdout().is_terminal();
+    let no_color = cli.no_color || std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+    let style = Style::new(!no_color && !cli.json && tty, tty);
+    let mut out = io::BufWriter::new(io::stdout().lock());
+    match run(&cli, &style, &mut out) {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        // The reader went away (`stng … | head`): stop quietly, as cat does.
+        Err(e) if is_broken_pipe(&e) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("stng: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Analyze the target, a file or every regular file under a directory.
+/// `Ok(false)` means some file in a directory could not be analyzed; each one
+/// was reported as it happened.
+fn run(cli: &Cli, style: &Style, out: &mut impl Write) -> Result<bool> {
     let root = &cli.target;
-    if !root.exists() {
-        anyhow::bail!("Path does not exist: {}", safe_path(root));
+    let meta = std::fs::metadata(root).with_context(|| safe_path(root))?;
+    if !cli.no_xor && !cli.json && !cli.debug && !cli.detect && io::stderr().is_terminal() {
+        eprintln!("Scanning for encoded material...");
     }
-    if !root.is_dir() {
-        return analyze(&cli, root, &style, false);
+    if !meta.is_dir() {
+        // A FIFO or device would block or never end.
+        if !meta.is_file() {
+            anyhow::bail!("{}: not a regular file or directory", safe_path(root));
+        }
+        analyze(cli, root, &meta, style, false, out).with_context(|| safe_path(root))?;
+        return Ok(true);
     }
+    let mut ok = true;
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
+        let mut entries: Vec<_> = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries.flatten().collect(),
             Err(e) => {
-                eprintln!("warning: {}: {e}", safe_path(&dir));
+                eprintln!("stng: {}: {e}", safe_path(&dir));
+                ok = false;
                 continue;
             }
         };
-        for entry in entries.flatten() {
+        // Name order: a directory's files, then its subdirectories.
+        entries.sort_by_key(std::fs::DirEntry::path);
+        let mut subdirs = Vec::new();
+        for entry in entries {
             let path = entry.path();
-            match entry.file_type() {
-                Ok(t) if t.is_dir() => stack.push(path),
-                Ok(t) if t.is_file() => {
-                    if let Err(e) = analyze(&cli, &path, &style, true) {
-                        eprintln!("warning: {}: {e}", safe_path(&path));
+            // Not followed: a symlink could lead anywhere, a FIFO or device
+            // would block or never end.
+            match entry.metadata() {
+                Ok(m) if m.is_dir() => subdirs.push(path),
+                Ok(m) if m.is_file() => {
+                    // A sample that trips a bug stops only its own analysis;
+                    // the panic hook has already reported it.
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        analyze(cli, &path, &m, style, true, &mut *out)
+                    }))
+                    .unwrap_or_else(|_| {
+                        Err(anyhow::anyhow!("internal error (a bug; please report it)"))
+                    });
+                    match result {
+                        Ok(()) => {}
+                        Err(e) if is_broken_pipe(&e) => return Err(e),
+                        Err(e) => {
+                            eprintln!("stng: {}: {e:#}", safe_path(&path));
+                            ok = false;
+                        }
                     }
                 }
-                _ => {}
+                Ok(_) => {
+                    tracing::debug!(path = %safe_path(&path), "skipping: not a file or directory")
+                }
+                Err(e) => {
+                    eprintln!("stng: {}: {e}", safe_path(&path));
+                    ok = false;
+                }
             }
         }
+        stack.extend(subdirs.into_iter().rev());
     }
-    Ok(())
+    Ok(ok)
 }
 
-/// Extract and print one file's strings. `in_directory` selects the
+/// Whether writing stdout failed because its reader closed.
+fn is_broken_pipe(e: &anyhow::Error) -> bool {
+    e.chain()
+        .filter_map(|cause| cause.downcast_ref::<io::Error>())
+        .any(|e| e.kind() == io::ErrorKind::BrokenPipe)
+}
+
+/// Extract and print one file's strings. `listed` is what `stat` or the
+/// directory listing said `path` was; `in_directory` selects the
 /// one-object-per-line JSON form.
-fn analyze(cli: &Cli, path: &Path, style: &Style, in_directory: bool) -> Result<()> {
-    let data = std::fs::read(path)?;
+fn analyze(
+    cli: &Cli,
+    path: &Path,
+    listed: &std::fs::Metadata,
+    style: &Style,
+    in_directory: bool,
+    out: &mut impl Write,
+) -> Result<()> {
+    let data = read_regular_file(path, listed)?;
     if cli.detect {
-        println!("{}", stng::detect_language(&data));
+        if in_directory {
+            writeln!(out, "{}: {}", safe_path(path), stng::detect_language(&data))?;
+        } else {
+            writeln!(out, "{}", stng::detect_language(&data))?;
+        }
+        out.flush()?;
         return Ok(());
     }
 
-    let key = cli.xor.as_ref().map(|k| k.0.clone());
-    let xorscan = cli.xorscan && key.is_none() && !cli.no_xor;
-    let mode = match &key {
-        Some(key) => XorMode::Key(key.clone()),
+    let key = cli.xor.as_ref().map(|k| k.0.as_slice());
+    let mode = match key {
+        Some(key) => XorMode::Key(key.to_vec()),
         None if cli.no_xor => XorMode::Off,
-        None if xorscan => XorMode::Scan,
+        None if cli.xorscan => XorMode::Scan,
         None => XorMode::Auto,
     };
-    let opts = stng::ExtractOptions::new(cli.min_length)
+    let opts = stng::ExtractOptions::new(usize::from(cli.min_length))
         .with_garbage_filter(!cli.unfiltered)
-        .with_xor(mode);
-    if !cli.no_xor
-        && !cli.json
-        && !cli.debug
-        && io::stderr().is_terminal()
-        && data.len() <= stng::MAX_XOR_SCAN_SIZE
-    {
-        eprintln!("Scanning file for encoded material...");
-    }
+        .with_xor(mode)
+        .with_platform_signed_skip(cli.skip_platform_signed);
 
-    let mut strings = stng::extract_strings_with_options(&data, &opts);
+    // Parsed once, for extraction and for the listing's format and overlay.
+    let object = stng::goblin::Object::parse(&data).ok();
+    let started = std::time::Instant::now();
+    let mut strings = match &object {
+        Some(object) => stng::extract_strings_from_parsed(object, &[], &data, &opts),
+        None => stng::extract_strings_with_options(&data, &opts),
+    };
+    tracing::debug!(
+        path = %safe_path(path),
+        bytes = data.len(),
+        strings = strings.len(),
+        elapsed = ?started.elapsed(),
+        "extracted"
+    );
     if let Some(LcgRange(lcg, range)) = &cli.xor_lcg {
-        let decoded = stng::decode_lcg_xor(&data, range.clone(), lcg)
-            .ok_or_else(|| anyhow::anyhow!("LCG-XOR parameters did not decode a readable range"))?;
+        let decoded = stng::decode_lcg_xor(&data, range.clone(), lcg).context("--xor-lcg")?;
         strings.push(decoded);
+    }
+    // `-i` first: the value dedup below keeps the lowest-offset copy, and
+    // that is often the raw-scan hit `-i` drops, not its structured twin.
+    if cli.interesting {
+        strings.retain(|s| s.method != StringMethod::RawScan);
     }
     // Show each value once, except what was decoded from a script: those
     // are distinct finds that may repeat text found elsewhere.
@@ -219,46 +304,87 @@ fn analyze(cli: &Cli, path: &Path, style: &Style, in_directory: bool) -> Result<
         s.method == StringMethod::ScriptDecode
             || seen.insert(s.value.trim().trim_end_matches(char::is_control).to_owned())
     });
-    if cli.interesting {
-        strings.retain(|s| s.method != StringMethod::RawScan);
-    }
 
     if cli.json {
-        print_json(path, &strings, in_directory)
+        print_json(out, path, &strings, in_directory)?;
     } else if cli.simple {
         for s in &strings {
-            println!(
+            writeln!(
+                out,
                 "{}",
                 output::terminal_safe(s.value.trim_end_matches(char::is_control))
-            );
+            )?;
         }
+        out.flush()?;
         eprintln!("\n{} strings extracted", strings.len());
-        Ok(())
     } else {
-        output::print_listing(path, &data, &mut strings, key.as_deref(), style);
-        Ok(())
+        output::print_listing(out, path, &data, object.as_ref(), &mut strings, key, style)?;
     }
+    out.flush()?;
+    Ok(())
+}
+
+/// The contents of the regular file at `path`, which `listed` describes.
+/// The checks are on the opened file, so one replaced after it was listed (by
+/// a symlink to a secret, or to `/dev/zero`) is refused rather than read, and
+/// one still growing is read only to the length it had.
+fn read_regular_file(path: &Path, listed: &std::fs::Metadata) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() || !same_file(&meta, listed) {
+        anyhow::bail!("changed while being read");
+    }
+    let mut data = Vec::new();
+    file.take(meta.len()).read_to_end(&mut data)?;
+    Ok(data)
+}
+
+#[cfg(unix)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    (a.dev(), a.ino()) == (b.dev(), b.ino())
+}
+
+/// Windows has no stable file identity in std; the type check stands alone.
+#[cfg(not(unix))]
+fn same_file(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    true
 }
 
 /// The strings as a JSON array; in a directory, as one
 /// `{"path": …, "strings": […]}` object per line.
-fn print_json(path: &Path, strings: &[ExtractedString], in_directory: bool) -> Result<()> {
+fn print_json(
+    out: &mut impl Write,
+    path: &Path,
+    strings: &[ExtractedString],
+    in_directory: bool,
+) -> io::Result<()> {
     #[derive(serde::Serialize)]
     struct File<'a> {
         path: std::borrow::Cow<'a, str>,
         strings: &'a [ExtractedString],
     }
-    let mut out = io::BufWriter::new(io::stdout().lock());
-    if in_directory {
+    let json = if in_directory {
         let file = File {
             path: path.to_string_lossy(),
             strings,
         };
-        serde_json::to_writer(&mut out, &file)?;
+        serde_json::to_string(&file)?
     } else {
-        serde_json::to_writer_pretty(&mut out, strings)?;
+        serde_json::to_string_pretty(strings)?
+    };
+    // serde_json escapes C0 controls but passes DEL, C1 controls and bidi
+    // overrides through, and JSON is often read on a terminal. Outside
+    // strings there is only ASCII and the pretty form's newlines, so
+    // escaping every other such character is the same JSON value.
+    let unsafe_char = |c: char| c != '\n' && output::is_terminal_unsafe(c);
+    let mut rest = json.as_str();
+    while let Some((at, c)) = rest.char_indices().find(|&(_, c)| unsafe_char(c)) {
+        out.write_all(&rest.as_bytes()[..at])?;
+        write!(out, "\\u{:04x}", u32::from(c))?;
+        rest = &rest[at + c.len_utf8()..];
     }
-    out.write_all(b"\n")?;
-    out.flush()?;
-    Ok(())
+    out.write_all(rest.as_bytes())?;
+    out.write_all(b"\n")
 }

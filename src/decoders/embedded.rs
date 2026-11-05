@@ -2,24 +2,22 @@
 //! and hex runs, and string concatenation that hides them.
 
 use super::base64_text::{MAX_INFLATED_PER_PASS, base64_payload_to_text, decode_base64_bytes};
-use super::{MAX_DECODED_SIZE, MIN_BASE64_LENGTH, decoded_to_text};
+use super::{MIN_BASE64_LENGTH, decoded_to_text};
 use crate::{ExtractedString, StringMethod};
 use rayon::prelude::*;
 use regex::Regex;
 use std::sync::LazyLock;
 use std::sync::atomic::AtomicUsize;
 
-#[allow(clippy::expect_used)]
 pub(super) static QUOTED_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]"#).expect("static regex"));
+    LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]"#).unwrap_or_else(crate::invalid_pattern));
 
 /// Matches base64-like substrings within larger strings (e.g. embedded in shell
 /// commands). The `{8,}` run only *starts* a candidate — [`extract_embedded_base64`]
 /// then decides whether a run this short is trustworthy. A 6-byte payload is 8
 /// base64 chars, so this is the floor below which nothing meaningful decodes.
-#[allow(clippy::expect_used)]
-pub(super) static EMBEDDED_B64_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"([A-Za-z0-9+/]{8,}={0,2})").expect("static regex"));
+static EMBEDDED_B64_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[A-Za-z0-9+/]{8,}={0,2}").unwrap_or_else(crate::invalid_pattern));
 
 /// The alphabet-char count above which an embedded run is trusted on its own —
 /// long enough (9 decoded bytes) that a false positive is unlikely. Shorter
@@ -31,9 +29,10 @@ pub(super) const EMBEDDED_B64_TRUSTED_LEN: usize = 12;
 /// the whole string. [`decode_hex_strings`] only decodes a value that is hex
 /// *in its entirety*, so without this the payload inside such a one-liner is
 /// never decoded and every plaintext rule downstream is blind to it.
-#[allow(clippy::expect_used)]
-pub(super) static EMBEDDED_HEX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"([0-9a-fA-F]{32,})").expect("static regex"));
+static EMBEDDED_HEX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!("[0-9a-fA-F]{{{EMBEDDED_HEX_TRUSTED_LEN},}}"))
+        .unwrap_or_else(crate::invalid_pattern)
+});
 
 /// The run length above which an embedded hex run is decoded on its own: 32
 /// nibbles is 16 decoded bytes. The floor is deliberately double
@@ -43,7 +42,7 @@ pub(super) static EMBEDDED_HEX_RE: LazyLock<Regex> =
 /// object ids, key material, colour tables. Those are rejected on output
 /// rather than input: random bytes almost never survive [`decoded_to_text`],
 /// which requires the result to be printable text end to end.
-pub(super) const EMBEDDED_HEX_TRUSTED_LEN: usize = 32;
+const EMBEDDED_HEX_TRUSTED_LEN: usize = 32;
 
 /// Deobfuscate strings that use concatenation patterns.
 ///
@@ -110,57 +109,49 @@ pub(crate) fn extract_embedded_base64(strings: &[ExtractedString]) -> Vec<Extrac
             let has_command = ["base64 -d", "base64 --decode", "base64 -D"]
                 .iter()
                 .any(|m| s.value.contains(m));
-            for cap in EMBEDDED_B64_RE.captures_iter(&s.value) {
-                if let Some(b64_match) = cap.get(1) {
-                    let b64_str = b64_match.as_str();
+            for b64_match in EMBEDDED_B64_RE.find_iter(&s.value) {
+                let b64_str = b64_match.as_str();
 
-                    // Skip if it's the entire string (handled by decode_base64_strings)
-                    if b64_str == s.value {
-                        continue;
-                    }
+                // Skip if it's the entire string (handled by decode_base64_strings)
+                if b64_str == s.value {
+                    continue;
+                }
 
-                    // A remainder of one cannot encode any final bytes.
-                    // Remainders two and three are canonical unpadded Base64.
-                    if b64_str.len() % 4 == 1 {
-                        continue;
-                    }
+                // A remainder of one cannot encode any final bytes.
+                // Remainders two and three are canonical unpadded Base64.
+                if b64_str.len() % 4 == 1 {
+                    continue;
+                }
 
-                    // A short run alone is indistinguishable from an ordinary
-                    // identifier, so it is taken only when padding (base64's
-                    // own tell, which almost never follows an identifier) or a
-                    // decode command corroborates it. A run of
-                    // EMBEDDED_B64_TRUSTED_LEN stands on its own.
-                    let pad = b64_str.bytes().rev().take_while(|&b| b == b'=').count();
-                    if b64_str.len() - pad < EMBEDDED_B64_TRUSTED_LEN && pad == 0 && !has_command {
-                        continue;
-                    }
+                // A short run alone is indistinguishable from an ordinary
+                // identifier, so it is taken only when padding (base64's
+                // own tell, which almost never follows an identifier) or a
+                // decode command corroborates it. A run of
+                // EMBEDDED_B64_TRUSTED_LEN stands on its own.
+                let pad = b64_str.bytes().rev().take_while(|&b| b == b'=').count();
+                if b64_str.len() - pad < EMBEDDED_B64_TRUSTED_LEN && pad == 0 && !has_command {
+                    continue;
+                }
 
-                    // Try to decode it
-                    if let Some(decoded) = decode_base64_bytes(b64_str) {
-                        // Check size limit
-                        if decoded.len() > MAX_DECODED_SIZE {
-                            continue;
-                        }
+                if let Some(decoded) = decode_base64_bytes(b64_str) {
+                    // Base64 can wrap binary zlib data. Inflate before asking
+                    // for text, just as the sample's runtime decoder does.
+                    if let Some((decoded_str, _)) = base64_payload_to_text(decoded, &budget) {
+                        let trimmed = decoded_str.trim();
 
-                        // Base64 can wrap binary zlib data. Inflate before asking
-                        // for text, just as the sample's runtime decoder does.
-                        if let Some((decoded_str, _)) = base64_payload_to_text(decoded, &budget) {
-                            let trimmed = decoded_str.trim();
-
-                            // Must be meaningful (at least 4 chars after trim)
-                            if trimmed.len() >= 4 {
-                                local.push(ExtractedString {
-                                    value: trimmed.to_string(),
-                                    // The base64 token sits at `b64_match.start()`
-                                    // within the parent's bytes; its source extent
-                                    // is the encoded token, not the decoded value.
-                                    data_offset: s.data_offset + b64_match.start() as u64,
-                                    data_len: u32::try_from(b64_str.len()).unwrap_or(u32::MAX),
-                                    method: StringMethod::Base64Decode,
-                                    kind: crate::classify_string(trimmed),
-                                    ..Default::default()
-                                });
-                            }
+                        // Must be meaningful (at least 4 chars after trim)
+                        if trimmed.len() >= 4 {
+                            local.push(ExtractedString {
+                                value: trimmed.to_string(),
+                                // The base64 token sits at `b64_match.start()`
+                                // within the parent's bytes; its source extent
+                                // is the encoded token, not the decoded value.
+                                data_offset: s.data_offset + b64_match.start() as u64,
+                                data_len: u32::try_from(b64_str.len()).unwrap_or(u32::MAX),
+                                method: StringMethod::Base64Decode,
+                                kind: crate::classify_string(trimmed),
+                                ..Default::default()
+                            });
                         }
                     }
                 }
@@ -186,17 +177,14 @@ pub(crate) fn extract_embedded_hex(strings: &[ExtractedString]) -> Vec<Extracted
         .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
         .flat_map_iter(|s| {
             let mut local = Vec::new();
-            for cap in EMBEDDED_HEX_RE.captures_iter(&s.value) {
-                let Some(hex_match) = cap.get(1) else {
-                    continue;
-                };
+            for hex_match in EMBEDDED_HEX_RE.find_iter(&s.value) {
                 let hex_str = hex_match.as_str();
 
                 // The whole-string case is decode_hex_strings' job.
                 if hex_str == s.value {
                     continue;
                 }
-                if hex_str.len() < EMBEDDED_HEX_TRUSTED_LEN || !hex_str.len().is_multiple_of(2) {
+                if !hex_str.len().is_multiple_of(2) {
                     continue;
                 }
 

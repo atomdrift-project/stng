@@ -3,13 +3,13 @@ use crate::StringKind;
 use goblin::mach::MachO;
 
 #[test]
-fn test_rust_extractor_creation() {
+fn new_sets_min_length() {
     let extractor = RustStringExtractor::new(4);
     assert_eq!(extractor.min_length, 4);
 }
 
 #[test]
-fn test_rust_extractor_different_min_lengths() {
+fn new_keeps_extreme_min_lengths() {
     let extractor1 = RustStringExtractor::new(0);
     assert_eq!(extractor1.min_length, 0);
     let extractor2 = RustStringExtractor::new(100);
@@ -17,7 +17,7 @@ fn test_rust_extractor_different_min_lengths() {
 }
 
 #[test]
-fn test_raw_string_extraction() {
+fn raw_scan_splits_on_nul_and_drops_short() {
     let extractor = RustStringExtractor::new(4);
     let data = b"Hello\0World\0foo\0";
 
@@ -29,7 +29,7 @@ fn test_raw_string_extraction() {
 }
 
 #[test]
-fn test_raw_string_deduplication() {
+fn raw_scan_deduplicates() {
     let extractor = RustStringExtractor::new(4);
     let data = b"Hello\0Hello\0World\0";
 
@@ -40,7 +40,7 @@ fn test_raw_string_deduplication() {
 }
 
 #[test]
-fn test_raw_string_min_length() {
+fn raw_scan_respects_min_length() {
     let extractor = RustStringExtractor::new(6);
     let data = b"Hello\0World\0";
 
@@ -51,7 +51,7 @@ fn test_raw_string_min_length() {
 }
 
 #[test]
-fn test_raw_string_whitespace_trimming() {
+fn raw_scan_trims_whitespace() {
     let extractor = RustStringExtractor::new(4);
     let data = b"  Hello  \0  World  \0";
 
@@ -62,7 +62,7 @@ fn test_raw_string_whitespace_trimming() {
 }
 
 #[test]
-fn test_raw_string_non_printable_breaks() {
+fn raw_scan_breaks_on_non_printable() {
     let extractor = RustStringExtractor::new(4);
     // Non-printable byte should break the string
     let data = b"Hello\x01World\0";
@@ -74,7 +74,7 @@ fn test_raw_string_non_printable_breaks() {
 }
 
 #[test]
-fn test_extract_packed_strings_urls() {
+fn packed_scan_finds_urls() {
     let extractor = RustStringExtractor::new(4);
     let data = b"https://example.com/path?query=value";
 
@@ -84,7 +84,7 @@ fn test_extract_packed_strings_urls() {
 }
 
 #[test]
-fn test_extract_packed_strings_paths() {
+fn packed_scan_finds_paths() {
     let extractor = RustStringExtractor::new(4);
     let data = b"/usr/local/bin/rustc";
 
@@ -94,7 +94,7 @@ fn test_extract_packed_strings_paths() {
 }
 
 #[test]
-fn test_extract_packed_strings_env_vars() {
+fn packed_scan_finds_env_vars() {
     let extractor = RustStringExtractor::new(4);
     let data = b"RUST_BACKTRACE=full HOME_DIR=/home";
 
@@ -104,7 +104,7 @@ fn test_extract_packed_strings_env_vars() {
 }
 
 #[test]
-fn test_extract_packed_strings_snake_case() {
+fn packed_scan_finds_snake_case_identifiers() {
     let extractor = RustStringExtractor::new(4);
     let data = b"my_function_name some_other_var";
 
@@ -114,7 +114,7 @@ fn test_extract_packed_strings_snake_case() {
 }
 
 #[test]
-fn test_extract_packed_strings_domain_names() {
+fn packed_scan_finds_domains() {
     let extractor = RustStringExtractor::new(4);
     let data = b"example.com api.github.com";
 
@@ -124,7 +124,7 @@ fn test_extract_packed_strings_domain_names() {
 }
 
 #[test]
-fn test_extract_packed_strings_null_separated() {
+fn packed_scan_splits_on_nul() {
     let extractor = RustStringExtractor::new(4);
     let data = b"hello\0world\0test";
 
@@ -136,18 +136,21 @@ fn test_extract_packed_strings_null_separated() {
 }
 
 #[test]
-fn test_extract_packed_strings_newline_separated() {
+fn packed_scan_splits_on_newline() {
     let extractor = RustStringExtractor::new(4);
     let data = b"line1\nline2\nline3";
 
     let strings = extractor.extract_packed_strings(data);
-
-    // Should process newlines
-    assert!(!strings.is_empty());
+    // Should split on newlines
+    let found: Vec<_> = strings
+        .iter()
+        .map(|s| (s.value.as_str(), s.data_offset))
+        .collect();
+    assert_eq!(found, [("line1", 0), ("line2", 6), ("line3", 12)]);
 }
 
 #[test]
-fn test_add_if_valid_too_short() {
+fn add_if_valid_rejects_short() {
     let extractor = RustStringExtractor::new(10);
     let mut strings = Vec::new();
     let mut seen = HashSet::new();
@@ -158,7 +161,7 @@ fn test_add_if_valid_too_short() {
 }
 
 #[test]
-fn test_add_if_valid_duplicate() {
+fn add_if_valid_rejects_seen() {
     let extractor = RustStringExtractor::new(4);
     let mut strings = Vec::new();
     let mut seen = HashSet::new();
@@ -170,7 +173,7 @@ fn test_add_if_valid_duplicate() {
 }
 
 #[test]
-fn test_add_if_valid_mostly_digits() {
+fn add_if_valid_rejects_mostly_digits() {
     let extractor = RustStringExtractor::new(4);
     let mut strings = Vec::new();
     let mut seen = HashSet::new();
@@ -182,7 +185,7 @@ fn test_add_if_valid_mostly_digits() {
 }
 
 #[test]
-fn test_add_if_valid_hex_pattern() {
+fn add_if_valid_rejects_short_hex() {
     let extractor = RustStringExtractor::new(4);
     let mut strings = Vec::new();
     let mut seen = HashSet::new();
@@ -194,7 +197,7 @@ fn test_add_if_valid_hex_pattern() {
 }
 
 #[test]
-fn test_add_if_valid_success() {
+fn add_if_valid_keeps_identifier() {
     let extractor = RustStringExtractor::new(4);
     let mut strings = Vec::new();
     let mut seen = HashSet::new();
@@ -207,20 +210,27 @@ fn test_add_if_valid_success() {
 }
 
 #[test]
-fn test_extract_patterns_from_segment_complex() {
+fn segment_scan_finds_url_path_env_and_ident() {
     let extractor = RustStringExtractor::new(4);
     let segment = "https://example.com/path /usr/bin/test MY_ENV_VAR=value snake_case_ident";
     let mut strings = Vec::new();
     let mut seen = HashSet::new();
 
     extractor.extract_patterns_from_segment(segment, 0, &mut strings, &mut seen);
-
     // Should extract URLs, paths, env vars, and identifiers
-    assert!(!strings.is_empty());
+    let has = |value: &str, offset: u64, kind: Option<StringKind>| {
+        strings
+            .iter()
+            .any(|s| s.value == value && s.data_offset == offset && s.kind == kind)
+    };
+    assert!(has("https://example.com/path", 0, Some(StringKind::Url)));
+    assert!(has("/usr/bin/test", 25, Some(StringKind::Path)));
+    assert!(has("MY_ENV_VAR", 39, Some(StringKind::EnvVar)));
+    assert!(has("snake_case_ident", 56, None));
 }
 
 #[test]
-fn test_extract_patterns_case_transition_split() {
+fn segment_scan_splits_on_case_transition() {
     let extractor = RustStringExtractor::new(4);
     // lowercaseUPPERCASEFOLLOWS - should split on case transition
     let segment = "helloWORLDNOW";
@@ -228,13 +238,16 @@ fn test_extract_patterns_case_transition_split() {
     let mut seen = HashSet::new();
 
     extractor.extract_patterns_from_segment(segment, 0, &mut strings, &mut seen);
-
-    // Should handle case transitions
-    assert!(!strings.is_empty());
+    // Should split where lowercase turns to uppercase
+    let found: Vec<_> = strings
+        .iter()
+        .map(|s| (s.value.as_str(), s.data_offset))
+        .collect();
+    assert_eq!(found, [("hello", 0), ("WORLDNOW", 5)]);
 }
 
 #[test]
-fn test_find_section_not_found() {
+fn elf_section_missing_is_none() {
     // Create minimal ELF-like data
     let mut data = vec![0u8; 512];
     data[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
@@ -249,7 +262,7 @@ fn test_find_section_not_found() {
 }
 
 #[test]
-fn test_raw_string_classification() {
+fn raw_scan_classifies_urls_and_paths() {
     let extractor = RustStringExtractor::new(4);
     let data = b"https://example.com\0/usr/bin\0ERROR_CODE\0";
 
@@ -267,7 +280,7 @@ fn test_raw_string_classification() {
 }
 
 #[test]
-fn test_elf_extraction_empty_data() {
+fn extracts_little_from_empty_elf() {
     let extractor = RustStringExtractor::new(4);
     let mut elf_data = vec![0u8; 64];
     elf_data[0..4].copy_from_slice(b"\x7fELF");
@@ -281,7 +294,7 @@ fn test_elf_extraction_empty_data() {
 }
 
 #[test]
-fn test_elf_extraction_with_rodata() {
+fn bounds_strings_from_sectionless_elf() {
     let extractor = RustStringExtractor::new(4);
     let mut elf_data = vec![0u8; 1024];
     elf_data[0..4].copy_from_slice(b"\x7fELF");
@@ -299,7 +312,7 @@ fn test_elf_extraction_with_rodata() {
 }
 
 #[test]
-fn test_macho_extraction_minimal() {
+fn extracts_little_from_empty_macho() {
     let extractor = RustStringExtractor::new(4);
     let mut macho_data = vec![0u8; 4096];
     macho_data[0..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
@@ -316,7 +329,7 @@ fn rust_elf() -> (&'static [u8], goblin::elf::Elf<'static>) {
 }
 
 #[test]
-fn test_elf_multiple_sections() {
+fn finds_structure_strings_in_rust_elf() {
     let (data, elf) = rust_elf();
     let strings = RustStringExtractor::new(4).extract_elf(&elf, data);
     assert!(!strings.is_empty());
@@ -328,7 +341,7 @@ fn test_elf_multiple_sections() {
 }
 
 #[test]
-fn test_min_length_filtering_elf() {
+fn longer_min_length_yields_fewer_strings() {
     let (data, elf) = rust_elf();
     let strings_short = RustStringExtractor::new(4).extract_elf(&elf, data);
     let strings_long = RustStringExtractor::new(20).extract_elf(&elf, data);
@@ -340,7 +353,7 @@ fn test_min_length_filtering_elf() {
 }
 
 #[test]
-fn test_elf_string_deduplication() {
+fn elf_scan_has_few_duplicates() {
     let (data, elf) = rust_elf();
     let strings = RustStringExtractor::new(4).extract_elf(&elf, data);
     let mut seen = std::collections::HashSet::new();
@@ -353,7 +366,7 @@ fn test_elf_string_deduplication() {
 }
 
 #[test]
-fn test_macho_text_const() {
+fn macho_strings_meet_structure_min_length() {
     let data = crate::test_fixture("testdata/macho/rust_heap_xor_installer_universal.macho");
     let goblin::mach::Mach::Fat(fat) = goblin::mach::Mach::parse(data).unwrap() else {
         panic!("universal binary")
@@ -369,7 +382,7 @@ fn test_macho_text_const() {
 }
 
 #[test]
-fn test_corrupted_binary_handling() {
+fn bounds_strings_from_garbage_elf() {
     let extractor = RustStringExtractor::new(4);
     let garbage_data = vec![0xAA; 1024];
     if let Ok(elf) = goblin::elf::Elf::parse(&garbage_data) {
@@ -379,7 +392,7 @@ fn test_corrupted_binary_handling() {
 }
 
 #[test]
-fn test_very_large_min_length() {
+fn huge_min_length_keeps_only_structure_strings() {
     let (data, elf) = rust_elf();
     let strings = RustStringExtractor::new(1000).extract_elf(&elf, data);
     // Even with min_length 1000, structure-based strings can be as short as 2.
@@ -393,7 +406,7 @@ fn test_very_large_min_length() {
 }
 
 #[test]
-fn test_offset_validity() {
+fn offsets_stay_within_file() {
     let (data, elf) = rust_elf();
     let file_size = data.len() as u64;
     for s in RustStringExtractor::new(4).extract_elf(&elf, data) {

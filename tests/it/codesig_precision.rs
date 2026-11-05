@@ -10,7 +10,7 @@ use std::fs;
 use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
 #[test]
-fn test_imports_not_marked_as_codesig() {
+fn keeps_imports_out_of_code_signature() {
     let bin_path = "/bin/ls";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
@@ -39,7 +39,7 @@ fn test_imports_not_marked_as_codesig() {
 }
 
 #[test]
-fn test_only_base64_gets_codesig_hash_kind() {
+fn gives_hash_kind_only_to_digest_base64() {
     let bin_path = "/bin/ls";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
@@ -90,7 +90,7 @@ fn test_only_base64_gets_codesig_hash_kind() {
 }
 
 #[test]
-fn test_linkedit_const_strings_selective_codesig() {
+fn marks_only_signature_plists_as_code_signature() {
     let bin_path = "/bin/ls";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
@@ -204,7 +204,7 @@ fn test_linkedit_const_strings_selective_codesig() {
 }
 
 #[test]
-fn test_codesig_method_on_signatures() {
+fn limits_code_signature_to_hashes_plists_and_certs() {
     let bin_path = "/bin/ls";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
@@ -305,7 +305,7 @@ fn test_codesig_method_on_signatures() {
 }
 
 #[test]
-fn test_no_base64_kind_in_linkedit() {
+fn promotes_digest_sized_base64_to_hashes() {
     let bin_path = "/bin/ls";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
@@ -340,7 +340,7 @@ fn test_no_base64_kind_in_linkedit() {
 }
 
 #[test]
-fn test_cert_strings_not_marked_as_hashes() {
+fn keeps_certificate_names_out_of_hashes() {
     let bin_path = "/bin/ls";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
@@ -354,9 +354,10 @@ fn test_cert_strings_not_marked_as_hashes() {
         .filter(|s| s.value.contains("Apple") && s.value.contains("Cert"))
         .collect();
 
-    if cert_strings.is_empty() {
-        return;
-    }
+    assert!(
+        !cert_strings.is_empty(),
+        "/bin/ls's signature names its Apple certificates"
+    );
 
     // None of these should be CodeSignatureHash
     for s in &cert_strings {
@@ -370,7 +371,7 @@ fn test_cert_strings_not_marked_as_hashes() {
 }
 
 #[test]
-fn test_exact_hash_count() {
+fn counts_ls_hashes_signature_strings_and_app_ids() {
     let bin_path = "/bin/ls";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");

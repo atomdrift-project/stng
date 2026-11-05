@@ -1,4 +1,8 @@
 //! Incrementing keys, where each byte's key is the previous plus one.
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "keys advance mod 256, and XOR_PATTERNS has fewer than 256 entries"
+)]
 
 use super::{Covered, REGION_RADIUS, XOR_PATTERNS, is_printable_byte_for_file_xor};
 use crate::xor::classify::classify_xor_string;
@@ -8,6 +12,9 @@ use std::sync::LazyLock;
 /// Patterns long enough for an incremental-XOR anchor, with their index in
 /// [`XOR_PATTERNS`]. Shorter ones produce too many chance hits to be evidence.
 pub(super) const MIN_ANCHOR_LEN: usize = 4;
+
+// A pattern's index is stored as a `u8`.
+const _: () = assert!(XOR_PATTERNS.len() < 256);
 
 /// The first two encoded bytes of every incremental-XOR `(pattern, seed)`
 /// pair, sorted, with a 64-Kbit filter over them. Seed 0 is excluded: that is
@@ -82,7 +89,7 @@ pub(super) fn find_incremental_anchors(data: &[u8]) -> Vec<(usize, usize, u8)> {
 pub(crate) fn extract_incremental_xor_strings(
     data: &[u8],
     min_length: usize,
-    excluded_ranges: &[(usize, usize)],
+    excluded_ranges: &[std::ops::Range<usize>],
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();
     // Pre-seed with excluded_ranges (code sections). The per-offset loop

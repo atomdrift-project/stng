@@ -149,10 +149,12 @@ pub(super) fn percent_decode(host: &str) -> Option<Cow<'_, str>> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        let escape = bytes
-            .get(i + 1..i + 3)
-            .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))
-            .and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok());
+        let escape = match bytes.get(i + 1..i + 3) {
+            Some(&[hi, lo]) => crate::bytes::hex_digit(hi)
+                .zip(crate::bytes::hex_digit(lo))
+                .map(|(hi, lo)| hi << 4 | lo),
+            _ => None,
+        };
         match (bytes[i], escape) {
             (b'%', Some(byte)) => {
                 out.push(byte);
@@ -203,6 +205,20 @@ pub(super) fn url_ipv4(host: &str) -> Option<Ipv4Addr> {
     Some(Ipv4Addr::from(u32::try_from(value).ok()?))
 }
 
+/// Whether `value` holds URLs and each names a vendor's metadata host:
+/// schema, DTD and certificate hosts, and Apple's, whose certificate and
+/// plist URLs are in every signed Mach-O and so in what XOR over them yields.
+pub(crate) fn only_metadata_urls(value: &str) -> bool {
+    let (mut any, mut all) = (false, true);
+    scan_url_authorities(value, |m| {
+        any = true;
+        all &= is_common_metadata_hostname(&m.value)
+            || m.value == "apple.com"
+            || m.value.ends_with(".apple.com");
+    });
+    any && all
+}
+
 /// Whether `value` holds a URL whose authority parses as a host or IP.
 pub(crate) fn has_url_authority(value: &str) -> bool {
     let mut found = false;
@@ -236,16 +252,27 @@ pub(super) fn scan_url_authorities(value: &str, mut emit: impl FnMut(NetworkMatc
     if memchr::memchr(b':', bytes).is_none() {
         return;
     }
+    let is_url_end = |b: &u8| b.is_ascii_whitespace() || matches!(*b, b'"' | b'\'' | b'<' | b'>');
+    // `authority_end` only moves forward, so the next URL terminator found
+    // for one URL stays valid for the following ones until it is passed.
+    // Rescanning per `://` made a long unterminated line quadratic.
+    let mut url_end = 0usize;
     let mut search_from = 0usize;
     while search_from < bytes.len() {
         let Some(rel) = memchr::memmem::find(&bytes[search_from..], b"://") else {
             break;
         };
         let marker = search_from + rel;
-        let Some(_scheme_start) = scheme_start(bytes, marker) else {
+        // An RFC 3986 scheme (a letter, then letters, digits, `+`, `-` or
+        // `.`) must end at the colon.
+        let scheme_start = bytes[..marker]
+            .iter()
+            .rposition(|&b| !(b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.')))
+            .map_or(0, |at| at + 1);
+        if scheme_start == marker || !bytes[scheme_start].is_ascii_alphabetic() {
             search_from = marker + 3;
             continue;
-        };
+        }
         let authority_start = marker + 3;
         let authority_end = bytes[authority_start..]
             .iter()
@@ -260,10 +287,12 @@ pub(super) fn scan_url_authorities(value: &str, mut emit: impl FnMut(NetworkMatc
         // A document type definition URL names a schema, as in a plist's
         // `<!DOCTYPE … "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`;
         // readers do not fetch it, so its host is not one the sample contacts.
-        let url_end = bytes[authority_end..]
-            .iter()
-            .position(|b| b.is_ascii_whitespace() || matches!(*b, b'"' | b'\'' | b'<' | b'>'))
-            .map_or(bytes.len(), |end| authority_end + end);
+        if url_end < authority_end {
+            url_end = bytes[authority_end..]
+                .iter()
+                .position(is_url_end)
+                .map_or(bytes.len(), |end| authority_end + end);
+        }
         if url_end >= authority_end + 4 && bytes[url_end - 4..url_end].eq_ignore_ascii_case(b".dtd")
         {
             search_from = url_end;
@@ -282,26 +311,4 @@ pub(super) fn scan_url_authorities(value: &str, mut emit: impl FnMut(NetworkMatc
         }
         search_from = authority_end.max(marker + 3);
     }
-}
-
-pub(super) fn scheme_start(bytes: &[u8], colon: usize) -> Option<usize> {
-    if colon == 0 {
-        return None;
-    }
-    let mut start = colon;
-    while start > 0 {
-        let b = bytes[start - 1];
-        if b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.') {
-            start -= 1;
-        } else {
-            break;
-        }
-    }
-    let scheme = &bytes[start..colon];
-    (!scheme.is_empty()
-        && scheme[0].is_ascii_alphabetic()
-        && scheme
-            .iter()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(*b, b'+' | b'-' | b'.')))
-    .then_some(start)
 }

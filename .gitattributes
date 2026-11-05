@@ -1,1 +1,7 @@
 * text=auto
+*.gz binary
+
+# GitHub source archives leave out the live-malware corpus, and language
+# statistics ignore it.
+testdata/** export-ignore
+testdata/** linguist-vendored

@@ -23,7 +23,7 @@ fn single_byte_keys_merge_hints_and_honor_exclusions() {
         &[key],
         8,
         true,
-        &[(300, 340)],
+        std::slice::from_ref(&(300..340)),
         vec![hint],
         false,
     );
@@ -37,4 +37,18 @@ fn single_byte_keys_merge_hints_and_honor_exclusions() {
         !values.iter().any(|v| v.contains("cmd.exe")),
         "excluded: {values:?}"
     );
+}
+
+#[test]
+fn key_showing_through_at_any_phase_is_an_artifact() {
+    let key = b"k3yPhrase";
+    // Zeros XOR'd from phase 3: the key rotated by three, repeated.
+    let rotated: String = (0..20)
+        .map(|i| char::from(key[(i + 3) % key.len()]))
+        .collect();
+    assert!(super::is_xor_key_artifact(&rotated, key), "{rotated}");
+    assert!(!super::is_xor_key_artifact(
+        "http://c2.example/gate.php",
+        key
+    ));
 }

@@ -6,7 +6,7 @@
 use stng::{ExtractOptions, StringMethod};
 
 /// Helper function to create XOR'd test data and verify extraction
-fn test_xor_extraction(test_strings: &[&str], test_name: &str) {
+fn assert_xor_recovers(test_strings: &[&str], test_name: &str) {
     let key = b"TESTKEY123";
 
     // Create XOR'd data
@@ -43,7 +43,7 @@ fn test_xor_extraction(test_strings: &[&str], test_name: &str) {
 
 #[test]
 
-fn test_applescript_strings_not_filtered() {
+fn keeps_xor_applescript() {
     // AppleScript commands from real malware
     let applescript_strings = vec![
         "set end of aflst to item i of fl",
@@ -57,12 +57,12 @@ fn test_applescript_strings_not_filtered() {
         "repeat with i from 1 to (count fl)",
     ];
 
-    test_xor_extraction(&applescript_strings, "AppleScript");
+    assert_xor_recovers(&applescript_strings, "AppleScript");
 }
 
 #[test]
 
-fn test_xml_plist_strings_not_filtered() {
+fn keeps_xor_plist_fragments() {
     let xml_strings = vec![
         ">ProgramArguments</key>",
         "<array>",
@@ -78,21 +78,21 @@ fn test_xml_plist_strings_not_filtered() {
         "<key>Label</key>",
     ];
 
-    test_xor_extraction(&xml_strings, "XML/plist");
+    assert_xor_recovers(&xml_strings, "XML/plist");
 }
 
 #[test]
-fn test_shell_commands_not_filtered() {
+fn keeps_xor_shell_commands() {
     let shell_strings = vec![
         "xattr -d com.apple.quarantine \"%s\" 2>&1",
         "osascript 2>&1 <<EOD",
     ];
 
-    test_xor_extraction(&shell_strings, "Shell commands");
+    assert_xor_recovers(&shell_strings, "Shell commands");
 }
 
 #[test]
-fn test_file_paths_not_filtered() {
+fn keeps_xor_wallet_and_launch_agent_paths() {
     let path_strings = vec![
         "%s/Library/LaunchAgents/%s",
         "Wallets/atomic/Local Storage",
@@ -101,14 +101,14 @@ fn test_file_paths_not_filtered() {
         "%s/Library/Ethereum/keystore",
     ];
 
-    test_xor_extraction(&path_strings, "File paths");
+    assert_xor_recovers(&path_strings, "File paths");
 }
 
 #[test]
-fn test_wallet_and_crypto_not_filtered() {
+fn keeps_xor_wallet_words() {
     let crypto = vec![
         "Ethereum", "keystore", "Wallet", "wallets", "tdata", "Ledger", "atomic",
     ];
 
-    test_xor_extraction(&crypto, "Crypto/Wallet");
+    assert_xor_recovers(&crypto, "Crypto/Wallet");
 }

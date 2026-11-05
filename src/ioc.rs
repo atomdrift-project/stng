@@ -11,7 +11,7 @@
 mod network;
 mod path;
 
-pub(crate) use network::has_url_authority;
+pub(crate) use network::{has_url_authority, only_metadata_urls};
 pub use path::canonicalize_ioc_path;
 
 use network::{
@@ -49,6 +49,7 @@ pub enum IocKind {
 
 /// Structural context for deciding whether a routable IP is version-like text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IpEvidence {
     /// An exact, otherwise unanchored IP string.
     Bare,
@@ -73,7 +74,8 @@ fn is_external_ipv4(ip: &Ipv4Addr, evidence: IpEvidence) -> bool {
     let octets = ip.octets();
 
     // Zero octets are overwhelmingly versions and padding in static data, so
-    // they are rejected even inside a URL.
+    // they are rejected even inside a URL (`http://45.0.32.156/` is a
+    // version lookalike; see `malformed_endpoints_and_url_lookalikes_are_rejected`).
     if octets.contains(&0) {
         return false;
     }
@@ -93,15 +95,16 @@ fn is_external_ipv4(ip: &Ipv4Addr, evidence: IpEvidence) -> bool {
         return false;
     }
 
-    if evidence == IpEvidence::Bare {
-        if octets[0] < 10 && octets[1] < 10 && octets[2] < 10 {
-            return false;
-        }
-        if octets[2] == 1 && octets[3] == 1 {
-            return false;
-        }
-    }
-    true
+    !(evidence == IpEvidence::Bare && looks_like_version(octets))
+}
+
+/// A bare dotted quad that is more often a version than an address: three
+/// single-digit leading parts (`1.2.3.4567`), or a `.1.1` build suffix.
+/// Stricter than the classifier's rule, which must still label a lone
+/// `192.168.1.1` an address; here it only withholds IOC status from a quad
+/// with no URL or socket around it.
+fn looks_like_version(octets: [u8; 4]) -> bool {
+    (octets[0] < 10 && octets[1] < 10 && octets[2] < 10) || (octets[2] == 1 && octets[3] == 1)
 }
 
 fn is_external_ipv6(ip: &Ipv6Addr, evidence: IpEvidence) -> bool {
@@ -154,6 +157,7 @@ pub enum KeyAlgorithm {
 
 /// Metadata for a key IOC. Exact bytes live in the IOC's canonical `value`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct KeyMetadata {
     /// Sorted unique algorithms for which this material was observed.
     pub algorithms: Vec<KeyAlgorithm>,
@@ -163,6 +167,7 @@ pub struct KeyMetadata {
 
 /// One source occurrence of a deduplicated IOC.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct IocOccurrence {
     /// Source byte spans as `[offset, length]`. Most values have one span;
     /// stack-constructed strings may have several.
@@ -182,6 +187,7 @@ pub struct IocOccurrence {
 
 /// A canonical IOC with bounded occurrence evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Ioc {
     /// What sort of indicator this is.
     pub kind: IocKind,
@@ -389,47 +395,17 @@ fn record_match(
     extracted: &ExtractedString,
     matched: NetworkMatch,
 ) {
-    let identity = (matched.kind, matched.value.clone());
-    let idx = if let Some(idx) = by_identity.get(&identity) {
-        *idx
-    } else {
-        let idx = out.len();
-        by_identity.insert(identity, idx);
-        out.push(Ioc {
-            kind: matched.kind,
-            value: matched.value,
-            ports: Vec::new(),
-            key: None,
-            count: 0,
-            occurrences: Vec::new(),
-        });
-        idx
-    };
-
-    let ioc = &mut out[idx];
-    ioc.count = ioc.count.saturating_add(1);
+    let ioc = tally(out, by_identity, matched.kind, matched.value, None);
     if let Some(port) = matched.port
         && !ioc.ports.contains(&port)
     {
         ioc.ports.push(port);
     }
-    if ioc.occurrences.len() >= MAX_IOC_OCCURRENCES {
-        return;
-    }
-
-    let source_spans = extracted
-        .source_spans()
-        .map(|(offset, len)| [offset, len])
-        .collect();
-    ioc.occurrences.push(IocOccurrence {
-        source_spans,
-        value_span: [
-            u32::try_from(matched.start).unwrap_or(u32::MAX),
-            u32::try_from(matched.len).unwrap_or(u32::MAX),
-        ],
-        port: matched.port,
-        method: extracted.method,
-    });
+    let value_span = [
+        u32::try_from(matched.start).unwrap_or(u32::MAX),
+        u32::try_from(matched.len).unwrap_or(u32::MAX),
+    ];
+    push_occurrence(ioc, extracted, value_span, matched.port);
 }
 
 fn record_key(
@@ -439,54 +415,72 @@ fn record_key(
     material: &[u8],
     algorithm: KeyAlgorithm,
 ) {
-    let value = encode_key_material(material);
-    let identity = (IocKind::Key, value.clone());
-    let idx = if let Some(idx) = by_identity.get(&identity) {
-        *idx
-    } else {
-        let idx = out.len();
-        by_identity.insert(identity, idx);
-        out.push(Ioc {
-            kind: IocKind::Key,
-            value,
-            ports: Vec::new(),
-            key: Some(KeyMetadata {
-                algorithms: Vec::new(),
-                bytes: u32::try_from(material.len()).unwrap_or(u32::MAX),
-            }),
-            count: 0,
-            occurrences: Vec::new(),
-        });
-        idx
+    let metadata = KeyMetadata {
+        algorithms: Vec::new(),
+        bytes: u32::try_from(material.len()).unwrap_or(u32::MAX),
     };
-
-    let ioc = &mut out[idx];
-    ioc.count = ioc.count.saturating_add(1);
+    let value = encode_key_material(material);
+    let ioc = tally(out, by_identity, IocKind::Key, value, Some(metadata));
     if let Some(key) = &mut ioc.key
         && !key.algorithms.contains(&algorithm)
     {
         key.algorithms.push(algorithm);
     }
-    if ioc.occurrences.len() >= MAX_IOC_OCCURRENCES {
-        return;
-    }
-    ioc.occurrences.push(IocOccurrence {
-        source_spans: extracted
-            .source_spans()
-            .map(|(offset, len)| [offset, len])
-            .collect(),
-        value_span: [0, u32::try_from(extracted.value.len()).unwrap_or(u32::MAX)],
-        port: None,
-        method: extracted.method,
+    let value_span = [0, u32::try_from(extracted.value.len()).unwrap_or(u32::MAX)];
+    push_occurrence(ioc, extracted, value_span, None);
+}
+
+/// The IOC for `(kind, value)`, appended to `out` on first sight (with
+/// `key`), with its count incremented.
+fn tally<'a>(
+    out: &'a mut Vec<Ioc>,
+    by_identity: &mut HashMap<(IocKind, String), usize>,
+    kind: IocKind,
+    value: String,
+    key: Option<KeyMetadata>,
+) -> &'a mut Ioc {
+    let idx = *by_identity.entry((kind, value.clone())).or_insert_with(|| {
+        out.push(Ioc {
+            kind,
+            value,
+            ports: Vec::new(),
+            key,
+            count: 0,
+            occurrences: Vec::new(),
+        });
+        out.len() - 1
     });
+    let ioc = &mut out[idx];
+    ioc.count = ioc.count.saturating_add(1);
+    ioc
+}
+
+/// Record where `extracted` holds `ioc`, until [`MAX_IOC_OCCURRENCES`].
+fn push_occurrence(
+    ioc: &mut Ioc,
+    extracted: &ExtractedString,
+    value_span: [u32; 2],
+    port: Option<u16>,
+) {
+    if ioc.occurrences.len() < MAX_IOC_OCCURRENCES {
+        ioc.occurrences.push(IocOccurrence {
+            source_spans: extracted
+                .source_spans()
+                .map(|(offset, len)| [offset, len])
+                .collect(),
+            value_span,
+            port,
+            method: extracted.method,
+        });
+    }
 }
 
 /// Return the stable, lossless IOC identity for decoded key bytes.
 ///
 /// Unpadded base64url represents arbitrary bytes without JSON escaping. The
 /// prefix makes the encoding explicit and leaves room for future wire formats.
-/// Hopper should decode and store the exact bytes; Bloom filters may hash them
-/// internally, but every reported match must be confirmed against these bytes.
+/// A consumer that indexes keys should store the decoded bytes; a hashed
+/// index may speed lookup, but every match must be confirmed against them.
 #[must_use]
 pub fn encode_key_material(material: &[u8]) -> String {
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(material);
@@ -532,5 +526,4 @@ fn xor_key_material(extracted: &ExtractedString) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests;

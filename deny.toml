@@ -10,13 +10,12 @@ ignore = []
 
 [licenses]
 # Permissive licences compatible with stng's Apache-2.0, as the dependency
-# tree uses them today. MPL-2.0 is file-level copyleft (option-ext, via dirs).
+# tree uses them today.
 allow = [
     "0BSD",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MIT",
-    "MPL-2.0",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
@@ -30,6 +29,10 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# tree-sitter is patched to a fork (Cargo.toml [patch.crates-io]); the
-# lockfile pins the commit. Any other git source is refused.
-allow-git = ["https://github.com/tstromberg/tree-sitter"]
+# binform is not on crates.io (Cargo.lock pins its commit), and tree-sitter
+# is patched to a fork (Cargo.toml [patch.crates-io], pinned by `rev`). Any
+# other git source is refused.
+allow-git = [
+    "https://github.com/atomdrift-project/binform.git",
+    "https://github.com/tstromberg/tree-sitter",
+]

@@ -108,7 +108,7 @@ fn minimal_go_pe_amd64_with_xor(plaintext: &[u8], key: u8) -> Vec<u8> {
 }
 
 #[test]
-fn test_arm64_elf_xor_url() {
+fn decodes_xor_url_in_arm64_elf() {
     let plaintext = b"https://c2server.evil.com:8443/beacon";
     let key: u8 = 0x5A;
     let binary = minimal_arm64_elf_with_xor(plaintext, key);
@@ -133,7 +133,7 @@ fn test_arm64_elf_xor_url() {
 }
 
 #[test]
-fn test_macho_xor_ip_address() {
+fn decodes_xor_ip_in_macho() {
     // C2 IP address
     let plaintext = b"192.168.50.100";
     let key: u8 = 0x77;
@@ -160,7 +160,7 @@ fn test_macho_xor_ip_address() {
 }
 
 #[test]
-fn test_pe_amd64_xor_url() {
+fn decodes_xor_url_in_pe() {
     // Windows PE with XOR-encoded C2 URL
     let plaintext = b"https://windows-update.evil.com:443/check";
     let key: u8 = 0x3D;
@@ -186,7 +186,7 @@ fn test_pe_amd64_xor_url() {
 }
 
 #[test]
-fn test_xor_user_agent_pattern() {
+fn decodes_xor_user_agent() {
     // Test that Mozilla pattern detection works and extracts surrounding
     // context. The payload sits in a binary: text skips the XOR scanners.
     let plaintext = b"User-Agent: Mozilla/5.0 (Windows NT 10.0) Safari/537.36";
@@ -211,7 +211,7 @@ fn test_xor_user_agent_pattern() {
 }
 
 #[test]
-fn test_xor_detection_shows_key() {
+fn decodes_xor_url_at_source_offset() {
     let plaintext = b"http://malware.evil.com/payload";
     let key: u8 = 0x42;
     let binary = minimal_arm64_elf_with_xor(plaintext, key);
@@ -221,13 +221,14 @@ fn test_xor_detection_shows_key() {
         .with_xor_min_length(10);
     let strings = extract_strings_with_options(&binary, &opts);
 
-    let xor_strings: Vec<_> = strings
-        .iter()
-        .filter(|s| s.method == StringMethod::XorDecode)
-        .collect();
-
+    // Only the right key recovers the plaintext, at the encoded bytes' offset.
     assert!(
-        !xor_strings.is_empty(),
-        "Should decode strings with the 0x42 XOR key",
+        strings
+            .iter()
+            .any(|s| s.value == "http://malware.evil.com/payload"
+                && s.data_offset == 0x200
+                && s.method == StringMethod::XorDecode
+                && s.kind == Some(StringKind::Url)),
+        "{strings:?}"
     );
 }

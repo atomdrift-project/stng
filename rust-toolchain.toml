@@ -1,0 +1,6 @@
+# The toolchain CI builds and lints with. Newer stable clippy adds lints that
+# CI would not see; this keeps `make lint` agreeing with it.
+[toolchain]
+channel = "1.97"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

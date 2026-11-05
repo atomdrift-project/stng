@@ -17,12 +17,12 @@ fn put_sockaddr_in(data: &mut [u8], off: usize, le_marker: bool, port: u16, ip: 
 }
 
 #[test]
-fn test_sockaddr_in_little_endian() {
+fn finds_le_sockaddr_in() {
     // sockaddr_in with AF_INET (0x0002) in little-endian
     let mut data = vec![0xAA; 300]; // Larger buffer to bypass 256-byte skip
     put_sockaddr_in(&mut data, 270, true, 8080, [192, 168, 1, 50]);
 
-    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
+    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown).collect::<Vec<_>>();
 
     // Should find our target
     let found = results.iter().find(|s| s.value == "192.168.1.50:8080");
@@ -35,12 +35,12 @@ fn test_sockaddr_in_little_endian() {
 }
 
 #[test]
-fn test_sockaddr_in_big_endian() {
+fn finds_be_sockaddr_in() {
     // sockaddr_in with AF_INET (0x0200) in big-endian
     let mut data = vec![0xAA; 300]; // Larger buffer to bypass 256-byte skip
     put_sockaddr_in(&mut data, 270, false, 8080, [192, 168, 1, 50]);
 
-    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
+    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown).collect::<Vec<_>>();
 
     let found = results.iter().find(|s| s.value == "192.168.1.50:8080");
     assert!(
@@ -50,26 +50,26 @@ fn test_sockaddr_in_big_endian() {
 }
 
 #[test]
-fn test_sockaddr_in_min_length_filter() {
+fn drops_sockaddr_below_min_length() {
     // sockaddr_in but with min_length that's too high
     let mut data = vec![0xAA; 300]; // Larger buffer to bypass 256-byte skip
     put_sockaddr_in(&mut data, 270, true, 80, [198, 51, 100, 80]);
 
     // Request results with min_length = 100
-    let results = scan_sockaddr_in(&data, 100, Endianness::Unknown);
+    let results = scan_sockaddr_in(&data, 100, Endianness::Unknown).collect::<Vec<_>>();
 
     // Should not find it (198.51.100.80:80 is only 16 chars)
     assert!(results.is_empty(), "Should filter by min_length");
 }
 
 #[test]
-fn test_sockaddr_in_no_false_positives_from_text() {
+fn rejects_text_like_ip() {
     // Data that looks like sockaddr_in but has text-like octets in the IP
     let mut data = vec![0xAA; 300]; // Larger buffer to bypass 256-byte skip
     // IP with 3+ ASCII chars (E=0x45, L=0x4C, F=0x46)
     put_sockaddr_in(&mut data, 270, true, 8080, [0x7F, 0x45, 0x4C, 0x46]);
 
-    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
+    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown).collect::<Vec<_>>();
 
     // Should filter out because IP looks like "ELF" text
     assert!(
@@ -79,7 +79,7 @@ fn test_sockaddr_in_no_false_positives_from_text() {
 }
 
 #[test]
-fn test_multiple_sockaddr_in_structures() {
+fn finds_mixed_endian_sockaddrs() {
     let mut data = vec![0xAA; 100];
 
     // First sockaddr_in at offset 5
@@ -100,7 +100,7 @@ fn test_multiple_sockaddr_in_structures() {
 }
 
 #[test]
-fn test_sockaddr_in_rejects_invalid_ips() {
+fn rejects_artifact_and_zero_octet_ips() {
     // Test that invalid IPs are filtered out
     let mut data = vec![0xAA; 400];
 
@@ -137,7 +137,7 @@ fn test_sockaddr_in_rejects_invalid_ips() {
     // Valid: 103.214.143.214 (realistic struct with zeroed sin_zero)
     put_sockaddr_in(&mut data, 320, true, 8085, [103, 214, 143, 214]);
 
-    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
+    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown).collect::<Vec<_>>();
 
     let ips: std::collections::HashSet<&str> = results.iter().map(|s| s.value.as_str()).collect();
 
@@ -171,7 +171,7 @@ fn test_sockaddr_in_rejects_invalid_ips() {
 }
 
 #[test]
-fn test_sockaddr_in_rejects_linear_ip() {
+fn rejects_sequential_octets() {
     // Linear sequences like 0x0D 0x0E 0x0F 0x10 are common in data tables,
     // not real addresses (matches the tscfgwmi.dll false positive pattern).
     let mut data = vec![0xAA; 320];
@@ -191,7 +191,7 @@ fn test_sockaddr_in_rejects_linear_ip() {
     // 192.168.1.50 — not linear, should be found
     put_sockaddr_in(&mut data, 290, true, 8081, [192, 168, 1, 50]);
 
-    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
+    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown).collect::<Vec<_>>();
     let ips: std::collections::HashSet<&str> = results.iter().map(|s| s.value.as_str()).collect();
 
     assert!(
@@ -209,7 +209,7 @@ fn test_sockaddr_in_rejects_linear_ip() {
 }
 
 #[test]
-fn test_sockaddr_in_rejects_low_last_octet() {
+fn rejects_last_octet_below_5() {
     // Last octets 1–4 are gateway/infrastructure, not C2 hosts.
     // Mirrors the 128.92.202.4 false positive from tscfgwmi.dll.
     let mut data = vec![0xAA; 320];
@@ -229,7 +229,7 @@ fn test_sockaddr_in_rejects_low_last_octet() {
     // 128.92.202.6 — last octet 6, should be found
     put_sockaddr_in(&mut data, 290, false, 32770, [128, 92, 202, 6]);
 
-    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
+    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown).collect::<Vec<_>>();
     let ips: std::collections::HashSet<&str> = results.iter().map(|s| s.value.as_str()).collect();
 
     assert!(
@@ -247,7 +247,7 @@ fn test_sockaddr_in_rejects_low_last_octet() {
 }
 
 #[test]
-fn test_sockaddr_in_rejects_repeated_low_octets() {
+fn rejects_repeated_low_octets() {
     // Repeated low-value octets are common in binary data tables, not real IPs.
     // Mirrors the 21.3.12.12 false positive from tscfgwmi.dll.
     let mut data = vec![0xAA; 340];
@@ -264,7 +264,7 @@ fn test_sockaddr_in_rejects_repeated_low_octets() {
     // 104.21.25.21 — 21 repeats but 21 >= 16, should be found
     put_sockaddr_in(&mut data, 310, false, 443, [104, 21, 25, 21]);
 
-    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown);
+    let results = scan_sockaddr_in(&data, 4, Endianness::Unknown).collect::<Vec<_>>();
     let ips: std::collections::HashSet<&str> = results.iter().map(|s| s.value.as_str()).collect();
 
     assert!(
@@ -282,7 +282,7 @@ fn test_sockaddr_in_rejects_repeated_low_octets() {
 }
 
 #[test]
-fn test_m68000_skip() {
+fn skips_m68000_binaries() {
     // M68000 binaries should return empty results to avoid false positives
     // Their instruction stream naturally contains 0x0002 patterns
     let mut data = vec![0xAA; 300];
@@ -304,7 +304,7 @@ fn test_m68000_skip() {
 }
 
 #[test]
-fn test_non_m68000_architectures_processed() {
+fn scans_non_m68000_architectures() {
     // Non-M68000 architectures should be processed normally
     let mut data = vec![0xAA; 300];
 
@@ -335,21 +335,21 @@ fn test_non_m68000_architectures_processed() {
 }
 
 #[test]
-fn test_sockaddr_endianness_le_rejects_be_marker() {
+fn le_binary_rejects_be_marker() {
     // On a little-endian binary, only `02 00` is a real sockaddr_in.
     // A `00 02 ...` sequence (e.g. middle of a COM GUID) must NOT match.
     let mut data = vec![0xAA; 300];
     // BE-marker bytes that decode to a plausible-looking 155.241.239.26:48379
     put_sockaddr_in(&mut data, 270, false, 48379, [155, 241, 239, 26]);
 
-    let results = scan_sockaddr_in(&data, 4, Endianness::Little);
+    let results = scan_sockaddr_in(&data, 4, Endianness::Little).collect::<Vec<_>>();
     assert!(
         results.is_empty(),
         "LE binary should not accept BE AF_INET marker; got {results:?}"
     );
 
     // Sanity: the same buffer with Unknown endianness *would* match.
-    let results_unknown = scan_sockaddr_in(&data, 4, Endianness::Unknown);
+    let results_unknown = scan_sockaddr_in(&data, 4, Endianness::Unknown).collect::<Vec<_>>();
     assert!(
         !results_unknown.is_empty(),
         "Unknown endianness should accept either marker"
@@ -357,7 +357,7 @@ fn test_sockaddr_endianness_le_rejects_be_marker() {
 }
 
 #[test]
-fn test_sockaddr_endianness_be_rejects_le_marker() {
+fn be_binary_rejects_le_marker() {
     // Inverse: on a big-endian binary, only `00 02` is real.
     let mut data = vec![0xAA; 300];
     data[270] = 0x02;
@@ -365,7 +365,7 @@ fn test_sockaddr_endianness_be_rejects_le_marker() {
     data[272..274].copy_from_slice(&[0x1F, 0x90]); // Port 8080
     data[274..278].copy_from_slice(&[0xC0, 0xA8, 0x01, 0x32]); // 192.168.1.50
 
-    let results = scan_sockaddr_in(&data, 4, Endianness::Big);
+    let results = scan_sockaddr_in(&data, 4, Endianness::Big).collect::<Vec<_>>();
     assert!(
         results.is_empty(),
         "BE binary should not accept LE AF_INET marker; got {results:?}"
@@ -373,17 +373,17 @@ fn test_sockaddr_endianness_be_rejects_le_marker() {
 }
 
 #[test]
-fn test_sockaddr_endianness_le_still_finds_native_marker() {
+fn le_binary_finds_le_marker() {
     // Regression guard: real LE sockaddr_in still extracts.
     let mut data = vec![0xAA; 300];
     put_sockaddr_in(&mut data, 270, true, 8080, [192, 168, 1, 50]);
 
-    let results = scan_sockaddr_in(&data, 4, Endianness::Little);
+    let results = scan_sockaddr_in(&data, 4, Endianness::Little).collect::<Vec<_>>();
     assert!(results.iter().any(|s| s.value == "192.168.1.50:8080"));
 }
 
 #[test]
-fn test_non_go_binaries_still_processed() {
+fn scans_non_go_arm_binary() {
     // Create a C-style binary with sockaddr_in that should be detected
     let mut data = vec![0xAA; 300];
 
@@ -437,7 +437,7 @@ const PERIODIC_FIXTURE_B: &[u8] = &[
 ];
 
 #[test]
-fn test_sits_in_periodic_table_flags_real_false_positives() {
+fn flags_packed_table_fixtures_as_periodic() {
     // AF_INET marker sits at relative offset 32 in both fixtures.
     assert!(
         sits_in_periodic_table(PERIODIC_FIXTURE_A, 32),
@@ -450,7 +450,7 @@ fn test_sits_in_periodic_table_flags_real_false_positives() {
 }
 
 #[test]
-fn test_sits_in_periodic_table_passes_real_layouts() {
+fn heterogeneous_and_zeroed_data_is_not_periodic() {
     // Heterogeneous .data around a real sockaddr_in.
     let mut hetero: Vec<u8> = (0u8..128)
         .map(|i| i.wrapping_mul(37).wrapping_add(0x33))
@@ -472,7 +472,7 @@ fn test_sits_in_periodic_table_passes_real_layouts() {
 }
 
 #[test]
-fn test_sin_zero_guard_rejects_periodic_fixture_at_raw_scan() {
+fn sin_zero_guard_rejects_packed_table() {
     // The Delphi/VCL packed-table false positive (11.16.15.16:3856) is now
     // caught by the sin_zero guard directly in scan_sockaddr_in, without
     // needing a PE handle or the periodicity guard: the eight bytes after
@@ -480,7 +480,7 @@ fn test_sin_zero_guard_rejects_periodic_fixture_at_raw_scan() {
     let mut data = vec![0u8; 2048];
     let embed = 1200;
     data[embed..embed + PERIODIC_FIXTURE_A.len()].copy_from_slice(PERIODIC_FIXTURE_A);
-    let raw = scan_sockaddr_in(&data, 4, Endianness::Little);
+    let raw = scan_sockaddr_in(&data, 4, Endianness::Little).collect::<Vec<_>>();
     assert!(
         !raw.iter().any(|s| s.value == "11.16.15.16:3856"),
         "sin_zero guard must reject the packed-table false positive at raw scan; got {raw:?}"
@@ -488,14 +488,14 @@ fn test_sin_zero_guard_rejects_periodic_fixture_at_raw_scan() {
 }
 
 #[test]
-fn test_looks_like_packed_u16_table_flags_unwind_code_region() {
+fn flags_unwind_codes_as_u16_table() {
     // Both AF_INET-marker offsets in the real fixture must be flagged.
     assert!(looks_like_packed_u16_table(UWOP_FIXTURE, 26));
     assert!(looks_like_packed_u16_table(UWOP_FIXTURE, 56));
 }
 
 #[test]
-fn test_looks_like_packed_u16_table_passes_isolated_sockaddr() {
+fn isolated_sockaddr_is_not_u16_table() {
     // 192.168.1.50:8080 embedded among heterogeneous bytes (function
     // pointers, padding, unrelated constants) — what a real sockaddr_in
     // in `.data` looks like. Must NOT be flagged.
@@ -522,7 +522,7 @@ fn test_looks_like_packed_u16_table_passes_isolated_sockaddr() {
 }
 
 #[test]
-fn test_sin_zero_guard_rejects_unwind_fixture_at_raw_scan() {
+fn sin_zero_guard_rejects_unwind_codes() {
     // Embed the UWOP fixture deep enough to clear the 1024-byte header skip
     // used by scan_sockaddr_in.
     let mut data = vec![0u8; 2048];
@@ -534,9 +534,56 @@ fn test_sin_zero_guard_rejects_unwind_fixture_at_raw_scan() {
     // the candidate IP are further unwind data, not a zeroed sin_zero tail.
     // This catches the false positive without a PE handle, ahead of the
     // looks_like_packed_u16_table guard the PE retain path still applies.
-    let raw = scan_sockaddr_in(&data, 4, Endianness::Little);
+    let raw = scan_sockaddr_in(&data, 4, Endianness::Little).collect::<Vec<_>>();
     assert!(
         !raw.iter().any(|s| s.value == "19.1.2.170:5632"),
         "sin_zero guard must reject the UNWIND_CODE false positive at raw scan; got {raw:?}"
+    );
+}
+
+#[test]
+fn section_map_uses_first_covering_section_in_header_order() {
+    // A later, wider section must not override an earlier one it overlaps,
+    // and gaps between sections belong to none.
+    let map = SectionMap::new([(100..200, false), (50..400, true), (500..600, true)].into_iter());
+    assert_eq!(map.verdict(49), None);
+    assert_eq!(map.verdict(50), Some(true));
+    assert_eq!(map.verdict(100), Some(false));
+    assert_eq!(map.verdict(199), Some(false));
+    assert_eq!(map.verdict(200), Some(true));
+    assert_eq!(map.verdict(400), None);
+    assert_eq!(map.verdict(599), Some(true));
+    assert_eq!(map.verdict(600), None);
+}
+
+#[test]
+fn section_map_ignores_empty_sections() {
+    let map = SectionMap::new([(100..100, false), (100..120, true)].into_iter());
+    assert_eq!(map.verdict(100), Some(true));
+    assert_eq!(SectionMap::new(std::iter::empty()).verdict(0), None);
+}
+
+#[test]
+fn decoys_cannot_hide_a_real_address() {
+    // Five lookalikes with imperfect padding, then the real one: dropping
+    // everything above the cap would hide it.
+    let mut data = vec![0xAA; 2048];
+    for (i, off) in [1100, 1200, 1300, 1400, 1500].into_iter().enumerate() {
+        put_sockaddr_in(
+            &mut data,
+            off,
+            true,
+            1000 + i as u16,
+            [45, 33, 2, 10 + i as u8],
+        );
+        data[off + 14] = 0x41;
+        data[off + 15] = 0x42;
+    }
+    put_sockaddr_in(&mut data, 1700, true, 4444, [185, 220, 101, 7]);
+    let results = scan_binary_ips(&data, 4, 0, None, None);
+    assert_eq!(results.len(), 4, "{results:?}");
+    assert!(
+        results.iter().any(|s| s.value == "185.220.101.7:4444"),
+        "{results:?}"
     );
 }

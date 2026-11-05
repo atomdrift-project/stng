@@ -1,40 +1,11 @@
 //! Raw string scanning for binaries without structure information.
 
+use crate::binary::RangeSet;
 use crate::classifier;
 use crate::types::{ExtractedString, StringKind, StringMethod};
 use memchr::memchr_iter;
 use std::collections::HashSet;
 use std::ops::Range;
-
-/// Returns true if `offset` falls inside any skip range.
-///
-/// Used to suppress raw scanning over regions whose strings are extracted by a
-/// higher-fidelity method (Go's structure-based + inline-pattern extractors
-/// cover .rodata; raw scanning that region produces merged garbage because
-/// Go packs strings back-to-back without null terminators).
-///
-/// `skip_ranges` must be sorted and disjoint, as [`sorted_skip_ranges`]
-/// leaves them: a binary can declare tens of thousands of sections, and a
-/// linear check per run made the scan quadratic.
-#[inline]
-fn in_skip_range(offset: usize, skip_ranges: &[Range<usize>]) -> bool {
-    let i = skip_ranges.partition_point(|r| r.start <= offset);
-    i > 0 && offset < skip_ranges[i - 1].end
-}
-
-/// `ranges` sorted, with overlapping and touching ranges merged.
-fn sorted_skip_ranges(ranges: &[Range<usize>]) -> Vec<Range<usize>> {
-    let mut sorted: Vec<Range<usize>> = ranges.iter().filter(|r| !r.is_empty()).cloned().collect();
-    sorted.sort_unstable_by_key(|r| (r.start, r.end));
-    let mut merged: Vec<Range<usize>> = Vec::with_capacity(sorted.len());
-    for range in sorted {
-        match merged.last_mut() {
-            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
-            _ => merged.push(range),
-        }
-    }
-    merged
-}
 
 pub(crate) fn extract_raw_strings(
     data: &[u8],
@@ -44,7 +15,7 @@ pub(crate) fn extract_raw_strings(
 ) -> Vec<ExtractedString> {
     // Build a set of known segment/section names for quick lookup
     let segment_names_set: HashSet<&str> = segment_names.iter().map(String::as_str).collect();
-    let skip_ranges = &sorted_skip_ranges(skip_ranges);
+    let skip_ranges = &RangeSet::new(skip_ranges.iter().cloned());
 
     let context = PrintableRunContext {
         min_length,
@@ -87,7 +58,7 @@ pub(crate) fn extract_raw_strings(
                 if run_len >= min_length {
                     let start = chunk.len() - run_len;
                     let abs_start = chunk_start + start;
-                    if in_skip_range(abs_start, skip_ranges) {
+                    if skip_ranges.contains(abs_start) {
                         continue;
                     }
                     strat1_runs.push((abs_start, &chunk[start..]));
@@ -125,8 +96,9 @@ pub(crate) fn extract_raw_strings(
 pub(crate) struct PrintableRunContext<'a> {
     pub(crate) min_length: usize,
     pub(crate) segment_names_set: &'a HashSet<&'a str>,
-    /// Sorted and disjoint; see [`in_skip_range`].
-    pub(crate) skip_ranges: &'a [Range<usize>],
+    /// Regions a higher-fidelity pass covers (Go and Rust string data,
+    /// which a byte scan would merge into garbage).
+    pub(crate) skip_ranges: &'a RangeSet,
 }
 
 /// Runs are processed in batches of this many so the intermediate
@@ -152,7 +124,7 @@ pub(crate) fn extract_printable_runs(
                 run_start = Some(i);
             }
         } else if let Some(start) = run_start {
-            if i - start >= context.min_length && !in_skip_range(start, context.skip_ranges) {
+            if i - start >= context.min_length && !context.skip_ranges.contains(start) {
                 runs.push((start, &data[start..i]));
                 if runs.len() >= RUN_BATCH {
                     classify_runs(&mut runs, context, true, strings, seen);
@@ -164,7 +136,7 @@ pub(crate) fn extract_printable_runs(
 
     if let Some(start) = run_start
         && data.len() - start >= context.min_length
-        && !in_skip_range(start, context.skip_ranges)
+        && !context.skip_ranges.contains(start)
     {
         runs.push((start, &data[start..]));
     }
@@ -245,7 +217,7 @@ pub(crate) fn extract_wide_strings(
     skip_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
     let segment_names_set: HashSet<&str> = segment_names.iter().map(String::as_str).collect();
-    let skip_ranges = &sorted_skip_ranges(skip_ranges);
+    let skip_ranges = &RangeSet::new(skip_ranges.iter().cloned());
     let mut strings = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -280,8 +252,7 @@ pub(crate) fn extract_wide_strings(
         // Walk backward to find the true start of this wide string run,
         // but never before the last consumed position.
         let mut start = zero_pos - 1;
-        let floor = if i > 0 { i } else { 0 };
-        while start >= floor + 2 {
+        while start >= i + 2 {
             let prev_lo = data[start - 2];
             let prev_hi = data[start - 1];
             if prev_hi == 0 && is_valid_wide_char(u16::from(prev_lo)) {
@@ -291,7 +262,7 @@ pub(crate) fn extract_wide_strings(
             }
         }
 
-        if in_skip_range(start, skip_ranges) {
+        if skip_ranges.contains(start) {
             continue;
         }
 
@@ -351,7 +322,7 @@ pub(crate) fn extract_wide_strings(
 
 /// Check if a UTF-16 code unit represents a valid printable character.
 #[inline]
-#[allow(clippy::match_same_arms)] // Arms are grouped by Unicode block for readability
+#[expect(clippy::match_same_arms, reason = "one arm per Unicode block")]
 fn is_valid_wide_char(code_unit: u16) -> bool {
     match code_unit {
         // ASCII printable range (space through tilde) plus tab, newline, carriage return
@@ -407,7 +378,7 @@ mod tests {
         let ctx = PrintableRunContext {
             min_length: 4,
             segment_names_set: &empty,
-            skip_ranges: &[],
+            skip_ranges: &RangeSet::default(),
         };
         let mut strings = Vec::new();
         let mut seen = HashSet::new();

@@ -1,6 +1,6 @@
 # stng Makefile
 # Build and test commands for language-aware string extraction
-# Compatible with both GNU make and BSD make
+# Needs GNU make: it uses $(shell) and $(if).
 
 BINARY = stng
 # Cargo package name, read from Cargo.toml for `cut-release`'s `-p`.
@@ -104,10 +104,10 @@ install-precommit: ## Install the git pre-commit hook
 test: ## Run all tests (unit + integration)
 	@echo "Running all tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --workspace --locked && \
+		cargo nextest run --locked && \
 		cargo test --doc --locked; \
 	else \
-		cargo test --workspace --locked; \
+		cargo test --locked; \
 	fi
 	@echo ""
 	@echo "✓ All tests passed"
@@ -115,9 +115,9 @@ test: ## Run all tests (unit + integration)
 test-unit: ## Run only unit tests (skip integration tests)
 	@echo "Running unit tests only..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --lib; \
+		cargo nextest run --lib --locked; \
 	else \
-		cargo test --lib; \
+		cargo test --lib --locked; \
 	fi
 	@echo ""
 	@echo "✓ Unit tests passed"
@@ -129,7 +129,7 @@ fmt: ## Format all code with rustfmt
 
 fix: ## Auto-fix clippy lints, then format with rustfmt
 	@echo "Applying clippy fixes..."
-	@cargo clippy --fix --workspace --all-targets --all-features --allow-dirty --allow-staged
+	@cargo clippy --fix --all-targets --all-features --allow-dirty --allow-staged
 	@cargo fmt --all
 	@echo "✓ Fixes applied"
 
@@ -138,8 +138,8 @@ lint: ## Run code formatting and linting checks
 	@cargo fmt --all --check
 	@echo "✓ Formatting passed"
 	@echo ""
-	@echo "Running clippy with workspace lints..."
-	@cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+	@echo "Running clippy..."
+	@cargo clippy --locked --all-targets --all-features -- -D warnings
 	@cargo clippy --locked --no-default-features --lib -- -D warnings
 	@RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --quiet
 	@echo "✓ Clippy passed"

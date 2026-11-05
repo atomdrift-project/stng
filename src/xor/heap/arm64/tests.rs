@@ -1,4 +1,3 @@
-#![allow(clippy::cast_possible_truncation)]
 use super::*;
 use goblin::{Object, mach::Mach};
 static FILE: std::sync::LazyLock<&[u8]> = std::sync::LazyLock::new(|| {

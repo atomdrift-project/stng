@@ -10,9 +10,7 @@ use crate::{ExtractedString, StringMethod, classifier, decoders, fuzzy_base64, p
 ///
 /// Decoding runs on the *text* of each string, so it is filetype-agnostic: the
 /// same pass that recovers base64-encoded PowerShell from a PE also recovers a
-/// base64-over-UTF-16LE blob sitting in a plain `.txt` or `.json`. Both the
-/// internal extraction pipeline and the CLI's line-based text path funnel through
-/// here so coverage stays identical across inputs.
+/// base64-over-UTF-16LE blob sitting in a plain `.txt` or `.json`.
 /// Base64 wrapping a zlib stream is inflated with a 10 MiB output bound before
 /// text validation; decoded strings retain the encoded token's source extent.
 #[must_use]
@@ -71,14 +69,12 @@ pub(crate) fn decode_spaced_strings(strings: &mut Vec<ExtractedString>, min_leng
             continue;
         }
 
-        // Try to decode as spaced ASCII
         if let Some(decoded) = decoders::decode_spaced_ascii(&s.value)
             && decoded.len() >= min_length
             && !seen.contains(&decoded)
         {
             seen.insert(decoded.clone());
 
-            // Create a new decoded string entry
             let kind = classifier::classify_string(&decoded);
             new_strings.push(ExtractedString {
                 value: decoded,

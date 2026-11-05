@@ -6,7 +6,6 @@ use std::sync::LazyLock;
 
 /// Mining software and its command-line flags. Pool URLs are the
 /// classifier's `MiningPool`; these have no kind of their own.
-#[allow(clippy::expect_used)]
 pub(super) static MINER_SOFTWARE: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         "xmrig",
@@ -20,12 +19,11 @@ pub(super) static MINER_SOFTWARE: LazyLock<AhoCorasick> = LazyLock::new(|| {
         "--algo=",
         "--cuda-devices",
     ])
-    .expect("valid miner patterns")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Literal shell-command indicators for `is_shell_command_string`, batched
 /// into one Aho-Corasick pass.
-#[allow(clippy::expect_used)]
 pub(super) static SHELL_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         "osascript",
@@ -37,7 +35,7 @@ pub(super) static SHELL_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
         "2>/dev/null",
         "2>",
     ])
-    .expect("valid shell indicator patterns")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// IOC substring patterns batched into one Aho-Corasick automaton.
@@ -45,9 +43,8 @@ pub(super) static SHELL_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
 /// One find costs O(len) where a `contains` per needle would cost
 /// O(needles × len). The matched pattern's index maps back to its per-needle constraint
 /// in [`ioc_substring_match`].
-#[allow(clippy::expect_used)]
 pub(super) static IOC_SUBSTRING: LazyLock<AhoCorasick> = LazyLock::new(|| {
-    AhoCorasick::new(IOC_SUBSTRING_PATTERNS).expect("valid IOC substring patterns")
+    AhoCorasick::new(IOC_SUBSTRING_PATTERNS).unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Pattern strings for [`IOC_SUBSTRING`] — order matters (the index of a
@@ -90,7 +87,6 @@ pub(super) fn ioc_substring_match(s: &str, len: usize) -> bool {
 }
 
 /// Code/script patterns that immediately mark a string as non-garbage (pure OR match).
-#[allow(clippy::expect_used)]
 pub(super) static CODE_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         "__attribute__",
@@ -116,7 +112,7 @@ pub(super) static CODE_PATTERNS: LazyLock<AhoCorasick> = LazyLock::new(|| {
         "IEX(",
         "DownloadString",
     ])
-    .expect("valid code patterns")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// String of length ≥8 composed entirely of `[0-9a-fA-F:-]`, with at
@@ -171,7 +167,7 @@ pub(super) fn is_token_id_run(s: &str, len: usize) -> bool {
 /// Telegram bot API token: `<bot_id>:<auth_token>`.
 ///
 /// Official shape (docs + observed rotations): bot_id is 8–16 ASCII digits,
-/// auth_token is 30–48 chars drawn from the base64url alphabet
+/// auth_token is 30–64 chars drawn from the base64url alphabet
 /// (`[A-Za-z0-9_-]`). The chaos filter otherwise drops these because digits
 /// → `:` → upper → lower → `-` flips character class on almost every byte.
 pub(super) fn is_telegram_bot_token(s: &str, len: usize) -> bool {
@@ -396,10 +392,11 @@ pub(super) fn is_locale_code(s: &str, len: usize) -> bool {
             && b[5].is_ascii_uppercase())
 }
 
-/// Check if string matches known Indicator of Compromise patterns.
-///
-/// These are high-value strings that should never be filtered.
-pub(super) fn is_recognized_ioc(s: &str, len: usize) -> bool {
+/// Whether `s` has a recognised structure that makes it worth keeping
+/// whatever the garbage heuristics say: an indicator (onion host, registry
+/// key, PEM block, URL), an identifier run (hash, UUID, token), a locale,
+/// a mangled symbol, an XML tag or an HTTP header.
+pub(super) fn is_recognized_structure(s: &str, len: usize) -> bool {
     // File-glob patterns (`*.exe`, `*.dll`, `*.tmp`) — high-value malware
     // indicators that would otherwise be killed by the short-string
     // noise-punctuation filter because `*` is in the noise set.

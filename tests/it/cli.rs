@@ -1,14 +1,8 @@
 //! CLI integration tests for stng.
 
-use std::process::Command;
-
-fn stng_cmd() -> Command {
-    crate::stng()
-}
-
 #[test]
-fn test_cli_help() {
-    let output = stng_cmd()
+fn help_lists_main_flags() {
+    let output = crate::stng()
         .arg("--help")
         .output()
         .expect("Failed to execute stng");
@@ -21,8 +15,8 @@ fn test_cli_help() {
 }
 
 #[test]
-fn test_cli_version() {
-    let output = stng_cmd()
+fn prints_version() {
+    let output = crate::stng()
         .arg("--version")
         .output()
         .expect("Failed to execute stng");
@@ -31,8 +25,8 @@ fn test_cli_version() {
 }
 
 #[test]
-fn test_cli_nonexistent_file() {
-    let output = stng_cmd()
+fn fails_on_missing_file() {
+    let output = crate::stng()
         .arg("/nonexistent/file/path")
         .output()
         .expect("Failed to execute stng");
@@ -43,13 +37,14 @@ fn test_cli_nonexistent_file() {
 }
 
 #[test]
-fn test_cli_detect_language_text() {
+fn detect_reports_text() {
     // Create a temp file with text content
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("stng_test_detect_text.txt");
+    // Under target/, and per process, so concurrent runs cannot collide.
+    let temp_file = crate::common::scratch_dir()
+        .join(format!("{}-stng_test_detect_text.txt", std::process::id()));
     std::fs::write(&temp_file, b"not a binary").unwrap();
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--detect")
         .arg(&temp_file)
         .output()
@@ -63,13 +58,14 @@ fn test_cli_detect_language_text() {
 }
 
 #[test]
-fn test_cli_detect_language_unknown() {
+fn detect_reports_unknown_for_binary() {
     // Create a temp file with binary garbage
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("stng_test_detect_bin.bin");
+    // Under target/, and per process, so concurrent runs cannot collide.
+    let temp_file = crate::common::scratch_dir()
+        .join(format!("{}-stng_test_detect_bin.bin", std::process::id()));
     std::fs::write(&temp_file, [0x00, 0x01, 0x02, 0x03, 0x04, 0x05]).unwrap();
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--detect")
         .arg(&temp_file)
         .output()
@@ -83,10 +79,10 @@ fn test_cli_detect_language_unknown() {
 }
 
 #[test]
-fn test_cli_json_output() {
+fn json_output_is_an_array() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--json")
         .arg(binary_path)
         .output()
@@ -101,9 +97,9 @@ fn test_cli_json_output() {
 }
 
 #[test]
-fn test_cli_decodes_vbscript_encoder_in_binary_classified_asp() {
+fn decodes_encoded_vbscript_in_asp() {
     let sample = crate::common::path("testdata/script/vbscript-encoded-malformed-asp.asp");
-    let output = stng_cmd()
+    let output = crate::stng()
         .args(["--json", "--no-xor"])
         .arg(sample)
         .output()
@@ -116,10 +112,10 @@ fn test_cli_decodes_vbscript_encoder_in_binary_classified_asp() {
 }
 
 #[test]
-fn test_cli_simple_output() {
+fn simple_mode_reports_count_on_stderr() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--simple")
         .arg(binary_path)
         .output()
@@ -133,18 +129,18 @@ fn test_cli_simple_output() {
 }
 
 #[test]
-fn test_cli_min_length() {
+fn min_length_never_adds_strings() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     // Run with min_length 4 (default)
-    let output_default = stng_cmd()
+    let output_default = crate::stng()
         .arg("--json")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
 
     // Run with min_length 20
-    let output_long = stng_cmd()
+    let output_long = crate::stng()
         .arg("-m")
         .arg("20")
         .arg("--json")
@@ -168,18 +164,18 @@ fn test_cli_min_length() {
 }
 
 #[test]
-fn test_cli_unfiltered() {
+fn unfiltered_never_drops_strings() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
     // Run without --unfiltered
-    let output1 = stng_cmd()
+    let output1 = crate::stng()
         .arg("--json")
         .arg(binary_path)
         .output()
         .expect("Failed to execute stng");
 
     // Run with --unfiltered
-    let output2 = stng_cmd()
+    let output2 = crate::stng()
         .arg("--json")
         .arg("--unfiltered")
         .arg(binary_path)
@@ -199,24 +195,25 @@ fn test_cli_unfiltered() {
 }
 
 #[test]
-fn test_cli_removed_flags_are_rejected() {
+fn rejects_removed_flags() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
     for removed in [
         "--flat",
         "--r2",
         "--no-r2",
+        "--no-rizin",
         "--no-cache",
         "--flush-cache",
         "--xor-min-length",
     ] {
-        let output = stng_cmd()
+        let output = crate::stng()
             .arg(removed)
             .arg(binary_path)
             .output()
             .expect("Failed to execute stng");
         assert!(!output.status.success(), "{removed} should be rejected");
     }
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--json")
         .arg(binary_path)
         .output()
@@ -226,33 +223,15 @@ fn test_cli_removed_flags_are_rejected() {
 }
 
 #[test]
-fn test_cli_no_r2() {
-    let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
-
-    let output = stng_cmd()
-        .arg("--json")
-        .arg(binary_path)
-        .output()
-        .expect("Failed to execute stng");
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Should not have r2 method strings when r2 is disabled
-        // (they might still appear if r2 is auto-detected, but we explicitly disabled it)
-        // Just check it's valid output
-        assert!(stdout.starts_with('['));
-    }
-}
-
-#[test]
-fn test_cli_text_file_cat() {
+fn prints_text_files_verbatim() {
     // Text files should be output like `cat`
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("stng_test_text.txt");
+    // Under target/, and per process, so concurrent runs cannot collide.
+    let temp_file =
+        crate::common::scratch_dir().join(format!("{}-stng_test_text.txt", std::process::id()));
     let content = b"This is just a text file, not a binary";
     std::fs::write(&temp_file, content).unwrap();
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -265,13 +244,14 @@ fn test_cli_text_file_cat() {
 }
 
 #[test]
-fn test_cli_binary_garbage() {
+fn reports_no_strings_in_garbage() {
     // Binary garbage should find no strings
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("stng_test_garbage.bin");
+    // Under target/, and per process, so concurrent runs cannot collide.
+    let temp_file =
+        crate::common::scratch_dir().join(format!("{}-stng_test_garbage.bin", std::process::id()));
     std::fs::write(&temp_file, [0x00, 0x01, 0x02, 0x03, 0x04, 0x05]).unwrap();
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -284,12 +264,13 @@ fn test_cli_binary_garbage() {
 }
 
 #[test]
-fn test_cli_empty_file() {
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("stng_test_empty.bin");
+fn reports_no_strings_in_empty_file() {
+    // Under target/, and per process, so concurrent runs cannot collide.
+    let temp_file =
+        crate::common::scratch_dir().join(format!("{}-stng_test_empty.bin", std::process::id()));
     std::fs::write(&temp_file, b"").unwrap();
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg(&temp_file)
         .output()
         .expect("Failed to execute stng");
@@ -302,10 +283,11 @@ fn test_cli_empty_file() {
 }
 
 #[test]
-fn test_cli_base64_decoding() {
+fn prints_decoded_base64() {
     // Test that base64 strings are decoded and shown in brackets
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("stng_test_base64.bin");
+    // Under target/, and per process, so concurrent runs cannot collide.
+    let temp_file =
+        crate::common::scratch_dir().join(format!("{}-stng_test_base64.bin", std::process::id()));
 
     // Create a fake ELF with a base64-encoded string
     // "VGhpcyBpcyBhIHNlY3JldCBtZXNzYWdl" decodes to "This is a secret message"
@@ -315,7 +297,7 @@ fn test_cli_base64_decoding() {
     content.extend_from_slice(&[0x00; 4]); // null terminator
     std::fs::write(&temp_file, &content).unwrap();
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--no-color")
         .arg(&temp_file)
         .output()
@@ -334,10 +316,11 @@ fn test_cli_base64_decoding() {
 }
 
 #[test]
-fn test_cli_trailing_newlines_trimmed() {
+fn trims_trailing_newlines() {
     // Test that trailing newlines/control chars are stripped from output
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("stng_test_newlines.bin");
+    // Under target/, and per process, so concurrent runs cannot collide.
+    let temp_file =
+        crate::common::scratch_dir().join(format!("{}-stng_test_newlines.bin", std::process::id()));
 
     // Create a fake ELF with strings that have trailing newlines
     let mut content = vec![0x7f, b'E', b'L', b'F']; // ELF magic
@@ -350,7 +333,7 @@ fn test_cli_trailing_newlines_trimmed() {
     content.extend_from_slice(&[0x00]); // null terminator
     std::fs::write(&temp_file, &content).unwrap();
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--no-color")
         .arg(&temp_file)
         .output()
@@ -384,10 +367,13 @@ fn test_cli_trailing_newlines_trimmed() {
 }
 
 #[test]
-fn test_cli_simple_mode_trims_newlines() {
+fn simple_mode_trims_trailing_newlines() {
     // Test that --simple mode also trims trailing control characters
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("stng_test_simple_newlines.bin");
+    // Under target/, and per process, so concurrent runs cannot collide.
+    let temp_file = crate::common::scratch_dir().join(format!(
+        "{}-stng_test_simple_newlines.bin",
+        std::process::id()
+    ));
 
     let mut content = vec![0x7f, b'E', b'L', b'F']; // ELF magic
     content.extend_from_slice(&[0x00; 4]); // padding
@@ -395,7 +381,7 @@ fn test_cli_simple_mode_trims_newlines() {
     content.extend_from_slice(&[0x00]); // null terminator
     std::fs::write(&temp_file, &content).unwrap();
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--simple")
         .arg(&temp_file)
         .output()
@@ -421,10 +407,10 @@ fn test_cli_simple_mode_trims_newlines() {
 }
 
 #[test]
-fn test_cli_interesting_flag() {
+fn interesting_emits_json_array() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--interesting")
         .arg("--json")
         .arg(binary_path)
@@ -443,10 +429,10 @@ fn test_cli_interesting_flag() {
 }
 
 #[test]
-fn test_cli_no_xor_flag() {
+fn no_xor_emits_no_xor_decodes() {
     let binary_path = crate::common::path("testdata/pe/msvc_console_amd64.exe");
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--no-xor")
         .arg("--json")
         .arg(binary_path)
@@ -465,12 +451,13 @@ fn test_cli_no_xor_flag() {
 }
 
 #[test]
-fn test_cli_debug_flag_does_not_crash() {
-    let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("stng_test_debug_flag.bin");
+fn debug_flag_succeeds() {
+    // Under target/, and per process, so concurrent runs cannot collide.
+    let temp_file = crate::common::scratch_dir()
+        .join(format!("{}-stng_test_debug_flag.bin", std::process::id()));
     std::fs::write(&temp_file, b"debug test content for flag check").unwrap();
 
-    let output = stng_cmd()
+    let output = crate::stng()
         .arg("--debug")
         .arg(&temp_file)
         .output()
@@ -482,4 +469,98 @@ fn test_cli_debug_flag_does_not_crash() {
     );
 
     std::fs::remove_file(&temp_file).ok();
+}
+
+#[test]
+fn json_stays_parseable_when_the_library_warns() {
+    // An odd-length UTF-16 file logs a warning; it must go to stderr.
+    let path = crate::common::temp_file("odd_utf16.txt", b"\xff\xfeh\0i\0!\0x\0y\0z");
+    let output = crate::stng().args(["--json", path]).output().unwrap();
+    assert!(output.status.success());
+    let parsed: Result<serde_json::Value, _> = serde_json::from_slice(&output.stdout);
+    assert!(
+        parsed.is_ok(),
+        "stdout is not JSON: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn closed_stdout_ends_the_run_quietly() {
+    use std::process::Stdio;
+    let mut child = crate::stng()
+        .arg(env!("CARGO_BIN_EXE_stng"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit {:?}: {stderr}",
+        output.status
+    );
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_targets_that_are_not_regular_files() {
+    let output = crate::stng().arg("/dev/null").output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not a regular file"));
+}
+
+#[test]
+fn unreadable_file_error_names_the_path() {
+    let missing = crate::common::scratch_dir().join("no-such-sample");
+    let output = crate::stng().arg(&missing).output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no-such-sample"));
+}
+
+/// JSON is often read on a terminal, so the C1 controls (`U+009B` is CSI)
+/// and bidirectional overrides serde_json passes through are escaped, and
+/// the escaped document still parses to the original values.
+#[test]
+fn json_escapes_terminal_controls_without_changing_values() {
+    // base64 of "hello \u{9b}31mworld \u{202e}evil text here and more"
+    let path = crate::common::temp_file(
+        "terminal_controls.js",
+        b"var p = \"aGVsbG8gwpszMW13b3JsZCDigK5ldmlsIHRleHQgaGVyZSBhbmQgbW9yZQ==\";",
+    );
+    let output = crate::stng().args(["--json", path]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains(['\u{9b}', '\u{202e}']), "{stdout}");
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        parsed
+            .iter()
+            .any(|s| s["value"] == "hello \u{9b}31mworld \u{202e}evil text here and more"),
+        "{stdout}"
+    );
+}
+
+/// A symlink inside a scanned directory is not followed: it could point at
+/// a secret, or at a device that never ends.
+#[cfg(unix)]
+#[test]
+fn directory_scan_skips_symlinks() {
+    let dir = crate::common::scratch_dir().join(format!("{}-symlinks", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let secret = crate::common::temp_file("secret.txt", b"do-not-follow-this-link-secret");
+    let link = dir.join("link");
+    std::fs::remove_file(&link).ok();
+    std::os::unix::fs::symlink(secret, &link).unwrap();
+    let output = crate::stng().args(["--json"]).arg(&dir).output().unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(output.status.success());
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("do-not-follow"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }

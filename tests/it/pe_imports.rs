@@ -1,4 +1,4 @@
-//! Native (no-radare2) PE import recovery.
+//! PE import recovery.
 //!
 //! PE import names live behind RVA tables in the import directory, not as
 //! inline literals, so a raw byte scan never surfaces them; stng resolves them
@@ -19,7 +19,7 @@ fn extract(caller_provides_symbols: bool) -> Vec<stng::ExtractedString> {
 }
 
 #[test]
-fn pe_imports_recovered_and_typed_without_r2() {
+fn pe_imports_recovered_and_typed() {
     let strings = extract(false);
     let import = |needle: &str| {
         strings

@@ -33,7 +33,6 @@ pub(crate) fn decode_base64_strings(strings: &[ExtractedString]) -> Vec<Extracte
             if let Some(deobfuscated) = deobfuscate_concatenation(&s.value)
                 && is_likely_base64(&deobfuscated)
             {
-                // Create a temporary ExtractedString with deobfuscated content
                 let temp = ExtractedString {
                     value: deobfuscated,
                     data_offset: s.data_offset,
@@ -97,19 +96,30 @@ pub(super) fn base64_payload_to_text(
     // A header is only a candidate: ordinary text such as "x = answer" starts
     // with the valid 78 20 dictionary header. If inflation fails, preserve the
     // existing plain-text path, but never coerce compressed binary into text.
-    let inflated = has_zlib_header.then(|| inflate_zlib(&decoded)).flatten();
-    if let Some(inflated) = &inflated
-        && budget
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                left.checked_sub(inflated.len())
-            })
-            .is_err()
+    // Inflate no further than the pass budget allows: checking after the fact
+    // let a spent budget still pay for a full-size inflation per payload.
+    let limit = MAX_DECODED_SIZE.min(budget.load(Ordering::Relaxed));
+    let inflated = match has_zlib_header
+        .then(|| inflate_zlib(&decoded, limit))
+        .flatten()
     {
-        tracing::warn!(
-            "zlib inflation budget of {MAX_INFLATED_PER_PASS} bytes spent; payload skipped"
-        );
-        return None;
-    }
+        // Over the per-payload cap: treated like a stream that failed to inflate.
+        Some(inflated) if inflated.len() > MAX_DECODED_SIZE => None,
+        Some(inflated)
+            if inflated.len() > limit
+                || budget
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                        left.checked_sub(inflated.len())
+                    })
+                    .is_err() =>
+        {
+            tracing::debug!(
+                "zlib inflation budget of {MAX_INFLATED_PER_PASS} bytes spent; payload skipped"
+            );
+            return None;
+        }
+        inflated => inflated,
+    };
     let is_zlib = inflated.is_some();
     let bytes = inflated.unwrap_or(decoded);
     let is_wide = looks_like_utf16le(&bytes);
@@ -128,9 +138,12 @@ pub(super) fn base64_payload_to_text(
 
 /// Inflate the first complete zlib stream, verifying its checksum and trailer.
 /// Like Python's zlib.decompress, ignore bytes after that stream: appending junk
-/// must not hide code that the runtime would execute. Cap output while inflating;
-/// never accept text emitted before a bad checksum or a truncated trailer.
-pub(super) fn inflate_zlib(input: &[u8]) -> Option<Vec<u8>> {
+/// must not hide code that the runtime would execute. Never accept text emitted
+/// before a bad checksum or a truncated trailer.
+///
+/// Inflation stops once output exceeds `limit`; the result is then `limit + 1`
+/// bytes long, which callers read as "too large".
+pub(super) fn inflate_zlib(input: &[u8], limit: usize) -> Option<Vec<u8>> {
     use flate2::{Decompress, FlushDecompress, Status};
 
     let mut decoder = Decompress::new(true);
@@ -141,14 +154,14 @@ pub(super) fn inflate_zlib(input: &[u8]) -> Option<Vec<u8>> {
         let before_out = decoder.total_out();
         let offset = usize::try_from(before_in).ok()?;
         // One extra byte distinguishes an exact-limit payload from a bomb.
-        let room = chunk.len().min(MAX_DECODED_SIZE + 1 - output.len());
+        let room = chunk.len().min(limit + 1 - output.len());
         let status = decoder
             .decompress(&input[offset..], &mut chunk[..room], FlushDecompress::None)
             .ok()?;
         let produced = usize::try_from(decoder.total_out() - before_out).ok()?;
         output.extend_from_slice(&chunk[..produced]);
-        if output.len() > MAX_DECODED_SIZE {
-            return None;
+        if output.len() > limit {
+            return Some(output);
         }
         if status == Status::StreamEnd {
             return (!output.is_empty()).then_some(output);
@@ -195,7 +208,6 @@ pub(super) fn decode_base64_string(
         }
     }
 
-    // Classify before moving
     let kind = crate::classify_string(&decoded_str);
 
     // Create new ExtractedString with decoded content. The decoded text lives

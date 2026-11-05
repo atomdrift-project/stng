@@ -12,7 +12,7 @@ fn go_pe_binary() -> Vec<u8> {
 
 // ELF Go binary tests
 #[test]
-fn test_elf_go_binary_detection() {
+fn detects_go_elf() {
     let data = go_elf_binary();
 
     assert!(
@@ -22,7 +22,7 @@ fn test_elf_go_binary_detection() {
 }
 
 #[test]
-fn test_elf_go_detect_language() {
+fn detects_go_language_in_elf() {
     let data = go_elf_binary();
 
     let lang = detect_language(&data);
@@ -34,7 +34,7 @@ fn test_elf_go_detect_language() {
 }
 
 #[test]
-fn test_elf_go_extract_strings() {
+fn finds_many_strings_in_go_elf() {
     let data = go_elf_binary();
 
     let strings = extract_strings(&data, 4);
@@ -49,7 +49,7 @@ fn test_elf_go_extract_strings() {
 }
 
 #[test]
-fn test_elf_go_has_runtime_strings() {
+fn finds_runtime_strings_in_go_elf() {
     let data = go_elf_binary();
 
     let strings = extract_strings(&data, 4);
@@ -60,60 +60,60 @@ fn test_elf_go_has_runtime_strings() {
 }
 
 #[test]
-fn test_elf_go_has_gopclntab_strings() {
+fn finds_runtime_main_in_elf_pclntab() {
     let data = go_elf_binary();
 
     let strings = extract_strings(&data, 4);
 
-    // Should extract strings successfully from Go ELF binaries
     assert!(
-        !strings.is_empty(),
-        "ELF Go binary should have extracted strings"
+        strings.iter().any(|s| s.value == "runtime.main"
+            && s.data_offset == 0xef99d
+            && s.method == StringMethod::PclntabSymbol),
+        "runtime.main not found in the pclntab"
     );
-
-    // Modern Go binaries may not have traditional gopclntab structure
-    let _has_func = strings.iter().any(|s| s.kind == Some(StringKind::FuncName));
 }
 
 #[test]
-fn test_elf_go_has_filepath_strings() {
+fn finds_go_source_path_in_elf_pclntab() {
     let data = go_elf_binary();
 
     let strings = extract_strings(&data, 4);
 
-    // Should extract strings successfully
+    // The pclntab file table names every compiled source file.
+    let proc_go = "/opt/homebrew/Cellar/go/1.25.6/libexec/src/runtime/proc.go";
     assert!(
-        !strings.is_empty(),
-        "ELF Go binary should have extracted strings"
+        strings.iter().any(|s| s.value == proc_go
+            && s.data_offset == 0xfc151
+            && s.method == StringMethod::PclntabSymbol
+            && s.kind == Some(StringKind::Path)),
+        "{proc_go} not found in the pclntab"
     );
-
-    // File paths may or may not be present depending on build flags
-    let _has_path = strings
-        .iter()
-        .any(|s| s.kind == Some(StringKind::FilePath) || s.kind == Some(StringKind::Path));
 }
 
 // PE Go binary tests
 #[test]
-fn test_pe_go_binary_detection() {
+fn detects_go_pe() {
     let data = go_pe_binary();
 
-    // PE detection may not identify Go specifically
-    let is_go = is_go_binary(&data);
-    // Just verify it doesn't panic and returns a boolean
-    let _ = is_go;
+    assert!(is_go_binary(&data), "PE Go binary should be detected as Go");
 }
 
 #[test]
-fn test_pe_go_extract_strings() {
+fn finds_hello_literal_in_go_pe() {
     let data = go_pe_binary();
 
     let strings = extract_strings(&data, 4);
-    assert!(!strings.is_empty(), "PE Go binary should have strings");
+    // The program's one literal, recovered as a length-delimited Go string.
+    assert!(
+        strings.iter().any(|s| s.value == "Hello, World!"
+            && s.data_offset == 0xc4959
+            && s.method == StringMethod::Structure),
+        "Hello, World! not found"
+    );
 }
 
 #[test]
-fn test_pe_go_has_strings() {
+fn finds_hello_or_runtime_in_go_pe() {
     let data = go_pe_binary();
 
     let strings = extract_strings(&data, 4);
@@ -129,7 +129,7 @@ fn test_pe_go_has_strings() {
 }
 
 #[test]
-fn test_elf_not_rust() {
+fn go_elf_is_not_rust() {
     let data = go_elf_binary();
 
     assert!(
@@ -139,7 +139,7 @@ fn test_elf_not_rust() {
 }
 
 #[test]
-fn test_pe_not_rust() {
+fn go_pe_is_not_rust() {
     let data = go_pe_binary();
 
     assert!(
@@ -149,25 +149,29 @@ fn test_pe_not_rust() {
 }
 
 #[test]
-fn test_elf_extract_with_options() {
+fn min_length_drops_short_symbols_in_go_elf() {
     let data = go_elf_binary();
 
     let opts = ExtractOptions::new(10);
     let strings = extract_strings_with_options(&data, &opts);
-    assert!(!strings.is_empty());
+    // 13 bytes clears the bar; the 9-byte `main.main` symbol does not.
+    assert!(strings.iter().any(|s| s.value == "Hello, World!"));
+    assert!(!strings.iter().any(|s| s.value == "main.main"));
 }
 
 #[test]
-fn test_pe_extract_with_options() {
+fn min_length_drops_short_symbols_in_go_pe() {
     let data = go_pe_binary();
 
     let opts = ExtractOptions::new(10);
     let strings = extract_strings_with_options(&data, &opts);
-    assert!(!strings.is_empty());
+    // 13 bytes clears the bar; the 9-byte `main.main` symbol does not.
+    assert!(strings.iter().any(|s| s.value == "Hello, World!"));
+    assert!(!strings.iter().any(|s| s.value == "main.main"));
 }
 
 #[test]
-fn test_elf_go_with_garbage_filter() {
+fn garbage_filter_never_grows_go_elf_output() {
     let data = go_elf_binary();
 
     let opts_filtered = ExtractOptions::new(4).with_garbage_filter(true);
@@ -180,7 +184,7 @@ fn test_elf_go_with_garbage_filter() {
 }
 
 #[test]
-fn test_pe_go_with_garbage_filter() {
+fn garbage_filter_never_grows_go_pe_output() {
     let data = go_pe_binary();
 
     let opts_filtered = ExtractOptions::new(4).with_garbage_filter(true);
@@ -193,21 +197,33 @@ fn test_pe_go_with_garbage_filter() {
 }
 
 #[test]
-fn test_elf_extract_from_object() {
+fn finds_go_version_in_elf() {
     let data = go_elf_binary();
 
     let opts = ExtractOptions::new(4);
     let strings = extract_strings_with_options(&data, &opts);
 
-    assert!(!strings.is_empty());
+    // The toolchain version recorded in the build info.
+    assert!(
+        strings.iter().any(|s| s.value == "go1.25.6"
+            && s.data_offset == 0xe3e58
+            && s.method == StringMethod::Structure),
+        "go1.25.6 not found"
+    );
 }
 
 #[test]
-fn test_pe_extract_from_object() {
+fn finds_go_version_in_pe() {
     let data = go_pe_binary();
 
     let opts = ExtractOptions::new(4);
     let strings = extract_strings_with_options(&data, &opts);
 
-    assert!(!strings.is_empty());
+    // The toolchain version recorded in the build info.
+    assert!(
+        strings.iter().any(|s| s.value == "go1.25.6"
+            && s.data_offset == 0xec120
+            && s.method == StringMethod::Structure),
+        "go1.25.6 not found"
+    );
 }

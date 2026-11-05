@@ -134,16 +134,10 @@ fn bench_extract_xor(c: &mut Criterion) {
     g.sample_size(10);
     g.measurement_time(Duration::from_secs(20));
 
-    let samples: &[(&str, &str)] = &[
-        (
-            "xor_brew_agent_363kb",
-            crate::common::path("testdata/xor/brew_agent_xor_sample"),
-        ),
-        (
-            "brew_agent_363kb",
-            crate::common::path("testdata/malware/brew_agent"),
-        ),
-    ];
+    let samples: &[(&str, &str)] = &[(
+        "brew_agent_363kb",
+        crate::common::path("testdata/malware/brew_agent"),
+    )];
 
     for (name, path) in samples {
         let data = std::fs::read(path).expect("read sample");

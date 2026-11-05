@@ -1,8 +1,6 @@
 //! Detection and extraction of overlay/appended data after binary boundaries.
 
-// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
-#![allow(clippy::cast_possible_truncation)]
-
+use crate::binary::RangeSet;
 use crate::classifier::classify_string;
 use crate::raw::{PrintableRunContext, extract_printable_runs, extract_wide_strings};
 use crate::types::{ExtractedString, OverlayInfo, StringKind};
@@ -15,61 +13,86 @@ use std::collections::HashSet;
 #[must_use]
 pub fn detect_elf_overlay(data: &[u8]) -> Option<OverlayInfo> {
     let elf = goblin::elf::Elf::parse(data).ok()?;
-    detect_elf_overlay_from_elf(&elf, data)
+    elf_overlay(&elf, data)
 }
 
-/// Detect overlay/appended data using a caller-supplied parsed ELF.
-///
-/// Prefer this over `detect_elf_overlay` when you already have an `Elf`
-/// object — it skips the redundant `goblin::elf::Elf::parse` call.
+/// The data appended after the image of a parsed ELF or PE: none for other
+/// formats, or when nothing follows the image.
 #[must_use]
-pub(crate) fn detect_elf_overlay_from_elf(
-    elf: &goblin::elf::Elf<'_>,
-    data: &[u8],
-) -> Option<OverlayInfo> {
-    // Find the highest file offset used by any program or section header
-    // Start with the ELF header size as minimum (64 bytes for 64-bit, 52 for 32-bit)
-    let header_size = if elf.is_64 { 64u64 } else { 52u64 };
-    let mut max_offset: u64 = header_size;
-
-    // Check program headers (segments)
-    for ph in &elf.program_headers {
-        let end = ph.p_offset.saturating_add(ph.p_filesz);
-        if end > max_offset {
-            max_offset = end;
-        }
+pub fn detect_overlay(object: &goblin::Object<'_>, data: &[u8]) -> Option<OverlayInfo> {
+    match object {
+        goblin::Object::Elf(elf) => elf_overlay(elf, data),
+        goblin::Object::PE(pe) => pe_overlay(pe, data),
+        _ => None,
     }
+}
 
-    // Check section headers
-    for sh in &elf.section_headers {
-        let end = sh.sh_offset.saturating_add(sh.sh_size);
-        if end > max_offset {
-            max_offset = end;
-        }
-    }
-
-    // Also check for section header table position (often at the end of the file)
-    if elf.header.e_shoff > 0 {
-        let sh_table_end = elf.header.e_shoff.saturating_add(
+/// The bytes after an ELF's last segment, section and header table.
+/// `.bss` and other NOBITS sections occupy no file bytes, so they do not
+/// extend the image.
+pub(crate) fn elf_overlay(elf: &goblin::elf::Elf<'_>, data: &[u8]) -> Option<OverlayInfo> {
+    let header_size = if elf.is_64 { 64u64 } else { 52 };
+    let segments = elf
+        .program_headers
+        .iter()
+        .map(|ph| ph.p_offset.saturating_add(ph.p_filesz));
+    let sections = elf
+        .section_headers
+        .iter()
+        .filter(|sh| sh.sh_type != goblin::elf::section_header::SHT_NOBITS)
+        .map(|sh| sh.sh_offset.saturating_add(sh.sh_size));
+    let section_table = (elf.header.e_shoff > 0).then(|| {
+        elf.header.e_shoff.saturating_add(
             u64::from(elf.header.e_shnum).saturating_mul(u64::from(elf.header.e_shentsize)),
-        );
-        if sh_table_end > max_offset {
-            max_offset = sh_table_end;
+        )
+    });
+    let end = segments
+        .chain(sections)
+        .chain(section_table)
+        .fold(header_size, u64::max);
+    overlay_after(end, data.len() as u64)
+}
+
+/// The bytes after a PE's headers and last section's raw data. An
+/// Authenticode certificate table there is signature, not overlay: data
+/// after it is the overlay.
+pub(crate) fn pe_overlay(pe: &goblin::pe::PE<'_>, data: &[u8]) -> Option<OverlayInfo> {
+    let headers = pe
+        .header
+        .optional_header
+        .map_or(0, |o| u64::from(o.windows_fields.size_of_headers));
+    // Without section data there is no image for anything to follow.
+    let mut end = pe
+        .sections
+        .iter()
+        .filter(|s| s.size_of_raw_data > 0)
+        .map(|s| u64::from(s.pointer_to_raw_data).saturating_add(u64::from(s.size_of_raw_data)))
+        .max()?
+        .max(headers);
+    // The certificate table's "address" is a file offset. Entries are
+    // 8-byte aligned, so a table that starts within that padding follows
+    // the image directly.
+    if let Some(cert) = pe
+        .header
+        .optional_header
+        .and_then(|o| o.data_directories.get_certificate_table().copied())
+    {
+        let start = u64::from(cert.virtual_address);
+        if start >= end && start <= end.next_multiple_of(8) && cert.size > 0 {
+            end = start.saturating_add(u64::from(cert.size));
         }
     }
+    overlay_after(end, data.len() as u64)
+}
 
-    // If there's data after the highest offset, it's overlay/appended data
-    // Require at least 16 bytes to avoid false positives from padding
-    let overlay_start = max_offset as usize;
-    let overlay_size = data.len().saturating_sub(overlay_start);
-    if overlay_size >= 16 {
-        Some(OverlayInfo {
-            start_offset: max_offset,
-            size: overlay_size as u64,
-        })
-    } else {
-        None
-    }
+/// The overlay from `end` to the end of a `len`-byte file, if it holds at
+/// least 16 bytes: less is alignment padding.
+fn overlay_after(end: u64, len: u64) -> Option<OverlayInfo> {
+    let size = len.checked_sub(end)?;
+    (size >= 16).then_some(OverlayInfo {
+        start_offset: end,
+        size,
+    })
 }
 
 /// Extract strings from overlay/appended data after binary boundaries.
@@ -78,47 +101,52 @@ pub(crate) fn detect_elf_overlay_from_elf(
 /// This function extracts both ASCII and wide (UTF-16LE) strings from overlay regions.
 #[must_use]
 pub fn extract_overlay_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
+    let overlay = match goblin::Object::parse(data) {
+        Ok(goblin::Object::Elf(elf)) => elf_overlay(&elf, data),
+        Ok(goblin::Object::PE(pe)) => pe_overlay(&pe, data),
+        _ => None,
+    };
+    overlay.map_or_else(Vec::new, |overlay| {
+        overlay_strings(data, &overlay, min_length)
+    })
+}
+
+/// The ASCII and UTF-16LE strings in `overlay`, at file offsets and typed
+/// as overlay data unless the classifier has more specific evidence.
+pub(crate) fn overlay_strings(
+    data: &[u8],
+    overlay: &OverlayInfo,
+    min_length: usize,
+) -> Vec<ExtractedString> {
+    let Some(bytes) = crate::binary::file_range_clamped(data, overlay.start_offset, overlay.size)
+    else {
+        return Vec::new();
+    };
     let mut strings = Vec::new();
-
-    // Try ELF overlay detection
-    if let Some(overlay_info) = detect_elf_overlay(data) {
-        let start = usize::try_from(overlay_info.start_offset)
-            .unwrap_or(data.len())
-            .min(data.len());
-        if start < data.len() {
-            let overlay_data = &data[start..];
-
-            // Extract ASCII strings
-            let mut seen = HashSet::new();
-            let initial_count = strings.len();
-            let segment_names_set = HashSet::new();
-            extract_printable_runs(
-                overlay_data,
-                PrintableRunContext {
-                    min_length,
-                    segment_names_set: &segment_names_set,
-                    skip_ranges: &[],
-                },
-                &mut strings,
-                &mut seen,
-            );
-
-            // Classify overlay strings and adjust offsets
-            for s in &mut strings[initial_count..] {
-                s.kind = Some(overlay_kind(&s.value, StringKind::Overlay));
-                s.rebase(start as u64);
-            }
-
-            // Extract wide strings
-            let wide_strings = extract_wide_strings(overlay_data, min_length, &[], &[]);
-            for mut s in wide_strings {
-                s.kind = Some(overlay_kind(&s.value, StringKind::OverlayWide));
-                s.rebase(start as u64);
-                strings.push(s);
-            }
-        }
+    extract_printable_runs(
+        bytes,
+        PrintableRunContext {
+            min_length,
+            segment_names_set: &HashSet::new(),
+            skip_ranges: &RangeSet::default(),
+        },
+        &mut strings,
+        &mut HashSet::new(),
+    );
+    for s in &mut strings {
+        s.kind = Some(overlay_kind(&s.value, StringKind::Overlay));
     }
-
+    strings.extend(
+        extract_wide_strings(bytes, min_length, &[], &[])
+            .into_iter()
+            .map(|mut s| {
+                s.kind = Some(overlay_kind(&s.value, StringKind::OverlayWide));
+                s
+            }),
+    );
+    for s in &mut strings {
+        s.rebase(overlay.start_offset);
+    }
     strings
 }
 

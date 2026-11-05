@@ -15,40 +15,37 @@ use super::DeobfuscationResult;
 use super::decode_chain::DecodeStep;
 
 /// eval(base64_decode("..."))
-#[allow(clippy::expect_used)]
 static EVAL_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"eval\s*\(\s*base64_decode\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// eval(gzinflate(base64_decode("..."))) — the classic PHP webshell
-#[allow(clippy::expect_used)]
 static EVAL_GZINFLATE_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"eval\s*\(\s*gzinflate\s*\(\s*base64_decode\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#,
     )
-    .expect("static regex")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// eval(gzuncompress(base64_decode("...")))
-#[allow(clippy::expect_used)]
 static EVAL_GZUNCOMPRESS_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"eval\s*\(\s*gzuncompress\s*\(\s*base64_decode\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#,
     )
-    .expect("static regex")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// eval(str_rot13("...")) — uses double-quote delimited capture to handle embedded single quotes
-#[allow(clippy::expect_used)]
 static EVAL_ROT13_DOUBLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"eval\s*\(\s*str_rot13\s*\(\s*"([^"]+)"\s*\)"#).expect("static regex")
+    Regex::new(r#"eval\s*\(\s*str_rot13\s*\(\s*"([^"]+)"\s*\)"#)
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// eval(str_rot13('...')) — single-quote delimited
-#[allow(clippy::expect_used)]
 static EVAL_ROT13_SINGLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"eval\s*\(\s*str_rot13\s*\(\s*'([^']+)'\s*\)").expect("static regex")
+    Regex::new(r"eval\s*\(\s*str_rot13\s*\(\s*'([^']+)'\s*\)")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Extract all obfuscated payloads from a PHP source.
@@ -71,7 +68,7 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
     results.extend(super::decode_captures(
         source,
         &[&EVAL_ROT13_DOUBLE_RE, &EVAL_ROT13_SINGLE_RE],
-        &[DecodeStep::Rot13],
+        &[DecodeStep::Rot(13)],
         ScriptLanguage::Php,
     ));
 
@@ -112,7 +109,7 @@ mod tests {
     use base64::Engine;
 
     #[test]
-    fn test_eval_base64_decode() {
+    fn decodes_eval_base64_decode() {
         let src = r#"<?php eval(base64_decode("ZWNobyAiaGVsbG8iOw==")); ?>"#;
         // "echo \"hello\";"
         let results = extract_obfuscated_payloads(src);
@@ -122,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_gzinflate_base64() {
+    fn decodes_eval_gzinflate() {
         // Create: "echo 'hello';" → raw deflate → base64
         use flate2::Compression;
         use flate2::write::DeflateEncoder;
@@ -141,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_gzuncompress_base64() {
+    fn decodes_eval_gzuncompress() {
         // Create: "echo 'hello';" → zlib compress → base64
         use flate2::Compression;
         use flate2::write::ZlibEncoder;
@@ -160,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_str_rot13() {
+    fn decodes_eval_str_rot13() {
         let src = r#"<?php eval(str_rot13("rpub 'uryyb';")); ?>"#;
         // ROT13 of "echo 'hello';"
         let results = extract_obfuscated_payloads(src);
@@ -169,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn test_no_false_positive_on_non_eval_base64() {
+    fn ignores_base64_decode_outside_eval() {
         let src = r#"<?php $data = base64_decode("YWJj"); echo $data; ?>"#;
         let results = extract_obfuscated_payloads(src);
         assert!(results.is_empty());

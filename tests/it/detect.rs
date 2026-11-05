@@ -1,11 +1,11 @@
 //! Tests for language and file type detection (detect.rs, binary.rs detection functions).
 
 use crate::common::minimal_elf_header;
-use stng::script::detect::{ScriptLanguage, detect_script_language};
+use stng::script::{ScriptLanguage, detect_script_language};
 use stng::{detect_language, is_go_binary, is_rust_binary, is_text_file};
 
 #[test]
-fn test_detect_language_plain_text() {
+fn detects_ascii_as_text() {
     let data = b"Hello, world! This is a plain text file.\n\
                  It has multiple lines and ASCII characters like ABC123.\n\
                  The content is all printable and has no binary markers.";
@@ -17,7 +17,7 @@ fn test_detect_language_plain_text() {
 }
 
 #[test]
-fn test_detect_language_empty() {
+fn detects_empty_as_unknown() {
     assert_eq!(
         detect_language(&[]),
         stng::Language::Unknown,
@@ -26,7 +26,7 @@ fn test_detect_language_empty() {
 }
 
 #[test]
-fn test_detect_language_all_zeros() {
+fn detects_zeros_as_unknown() {
     let data = vec![0u8; 512];
     assert_eq!(
         detect_language(&data),
@@ -36,7 +36,7 @@ fn test_detect_language_all_zeros() {
 }
 
 #[test]
-fn test_detect_language_elf_no_language_markers() {
+fn detects_bare_elf_as_unknown() {
     // Minimal ELF without Go or Rust section markers — neither language, but is a binary
     let data = minimal_elf_header();
     assert_eq!(
@@ -47,19 +47,19 @@ fn test_detect_language_elf_no_language_markers() {
 }
 
 #[test]
-fn test_is_text_file_plain_ascii() {
+fn plain_ascii_is_text() {
     let data =
         b"This is a plain text file.\nWith multiple lines.\nAnd mostly printable ASCII content.";
     assert!(is_text_file(data), "Plain ASCII should be text");
 }
 
 #[test]
-fn test_is_text_file_empty() {
+fn empty_is_not_text() {
     assert!(!is_text_file(&[]), "Empty data is not text");
 }
 
 #[test]
-fn test_is_text_file_rejects_elf_magic() {
+fn elf_magic_is_not_text() {
     let mut data = vec![b'A'; 200];
     data[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
     assert!(
@@ -69,7 +69,7 @@ fn test_is_text_file_rejects_elf_magic() {
 }
 
 #[test]
-fn test_is_text_file_rejects_macho_64bit_le() {
+fn macho_64_magic_is_not_text() {
     let mut data = vec![b'A'; 200];
     data[0..4].copy_from_slice(&[0xCF, 0xFA, 0xED, 0xFE]);
     assert!(
@@ -79,7 +79,7 @@ fn test_is_text_file_rejects_macho_64bit_le() {
 }
 
 #[test]
-fn test_is_text_file_rejects_macho_32bit_le() {
+fn macho_32_magic_is_not_text() {
     let mut data = vec![b'A'; 200];
     data[0..4].copy_from_slice(&[0xCE, 0xFA, 0xED, 0xFE]);
     assert!(
@@ -89,7 +89,7 @@ fn test_is_text_file_rejects_macho_32bit_le() {
 }
 
 #[test]
-fn test_is_text_file_rejects_fat_macho() {
+fn fat_macho_magic_is_not_text() {
     let mut data = vec![b'A'; 200];
     data[0..4].copy_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
     assert!(
@@ -99,7 +99,7 @@ fn test_is_text_file_rejects_fat_macho() {
 }
 
 #[test]
-fn test_is_text_file_rejects_pe_mz_header() {
+fn mz_header_is_not_text() {
     let mut data = vec![b'A'; 200];
     data[0..2].copy_from_slice(b"MZ");
     assert!(
@@ -109,7 +109,7 @@ fn test_is_text_file_rejects_pe_mz_header() {
 }
 
 #[test]
-fn test_is_text_file_rejects_high_binary_ratio() {
+fn mostly_unprintable_is_not_text() {
     // Cycle through all byte values — far below 85% printable
     let data: Vec<u8> = (0u8..=255).cycle().take(256).collect();
     assert!(
@@ -119,7 +119,7 @@ fn test_is_text_file_rejects_high_binary_ratio() {
 }
 
 #[test]
-fn test_is_text_file_rejects_more_than_two_nulls() {
+fn three_nuls_are_not_text() {
     let mut data = vec![b'A'; 200];
     data[10] = 0;
     data[50] = 0;
@@ -131,7 +131,7 @@ fn test_is_text_file_rejects_more_than_two_nulls() {
 }
 
 #[test]
-fn test_is_text_file_allows_two_nulls() {
+fn two_nuls_are_still_text() {
     // Exactly 2 null bytes within otherwise printable text should still pass
     let mut data = b"This is printable text content for testing null byte tolerance.".to_vec();
     data.extend(
@@ -146,7 +146,7 @@ fn test_is_text_file_allows_two_nulls() {
 }
 
 #[test]
-fn test_is_go_binary_false_for_minimal_elf() {
+fn bare_elf_is_not_go() {
     let data = minimal_elf_header();
     assert!(
         !is_go_binary(&data),
@@ -155,13 +155,13 @@ fn test_is_go_binary_false_for_minimal_elf() {
 }
 
 #[test]
-fn test_is_go_binary_false_for_text() {
+fn text_is_not_go() {
     let data = b"Just a plain text string with no binary markers at all.";
     assert!(!is_go_binary(data), "Plain text should not be a Go binary");
 }
 
 #[test]
-fn test_is_rust_binary_false_for_minimal_elf() {
+fn bare_elf_is_not_rust() {
     let data = minimal_elf_header();
     assert!(
         !is_rust_binary(&data),
@@ -170,7 +170,7 @@ fn test_is_rust_binary_false_for_minimal_elf() {
 }
 
 #[test]
-fn test_is_rust_binary_false_for_text() {
+fn text_is_not_rust() {
     let data = b"This is not a Rust binary, just text.";
     assert!(
         !is_rust_binary(data),
@@ -179,7 +179,7 @@ fn test_is_rust_binary_false_for_text() {
 }
 
 #[test]
-fn test_detect_language_with_real_go_binary() {
+fn detects_go_binary_as_go() {
     let path = crate::common::path("testdata/elf/hello_linux_amd64");
     let data = std::fs::read(path).expect("Failed to read test binary");
     assert_eq!(
@@ -190,7 +190,7 @@ fn test_detect_language_with_real_go_binary() {
 }
 
 #[test]
-fn test_is_go_binary_true_for_real_go_binary() {
+fn go_binary_is_go() {
     let path = crate::common::path("testdata/elf/hello_linux_amd64");
     let data = std::fs::read(path).expect("Failed to read test binary");
     assert!(
@@ -200,7 +200,7 @@ fn test_is_go_binary_true_for_real_go_binary() {
 }
 
 #[test]
-fn test_is_rust_binary_false_for_go_binary() {
+fn go_binary_is_not_rust() {
     let path = crate::common::path("testdata/elf/hello_linux_amd64");
     let data = std::fs::read(path).expect("Failed to read test binary");
     assert!(
@@ -210,7 +210,7 @@ fn test_is_rust_binary_false_for_go_binary() {
 }
 
 #[test]
-fn test_script_language_detector_confusion_matrix() {
+fn detects_script_languages() {
     let cases = [
         (
             "python imports and defs",
@@ -304,7 +304,7 @@ fn test_script_language_detector_confusion_matrix() {
 }
 
 #[test]
-fn test_script_language_detector_ambiguous_examples() {
+fn resolves_ambiguous_scripts() {
     let cases = [
         (
             "lua print should not become python",

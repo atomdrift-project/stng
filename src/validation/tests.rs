@@ -13,7 +13,7 @@ fn retains_short_environment_assignments() {
 }
 
 #[test]
-fn test_is_garbage_valid_strings() {
+fn keeps_ordinary_strings() {
     // Valid strings should NOT be garbage
     assert!(!is_garbage("Hello World"));
     assert!(!is_garbage("go1.22.0"));
@@ -29,7 +29,7 @@ fn test_is_garbage_valid_strings() {
 }
 
 #[test]
-fn test_is_garbage_hex_id_runs() {
+fn keeps_hex_id_runs() {
     // UUIDs / Mythic payload_uuid
     assert!(!is_garbage("88a39a12-f279-4bb2-b102-1ee1157ad859"));
     assert!(!is_garbage("550e8400-e29b-41d4-a716-446655440000"));
@@ -54,7 +54,7 @@ fn test_is_garbage_hex_id_runs() {
 }
 
 #[test]
-fn test_is_garbage_token_id_runs() {
+fn keeps_token_id_runs() {
     // Opaque API tokens / b64-shaped IDs (length ≥ 12, base64 alphabet)
     assert!(!is_garbage("AKIAIOSFODNN7EXAMPLE")); // AWS access key id shape
     assert!(!is_garbage("ghp_AbCd1234EfGh5678IjKl"));
@@ -68,7 +68,7 @@ fn test_is_garbage_token_id_runs() {
 }
 
 #[test]
-fn test_is_garbage_jpeg_metadata() {
+fn keeps_jpeg_metadata() {
     // JPEG/image metadata strings should NOT be garbage
     assert!(!is_garbage("JFIF"));
     assert!(!is_garbage("Photoshop 3.0"));
@@ -82,7 +82,7 @@ fn test_is_garbage_jpeg_metadata() {
 }
 
 #[test]
-fn test_is_garbage_misaligned_go_reads() {
+fn rejects_misaligned_go_reads() {
     // Misaligned Go data patterns should be garbage
     assert!(is_garbage("asL "));
     assert!(is_garbage("``L "));
@@ -96,7 +96,7 @@ fn test_is_garbage_misaligned_go_reads() {
 }
 
 #[test]
-fn test_is_garbage_short_binary_patterns() {
+fn rejects_short_binary_patterns() {
     // Short strings that look like misaligned binary data
     assert!(is_garbage("PuO#"));
     assert!(is_garbage("P9O"));
@@ -142,7 +142,7 @@ fn test_is_garbage_short_binary_patterns() {
 }
 
 #[test]
-fn test_is_garbage_short_nonalpha() {
+fn rejects_short_punctuation() {
     // Short strings with mostly non-alphanumeric
     assert!(is_garbage("@#$%"));
     assert!(is_garbage("!!!"));
@@ -151,7 +151,7 @@ fn test_is_garbage_short_nonalpha() {
 }
 
 #[test]
-fn test_is_garbage_repeated_chars() {
+fn rejects_repeated_chars() {
     // Single repeated characters
     assert!(is_garbage("aaaa"));
     assert!(is_garbage("...."));
@@ -159,61 +159,61 @@ fn test_is_garbage_repeated_chars() {
 }
 
 #[test]
-fn test_is_garbage_unicode_endings() {
+fn rejects_short_strings_ending_in_unicode() {
     // Short strings with non-ASCII unicode at the end
     assert!(is_garbage("333333ӿ"));
     assert!(is_garbage("abcӿ"));
 }
 
 #[test]
-fn test_is_garbage_control_chars() {
+fn rejects_control_chars() {
     // Strings with control characters
     assert!(is_garbage("ab\x00cd"));
     assert!(is_garbage("\x01\x02\x03"));
 }
 
 #[test]
-fn test_is_garbage_single_char() {
+fn rejects_single_chars() {
     assert!(is_garbage("a"));
     assert!(is_garbage("X"));
     assert!(is_garbage("1"));
 }
 
 #[test]
-fn test_is_garbage_alternating_pattern() {
+fn rejects_digit_letter_alternation() {
     // Alternating digit/non-hex-letter chaos with no other signal
     assert!(is_garbage("1z2y3x4w5v"));
     // Pure-hex run of the same shape is kept — could be a short
     // hash fragment, build ID, or other identifier (see
-    // is_hex_id_run / test_is_garbage_hex_id_runs).
+    // is_hex_id_run / keeps_hex_id_runs).
     assert!(!is_garbage("1a2b3c4d5e"));
 }
 
 #[test]
-fn test_is_garbage_low_alphanum_ratio() {
+fn rejects_low_alphanumeric_ratio() {
     // Less than 30% alphanumeric for strings > 6 chars
     assert!(is_garbage("....!!!!"));
 }
 
 #[test]
-fn test_is_garbage_unbalanced_parens() {
+fn rejects_unbalanced_brackets() {
     assert!(is_garbage("ab(cd"));
     assert!(is_garbage("ab[cd"));
 }
 
 #[test]
-fn test_is_garbage_single_quote() {
+fn rejects_lone_single_quote() {
     assert!(is_garbage("ab'cd"));
 }
 
 #[test]
-fn test_is_garbage_trailing_newline_ok() {
+fn keeps_trailing_newline() {
     // Trailing newline should not trigger control char detection
     assert!(!is_garbage("hello world\n"));
 }
 
 #[test]
-fn test_is_garbage_pascal_case_identifiers() {
+fn keeps_pascal_case_identifiers() {
     // PascalCase / camelCase symbol names with frequent Upper↔Lower
     // transitions are valid identifiers and must not be flagged as chaotic.
     // Regression: pre-fix, the binary at SHA
@@ -238,7 +238,7 @@ fn test_is_garbage_pascal_case_identifiers() {
 }
 
 #[test]
-fn test_is_garbage_alternating_case_letters_kept() {
+fn keeps_long_alternating_case_letters() {
     // Long pure-ASCII letter strings — even with frequent case alternation —
     // are likely meaningful (identifiers, obfuscated text, words).
     for s in ["AbCdEfGh", "PaSsWoRd", "TheQuickBrownFox", "AaBbCcDdEe"] {
@@ -247,7 +247,7 @@ fn test_is_garbage_alternating_case_letters_kept() {
 }
 
 #[test]
-fn test_is_garbage_leading_tab_trimmed() {
+fn keeps_identifiers_with_leading_tab() {
     // A leading tab on an otherwise valid identifier must not poison
     // the control-character check. Real Go pclntab entries surface
     // identifiers prefixed with a `\t` byte. (Leading literal spaces
@@ -259,14 +259,14 @@ fn test_is_garbage_leading_tab_trimmed() {
 }
 
 #[test]
-fn test_is_garbage_camel_case_garbage_still_rejected() {
+fn rejects_short_alternating_case() {
     // Alternation alone is not enough — without any ≥2-char lowercase run
     // and at <7 chars, mixed-case strings should still be considered garbage.
     assert!(is_garbage("AaBbCc"));
 }
 
 #[test]
-fn test_is_garbage_crypto_algorithm_names() {
+fn keeps_crypto_algorithm_names() {
     // Crypto / hash / type names with digits used to be killed by the
     // MIXED_CASE_DIGIT range filter (5–10 chars + upper + lower + digit).
     // The looser identifier-shape rule keeps them.
@@ -285,7 +285,7 @@ fn test_is_garbage_crypto_algorithm_names() {
 }
 
 #[test]
-fn test_is_garbage_file_globs() {
+fn keeps_file_globs() {
     // File-glob patterns are high-value malware indicators and must
     // survive the short-string noise-punctuation filter.
     for s in ["*.exe", "*.dll", "*.bin", "*.tmp", "*.log", "*.so"] {
@@ -298,7 +298,7 @@ fn test_is_garbage_file_globs() {
 }
 
 #[test]
-fn test_is_garbage_four_char_camelcase_kept() {
+fn keeps_four_char_camel_case() {
     // 4-char camelCase: brand names, Hungarian notation, abbreviated
     // identifiers — high signal for security analysts (`hWnd` is a
     // ubiquitous Win32 type; `iPad`, `iMac` are Apple device IDs).
@@ -308,7 +308,7 @@ fn test_is_garbage_four_char_camelcase_kept() {
 }
 
 #[test]
-fn test_is_garbage_short_function_calls_kept() {
+fn keeps_short_function_calls() {
     // `Run()`, `F(x)`, `fn()` — short function-call shapes are
     // meaningful code fragments, not noise.
     for s in ["Run()", "fn()", "F(x)", "Init()", "Stop()"] {
@@ -317,7 +317,7 @@ fn test_is_garbage_short_function_calls_kept() {
 }
 
 #[test]
-fn test_is_garbage_multi_word_fragments_kept() {
+fn keeps_asm_fragments() {
     // Multi-word fragments from disassembly output, formatted logs, etc.
     // The space-separated structure is meaningful even when individual
     // tokens look like noise (single-letter, all-caps, etc.).
@@ -333,7 +333,7 @@ fn test_is_garbage_multi_word_fragments_kept() {
 }
 
 #[test]
-fn test_is_garbage_multi_word_noise_still_rejected() {
+fn rejects_spaced_noise() {
     // A single space inside otherwise-noisy bytes shouldn't save them.
     // The exemption requires <=1 noise-punct char and all-ASCII.
     assert!(is_garbage("ZFI7% eE;*\\Y"));
@@ -341,7 +341,7 @@ fn test_is_garbage_multi_word_noise_still_rejected() {
 }
 
 #[test]
-fn test_is_garbage_short_camelcase_kept() {
+fn keeps_short_camel_case() {
     // 5+ char identifier-shaped names are kept — covers `iPad`-style
     // abbreviated identifiers, Hungarian notation like `hModule`, and
     // brand-shaped strings like `iOSv2`.
@@ -357,7 +357,7 @@ fn test_is_garbage_short_camelcase_kept() {
 }
 
 #[test]
-fn test_is_garbage_short_strings_with_dots() {
+fn keeps_short_dotted_names() {
     // Short strings with dots should not be automatically marked as garbage
     // These are common in filenames and section names
     assert!(!is_garbage("d.exe"), "d.exe should not be garbage");
@@ -372,7 +372,7 @@ fn test_is_garbage_short_strings_with_dots() {
 }
 
 #[test]
-fn test_is_garbage_base64_strings() {
+fn keeps_base64() {
     // Base64 strings should NOT be garbage
     assert!(!is_garbage("VGhpcyBpcyBhIHNlY3JldCBtZXNzYWdl"));
     assert!(!is_garbage("SGVsbG8gV29ybGQh"));
@@ -380,7 +380,7 @@ fn test_is_garbage_base64_strings() {
 }
 
 #[test]
-fn test_is_garbage_obfuscated_javascript() {
+fn keeps_obfuscated_javascript() {
     // Obfuscated JavaScript with hex identifiers should NOT be garbage
     // This is common in malware and should be preserved for analysis
     let test_cases = vec![
@@ -411,7 +411,7 @@ fn test_is_garbage_obfuscated_javascript() {
 }
 
 #[test]
-fn test_is_garbage_shell_shebangs_and_options() {
+fn keeps_shebangs_and_shell_options() {
     // Shebang lines and shell command options should NOT be garbage
     assert!(!is_garbage("#!/bin/sh -eux -o p"));
     assert!(!is_garbage("#!/bin/bash"));
@@ -422,7 +422,7 @@ fn test_is_garbage_shell_shebangs_and_options() {
 }
 
 #[test]
-fn test_is_garbage_obfuscated_python() {
+fn keeps_obfuscated_python() {
     // Obfuscated Python with mangled identifiers should NOT be garbage
     assert!(!is_garbage("def llIIlIlllllIIlllII(lllIllllIIIllIllII):"));
     assert!(!is_garbage(
@@ -437,7 +437,7 @@ fn test_is_garbage_obfuscated_python() {
 }
 
 #[test]
-fn test_is_garbage_malware_iocs() {
+fn keeps_malware_iocs() {
     // IOCs commonly found in malware should NOT be garbage
 
     // MAC addresses
@@ -533,7 +533,7 @@ fn test_is_garbage_malware_iocs() {
 }
 
 #[test]
-fn test_is_garbage_non_ascii_strings() {
+fn rejects_non_ascii_noise() {
     // Strings with excessive non-ASCII characters should be garbage
     let test_cases = vec![
         ("/º ¸`¨wl½¶ zmNy", "Path with non-ASCII chars"),
@@ -554,7 +554,7 @@ fn test_is_garbage_non_ascii_strings() {
 }
 
 #[test]
-fn test_is_garbage_literal_escape_sequences() {
+fn rejects_literal_escapes_outside_code() {
     // Strings with literal \x escape sequences (not in code context) are garbage
     assert!(
         is_garbage("RFXA-\\xU*^$U"),
@@ -574,7 +574,7 @@ fn test_is_garbage_literal_escape_sequences() {
 }
 
 #[test]
-fn test_is_garbage_ransomware_and_ctf_iocs() {
+fn keeps_ransomware_and_ctf_iocs() {
     // IOCs commonly found in ransomware and CTF challenges should NOT be garbage.
     for (s, what) in [
         // Cryptocurrency wallet addresses
@@ -721,7 +721,7 @@ fn test_is_garbage_ransomware_and_ctf_iocs() {
 }
 
 #[test]
-fn test_is_garbage_xor_malware_samples() {
+fn rejects_xor_decoded_noise() {
     // Real garbage strings from XOR-decoded malware (brew_agent sample)
     // These have chaotic character class alternation and should be filtered
     // Note: Some strings with specific patterns (e.g., short with limited special chars)
@@ -763,7 +763,7 @@ fn test_is_garbage_xor_malware_samples() {
 // ===== Telegram bot token predicate =====
 
 #[test]
-fn test_is_telegram_bot_token_positive() {
+fn recognizes_telegram_bot_tokens() {
     // DPRK Teams (2026.04) sample.
     let t = "8520232238:AAF6xeNiv-OKpAPrnRmv7AsjmJAmkRjf0I4";
     assert!(is_telegram_bot_token(t, t.len()));
@@ -783,7 +783,7 @@ fn test_is_telegram_bot_token_positive() {
 }
 
 #[test]
-fn test_is_telegram_bot_token_negative() {
+fn rejects_malformed_telegram_bot_tokens() {
     // No colon.
     let t = "8520232238AAF6xeNivOKpAPrnRmv7AsjmJAmkRjf0I4";
     assert!(!is_telegram_bot_token(t, t.len()));
@@ -810,7 +810,7 @@ fn test_is_telegram_bot_token_negative() {
 // ===== Swift mangled symbol predicate =====
 
 #[test]
-fn test_is_swift_mangled_symbol_positive() {
+fn recognizes_swift_mangled_symbols() {
     // _TtC class metadata (the DPRK Teams sample).
     let s = "_TtC7TeamAppP33_464D6157E8D96D7B7ECE5C61C5669F7019ResourceBundleClass";
     assert!(is_swift_mangled_symbol(s, s.len()));
@@ -838,7 +838,7 @@ fn test_is_swift_mangled_symbol_positive() {
 }
 
 #[test]
-fn test_is_swift_mangled_symbol_negative() {
+fn rejects_non_swift_symbols() {
     // Too short.
     assert!(!is_swift_mangled_symbol("_Tt", 3));
 
@@ -856,3 +856,11 @@ fn test_is_swift_mangled_symbol_negative() {
 }
 
 // ===== JWT predicate =====
+
+#[test]
+fn words_with_y_for_a_vowel_survive() {
+    for s in ["sync", "strcpy", "stpcpy", "fcrypt"] {
+        assert!(!crate::is_garbage(s), "{s}");
+    }
+    assert!(crate::is_garbage("xkcdq"));
+}

@@ -15,7 +15,7 @@ fn load_sample() -> Vec<u8> {
 }
 
 #[test]
-fn test_no_xor_ip_false_positives_from_xaml_margins() {
+fn rejects_xaml_margins_as_xor_ips() {
     let data = load_sample();
 
     let opts = ExtractOptions::new(4)
@@ -41,7 +41,7 @@ fn test_no_xor_ip_false_positives_from_xaml_margins() {
 }
 
 #[test]
-fn test_no_base64_false_positives_from_cert_timestamps() {
+fn rejects_cert_timestamps_as_base64() {
     let data = load_sample();
 
     let opts = ExtractOptions::new(4);
@@ -65,7 +65,7 @@ fn test_no_base64_false_positives_from_cert_timestamps() {
 }
 
 #[test]
-fn test_no_base64_false_positives_from_x86_code() {
+fn rejects_x86_code_as_base64() {
     let data = load_sample();
 
     let opts = ExtractOptions::new(4);
@@ -85,7 +85,7 @@ fn test_no_base64_false_positives_from_x86_code() {
 }
 
 #[test]
-fn test_no_php_false_positives_from_reloc_section() {
+fn rejects_reloc_bytes_as_php() {
     let data = load_sample();
 
     let opts = ExtractOptions::new(4);
@@ -107,7 +107,7 @@ fn test_no_php_false_positives_from_reloc_section() {
 }
 
 #[test]
-fn test_legitimate_strings_still_extracted() {
+fn keeps_downloader_strings() {
     let data = load_sample();
 
     let opts = ExtractOptions::new(4);

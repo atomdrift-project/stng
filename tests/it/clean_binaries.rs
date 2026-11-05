@@ -6,14 +6,11 @@
 use std::fs;
 use stng::{ExtractOptions, StringKind, extract_strings_with_options};
 
-/// Test that /bin/ls has no obfuscated content.
-/// This is a clean system binary that should not trigger XOR or encoding detections.
+/// A clean Go hello-world ELF has no obfuscated content: no XOR or
+/// encoding detections.
 #[test]
-#[cfg(unix)] // reads a Unix system binary
-fn test_bin_ls_clean() {
-    let bin_path = "/bin/ls";
-
-    let data = fs::read(bin_path).expect("Failed to read /bin/ls");
+fn clean_elf_has_no_obfuscated_strings() {
+    let data = crate::common::bytes("testdata/elf/hello_linux_amd64");
 
     let opts = ExtractOptions::new(10)
         .with_xor(stng::XorMode::Auto)
@@ -103,13 +100,10 @@ fn test_bin_ls_clean() {
     );
 }
 
-/// Test that /bin/cat has no obfuscated content.
+/// A clean MSVC console PE has no obfuscated content.
 #[test]
-#[cfg(unix)] // reads a Unix system binary
-fn test_bin_cat_clean() {
-    let bin_path = "/bin/cat";
-
-    let data = fs::read(bin_path).expect("Failed to read /bin/cat");
+fn clean_pe_has_no_obfuscated_strings() {
+    let data = crate::common::bytes("testdata/pe/msvc_console_amd64.exe");
 
     let opts = ExtractOptions::new(10)
         .with_xor(stng::XorMode::Auto)
@@ -132,7 +126,7 @@ fn test_bin_cat_clean() {
 /// Test that vget_sample (Rust binary) has no false base85 detections.
 /// File paths like "library/alloc/src/raw_vec/mod.rs" are not base85 encoded.
 #[test]
-fn test_vget_sample_no_base85() {
+fn finds_at_most_one_base85_in_rust_binary() {
     let sample_path = crate::common::path("testdata/malware/vget_sample");
 
     let data = fs::read(sample_path).expect("Failed to read vget_sample");

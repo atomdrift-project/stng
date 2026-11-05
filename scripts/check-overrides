@@ -1,9 +1,14 @@
 #!/bin/sh
-# Fail if Cargo.toml has a dependency or [patch] path that leaves the repo
-# (absolute, ~, or through ..): it pins against a sibling working tree, so
-# nobody else can reproduce the build. Paths inside the repo and [patch]
-# entries sourced from git pass. Target
-# paths under [lib]/[[bin]] are not dependencies and are ignored.
+# Fail if Cargo.toml has a dependency or [patch] entry that others cannot
+# reproduce:
+#   - a path that leaves the repo (absolute, ~, or through ..), which pins
+#     against a sibling working tree;
+#   - a [patch] git source without `rev = "<sha>"`, which follows a branch
+#     head. Ordinary git dependencies may omit it: a dependent must resolve
+#     a type-sharing dependency (binform) from the same source, and
+#     Cargo.lock records the commit for stng's own builds.
+# Paths inside the repo pass. Target paths under [lib]/[[bin]] are not
+# dependencies and are ignored. Entries are expected on one line.
 #
 # Run by scripts/pre-commit and by CI.
 
@@ -20,6 +25,19 @@ overrides=$(awk '
 		next
 	}
 	section ~ /(^|\.)(dev-|build-)?dependencies(\.|$)/ || section ~ /^patch/ {
+		if (section ~ /^patch/ && $0 ~ /(^|[{,[:space:]])git[[:space:]]*=/) {
+			# No regex intervals: older mawk lacks them.
+			rev = ""
+			if (match($0, /(^|[{,[:space:]])rev[[:space:]]*=[[:space:]]*"[0-9a-f]+"/)) {
+				rev = substr($0, RSTART, RLENGTH)
+				sub(/^[^"]*"/, "", rev)
+				sub(/"$/, "", rev)
+			}
+			if (length(rev) != 40) {
+				printf "  %d: %s (git source without a full-sha rev)\n", NR, $0
+			}
+			next
+		}
 		if (!match($0, /(^|[{,[:space:]])path[[:space:]]*=[[:space:]]*"[^"]*"/)) {
 			next
 		}
@@ -33,8 +51,8 @@ overrides=$(awk '
 ' Cargo.toml)
 
 if [ -n "$overrides" ]; then
-	echo "Error: Cargo.toml contains local overrides; remove before committing:" >&2
+	echo "Error: Cargo.toml has unreproducible dependency sources; fix before committing:" >&2
 	echo "$overrides" >&2
 	exit 1
 fi
-echo "✓ No local overrides"
+echo "✓ No local overrides or unpinned git sources"

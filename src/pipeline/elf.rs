@@ -1,25 +1,15 @@
 //! ELF binaries.
 
-use super::merge_imports;
-use super::unclaimed_raw_strings;
-use super::{Scan, parallel};
-use crate::GoStringExtractor;
-use crate::RustStringExtractor;
-use crate::StringMethod;
-use crate::binary;
-use crate::collect_elf_section_info;
-use crate::collect_elf_segments;
-use crate::elf_go_skip_ranges;
-use crate::extract_layout_imports;
-use crate::extract_overlay_strings;
-use crate::extract_raw_strings;
-use crate::extract_stack_strings_with_context;
-use crate::extract_wide_strings;
+use super::{Scan, merge_imports, parallel, unclaimed_raw_strings};
+use crate::binary::{self, collect_elf_section_info, elf_go_skip_ranges, elf_section_names};
+use crate::go::{GoStringExtractor, pclntab_strings};
+use crate::imports::extract_layout_imports;
 use crate::layouts::Layouts;
-use crate::overlay::detect_elf_overlay_from_elf;
-use crate::pclntab_strings;
-use crate::scan_binary_ips;
-use crate::{ExtractOptions, ExtractedString};
+use crate::raw::{extract_raw_strings, extract_wide_strings};
+use crate::rust::RustStringExtractor;
+use crate::sockaddr::scan_binary_ips;
+use crate::stack_strings::extract_stack_strings_with_context;
+use crate::{ExtractOptions, ExtractedString, StringMethod, overlay};
 use goblin::elf::Elf;
 use std::collections::HashSet;
 
@@ -33,12 +23,12 @@ pub(super) fn scan<'d>(
     let min_length = opts.min_length;
     let mut strings = Vec::new();
     let mut is_go_binary = false;
-    let segments = collect_elf_segments(elf);
+    let segments = elf_section_names(elf);
     let section_info = collect_elf_section_info(elf);
 
     // Detect overlay first to avoid scanning it during normal extraction.
     // Reuse the already-parsed ELF — detect_elf_overlay(data) would re-parse.
-    let overlay_info = detect_elf_overlay_from_elf(elf, data);
+    let overlay_info = overlay::elf_overlay(elf, data);
     let scan_data = if let Some(ref overlay) = overlay_info {
         // Only scan up to overlay start (safe cast: min with data.len())
         let end = usize::try_from(overlay.start_offset)
@@ -49,7 +39,6 @@ pub(super) fn scan<'d>(
         data
     };
 
-    // Check for Go sections
     let has_go = elf.section_headers.iter().any(|sh| {
         let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
         name == ".gopclntab" || name == ".go.buildinfo"
@@ -100,17 +89,17 @@ pub(super) fn scan<'d>(
                     sh.sh_flags & u64::from(goblin::elf::section_header::SHF_EXECINSTR) != 0
                 })
                 .filter_map(|sh| {
-                    // u64→usize: lossless on 64-bit hosts (this tool targets 64-bit only)
-                    #[allow(clippy::cast_possible_truncation)]
-                    let start = sh.sh_offset as usize;
-                    #[allow(clippy::cast_possible_truncation)]
-                    let end = start.saturating_add(sh.sh_size as usize);
-                    scan_data.get(start..end).map(|_| (start, end))
+                    let start = usize::try_from(sh.sh_offset).ok()?;
+                    let end = start.checked_add(usize::try_from(sh.sh_size).ok()?)?;
+                    (end <= scan_data.len()).then_some(start..end)
                 })
                 .collect(),
         );
         strings.extend(super::extract_stack_strings_from_ranges(
-            scan_data, min_length, &code,
+            scan_data,
+            min_length,
+            &code,
+            crate::x86::bits_elf(elf.header.e_machine),
         ));
     }
 
@@ -126,7 +115,9 @@ pub(super) fn scan<'d>(
     }
 
     // Extract overlay/appended data (common malware technique)
-    strings.extend(extract_overlay_strings(data, min_length));
+    if let Some(ref overlay) = overlay_info {
+        strings.extend(overlay::overlay_strings(data, overlay, min_length));
+    }
     Scan {
         strings,
         sections: section_info,
@@ -181,7 +172,7 @@ fn scan_go(
     // binary's strings behind one Go-named section.
     let is_go = !go_strings.is_empty();
     if !is_go {
-        tracing::warn!("ELF has Go section names but no Go string structures; scanning as non-Go");
+        tracing::debug!("ELF has Go section names but no Go string structures; scanning as non-Go");
         strings.extend(extract_raw_strings(scan_data, min_length, segments, &[]));
     }
     let known: HashSet<&str> = go_strings.iter().map(|s| s.value.as_str()).collect();
@@ -229,9 +220,12 @@ fn extract_go_text_xor_strings(
         return Vec::new();
     };
 
+    let Some(bits) = crate::x86::bits_elf(elf.header.e_machine) else {
+        return Vec::new();
+    };
     // Use the context-aware version to resolve RIP-relative XMM loads.
     let mut xor_results =
-        extract_stack_strings_with_context(text, min_length, scan_data, text_vma, image_base);
+        extract_stack_strings_with_context(text, min_length, scan_data, text_vma, image_base, bits);
     // Adjust data_offset to file-relative position.
     for r in &mut xor_results {
         r.rebase(text_start as u64);
@@ -278,10 +272,6 @@ fn extract_elf_pclntab_strings(
     // larger funcname pass and recovers package paths the latter can't.
     let (mut nulls, varints) = pclntab_strings(section_bytes, start as u64, min_length);
     nulls.extend(varints);
-    tracing::debug!(
-        "TIME: Go ELF .gopclntab scan took {:?} ({} symbols)",
-        t_pcln.elapsed(),
-        nulls.len()
-    );
+    tracing::debug!(elapsed = ?t_pcln.elapsed(), symbols = nulls.len(), "Go ELF .gopclntab scan finished");
     nulls
 }

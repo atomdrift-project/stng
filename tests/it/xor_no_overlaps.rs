@@ -6,7 +6,7 @@
 use stng::{ExtractOptions, StringKind, StringMethod};
 
 #[test]
-fn test_no_overlapping_xor_strings() {
+fn emits_no_overlapping_duplicates() {
     // Create test data with XOR'd strings and null-padded regions
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
@@ -92,7 +92,7 @@ fn test_no_overlapping_xor_strings() {
 }
 
 #[test]
-fn test_null_region_filtering() {
+fn drops_key_artifacts_from_nul_runs() {
     // Test that we don't extract key artifacts from null-heavy regions
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
 
@@ -126,7 +126,7 @@ fn test_null_region_filtering() {
 }
 
 #[test]
-fn test_brew_agent_no_overlaps() {
+fn keeps_brew_agent_xor_strings_disjoint() {
     // Test that the actual brew_agent malware doesn't produce overlaps
     let data = crate::common::bytes("testdata/malware/brew_agent");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -182,7 +182,7 @@ fn test_brew_agent_no_overlaps() {
 }
 
 #[test]
-fn test_auto_detected_xor_key_in_output() {
+fn reports_autodetected_key_as_xor_key() {
     // Verify that when XOR auto-detection finds a key, the returned strings
     // include an entry with kind == XorKey. This regressed when the key string
     // existed at multiple offsets (e.g. fat Mach-O arch slices): only one copy

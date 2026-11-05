@@ -15,64 +15,58 @@ use std::sync::LazyLock;
 use super::DeobfuscationResult;
 use super::decode_chain::DecodeStep;
 
-/// -EncodedCommand or -enc followed by base64 (case insensitive via (?i))
-#[allow(clippy::expect_used)]
+/// `-EncodedCommand` followed by base64. powershell.exe takes any
+/// unambiguous prefix (`-e`, `-en`, …, `-encodedcomman`) and the `-ec`
+/// alias; the flag is captured so [`is_encoded_command_flag`] can check it.
 static ENCODED_CMD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)-(?:encodedcommand|enc|e)\s+['"]?([A-Za-z0-9+/=]{8,})['"]?"#)
-        .expect("static regex")
+    Regex::new(r#"(?i)-(e[a-z]{0,13})\s+['"]?([A-Za-z0-9+/=]{8,})['"]?"#)
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 // The one-letter `-e` option is also common in other programs (for example,
 // `grep -E`), so it needs a PowerShell executable on the same command line.
-#[allow(clippy::expect_used)]
 static POWERSHELL_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:^|[^a-z0-9_])(?:powershell|pwsh)(?:\.exe)?(?:[\s"']|$)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// `[Convert]::FromBase64String("...")` or `[System.Convert]::FromBase64String("...")`
-#[allow(clippy::expect_used)]
 static CONVERT_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?i)\[(?:System\.)?Convert\]::FromBase64String\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#,
     )
-    .expect("static regex")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// [char[]](72,101,108,...) -join '' or [char[]](72,101,108,...) -join ""
-#[allow(clippy::expect_used)]
 static CHAR_ARRAY_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\[char\[\]\]\s*\(\s*([0-9,\s]+)\s*\)\s*-join\s*['"]['"]*"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// iex with reversed string: iex(-join('string'[-1..-N])) or similar
-#[allow(clippy::expect_used)]
 static IEX_REVERSE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:iex|invoke-expression)\s*\(\s*(?:-join\s*\(\s*)?['"]([^'"]+)['"]\s*\[\s*-1\s*\.\.\s*-\d+"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Simple string replace: "string".replace("X","Y") in context of iex
-#[allow(clippy::expect_used)]
 static IEX_REPLACE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:iex|invoke-expression)\s*\(\s*['"]([^'"]+)['"]((?:\s*\.replace\s*\(\s*['"][^'"]*['"]\s*,\s*['"][^'"]*['"]\s*\))+)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Individual .replace("X","Y") pairs
-#[allow(clippy::expect_used)]
 static REPLACE_PAIR_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\.replace\s*\(\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Base64 string used with iex/Invoke-Expression and
 /// [System.Text.Encoding]::UTF8.GetString or Unicode.GetString
-#[allow(clippy::expect_used)]
 static IEX_ENCODING_B64_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:iex|invoke-expression)\s*\(\s*\[System\.Text\.Encoding\]::\w+\.GetString\s*\(\s*\[(?:System\.)?Convert\]::FromBase64String\s*\(\s*['"]([A-Za-z0-9+/=\s]+)['"]\s*\)"#)
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Extract all obfuscated payloads from a PowerShell script.
@@ -103,7 +97,12 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
     }));
 
     results.extend(try_char_array(source));
-    results.extend(try_iex_reverse(source));
+    results.extend(super::decode_captures(
+        source,
+        &[&IEX_REVERSE_RE],
+        &[DecodeStep::Reverse],
+        ScriptLanguage::PowerShell,
+    ));
     results.extend(try_iex_replace(source));
 
     results
@@ -111,24 +110,41 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
 
 /// -EncodedCommand base64 (UTF-16LE encoded)
 fn try_encoded_command(source: &str) -> Vec<DeobfuscationResult> {
+    let bytes = source.as_bytes();
+    // Matches arrive in offset order, so the current line and where its first
+    // PowerShell executable ends are found once per line, not once per match.
+    let mut scanned = 0;
+    let mut line_start = 0;
+    let mut exec_end: Option<Option<usize>> = None;
     ENCODED_CMD_RE
         .captures_iter(source)
         .filter_map(|cap| {
             let matched = cap.get(0)?;
             let offset = matched.start();
-            if matched.as_str().get(..2)?.eq_ignore_ascii_case("-e")
-                && matched
-                    .as_str()
-                    .as_bytes()
-                    .get(2)
-                    .is_some_and(u8::is_ascii_whitespace)
-            {
-                let line_start = source[..offset].rfind('\n').map_or(0, |pos| pos + 1);
-                if !POWERSHELL_EXEC_RE.is_match(&source[line_start..offset]) {
+            let flag = cap.get(1)?.as_str().to_ascii_lowercase();
+            if !is_encoded_command_flag(&flag) {
+                return None;
+            }
+            // The one-letter form is common in other programs (`grep -e`),
+            // so it needs a PowerShell executable on the same line.
+            if flag == "e" {
+                if let Some(nl) = memchr::memrchr(b'\n', &bytes[scanned..offset]) {
+                    line_start = scanned + nl + 1;
+                    exec_end = None;
+                }
+                scanned = offset;
+                let end = *exec_end.get_or_insert_with(|| {
+                    let line_end = memchr::memchr(b'\n', &bytes[line_start..])
+                        .map_or(source.len(), |nl| line_start + nl);
+                    POWERSHELL_EXEC_RE
+                        .find(&source[line_start..line_end])
+                        .map(|m| line_start + m.end())
+                });
+                if end.is_none_or(|end| end > offset) {
                     return None;
                 }
             }
-            let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
+            let blob = cap.get(2)?.as_str().replace(char::is_whitespace, "");
             let steps = vec![DecodeStep::Base64, DecodeStep::Utf16Le];
             let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps)?;
             Some(DeobfuscationResult {
@@ -141,6 +157,11 @@ fn try_encoded_command(source: &str) -> Vec<DeobfuscationResult> {
         .collect()
 }
 
+/// Whether `flag` (lowercase, without its `-`) names `-EncodedCommand`.
+fn is_encoded_command_flag(flag: &str) -> bool {
+    flag == "ec" || "encodedcommand".starts_with(flag)
+}
+
 /// `[Convert]::FromBase64String` (standalone, not wrapped in iex+Encoding)
 fn try_convert_b64(source: &str) -> Vec<DeobfuscationResult> {
     CONVERT_B64_RE
@@ -148,11 +169,20 @@ fn try_convert_b64(source: &str) -> Vec<DeobfuscationResult> {
         .filter_map(|cap| {
             let blob = cap.get(1)?.as_str().replace(char::is_whitespace, "");
             let offset = cap.get(0)?.start();
-            // Try UTF-16LE first (common for PowerShell), fall back to raw UTF-8
-            let steps_utf16 = vec![DecodeStep::Base64, DecodeStep::Utf16Le];
-            let steps_utf8 = vec![DecodeStep::Base64];
-            let result = super::decode_chain::apply_chain(blob.as_bytes(), &steps_utf16)
-                .or_else(|| super::decode_chain::apply_chain(blob.as_bytes(), &steps_utf8))?;
+            // The bytes have no declared encoding. UTF-16LE is PowerShell's
+            // own, but only bytes that look wide are read that way:
+            // "dGVzdA==" is "test", not two CJK characters.
+            let utf8 = super::decode_chain::apply_chain(blob.as_bytes(), &[DecodeStep::Base64]);
+            let wide = utf8
+                .as_ref()
+                .is_none_or(|r| crate::decoders::looks_like_utf16le(r.payload.as_bytes()));
+            let utf16 = || {
+                super::decode_chain::apply_chain(
+                    blob.as_bytes(),
+                    &[DecodeStep::Base64, DecodeStep::Utf16Le],
+                )
+            };
+            let result = if wide { utf16().or(utf8) } else { utf8 }?;
             Some(DeobfuscationResult {
                 decoded: result.payload,
                 offset,
@@ -178,25 +208,6 @@ fn try_char_array(source: &str) -> Vec<DeobfuscationResult> {
                 decoded: payload,
                 offset,
                 chain_description: "powershell:charcodes".to_string(),
-                language: ScriptLanguage::PowerShell,
-            })
-        })
-        .collect()
-}
-
-/// iex(-join('string'[-1..-N]))
-fn try_iex_reverse(source: &str) -> Vec<DeobfuscationResult> {
-    IEX_REVERSE_RE
-        .captures_iter(source)
-        .filter_map(|cap| {
-            let reversed = cap.get(1)?.as_str();
-            let offset = cap.get(0)?.start();
-            let steps = vec![DecodeStep::Reverse];
-            let result = super::decode_chain::apply_chain(reversed.as_bytes(), &steps)?;
-            Some(DeobfuscationResult {
-                decoded: result.payload,
-                offset,
-                chain_description: format!("powershell:{}", result.chain_description),
                 language: ScriptLanguage::PowerShell,
             })
         })
@@ -252,6 +263,36 @@ fn try_iex_replace(source: &str) -> Vec<DeobfuscationResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PAYLOAD: &str =
+        "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABwAHcAbgBlAGQALQBiAHkALQB0AGUAcwB0AA==";
+
+    #[test]
+    fn every_encoded_command_spelling_is_decoded() {
+        for flag in [
+            "-e",
+            "-ec",
+            "-en",
+            "-enco",
+            "-EncodedCommand",
+            "-encodedcomman",
+        ] {
+            let src = format!("powershell.exe -nop {flag} {PAYLOAD}");
+            let found = try_encoded_command(&src);
+            assert!(
+                found.iter().any(|r| r.decoded.contains("pwned-by-test")),
+                "{flag}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_e_flags_are_not_encoded_commands() {
+        for flag in ["-ep", "-execute", "-ex"] {
+            let src = format!("powershell.exe {flag} {PAYLOAD}");
+            assert!(try_encoded_command(&src).is_empty(), "{flag}");
+        }
+    }
     use base64::Engine;
 
     #[test]
@@ -265,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn test_encoded_command() {
+    fn decodes_encoded_command() {
         // "Write-Host 'hello'" as UTF-16LE then base64
         let payload = "Write-Host 'hello'";
         let utf16: Vec<u8> = payload.encode_utf16().flat_map(u16::to_le_bytes).collect();
@@ -277,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn test_encoded_command_short_flag() {
+    fn decodes_enc_short_flag() {
         let payload = "whoami";
         let utf16: Vec<u8> = payload.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&utf16);
@@ -308,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_from_base64_utf16() {
+    fn decodes_utf16_from_base64_string() {
         let payload = "Get-Process";
         let utf16: Vec<u8> = payload.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&utf16);
@@ -319,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn test_iex_encoding_b64() {
+    fn decodes_iex_utf8_get_string() {
         // UTF-8 base64 (not UTF-16LE) with explicit Encoding::UTF8
         let payload = "Write-Host 'hello'";
         let encoded = base64::engine::general_purpose::STANDARD.encode(payload.as_bytes());
@@ -332,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn test_char_array() {
+    fn decodes_iex_char_array() {
         // "hello" as char codes
         let src = r"iex([char[]](104,101,108,108,111) -join '')";
         let results = extract_obfuscated_payloads(src);
@@ -341,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn test_iex_replace() {
+    fn decodes_iex_replace() {
         let src = r#"iex("hXXps://evil.com/payload".replace("XX","tt"))"#;
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -349,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn test_iex_multiple_replace() {
+    fn decodes_chained_replaces() {
         let src = r#"iex("hXXps://YYY.com/ZZZ".replace("XX","tt").replace("YYY","evil").replace("ZZZ","payload"))"#;
         let results = extract_obfuscated_payloads(src);
         assert_eq!(results.len(), 1);
@@ -357,12 +398,26 @@ mod tests {
     }
 
     #[test]
-    fn test_no_false_positive_on_normal_convert() {
+    fn decodes_bare_from_base64_string() {
         // [Convert]::FromBase64String not in iex context is still detected
         // (it's still suspicious in PowerShell)
         let src = r#"$data = [Convert]::FromBase64String("dGVzdA==")"#;
         let results = extract_obfuscated_payloads(src);
         // This should still decode since FromBase64String is suspicious in PS
-        assert!(!results.is_empty());
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(results[0].offset, src.find("[Convert]").unwrap());
+        assert_eq!(results[0].language, ScriptLanguage::PowerShell);
+        assert_eq!(results[0].chain_description, "powershell:base64");
+        assert_eq!(results[0].decoded, "test");
+    }
+
+    #[test]
+    fn decodes_wide_from_base64_string_as_utf16() {
+        // "calc" in UTF-16LE.
+        let src = r#"$data = [Convert]::FromBase64String("YwBhAGwAYwA=")"#;
+        let results = extract_obfuscated_payloads(src);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(results[0].decoded, "calc");
+        assert_eq!(results[0].chain_description, "powershell:base64+utf16le");
     }
 }

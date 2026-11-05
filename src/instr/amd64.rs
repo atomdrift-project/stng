@@ -61,9 +61,7 @@ pub(super) fn extract_inline_strings_amd64(
         &mut result,
     );
 
-    // Deduplicate by value, preserving first-seen order.
-    let mut seen: HashSet<String> = HashSet::new();
-    result.retain(|s| seen.insert(s.value.clone()));
+    crate::types::dedup_by_value(&mut result);
     result
 }
 
@@ -202,7 +200,7 @@ pub(super) fn extract_amd64_stored_strings(
 }
 
 pub(super) fn read_i32(b: &[u8], at: usize) -> Option<i32> {
-    Some(i32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
+    crate::bytes::array(b, at).map(i32::from_le_bytes)
 }
 
 /// A memory operand `[base + disp]` from the ModRM at `at` (REX.B in `rex`):
@@ -313,7 +311,7 @@ pub(super) fn extract_backward_strings(
     // The LEA+immediate-length pair itself remains exact, so widening this
     // bounded association window does not make arbitrary printable data a
     // candidate; it only lets a valid pair survive intervening setup code.
-    let scan_start = call_pos.saturating_sub(call_pos.min(256));
+    let scan_start = call_pos.saturating_sub(256);
     let mut pos = scan_start;
 
     while pos + 7 <= call_pos {
@@ -395,8 +393,9 @@ pub(super) fn find_inline_length_string(
         if len == 0 || len > 1000 || str_addr.checked_add(len)? > rodata_end {
             return None;
         }
-        let start = str_addr.checked_sub(rodata_addr)? as usize;
-        let s = std::str::from_utf8(rodata_data.get(start..start + len as usize)?).ok()?;
+        let start = usize::try_from(str_addr.checked_sub(rodata_addr)?).ok()?;
+        let end = start.checked_add(usize::try_from(len).ok()?)?;
+        let s = std::str::from_utf8(rodata_data.get(start..end)?).ok()?;
         (is_valid_utf8_string(s) && s.len() >= min_length).then(|| s.to_string())
     };
 
@@ -550,7 +549,6 @@ pub(super) fn decode_mov_imm32(text_data: &[u8], p: usize) -> Option<(u8, u64)> 
 ///
 /// This pattern captures strings built after calling allocation or initialization functions,
 /// common in Go runtime for map values and struct fields.
-#[allow(clippy::similar_names)]
 pub(super) fn extract_amd64_value_string(
     call_pos: usize,
     scan: &Scan<'_>,
@@ -620,8 +618,10 @@ pub(super) fn extract_amd64_value_string(
                 continue;
             }
 
-            let rodata_offset = (str_addr - rodata_addr) as usize;
-            let Some(end) = rodata_offset.checked_add(str_len as usize) else {
+            let rodata_offset = usize::try_from(str_addr - rodata_addr).unwrap_or(usize::MAX);
+            let Some(end) =
+                rodata_offset.checked_add(usize::try_from(str_len).unwrap_or(usize::MAX))
+            else {
                 continue;
             };
             if end > rodata_data.len() {

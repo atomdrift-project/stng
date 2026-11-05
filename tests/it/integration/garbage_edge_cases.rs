@@ -3,34 +3,34 @@
 use stng::is_garbage;
 
 #[test]
-fn test_is_garbage_path_separators() {
+fn keeps_deep_paths() {
     // Paths with multiple separators
     assert!(!is_garbage("/usr/local/bin/test"));
     assert!(!is_garbage("C:\\Windows\\System32\\cmd.exe"));
 }
 
 #[test]
-fn test_is_garbage_format_strings() {
+fn keeps_format_strings() {
     // Printf-style format strings should not be garbage
     assert!(!is_garbage("Error: %s at line %d"));
     assert!(!is_garbage("Processing %d of %d items"));
 }
 
 #[test]
-fn test_is_garbage_urls() {
+fn keeps_urls() {
     assert!(!is_garbage("https://example.com/path"));
     assert!(!is_garbage("http://localhost:8080"));
 }
 
 #[test]
-fn test_is_garbage_json_like() {
+fn keeps_json_rejects_short_array() {
     assert!(!is_garbage("{\"key\": \"value\"}"));
     // Short strings with punctuation are filtered
     assert!(is_garbage("[1, 2, 3]"));
 }
 
 #[test]
-fn test_is_garbage_boundary_cases() {
+fn rejects_one_char_keeps_two() {
     // Very short strings
     assert!(is_garbage("a")); // 1 char is garbage
     // 2-3 char strings can be valid identifiers
@@ -42,7 +42,7 @@ fn test_is_garbage_boundary_cases() {
 }
 
 #[test]
-fn test_is_garbage_whitespace_variations() {
+fn keeps_padded_phrase_rejects_tab() {
     // Leading/trailing whitespace
     assert!(!is_garbage("  hello world  "));
     // Tabs are control characters and filtered
@@ -50,7 +50,7 @@ fn test_is_garbage_whitespace_variations() {
 }
 
 #[test]
-fn test_is_garbage_numeric_strings() {
+fn rejects_bare_dotted_triple_keeps_versions() {
     // Short strings with dots are filtered as noise punctuation
     assert!(is_garbage("1.2.3"));
     assert!(!is_garbage("v2.0.0"));

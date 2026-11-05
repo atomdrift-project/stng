@@ -17,8 +17,8 @@ cargo install --locked --git https://github.com/atomdrift-project/stng
 ```
 
 `cargo install` does not read the repository's `.cargo/config.toml`, which
-tunes jemalloc for a short-lived process (26-55% lower peak memory). To get the
-same build, set it yourself:
+tunes jemalloc for a short-lived process (lower peak memory; see that file).
+To get the same build, set it yourself:
 
 ```bash
 JEMALLOC_SYS_WITH_MALLOC_CONF=narenas:4,dirty_decay_ms:0,muzzy_decay_ms:0 \
@@ -28,11 +28,11 @@ JEMALLOC_SYS_WITH_MALLOC_CONF=narenas:4,dirty_decay_ms:0,muzzy_decay_ms:0 \
 ## Use
 
 ```bash
-stng malware.bin              # strings by section, XOR detection on
+stng malware.bin              # strings in file order, XOR detection on
 stng -i malware.bin           # skip raw-scan noise
 stng --json malware.bin       # machine-readable output
 stng --xor 0xAB malware.bin   # decode with a known key: 0x/hex: for hex, else text
-stng --xorscan malware.bin    # XOR-scan Go and platform-signed binaries too
+stng --xorscan malware.bin    # XOR-scan Go binaries too
 stng --json samples/          # one {"path", "strings"} JSON object per line
 ```
 
@@ -50,20 +50,36 @@ holding `{"path": …, "strings": [ … ]}`. Each string is:
 | `method` | How it was found: `raw_scan`, `wide_string`, `structure` (Go/Rust `{ptr, len}`), `instruction_pattern`, `xor_decode`, `base64_decode`, `script_decode`, and the rest of `stng::StringMethod` in snake_case. |
 | `kind` | What it is, or `null`: `url`, `ip`, `path`, `shell_cmd`, `base64`, `xor_key`, and the rest of `stng::StringKind` in snake_case. |
 
-Strings decoded from a script's payload (`script_decode`) are located at the
-encoded blob they came from, so several can share an offset. New `method` and
-`kind` values may appear in minor releases.
+A decoded string is located at the encoded string it came from, and both are
+reported. Strings decoded from a script's payload (`script_decode`) are
+located at the outermost encoded blob, so several can share an offset. New
+`method` and `kind` values may appear in minor releases.
 
 ## As a library
+
+stng is distributed from git, not crates.io. Add it, and copy its
+tree-sitter patch into your top-level `Cargo.toml`:
 
 ```toml
 # Pin a release tag (or a `rev`); `default-features = false` leaves out the
 # CLI's dependencies.
-stng = { git = "https://github.com/atomdrift-project/stng", tag = "v2.1.1", default-features = false }
+stng = { git = "https://github.com/atomdrift-project/stng", tag = "v3.0.0-beta.1", default-features = false }
+
+[patch.crates-io]
+tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", rev = "10d5d1372be200e04480a6b1d6780229c5b1ee79" }
+tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", rev = "10d5d1372be200e04480a6b1d6780229c5b1ee79" }
 ```
 
-```rust
-let opts = stng::ExtractOptions::new(4).with_garbage_filter(true).with_xor(None);
+Cargo applies `[patch]` only from the top-level manifest. Without it you get
+upstream tree-sitter, whose parser lacks the bounds stng relies on for
+hostile Lua input. Copy the `rev` from stng's own `Cargo.toml` at the tag you
+pin.
+
+```rust,no_run
+let bytes = std::fs::read("sample.bin").expect("read sample");
+let opts = stng::ExtractOptions::new(4)
+    .with_garbage_filter(true)
+    .with_xor(stng::XorMode::Auto);
 for s in stng::extract_strings_with_options(&bytes, &opts) {
     println!("{:#x} {:?} {}", s.data_offset, s.kind, s.value);
 }
@@ -71,7 +87,7 @@ for s in stng::extract_strings_with_options(&bytes, &opts) {
 
 `stng` re-exports [goblin](https://crates.io/crates/goblin) and
 [binform](https://github.com/atomdrift-project/binform) and accepts what they
-parsed (`extract_strings_from_object`, `extract_strings_from_parsed`), so a
+parsed (`extract_strings_from_parsed`), so a
 caller that already parsed a binary does not parse it twice. Their versions
 are therefore part of stng's public API.
 

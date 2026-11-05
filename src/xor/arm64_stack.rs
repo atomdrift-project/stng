@@ -2,9 +2,11 @@
 //!
 //! This intentionally handles a small compiler-shaped subset:
 //! MOVZ/MOVK immediate construction, ADD-immediate stack pointers, unsigned
-//! STR/LDR stack accesses, and BL sink detection. That covers binaries that
-//! build ciphertext and XOR pads as stack immediates, then reuse the same pad
-//! for command strings and filesystem/browser-wallet target strings.
+//! LDR/STR stack accesses (general and q registers), LDP/STP of q registers,
+//! vector EOR, and BL sink detection. Any other instruction forgets the
+//! registers it writes. That covers binaries that build ciphertext and XOR
+//! pads as stack immediates, XOR them in vector registers, and reuse the same
+//! pad for command strings and filesystem/browser-wallet target strings.
 
 use crate::classifier::classify_string;
 use crate::types::{ExtractedString, StringKind, StringMethod};
@@ -27,6 +29,13 @@ const FEW_STRINGS: usize = 64;
 const MAX_DECODE_WORK: usize = 1 << 28;
 /// Distinct stack slots tracked per section. Past this the map starts over.
 const MAX_SLOTS: usize = 1 << 16;
+/// Distinct XOR pads kept per section. Every later store is tried against
+/// each pad, so the count multiplies per-store work; real samples recover
+/// a handful (4 in the largest fixture).
+const MAX_PADS: usize = 64;
+/// Blob starts tried per store: every slot up to 128 bytes below it, and the
+/// store itself.
+const MAX_STARTS: usize = 129;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AdmissionProfile {
@@ -43,6 +52,16 @@ enum RegValue {
     Imm(u64),
     Ptr(i64),
     Bytes(Vec<u8>),
+}
+
+/// A known vector register: its bytes, and where they came from.
+#[derive(Debug, Clone)]
+struct Vector {
+    bytes: Vec<u8>,
+    /// The stack offset it was loaded from.
+    loaded_from: Option<i64>,
+    /// For an EOR result, where each operand was loaded from.
+    xor_of: Option<[Option<i64>; 2]>,
 }
 
 /// Extract printable strings produced by XORing stack-resident ARM64 immediates.
@@ -89,8 +108,7 @@ pub(crate) fn extract_arm64_stack_xor_strings(
     }
 
     results.sort_by_key(|r| (r.data_offset, r.value.len()));
-    let mut seen = HashSet::new();
-    results.retain(|r| seen.insert(r.value.clone()));
+    crate::types::dedup_by_value(&mut results);
     results
 }
 
@@ -163,10 +181,15 @@ fn extract_section(
     let mut recovered_pads: Vec<Vec<u8>> = Vec::new();
     let mut seen_pads: HashSet<Vec<u8>> = HashSet::new();
     let mut seen_values = HashSet::new();
-    // Charge a decoder call for the slots it will scan.
+    let mut vectors: HashMap<u8, Vector> = HashMap::new();
+    // Stack offsets a vector EOR overwrote with `ciphertext ^ pad`, where the
+    // ciphertext was, and the offset of the pad.
+    let mut decrypted: HashMap<i64, i64> = HashMap::new();
+    let mut building = Building::default();
     for (idx, chunk) in code.as_chunks::<4>().0.iter().enumerate() {
         let word = u32::from_le_bytes(*chunk);
         let instr_off = (idx * 4) as u64;
+        let at = section_file_offset + instr_off;
 
         if let Some((rd, value)) = decode_mov_wide(word, &regs) {
             regs.insert(rd, RegValue::Imm(value));
@@ -183,7 +206,21 @@ fn extract_section(
         }
 
         // BL: a call, whose x0 may point at a decoded string.
-        if word & 0xfc00_0000 == 0x9400_0000 {
+        let is_bl = word & 0xfc00_0000 == 0x9400_0000;
+        if is_bl
+            && let Some(&RegValue::Ptr(arg0)) = regs.get(&0)
+            && decrypted.contains_key(&arg0)
+            && decoded_arg_starts.insert(arg0)
+        {
+            let decoded = decrypted_arg(&memory, &decrypted, arg0, at, min_length);
+            for pad in decoded.pads {
+                if recovered_pads.len() < MAX_PADS && seen_pads.insert(pad.clone()) {
+                    recovered_pads.push(pad);
+                }
+            }
+            append_unique_results(&mut sink_results, decoded.results, &mut seen_values);
+        }
+        if is_bl {
             if let Some(RegValue::Ptr(arg0)) = regs.get(&0)
                 && decoded_arg_starts.insert(*arg0)
                 && budget.spend(memory.len())
@@ -195,41 +232,95 @@ fn extract_section(
                     min_length,
                 );
                 for pad in decoded.pads {
+                    if recovered_pads.len() >= MAX_PADS {
+                        tracing::debug!(MAX_PADS, "arm64 stack XOR: pad list full");
+                        break;
+                    }
                     if seen_pads.insert(pad.clone()) {
                         recovered_pads.push(pad);
                     }
                 }
                 append_unique_results(&mut sink_results, decoded.results, &mut seen_values);
             }
+            // The call may change every caller-saved register.
+            regs.retain(|&r, _| (19..=29).contains(&r));
+            vectors.clear();
             continue;
         }
 
-        if let Some(mem) = decode_unsigned_mem(word) {
-            let Some(base) = ptr_offset(&regs, mem.rn) else {
-                continue;
-            };
-            let disp = base + mem.disp;
-            if mem.load {
-                if let Some(slot) = memory.get(&disp) {
-                    regs.insert(mem.rt, RegValue::Bytes(slot.bytes.clone()));
-                } else {
-                    regs.remove(&mem.rt);
-                }
-            } else if let Some(bytes) = match regs.get(&mem.rt) {
-                Some(RegValue::Imm(value)) => Some(value.to_le_bytes()[..mem.size].to_vec()),
-                Some(RegValue::Bytes(bytes)) if bytes.len() >= mem.size => {
-                    Some(bytes[..mem.size].to_vec())
+        if let Some((vd, vn, vm, len)) = decode_vector_eor(word) {
+            let result = match (vectors.get(&vn), vectors.get(&vm)) {
+                (Some(a), Some(b)) if a.bytes.len() >= len && b.bytes.len() >= len => {
+                    Some(Vector {
+                        bytes: a
+                            .bytes
+                            .iter()
+                            .zip(&b.bytes)
+                            .take(len)
+                            .map(|(x, y)| x ^ y)
+                            .collect(),
+                        loaded_from: None,
+                        xor_of: Some([a.loaded_from, b.loaded_from]),
+                    })
                 }
                 _ => None,
-            } {
+            };
+            match result {
+                Some(result) => vectors.insert(vd, result),
+                None => vectors.remove(&vd),
+            };
+            continue;
+        }
+
+        let accesses = decode_unsigned_mem(word)
+            .map(|mem| vec![mem])
+            .or_else(|| decode_vector_pair(word));
+        if let Some(accesses) = accesses {
+            for mem in accesses {
+                let Some(base) = ptr_offset(&regs, mem.rn) else {
+                    // An address off the modelled stack: a load's register
+                    // becomes unknown, and a store is not tracked.
+                    if mem.load {
+                        forget(&mut regs, &mut vectors, &mem);
+                    }
+                    continue;
+                };
+                let disp = base + mem.disp;
+                if mem.load {
+                    load(&memory, &mut regs, &mut vectors, &mem, disp);
+                    continue;
+                }
+                decrypted.remove(&disp);
+                let Some(bytes) = stored_bytes(&regs, &vectors, &mem) else {
+                    // An unknown value overwrites what the slots held.
+                    clobber(&mut memory, disp, mem.size);
+                    continue;
+                };
+                if let Some(pad) = vectors
+                    .get(&mem.rt)
+                    .filter(|_| mem.vector)
+                    .and_then(|v| v.xor_of)
+                    .and_then(|[a, b]| match (a, b) {
+                        (Some(a), Some(pad)) | (Some(pad), Some(a)) if a == disp => Some(pad),
+                        _ => None,
+                    })
+                {
+                    decrypted.insert(disp, pad);
+                }
                 if memory.len() >= MAX_SLOTS && !memory.contains_key(&disp) {
                     tracing::debug!(MAX_SLOTS, "arm64 stack XOR: slot map full, starting over");
                     memory.clear();
                     decoded_blob_state.clear();
+                    decrypted.clear();
+                    append_unique_results(&mut sink_results, building.finish(), &mut seen_values);
                 }
-                let at = section_file_offset + instr_off;
+                clobber(&mut memory, disp, bytes.len());
                 memory.insert(disp, Slot { bytes, at });
-                if !recovered_pads.is_empty() && budget.spend(memory.len()) {
+                // The decoder walks every slot, then tries each pad on up to
+                // `MAX_STARTS` blobs.
+                if !recovered_pads.is_empty()
+                    && budget.spend(memory.len() + MAX_STARTS * recovered_pads.len())
+                {
                     let decoded = decode_recent_stack_blobs_with_pads(
                         &memory,
                         disp,
@@ -238,13 +329,272 @@ fn extract_section(
                         section_file_offset + instr_off,
                         min_length,
                     );
-                    append_unique_results(&mut sink_results, decoded, &mut seen_values);
+                    for (start, found) in decoded {
+                        building.add(start, found);
+                    }
                 }
             }
+            continue;
+        }
+
+        // Anything else forgets the registers it may write; an instruction
+        // whose writes are not known forgets every register.
+        match crate::arm64::effects::writes(word) {
+            Some(mask) => regs.retain(|&r, _| mask & (1 << r) == 0),
+            None => regs.clear(),
+        }
+        if writes_vectors(word) {
+            vectors.clear();
         }
     }
 
+    append_unique_results(&mut sink_results, building.finish(), &mut seen_values);
     sink_results
+}
+
+/// Strings decoded from stack blobs as the code builds them, by the stack
+/// offset each starts at. A blob is decoded after every store into it, so
+/// each stage of a string being built decodes too; only the most complete
+/// is kept.
+#[derive(Default)]
+struct Building(HashMap<i64, Vec<ExtractedString>>);
+
+impl Building {
+    /// Record `found`, decoded from the blob at `start`. A decode extending
+    /// one already held replaces it; one an earlier decode covers is dropped.
+    fn add(&mut self, start: i64, found: ExtractedString) {
+        let held = self.0.entry(start).or_default();
+        if held.iter().any(|s| s.value.starts_with(&found.value)) {
+            return;
+        }
+        match held.iter().position(|s| found.value.starts_with(&s.value)) {
+            Some(i) => held[i] = found,
+            None => held.push(found),
+        }
+    }
+
+    /// Every string kept, in stack order, without those that are a piece of
+    /// a string decoded from an earlier start: the same bytes read from
+    /// partway in.
+    fn finish(&mut self) -> Vec<ExtractedString> {
+        let mut strings: Vec<(i64, ExtractedString)> = self
+            .0
+            .drain()
+            .flat_map(|(start, held)| held.into_iter().map(move |s| (start, s)))
+            .collect();
+        strings.sort_by_key(|(start, s)| (*start, s.data_offset));
+        let inside = |start: i64, value: &str| {
+            strings.iter().any(|(earlier, s)| {
+                usize::try_from(start - earlier).is_ok_and(|skip| {
+                    skip > 0
+                        && s.value
+                            .get(skip..)
+                            .is_some_and(|rest| rest.starts_with(value))
+                })
+            })
+        };
+        let keep: Vec<bool> = strings
+            .iter()
+            .map(|(start, s)| !inside(*start, &s.value))
+            .collect();
+        strings
+            .into_iter()
+            .zip(keep)
+            .filter_map(|((_, s), keep)| keep.then_some(s))
+            .collect()
+    }
+}
+
+/// Whether `word` is in an encoding class that can write a vector register:
+/// SIMD&FP data processing, or a SIMD&FP load.
+fn writes_vectors(word: u32) -> bool {
+    let op0 = (word >> 25) & 0xf;
+    op0 & 0x7 == 0x7 || (op0 & 0x5 == 0x4 && (word >> 26) & 1 == 1 && (word >> 22) & 1 == 1)
+}
+
+/// `EOR Vd.<8B|16B>, Vn, Vm`: the registers, and the bytes it writes.
+fn decode_vector_eor(word: u32) -> Option<(u8, u8, u8, usize)> {
+    if word & 0xbfe0_fc00 != 0x2e20_1c00 {
+        return None;
+    }
+    let len = if (word >> 30) & 1 == 1 { 16 } else { 8 };
+    Some((
+        (word & 0x1f) as u8,
+        ((word >> 5) & 0x1f) as u8,
+        ((word >> 16) & 0x1f) as u8,
+        len,
+    ))
+}
+
+/// `LDP`/`STP` of two vector registers, signed offset: one access each.
+fn decode_vector_pair(word: u32) -> Option<Vec<MemInsn>> {
+    if word & 0x3f80_0000 != 0x2d00_0000 {
+        return None;
+    }
+    let size = match word >> 30 {
+        0 => 4,
+        1 => 8,
+        2 => 16,
+        _ => return None,
+    };
+    let load = (word >> 22) & 1 == 1;
+    // imm7 is signed, in units of the register size.
+    let imm7 = i64::from((word >> 15) & 0x7f);
+    let imm7 = if imm7 & 0x40 != 0 { imm7 - 0x80 } else { imm7 };
+    let rn = ((word >> 5) & 0x1f) as u8;
+    let disp = imm7 * size as i64;
+    let access = |rt: u32, disp: i64| MemInsn {
+        rt: (rt & 0x1f) as u8,
+        rn,
+        disp,
+        size,
+        load,
+        vector: true,
+        sign_extend_to: None,
+    };
+    Some(vec![
+        access(word, disp),
+        access(word >> 10, disp + size as i64),
+    ])
+}
+
+/// Forget the register a load from an untracked address writes.
+fn forget(regs: &mut HashMap<u8, RegValue>, vectors: &mut HashMap<u8, Vector>, mem: &MemInsn) {
+    if mem.vector {
+        vectors.remove(&mem.rt);
+    } else {
+        regs.remove(&mem.rt);
+    }
+}
+
+/// Load `mem.size` bytes at stack offset `disp` into the register.
+fn load(
+    memory: &Stack,
+    regs: &mut HashMap<u8, RegValue>,
+    vectors: &mut HashMap<u8, Vector>,
+    mem: &MemInsn,
+    disp: i64,
+) {
+    let bytes = collect_contiguous(memory, disp, mem.size)
+        .filter(|bytes| bytes.len() >= mem.size)
+        .map(|mut bytes| {
+            bytes.truncate(mem.size);
+            bytes
+        });
+    match (bytes, mem.vector) {
+        (Some(bytes), true) => {
+            vectors.insert(
+                mem.rt,
+                Vector {
+                    bytes,
+                    loaded_from: Some(disp),
+                    xor_of: None,
+                },
+            );
+        }
+        (Some(mut bytes), false) if mem.rt != 31 => {
+            if let Some(width) = mem.sign_extend_to {
+                let fill = if bytes.last().is_some_and(|&b| b & 0x80 != 0) {
+                    0xff
+                } else {
+                    0
+                };
+                bytes.resize(width, fill);
+            }
+            regs.insert(mem.rt, RegValue::Bytes(bytes));
+        }
+        _ => forget(regs, vectors, mem),
+    }
+}
+
+/// The bytes a store writes, when its register's value is known. The zero
+/// register stores zeros.
+fn stored_bytes(
+    regs: &HashMap<u8, RegValue>,
+    vectors: &HashMap<u8, Vector>,
+    mem: &MemInsn,
+) -> Option<Vec<u8>> {
+    if mem.vector {
+        let bytes = &vectors.get(&mem.rt)?.bytes;
+        return bytes.get(..mem.size).map(<[u8]>::to_vec);
+    }
+    if mem.rt == 31 {
+        return Some(vec![0; mem.size]);
+    }
+    match regs.get(&mem.rt)? {
+        RegValue::Imm(value) => Some(value.to_le_bytes()[..mem.size].to_vec()),
+        RegValue::Bytes(bytes) => bytes.get(..mem.size).map(<[u8]>::to_vec),
+        RegValue::Ptr(_) => None,
+    }
+}
+
+/// Drop every slot a store of `len` bytes at `disp` overwrites. A slot holds
+/// at most 16 bytes, so only those starting up to 15 bytes before can reach it.
+fn clobber(memory: &mut Stack, disp: i64, len: usize) {
+    for start in disp - 15..disp + len as i64 {
+        if memory
+            .get(&start)
+            .is_some_and(|slot| start + slot.bytes.len() as i64 > disp)
+        {
+            memory.remove(&start);
+        }
+    }
+}
+
+/// The string a call's first argument points at, which vector EORs wrote
+/// over its ciphertext, and the pad they used.
+fn decrypted_arg(
+    memory: &Stack,
+    decrypted: &HashMap<i64, i64>,
+    arg0: i64,
+    at: u64,
+    min_length: usize,
+) -> StackDecodeResults {
+    let mut results = Vec::new();
+    let mut pads = Vec::new();
+    // The decrypted run from `arg0` whose pad is one run too.
+    let pad_start = decrypted[&arg0];
+    let mut len = 0;
+    while let Some(Slot { bytes, .. }) = memory.get(&(arg0 + len))
+        && decrypted.get(&(arg0 + len)) == Some(&(pad_start + len))
+    {
+        len += bytes.len() as i64;
+    }
+    let len = usize::try_from(len).unwrap_or(0);
+    if let (Some(plain), Some(pad)) = (
+        collect_contiguous(memory, arg0, len),
+        collect_contiguous(memory, pad_start, len),
+    ) && plain.len() >= len
+        && pad.len() >= len
+        && looks_printable(&plain[..len])
+    {
+        let value = String::from_utf8_lossy(&plain[..len])
+            .split('\0')
+            .next()
+            .unwrap_or("")
+            .trim_end()
+            .to_string();
+        if value.len() >= min_length && looks_like_useful_decoded_string(&value) {
+            let key = pad[..len].to_vec();
+            results.push(ExtractedString {
+                value: format!("0x{}", crate::bytes::to_hex(&key)),
+                // The key is located at the store that wrote its first bytes.
+                data_offset: memory.get(&pad_start).map_or(at, |slot| slot.at),
+                method: StringMethod::XorStackPair,
+                kind: Some(StringKind::XorKey),
+                ..Default::default()
+            });
+            pads.push(key);
+            results.push(ExtractedString {
+                kind: classify_string(&value).or(Some(StringKind::StackString)),
+                value,
+                data_offset: at,
+                method: StringMethod::XorStackPair,
+                ..Default::default()
+            });
+        }
+    }
+    StackDecodeResults { results, pads }
 }
 
 fn ptr_offset(regs: &HashMap<u8, RegValue>, rn: u8) -> Option<i64> {
@@ -263,9 +613,9 @@ fn decode_mov_wide(word: u32, regs: &HashMap<u8, RegValue>) -> Option<(u8, u64)>
     if !mov.keep {
         return Some((rd, mov.imm));
     }
-    let before = match regs.get(&rd) {
-        Some(RegValue::Imm(value)) => *value,
-        _ => 0,
+    // MOVK keeps the other bits, so an unknown register stays unknown.
+    let Some(RegValue::Imm(before)) = regs.get(&rd) else {
+        return None;
     };
     Some((rd, before & !(0xffff << mov.shift) | mov.imm))
 }
@@ -289,6 +639,10 @@ struct MemInsn {
     disp: i64,
     size: usize,
     load: bool,
+    /// A vector (SIMD&FP) register rather than a general one.
+    vector: bool,
+    /// For `LDRS*`, the register width the value is sign-extended to.
+    sign_extend_to: Option<usize>,
 }
 
 struct StackDecodeResults {
@@ -296,15 +650,20 @@ struct StackDecodeResults {
     pads: Vec<Vec<u8>>,
 }
 
+/// `LDR`/`STR`/`LDRS*` with an unsigned immediate offset, of a general or
+/// vector register. `PRFM` and unallocated encodings are `None`.
 fn decode_unsigned_mem(word: u32) -> Option<MemInsn> {
     if (word & 0x3b00_0000) != 0x3900_0000 {
         return None;
     }
     let size_code = (word >> 30) & 0x3;
-    let size = match size_code {
-        0 => 1,
-        2 => 4,
-        3 => 8,
+    let opc = (word >> 22) & 0x3;
+    let vector = (word >> 26) & 1 == 1;
+    let (size, load, sign_extend_to) = match (vector, size_code, opc) {
+        (true, 0, 2 | 3) => (16, opc == 3, None),
+        (_, _, 0 | 1) => (1 << size_code, opc == 1, None),
+        (false, 0..=2, 2) => (1 << size_code, true, Some(8)),
+        (false, 0 | 1, 3) => (1 << size_code, true, Some(4)),
         _ => return None,
     };
     let imm12 = i64::from((word >> 10) & 0xfff);
@@ -313,7 +672,9 @@ fn decode_unsigned_mem(word: u32) -> Option<MemInsn> {
         rn: ((word >> 5) & 0x1f) as u8,
         disp: imm12 * size as i64,
         size,
-        load: ((word >> 22) & 1) != 0,
+        load,
+        vector,
+        sign_extend_to,
     })
 }
 
@@ -419,7 +780,7 @@ fn decode_recent_stack_blobs_with_pads(
     decoded_blob_state: &mut HashMap<i64, (usize, usize, u64)>,
     instr_off: u64,
     min_length: usize,
-) -> Vec<ExtractedString> {
+) -> Vec<(i64, ExtractedString)> {
     let mut results = Vec::new();
     let mut seen = HashSet::new();
     let mut starts: Vec<i64> = memory
@@ -460,10 +821,12 @@ fn decode_recent_stack_blobs_with_pads(
             if pad.is_empty() {
                 continue;
             }
+            // A pad covers the string it was built for; bytes past it are
+            // another string's, and a wrapped pad only garbles them.
             let decoded: Vec<u8> = cipher
                 .iter()
-                .enumerate()
-                .map(|(idx, &byte)| byte ^ pad[idx % pad.len()])
+                .zip(pad)
+                .map(|(&byte, &key)| byte ^ key)
                 .collect();
 
             for raw_value in printable_runs(&decoded, min_length) {
@@ -476,13 +839,16 @@ fn decode_recent_stack_blobs_with_pads(
                 if !looks_like_useful_decoded_string(&value) || !seen.insert(value.clone()) {
                     continue;
                 }
-                results.push(ExtractedString {
-                    kind: classify_string(&value).or(Some(StringKind::StackString)),
-                    value,
-                    data_offset: instr_off,
-                    method: StringMethod::XorStackPair,
-                    ..Default::default()
-                });
+                results.push((
+                    start,
+                    ExtractedString {
+                        kind: classify_string(&value).or(Some(StringKind::StackString)),
+                        value,
+                        data_offset: instr_off,
+                        method: StringMethod::XorStackPair,
+                        ..Default::default()
+                    },
+                ));
             }
         }
     }
@@ -550,7 +916,6 @@ const ANCHORS: &[&str] = &[
 
 /// A decoded run is worth normalizing only if it names a stealer target or
 /// the commands around one.
-#[allow(clippy::expect_used)] // static patterns
 static MARKERS: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::builder()
         .ascii_case_insensitive(true)
@@ -559,7 +924,7 @@ static MARKERS: LazyLock<AhoCorasick> = LazyLock::new(|| {
                 .iter()
                 .chain(&["killall", "terminal", "keychain", "wallet"]),
         )
-        .expect("static patterns")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 fn normalize_decoded_value(value: &str, min_length: usize) -> Option<String> {
@@ -584,32 +949,31 @@ fn normalize_decoded_value(value: &str, min_length: usize) -> Option<String> {
         })
         .to_string();
 
+    // A decoded value runs on into whatever followed it on the stack. These
+    // targets end where their last path component does; the first found,
+    // in this order, cuts the value there. (`killall Terminal` only as a
+    // prefix: the word appears inside longer commands.)
+    const ENDS: &[&str] = &[
+        "login.keychain-db",
+        "login.keychain",
+        ".electrum-ltc/wallets",
+        ".electrum/wallets",
+        ".walletwasabi/client/Wallets",
+        "Monero/wallets",
+        "wallet.dat",
+        "BraveSoftware/Brave-Browser",
+        "Google/Chrome for Testing",
+        "Google/Chrome Canary",
+        "Google/Chrome Beta",
+        "Google/Chrome Dev",
+    ];
     if value.starts_with("killall Terminal") {
         value.truncate("killall Terminal".len());
-    } else if let Some(end) = value.find("login.keychain-db") {
-        value.truncate(end + "login.keychain-db".len());
-    } else if let Some(end) = value.find("login.keychain") {
-        value.truncate(end + "login.keychain".len());
-    } else if let Some(end) = value.find(".electrum-ltc/wallets") {
-        value.truncate(end + ".electrum-ltc/wallets".len());
-    } else if let Some(end) = value.find(".electrum/wallets") {
-        value.truncate(end + ".electrum/wallets".len());
-    } else if let Some(end) = value.find(".walletwasabi/client/Wallets") {
-        value.truncate(end + ".walletwasabi/client/Wallets".len());
-    } else if let Some(end) = value.find("Monero/wallets") {
-        value.truncate(end + "Monero/wallets".len());
-    } else if let Some(end) = value.find("wallet.dat") {
-        value.truncate(end + "wallet.dat".len());
-    } else if let Some(end) = value.find("BraveSoftware/Brave-Browser") {
-        value.truncate(end + "BraveSoftware/Brave-Browser".len());
-    } else if let Some(end) = value.find("Google/Chrome for Testing") {
-        value.truncate(end + "Google/Chrome for Testing".len());
-    } else if let Some(end) = value.find("Google/Chrome Canary") {
-        value.truncate(end + "Google/Chrome Canary".len());
-    } else if let Some(end) = value.find("Google/Chrome Beta") {
-        value.truncate(end + "Google/Chrome Beta".len());
-    } else if let Some(end) = value.find("Google/Chrome Dev") {
-        value.truncate(end + "Google/Chrome Dev".len());
+    } else if let Some(end) = ENDS
+        .iter()
+        .find_map(|end| value.find(end).map(|at| at + end.len()))
+    {
+        value.truncate(end);
     }
 
     if value.starts_with("osascript")
@@ -661,35 +1025,38 @@ fn looks_like_useful_decoded_string(s: &str) -> bool {
     ) {
         return true;
     }
+    // What macOS stealers decode: tools they run, and the browser, keychain
+    // and wallet stores they read. A listed word covers its extensions
+    // (`wallet` covers `wallet.dat`).
+    const MARKERS: &[&str] = &[
+        "killall",
+        "terminal",
+        "dscl",
+        "/users/",
+        "library/",
+        "application support",
+        "keychain",
+        "cookies",
+        "login data",
+        "wallet",
+        "electrum",
+        "exodus",
+        "atomic",
+        "ledger",
+        "monero",
+        "bitcoin",
+        "wasabi",
+        "chrome",
+        "chromium",
+        "brave",
+        "safari",
+        "sqlite",
+        "osascript",
+        "chmod",
+        "curl",
+    ];
     let lower = s.to_ascii_lowercase();
-    lower.contains("killall")
-        || lower.contains("terminal")
-        || lower.contains("dscl")
-        || lower.contains("/users/")
-        || lower.contains("/library/")
-        || lower.contains("library/")
-        || lower.contains("application support")
-        || lower.contains("keychain")
-        || lower.contains("cookies")
-        || lower.contains("login data")
-        || lower.contains("wallet")
-        || lower.contains("wallets")
-        || lower.contains("wallet.dat")
-        || lower.contains("electrum")
-        || lower.contains("exodus")
-        || lower.contains("atomic")
-        || lower.contains("ledger")
-        || lower.contains("monero")
-        || lower.contains("bitcoin")
-        || lower.contains("wasabi")
-        || lower.contains("chrome")
-        || lower.contains("chromium")
-        || lower.contains("brave")
-        || lower.contains("safari")
-        || lower.contains("sqlite")
-        || lower.contains("osascript")
-        || lower.contains("chmod")
-        || lower.contains("curl")
+    MARKERS.iter().any(|marker| lower.contains(marker))
 }
 
 fn append_unique_results(
@@ -733,6 +1100,83 @@ mod tests {
         assert_eq!(mem.disp, 0x480);
         assert_eq!(mem.size, 4);
         assert!(!mem.load);
+    }
+
+    #[test]
+    fn decodes_q_register_loads_stores_and_pairs() {
+        // DynamicHub: ldr q1, [sp, #0x4730]; str q0, [sp, #0x4720].
+        let ldr = decode_unsigned_mem(0x3dd1_cfe1).expect("ldr q");
+        assert_eq!((ldr.rt, ldr.rn, ldr.disp, ldr.size), (1, 31, 0x4730, 16));
+        assert!(ldr.load && ldr.vector);
+        let str = decode_unsigned_mem(0x3d91_cbe0).expect("str q");
+        assert_eq!((str.rt, str.disp, str.size), (0, 0x4720, 16));
+        assert!(!str.load && str.vector);
+        // ldp q2, q3, [x8]
+        let pair = decode_vector_pair(0xad40_0d02).expect("ldp q");
+        assert_eq!(
+            pair.iter()
+                .map(|m| (m.rt, m.rn, m.disp))
+                .collect::<Vec<_>>(),
+            [(2, 8, 0), (3, 8, 16)]
+        );
+        // eor.16b v0, v2, v0
+        assert_eq!(decode_vector_eor(0x6e20_1c40), Some((0, 2, 0, 16)));
+        // prfm pldl1keep, [x0] is not a store.
+        assert!(decode_unsigned_mem(0xf980_0000).is_none());
+    }
+
+    /// The shape DynamicHub compiles to: ciphertext and pad built on the
+    /// stack with word stores, XORed in q registers, the plaintext stored
+    /// back over the ciphertext, and its address passed to a call.
+    #[test]
+    fn decodes_vector_xor_written_back_over_its_ciphertext() {
+        let plain: Vec<u8> = b"killall Terminal".iter().copied().chain([0; 16]).collect();
+        let pad: Vec<u8> = (0..32u8).map(|i| 0x80 | i.wrapping_mul(7)).collect();
+        let cipher: Vec<u8> = plain.iter().zip(&pad).map(|(p, k)| p ^ k).collect();
+        let mut words = Vec::new();
+        // Each 32-bit word: movz w8, #lo; movk w8, #hi, lsl 16; str w8, [sp, #at].
+        let mut store_words = |bytes: &[u8], base: u32| {
+            for (i, w) in bytes.chunks(4).enumerate() {
+                let value = u32::from_le_bytes([w[0], w[1], w[2], w[3]]);
+                let at = base + 4 * i as u32;
+                words.push(0x5280_0000 | (value & 0xffff) << 5 | 8);
+                words.push(0x72a0_0000 | (value >> 16) << 5 | 8);
+                words.push(0xb900_0000 | (at / 4) << 10 | 31 << 5 | 8);
+            }
+        };
+        store_words(&pad, 0x100);
+        store_words(&cipher, 0x200);
+        words.extend([
+            0x9100_0000 | 0x100 << 10 | 31 << 5 | 8, // add x8, sp, #0x100
+            0x3dc0_0000 | 0x20 << 10 | 31 << 5,      // ldr q0, [sp, #0x200]
+            0x3dc0_0000 | 0x21 << 10 | 31 << 5 | 1,  // ldr q1, [sp, #0x210]
+            0xad40_0d02,                             // ldp q2, q3, [x8]
+            0x6e20_1c40,                             // eor.16b v0, v2, v0
+            0x6e21_1c61,                             // eor.16b v1, v3, v1
+            0x3d80_0000 | 0x20 << 10 | 31 << 5,      // str q0, [sp, #0x200]
+            0x3d80_0000 | 0x21 << 10 | 31 << 5 | 1,  // str q1, [sp, #0x210]
+            0x9100_0000 | 0x200 << 10 | 31 << 5,     // add x0, sp, #0x200
+            0x9400_0000,                             // bl
+        ]);
+        let code: Vec<u8> = words.iter().flat_map(|w: &u32| w.to_le_bytes()).collect();
+        let call = (code.len() - 4) as u64;
+
+        let found = extract_section(&code, 0, 4, &mut Budget(MAX_DECODE_WORK));
+        let decoded = found
+            .iter()
+            .find(|s| s.value == "killall Terminal")
+            .expect("plaintext recovered");
+        assert_eq!(
+            (decoded.method, decoded.data_offset),
+            (StringMethod::XorStackPair, call)
+        );
+        let key = found
+            .iter()
+            .find(|s| s.kind == Some(StringKind::XorKey))
+            .expect("pad reported");
+        assert_eq!(key.value, format!("0x{}", crate::bytes::to_hex(&pad)));
+        // At the first store of the pad: the third word of the program.
+        assert_eq!(key.data_offset, 8);
     }
 
     #[test]

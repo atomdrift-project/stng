@@ -8,7 +8,7 @@ use stng::is_garbage;
 // ===== MAC Address Tests =====
 
 #[test]
-fn test_mac_address_formats() {
+fn keeps_mac_addresses() {
     // Colon format: 00:1A:2B:3C:4D:5E
     assert!(!is_garbage("00:1A:2B:3C:4D:5E"), "MAC colon format");
     assert!(!is_garbage("FF:FF:FF:FF:FF:FF"), "MAC broadcast");
@@ -24,7 +24,7 @@ fn test_mac_address_formats() {
 }
 
 #[test]
-fn test_incomplete_mac_addresses() {
+fn keeps_incomplete_mac_address() {
     // Incomplete MACs are still valid strings (not garbage)
     assert!(!is_garbage("00:1A:2B:3C:4D"), "Incomplete MAC");
 }
@@ -32,7 +32,7 @@ fn test_incomplete_mac_addresses() {
 // ===== IPv6 Address Tests =====
 
 #[test]
-fn test_ipv6_addresses() {
+fn keeps_ipv6_addresses() {
     // Full IPv6
     assert!(
         !is_garbage("2001:0db8:85a3:0000:0000:8a2e:0370:7334"),
@@ -58,7 +58,7 @@ fn test_ipv6_addresses() {
 }
 
 #[test]
-fn test_short_ipv6_like_strings() {
+fn keeps_short_ipv6_like_string() {
     // Short strings with colons are not automatically garbage
     assert!(!is_garbage("2001:db8:1"), "Short IPv6-like string");
 }
@@ -66,7 +66,7 @@ fn test_short_ipv6_like_strings() {
 // ===== Crypto Hash Tests =====
 
 #[test]
-fn test_crypto_hashes() {
+fn keeps_hex_digests() {
     // MD5 (32 hex chars)
     assert!(!is_garbage("5d41402abc4b2a76b9719d911017c592"), "MD5 hash");
 
@@ -98,7 +98,7 @@ fn test_crypto_hashes() {
 }
 
 #[test]
-fn test_non_hash_hex_strings() {
+fn keeps_short_and_near_hex_strings() {
     // Short hex strings (< 32 chars) are not automatically garbage
     assert!(!is_garbage("deadbeef"), "Short hex identifier");
     assert!(!is_garbage("cafebabe"), "Hex pattern");
@@ -115,7 +115,7 @@ fn test_non_hash_hex_strings() {
 // ===== Locale String Tests =====
 
 #[test]
-fn test_locale_strings() {
+fn keeps_locale_names() {
     // Standard locales (2 lower + underscore + 2 upper)
     assert!(!is_garbage("en_US"), "English US locale");
     assert!(!is_garbage("zh_CN"), "Chinese locale");
@@ -128,7 +128,7 @@ fn test_locale_strings() {
 }
 
 #[test]
-fn test_invalid_locales() {
+fn rejects_malformed_locales() {
     // Wrong case pattern
     assert!(is_garbage("EN_us"), "Uppercase-lowercase locale");
     assert!(is_garbage("en_us"), "All lowercase locale");
@@ -141,7 +141,7 @@ fn test_invalid_locales() {
 // ===== XML/Plist Tag Tests =====
 
 #[test]
-fn test_xml_tags() {
+fn keeps_plist_tags() {
     assert!(!is_garbage("<array>"), "XML array tag");
     assert!(!is_garbage("<dict>"), "XML dict tag");
     assert!(!is_garbage("<key>"), "XML key tag");
@@ -153,7 +153,7 @@ fn test_xml_tags() {
 }
 
 #[test]
-fn test_invalid_xml_tags() {
+fn rejects_empty_or_spaced_tags() {
     // Empty tags
     assert!(is_garbage("<>"), "Empty tag");
 
@@ -165,7 +165,7 @@ fn test_invalid_xml_tags() {
 // ===== Shell Command Redirection Tests =====
 
 #[test]
-fn test_shell_redirections() {
+fn keeps_shell_redirections() {
     assert!(!is_garbage("command 2>&1"), "Stderr to stdout");
     assert!(!is_garbage("ls 2>/dev/null"), "Stderr to file");
     assert!(!is_garbage("cat <<EOF"), "Heredoc");
@@ -177,7 +177,7 @@ fn test_shell_redirections() {
 }
 
 #[test]
-fn test_invalid_redirections() {
+fn keeps_redirect_operator_rejects_bare_heredoc() {
     // Very short strings (2 chars) are garbage
     assert!(is_garbage("<<"), "Too short");
 
@@ -193,7 +193,7 @@ fn test_invalid_redirections() {
 // ===== Short String Pattern Tests =====
 
 #[test]
-fn test_short_string_patterns() {
+fn keeps_short_consistent_case_words() {
     // All uppercase (OK)
     assert!(!is_garbage("API"), "All uppercase OK");
     assert!(!is_garbage("HTTP"), "Protocol uppercase");
@@ -223,7 +223,7 @@ fn test_short_string_patterns() {
 }
 
 #[test]
-fn test_short_garbage_patterns() {
+fn rejects_short_mixed_noise() {
     // Consistent case alphanumeric is now accepted (could be identifiers)
     assert!(
         !is_garbage("9N2A"),
@@ -249,7 +249,7 @@ fn test_short_garbage_patterns() {
 // ===== camelCase Tests =====
 
 #[test]
-fn test_camelcase_patterns() {
+fn keeps_camel_case() {
     // Valid camelCase (>= 7 chars, lowercase start, one uppercase not at end)
     assert!(!is_garbage("myValue"), "camelCase myValue");
     assert!(!is_garbage("someWord"), "camelCase someWord");
@@ -258,7 +258,7 @@ fn test_camelcase_patterns() {
 }
 
 #[test]
-fn test_short_camelcase_accepted() {
+fn keeps_five_char_camel_case() {
     // 5+ char camelCase identifiers are now kept — `myVal`, `getId`,
     // `iOSv2` are all valid abbreviated names that security analysts
     // care about. The 4-char floor in `looks_like_word_like` still
@@ -270,7 +270,7 @@ fn test_short_camelcase_accepted() {
 // ===== Filename and Section Tests =====
 
 #[test]
-fn test_filenames_with_dots() {
+fn keeps_short_filenames() {
     assert!(!is_garbage("d.exe"), "d.exe filename");
     assert!(!is_garbage("a.out"), "a.out filename");
     assert!(!is_garbage("lib.so"), "lib.so filename");
@@ -278,7 +278,7 @@ fn test_filenames_with_dots() {
 }
 
 #[test]
-fn test_section_names() {
+fn keeps_section_names() {
     assert!(!is_garbage(".text"), "Text section");
     assert!(!is_garbage(".data"), "Data section");
     assert!(!is_garbage(".bss"), "BSS section");
@@ -287,7 +287,7 @@ fn test_section_names() {
 }
 
 #[test]
-fn test_invalid_dot_patterns() {
+fn rejects_stray_dots() {
     // Leading dot
     assert!(is_garbage("."), "Single dot");
     assert!(is_garbage(".."), "Double dot");
@@ -302,7 +302,7 @@ fn test_invalid_dot_patterns() {
 // ===== Format String Tests =====
 
 #[test]
-fn test_format_strings() {
+fn keeps_printf_formats_with_context() {
     // Short format strings with noise punctuation may be garbage
     // Longer format strings with more context are not garbage
     assert!(
@@ -323,7 +323,7 @@ fn test_format_strings() {
 // ===== Path Pattern Tests =====
 
 #[test]
-fn test_path_patterns() {
+fn keeps_unix_and_windows_paths() {
     assert!(!is_garbage("/usr/lib/go"), "Unix path");
     assert!(!is_garbage("/etc/passwd"), "Config path");
     assert!(!is_garbage("C:\\Windows\\System32"), "Windows path");
@@ -332,7 +332,7 @@ fn test_path_patterns() {
 }
 
 #[test]
-fn test_invalid_paths() {
+fn rejects_punctuation_only_paths() {
     // Too many special characters (> 30%)
     assert!(is_garbage("/!!!!/####/$$$$"), "Too many special chars");
 
@@ -349,7 +349,7 @@ fn test_invalid_paths() {
 // ===== Version String Tests =====
 
 #[test]
-fn test_version_strings() {
+fn keeps_version_strings() {
     assert!(!is_garbage("v1.0"), "Version v1.0");
     assert!(!is_garbage("v2.3.4"), "Version v2.3.4");
     // Note: Short versions like "V10.5" (5 chars with mixed case+digits) may be garbage
@@ -361,7 +361,7 @@ fn test_version_strings() {
 // ===== Base64-like Pattern Tests =====
 
 #[test]
-fn test_base64_like_patterns() {
+fn keeps_base64_tokens() {
     // Long base64 strings (>= 16 chars, only [A-Za-z0-9+/=])
     assert!(!is_garbage("VGhpcyBpcyBhIHNlY3JldA=="), "Base64 string");
     assert!(!is_garbage("SGVsbG8gV29ybGQh"), "Base64 no padding");
@@ -371,7 +371,7 @@ fn test_base64_like_patterns() {
 // ===== Character Class Transition Tests =====
 
 #[test]
-fn test_low_transition_patterns() {
+fn keeps_compound_identifiers() {
     // Legitimate strings with reasonable run lengths
     assert!(!is_garbage("HelloWorld"), "PascalCase compound");
     assert!(!is_garbage("test_function_name"), "Snake case");
@@ -379,7 +379,7 @@ fn test_low_transition_patterns() {
 }
 
 #[test]
-fn test_high_transition_patterns() {
+fn keeps_hex_runs_rejects_alternating_noise() {
     // Pure-hex runs ≥8 chars are kept (see is_hex_id_run): they could
     // be hash fragments, build IDs, or other identifiers.
     assert!(!is_garbage("aB1cD2eF3"), "All-hex run is a valid hex id");
@@ -391,7 +391,7 @@ fn test_high_transition_patterns() {
 // ===== Whitespace Tests =====
 
 #[test]
-fn test_excessive_whitespace() {
+fn rejects_whitespace_only() {
     // Strings with whitespace are complex - only garbage if whitespace > 0 AND whitespace * 3 > len
     // AND meets other criteria. The exact threshold depends on content.
     // Strings with some alphanumeric content may pass even with lots of spaces
@@ -401,7 +401,7 @@ fn test_excessive_whitespace() {
 }
 
 #[test]
-fn test_reasonable_whitespace() {
+fn keeps_spaced_sentences() {
     // Normal sentences
     assert!(!is_garbage("Hello World"), "Normal spacing");
     assert!(!is_garbage("Error message here"), "Sentence spacing");
@@ -410,7 +410,7 @@ fn test_reasonable_whitespace() {
 // ===== Non-ASCII Content Tests =====
 
 #[test]
-fn test_short_strings_with_non_ascii() {
+fn rejects_short_non_ascii_heavy() {
     // < 30 chars with > 20% non-ASCII
     assert!(is_garbage("test€€€€"), "Short with non-ASCII");
 
@@ -419,14 +419,14 @@ fn test_short_strings_with_non_ascii() {
 }
 
 #[test]
-fn test_long_strings_with_non_ascii() {
+fn rejects_long_non_ascii_heavy() {
     // >= 30 chars with > 30% non-ASCII should be garbage
     let s = "test".repeat(5) + &"€".repeat(10); // 20 ASCII + 10 non-ASCII = 33% non-ASCII
     assert!(is_garbage(&s), "Long with too much non-ASCII");
 }
 
 #[test]
-fn test_acceptable_non_ascii() {
+fn keeps_ascii_phrase() {
     // Short strings with non-ASCII are generally filtered
     // For very short strings (< 10 chars), >= 2 non-ASCII chars triggers garbage
     // "Café" has 1 non-ASCII char but is only 4 chars, may be filtered
@@ -437,7 +437,7 @@ fn test_acceptable_non_ascii() {
 // ===== Repeated Character Tests =====
 
 #[test]
-fn test_repeated_characters() {
+fn rejects_repeated_char_runs() {
     assert!(is_garbage("aaaa"), "Repeated a");
     assert!(is_garbage("1111"), "Repeated 1");
     assert!(is_garbage("!!!!"), "Repeated !");
@@ -447,7 +447,7 @@ fn test_repeated_characters() {
 // ===== Alphanumeric Ratio Tests =====
 
 #[test]
-fn test_low_alphanumeric_ratio() {
+fn rejects_punctuation_runs() {
     // < 30% alphanumeric for > 6 chars
     assert!(is_garbage("!!!@@@###$$$"), "All special chars");
     assert!(is_garbage("...---___|||"), "Mostly punctuation");
@@ -456,7 +456,7 @@ fn test_low_alphanumeric_ratio() {
 // ===== Noise Punctuation Tests =====
 
 #[test]
-fn test_short_strings_with_noise() {
+fn rejects_short_with_noise_punctuation() {
     // <= 10 chars with noise punctuation
     assert!(is_garbage("abc#def"), "Short with #");
     assert!(is_garbage("test@foo"), "Short with @");
@@ -466,7 +466,7 @@ fn test_short_strings_with_noise() {
 // ===== Hex-Only Pattern Tests =====
 
 #[test]
-fn test_hex_only_patterns() {
+fn keeps_hex_magic_words() {
     // Note: Short hex strings are valid identifiers (not garbage)
     // Longer random hex might be, but 8-char hex strings like "deadbeef" are valid
     assert!(!is_garbage("deadbeef"), "Valid hex identifier");
@@ -474,7 +474,7 @@ fn test_hex_only_patterns() {
 }
 
 #[test]
-fn test_non_hex_only_ok() {
+fn keeps_hex_lookalikes() {
     // Has non-hex letters
     assert!(!is_garbage("testfile"), "Has 't' (non-hex)");
     assert!(!is_garbage("logging"), "Has 'g' (non-hex)");
@@ -489,7 +489,7 @@ fn test_non_hex_only_ok() {
 // ===== Trailing Space Tests =====
 
 #[test]
-fn test_trailing_spaces() {
+fn rejects_short_with_trailing_spaces() {
     // Ends with space, < 10 chars, < 4 alphanumeric
     assert!(is_garbage("ab "), "Short with trailing space");
     assert!(is_garbage("xyz  "), "Multiple trailing spaces");
@@ -498,7 +498,7 @@ fn test_trailing_spaces() {
 // ===== Backtick Pattern Tests =====
 
 #[test]
-fn test_backtick_patterns() {
+fn rejects_backtick_letter_tails() {
     // Backtick followed by single letter (Go misaligned reads)
     assert!(is_garbage("`L"), "Backtick + L");
     assert!(is_garbage("`M"), "Backtick + M");
@@ -508,7 +508,7 @@ fn test_backtick_patterns() {
 // ===== Unbalanced Punctuation Tests =====
 
 #[test]
-fn test_unbalanced_punctuation() {
+fn rejects_unbalanced_brackets_and_quotes() {
     // <= 8 chars with unbalanced parens
     assert!(is_garbage("(abc"), "Unclosed paren");
     assert!(is_garbage("def)"), "Extra close paren");
@@ -519,7 +519,7 @@ fn test_unbalanced_punctuation() {
 }
 
 #[test]
-fn test_balanced_punctuation() {
+fn keeps_balanced_brackets() {
     // Short strings (<= 8 chars) with unbalanced punctuation are garbage
     // But "(abc)" has balanced parens (open=1, close=1) yet is still garbage
     // because it has quotes issue or other heuristics
@@ -534,7 +534,7 @@ fn test_balanced_punctuation() {
 // ===== Medium-Length Mixed Patterns =====
 
 #[test]
-fn test_medium_mixed_case_digits() {
+fn keeps_mixed_id_rejects_embedded_punctuation() {
     // 5-10 chars with digits + uppercase + lowercase: identifier-shaped
     // alphanumeric strings (`fprzTR8`-style — a random-looking ID could
     // be a mutex name, hash prefix, or generated token) are now kept.
@@ -545,7 +545,7 @@ fn test_medium_mixed_case_digits() {
 }
 
 #[test]
-fn test_medium_version_like() {
+fn keeps_short_versions() {
     // Version-like patterns are OK
     assert!(!is_garbage("go1.22"), "Go version");
     assert!(!is_garbage("v1.0.5"), "Version string");
@@ -554,7 +554,7 @@ fn test_medium_version_like() {
 // ===== Short Uppercase + Digits Tests =====
 
 #[test]
-fn test_short_upper_digits() {
+fn rejects_lone_leading_zero_or_one() {
     // Consistent-case alphanumeric patterns (digits + uppercase, no lowercase) are valid
     // Multi-digit leading numbers are OK (could be product codes, etc.)
     assert!(!is_garbage("55LYE"), "Multi-digit leading number is valid");
@@ -571,7 +571,7 @@ fn test_short_upper_digits() {
 }
 
 #[test]
-fn test_valid_upper_digits() {
+fn keeps_algorithm_and_encoding_names() {
     // Alphanumeric identifiers with consistent case (4-8 chars) are valid
     // File signatures, algorithms, encodings, architectures
     assert!(!is_garbage("UTF8"), "encoding");
@@ -589,7 +589,7 @@ fn test_valid_upper_digits() {
 // ===== Literal Escape Sequence Tests =====
 
 #[test]
-fn test_literal_escapes_without_code_context() {
+fn rejects_bare_escape_sequences() {
     // < 30 chars with \x, \u, \U but no code context
     // Note: "bar\\U00000041" is 15 chars and may not trigger garbage
     // Let's test shorter ones that definitely should
@@ -598,7 +598,7 @@ fn test_literal_escapes_without_code_context() {
 }
 
 #[test]
-fn test_escapes_with_code_context() {
+fn keeps_escapes_in_code() {
     // Has code context (quotes, parens, print, echo, const, var)
     assert!(!is_garbage("print \"\\x41\""), "print with escape");
     assert!(!is_garbage("echo '\\x48'"), "echo with escape");
@@ -609,7 +609,7 @@ fn test_escapes_with_code_context() {
 // ===== Edge Cases =====
 
 #[test]
-fn test_empty_and_whitespace() {
+fn rejects_empty_and_whitespace() {
     assert!(is_garbage(""), "Empty string");
     assert!(is_garbage(" "), "Single space");
     assert!(is_garbage("   "), "Multiple spaces");
@@ -618,14 +618,14 @@ fn test_empty_and_whitespace() {
 }
 
 #[test]
-fn test_control_characters() {
+fn rejects_control_characters() {
     assert!(is_garbage("ab\x00cd"), "Null byte");
     assert!(is_garbage("\x01\x02\x03"), "Control chars");
     assert!(is_garbage("test\x07"), "Bell char");
 }
 
 #[test]
-fn test_trailing_newline_exception() {
+fn keeps_trailing_newline() {
     // Trailing newline should NOT trigger control char detection
     assert!(!is_garbage("hello world\n"), "Trailing newline OK");
     assert!(!is_garbage("test\n"), "Short with newline OK");
@@ -634,7 +634,7 @@ fn test_trailing_newline_exception() {
 // ===== Special Obfuscation Patterns =====
 
 #[test]
-fn test_obfuscated_javascript_hex_identifiers() {
+fn keeps_js_hex_identifiers() {
     assert!(
         !is_garbage("const _0x1c1000=_0x230d;"),
         "Hex identifier const"
@@ -650,7 +650,7 @@ fn test_obfuscated_javascript_hex_identifiers() {
 }
 
 #[test]
-fn test_obfuscated_python_mangled_identifiers() {
+fn keeps_python_mangled_identifiers() {
     assert!(
         !is_garbage("def llIIlIlllllIIlllII(arg):"),
         "Python mangled def"
@@ -664,7 +664,7 @@ fn test_obfuscated_python_mangled_identifiers() {
 // ===== API Keys and Secrets =====
 
 #[test]
-fn test_api_key_formats() {
+fn keeps_api_tokens() {
     assert!(!is_garbage("AKIA0123456789ABCDEF"), "AWS access key");
     assert!(
         !is_garbage("ghp_0123456789abcdefghijklmnopqrstuv"),
@@ -683,14 +683,14 @@ fn test_api_key_formats() {
 // ===== SQL and XSS Patterns =====
 
 #[test]
-fn test_sql_injection_patterns() {
+fn keeps_sql_injection() {
     assert!(!is_garbage("' OR '1'='1"), "SQL injection OR");
     assert!(!is_garbage("admin'--"), "SQL comment injection");
     assert!(!is_garbage("1' UNION SELECT NULL--"), "SQL union");
 }
 
 #[test]
-fn test_xss_patterns() {
+fn keeps_xss_payloads() {
     assert!(!is_garbage("<script>alert(1)</script>"), "XSS script");
     assert!(!is_garbage("<img src=x onerror=alert(1)>"), "XSS img");
     assert!(
@@ -702,7 +702,7 @@ fn test_xss_patterns() {
 // ===== Windows Patterns =====
 
 #[test]
-fn test_windows_registry_paths() {
+fn keeps_registry_paths() {
     assert!(
         !is_garbage("HKLM\\SOFTWARE\\Microsoft\\Windows"),
         "Registry HKLM"
@@ -711,7 +711,7 @@ fn test_windows_registry_paths() {
 }
 
 #[test]
-fn test_windows_mutexes() {
+fn keeps_mutex_and_guid() {
     assert!(!is_garbage("Global\\MutexName"), "Windows global mutex");
     // Note: GUIDs with braces have special chars and may be flagged
     // Full GUID format is more recognizable
@@ -724,14 +724,14 @@ fn test_windows_mutexes() {
 // ===== Cryptocurrency Patterns =====
 
 #[test]
-fn test_mining_pool_patterns() {
+fn keeps_mining_pools() {
     assert!(!is_garbage("pool.minexmr.com:4444"), "Mining pool");
     assert!(!is_garbage("stratum+tcp://pool.com:3333"), "Stratum URL");
     assert!(!is_garbage("xmr-eu1.nanopool.org:14444"), "Nanopool");
 }
 
 #[test]
-fn test_miner_commands() {
+fn keeps_miner_flags() {
     assert!(!is_garbage("xmrig"), "XMRig miner");
     assert!(!is_garbage("--donate-level=1"), "Miner flag");
     assert!(!is_garbage("--algo=cryptonight"), "Mining algo");
@@ -740,7 +740,7 @@ fn test_miner_commands() {
 // ===== Tor/Onion Patterns =====
 
 #[test]
-fn test_onion_addresses() {
+fn keeps_onion_addresses() {
     assert!(!is_garbage("http://example.onion"), "Onion HTTP");
     assert!(!is_garbage("https://3g2upl4pq6kufc4m.onion"), "Onion HTTPS");
     assert!(!is_garbage("ransomware2x4ytmz.onion"), "Onion domain");
@@ -749,7 +749,7 @@ fn test_onion_addresses() {
 // ===== CTF Flag Patterns =====
 
 #[test]
-fn test_ctf_flags() {
+fn keeps_ctf_flags() {
     assert!(!is_garbage("CTF{th1s_1s_4_fl4g}"), "CTF flag");
     assert!(!is_garbage("flag{secret}"), "flag format");
     assert!(!is_garbage("picoCTF{pwn3d}"), "picoCTF");
@@ -759,7 +759,7 @@ fn test_ctf_flags() {
 // ===== PEM/JWT Patterns =====
 
 #[test]
-fn test_pem_headers() {
+fn keeps_pem_armor() {
     assert!(!is_garbage("-----BEGIN PUBLIC KEY-----"), "PEM begin");
     assert!(!is_garbage("-----END PRIVATE KEY-----"), "PEM end");
     assert!(
@@ -769,7 +769,7 @@ fn test_pem_headers() {
 }
 
 #[test]
-fn test_jwt_tokens() {
+fn keeps_jwts() {
     // Standalone header (base64url, not a full JWT) — kept by the base64 classifier.
     assert!(
         !is_garbage("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"),
@@ -810,7 +810,7 @@ fn test_jwt_tokens() {
 // ===== Telegram Bot Tokens =====
 
 #[test]
-fn test_telegram_bot_tokens() {
+fn keeps_telegram_bot_tokens() {
     // Real shape observed in DPRK Teams sample (2026-04).
     assert!(
         !is_garbage("8520232238:AAF6xeNiv-OKpAPrnRmv7AsjmJAmkRjf0I4"),
@@ -844,7 +844,7 @@ fn test_telegram_bot_tokens() {
 // ===== Swift Mangled Symbols =====
 
 #[test]
-fn test_swift_mangled_symbols() {
+fn keeps_swift_mangled_symbols() {
     // _Tt-prefix (Swift 1-3 class metadata) — the kind that was dropped before.
     assert!(
         !is_garbage("_TtC7TeamAppP33_464D6157E8D96D7B7ECE5C61C5669F7019ResourceBundleClass"),
@@ -880,7 +880,7 @@ fn test_swift_mangled_symbols() {
 // ===== Ransom Note Patterns =====
 
 #[test]
-fn test_ransom_patterns() {
+fn keeps_ransom_note_lines() {
     assert!(
         !is_garbage("YOUR FILES HAVE BEEN ENCRYPTED"),
         "Ransom message"
@@ -892,7 +892,7 @@ fn test_ransom_patterns() {
 // ===== LDAP Patterns =====
 
 #[test]
-fn test_ldap_paths() {
+fn keeps_ldap_dns() {
     assert!(!is_garbage("LDAP://CN=Users,DC=domain,DC=com"), "LDAP path");
     assert!(!is_garbage("CN=Administrator,CN=Users"), "AD DN");
 }
@@ -900,7 +900,7 @@ fn test_ldap_paths() {
 // ===== Ransomware Extensions =====
 
 #[test]
-fn test_ransomware_extensions() {
+fn keeps_ransomware_extensions() {
     assert!(!is_garbage(".locked"), "Locked extension");
     assert!(!is_garbage(".encrypted"), "Encrypted extension");
     assert!(!is_garbage(".wannacry"), "WannaCry extension");

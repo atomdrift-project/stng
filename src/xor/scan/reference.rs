@@ -5,6 +5,7 @@
 use super::repeating::finish_xor_candidate;
 use super::rolling::ROLLING_XOR_PATTERNS;
 use super::*;
+use std::ops::Range;
 
 /// Decode `data` under `key` from every offset, with no overlap skipping:
 /// the specification of the fast repeating-key scan.
@@ -13,261 +14,151 @@ pub(super) fn pattern_scan(
     key: &[u8],
     min_length: usize,
     apply_filters: bool,
-    excluded_ranges: &[(usize, usize)],
+    excluded_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
-    let key_preview = key_preview(key);
-
+    let strict = super::is_path_key(key);
     // Results come out in offset order.
     (0..data.len())
         .filter_map(|pos| {
-            // XOR decode while printable: data[pos+j] ^ key[j % len(key)].
-            // A result needs `min_length` printable bytes, so a position
-            // whose prefix fails cannot yield one.
-            let key_len = key.len();
-            let remaining = data.len() - pos;
-            if remaining < min_length {
-                return None;
-            }
-            if !(0..min_length)
-                .all(|j| is_printable_byte_for_file_xor(data[pos + j] ^ key[j % key_len]))
-            {
-                return None;
-            }
-
-            // Skip excluded ranges (only checked after the fast printable pre-filter)
-            if excluded_ranges
-                .iter()
-                .any(|&(start, end)| pos >= start && pos < end)
-            {
-                return None;
-            }
-
-            let mut decoded = Vec::new();
-
-            // Track positions of single nulls in raw data (potential garbage boundaries)
-            let mut null_positions = Vec::new();
-
-            let max_len = std::cmp::min(1024, data.len() - pos);
-            for j in 0..max_len {
-                let raw = data[pos + j];
-                let byte = raw ^ key[j % key_len];
-
-                // Check for consecutive nulls in raw data (indicates end of actual string data),
-                // but only stop if the XOR-decoded byte is also non-printable. When the decoded
-                // byte is printable, the null is part of the encrypted payload, not zero padding.
-                if raw == 0 && pos + j + 1 < data.len() && data[pos + j + 1] == 0 {
-                    if !is_printable_byte_for_file_xor(byte) {
-                        break;
-                    }
-                    // Single null at this position (consecutive null handled above)
-                    null_positions.push(j);
-                } else if raw == 0 {
-                    // Single null (not followed by another null) - potential garbage boundary
-                    null_positions.push(j);
-                }
-
-                if is_printable_byte_for_file_xor(byte) {
-                    decoded.push(byte);
-                } else {
-                    break;
-                }
-            }
-
-            // Trim at null boundaries if we detect garbage (consonant clusters)
-            // Check all nulls, trim at the first one followed by garbage
-            // Skip null at position 0 (start of string) as it's not a garbage boundary
-            let mut trim_at: Option<usize> = None;
-            for &null_pos in &null_positions {
-                if null_pos == 0 {
-                    continue; // Don't trim at start of string (inner loop continue, not outer)
-                }
-                if null_pos < decoded.len() {
-                    let after_null = &decoded[null_pos..];
-                    // Need at least 2 chars after null to detect garbage (e.g., "aTr")
-                    if after_null.len() >= 2 {
-                        // Count the longest run of consecutive ASCII consonants
-                        // in the first 4 bytes. Operate directly on bytes — no
-                        // UTF-8 conversion needed since we only check ASCII letters.
-                        let check_len = after_null.len().min(4);
-                        let max_consecutive = after_null[..check_len]
-                            .iter()
-                            .fold((0u32, 0u32), |(max, cur), &b| {
-                                if b.is_ascii_alphabetic() {
-                                    let is_vowel = matches!(
-                                        b.to_ascii_lowercase(),
-                                        b'a' | b'e' | b'i' | b'o' | b'u'
-                                    );
-                                    if is_vowel {
-                                        (max, 0)
-                                    } else {
-                                        let next = cur + 1;
-                                        (max.max(next), next)
-                                    }
-                                } else {
-                                    (max, 0)
-                                }
-                            })
-                            .0;
-
-                        if max_consecutive >= 3 {
-                            trim_at = Some(null_pos);
-                            break; // Trim at first garbage boundary
-                        }
-                    }
-                }
-            }
-
-            if let Some(trim_pos) = trim_at {
-                decoded.truncate(trim_pos);
-            }
-
-            // Check minimum length after trimming
-            if decoded.len() < min_length {
-                return None;
-            }
-
-            // Skip strings decoded from null-heavy regions. When raw bytes are
-            // mostly zero the XOR output is just the key text reflected back —
-            // not actual encrypted content.
-            let raw_null_count = data[pos..pos + decoded.len()]
-                .iter()
-                .filter(|&&b| b == 0)
-                .count();
-            if raw_null_count * 2 > decoded.len() {
-                return None;
-            }
-
-            finish_xor_candidate(pos, decoded, min_length, apply_filters, &key_preview)
+            let decoded = decode_at(data, key, pos, min_length, excluded_ranges)?;
+            finish_xor_candidate(pos, decoded, min_length, apply_filters, strict)
         })
         .collect()
 }
 
 /// The offsets [`pattern_scan`] decodes into strings, with their decoded
-/// lengths: its per-offset walk, null trim and null-ratio checks, verbatim.
+/// lengths: its per-offset walk, null trim and null-ratio checks.
 pub(super) fn pattern_candidates(
     data: &[u8],
     key: &[u8],
     min_length: usize,
-    excluded_ranges: &[(usize, usize)],
+    excluded_ranges: &[Range<usize>],
 ) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
-    for pos in 0..data.len() {
-        let key_len = key.len();
-        let remaining = data.len() - pos;
-        if remaining < min_length {
-            continue;
-        }
-        if !(0..min_length)
-            .all(|j| is_printable_byte_for_file_xor(data[pos + j] ^ key[j % key_len]))
-        {
-            continue;
-        }
+    (0..data.len())
+        .filter_map(|pos| {
+            decode_at(data, key, pos, min_length, excluded_ranges).map(|d| (pos, d.len()))
+        })
+        .collect()
+}
 
-        // Skip excluded ranges (only checked after the fast printable pre-filter)
-        if excluded_ranges
-            .iter()
-            .any(|&(start, end)| pos >= start && pos < end)
-        {
-            continue;
-        }
+/// The bytes [`pattern_scan`] decodes at `pos`, before its final filters.
+fn decode_at(
+    data: &[u8],
+    key: &[u8],
+    pos: usize,
+    min_length: usize,
+    excluded_ranges: &[Range<usize>],
+) -> Option<Vec<u8>> {
+    // XOR decode while printable: data[pos+j] ^ key[j % len(key)].
+    // A result needs `min_length` printable bytes, so a position
+    // whose prefix fails cannot yield one.
+    let key_len = key.len();
+    let remaining = data.len() - pos;
+    if remaining < min_length {
+        return None;
+    }
+    if !(0..min_length).all(|j| is_printable_byte_for_file_xor(data[pos + j] ^ key[j % key_len])) {
+        return None;
+    }
 
-        let mut decoded = Vec::new();
+    // Skip excluded ranges (only checked after the fast printable pre-filter)
+    if excluded_ranges.iter().any(|r| r.contains(&pos)) {
+        return None;
+    }
 
-        // Track positions of single nulls in raw data (potential garbage boundaries)
-        let mut null_positions = Vec::new();
+    let mut decoded = Vec::new();
 
-        let max_len = std::cmp::min(1024, data.len() - pos);
-        for j in 0..max_len {
-            let raw = data[pos + j];
-            let byte = raw ^ key[j % key_len];
+    // Track positions of single nulls in raw data (potential garbage boundaries)
+    let mut null_positions = Vec::new();
 
-            // Check for consecutive nulls in raw data (indicates end of actual string data),
-            // but only stop if the XOR-decoded byte is also non-printable. When the decoded
-            // byte is printable, the null is part of the encrypted payload, not zero padding.
-            if raw == 0 && pos + j + 1 < data.len() && data[pos + j + 1] == 0 {
-                if !is_printable_byte_for_file_xor(byte) {
-                    break;
-                }
-                // Single null at this position (consecutive null handled above)
-                null_positions.push(j);
-            } else if raw == 0 {
-                // Single null (not followed by another null) - potential garbage boundary
-                null_positions.push(j);
-            }
+    let max_len = std::cmp::min(1024, data.len() - pos);
+    for j in 0..max_len {
+        let raw = data[pos + j];
+        let byte = raw ^ key[j % key_len];
 
-            if is_printable_byte_for_file_xor(byte) {
-                decoded.push(byte);
-            } else {
+        // Check for consecutive nulls in raw data (indicates end of actual string data),
+        // but only stop if the XOR-decoded byte is also non-printable. When the decoded
+        // byte is printable, the null is part of the encrypted payload, not zero padding.
+        if raw == 0 && pos + j + 1 < data.len() && data[pos + j + 1] == 0 {
+            if !is_printable_byte_for_file_xor(byte) {
                 break;
             }
+            // Single null at this position (consecutive null handled above)
+            null_positions.push(j);
+        } else if raw == 0 {
+            // Single null (not followed by another null) - potential garbage boundary
+            null_positions.push(j);
         }
 
-        // Trim at null boundaries if we detect garbage (consonant clusters)
-        // Check all nulls, trim at the first one followed by garbage
-        // Skip null at position 0 (start of string) as it's not a garbage boundary
-        let mut trim_at: Option<usize> = None;
-        for &null_pos in &null_positions {
-            if null_pos == 0 {
-                continue; // Don't trim at start of string (inner loop continue, not outer)
-            }
-            if null_pos < decoded.len() {
-                let after_null = &decoded[null_pos..];
-                // Need at least 2 chars after null to detect garbage (e.g., "aTr")
-                if after_null.len() >= 2 {
-                    // Count the longest run of consecutive ASCII consonants
-                    // in the first 4 bytes. Operate directly on bytes — no
-                    // UTF-8 conversion needed since we only check ASCII letters.
-                    let check_len = after_null.len().min(4);
-                    let max_consecutive = after_null[..check_len]
-                        .iter()
-                        .fold((0u32, 0u32), |(max, cur), &b| {
-                            if b.is_ascii_alphabetic() {
-                                let is_vowel = matches!(
-                                    b.to_ascii_lowercase(),
-                                    b'a' | b'e' | b'i' | b'o' | b'u'
-                                );
-                                if is_vowel {
-                                    (max, 0)
-                                } else {
-                                    let next = cur + 1;
-                                    (max.max(next), next)
-                                }
-                            } else {
-                                (max, 0)
-                            }
-                        })
-                        .0;
+        if is_printable_byte_for_file_xor(byte) {
+            decoded.push(byte);
+        } else {
+            break;
+        }
+    }
 
-                    if max_consecutive >= 3 {
-                        trim_at = Some(null_pos);
-                        break; // Trim at first garbage boundary
-                    }
+    // Trim at null boundaries if we detect garbage (consonant clusters)
+    // Check all nulls, trim at the first one followed by garbage
+    // Skip null at position 0 (start of string) as it's not a garbage boundary
+    let mut trim_at: Option<usize> = None;
+    for &null_pos in &null_positions {
+        if null_pos == 0 {
+            continue; // Don't trim at start of string (inner loop continue, not outer)
+        }
+        if null_pos < decoded.len() {
+            let after_null = &decoded[null_pos..];
+            // Need at least 2 chars after null to detect garbage (e.g., "aTr")
+            if after_null.len() >= 2 {
+                // Count the longest run of consecutive ASCII consonants
+                // in the first 4 bytes. Operate directly on bytes — no
+                // UTF-8 conversion needed since we only check ASCII letters.
+                let check_len = after_null.len().min(4);
+                let max_consecutive = after_null[..check_len]
+                    .iter()
+                    .fold((0u32, 0u32), |(max, cur), &b| {
+                        if b.is_ascii_alphabetic() {
+                            let is_vowel =
+                                matches!(b.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u');
+                            if is_vowel {
+                                (max, 0)
+                            } else {
+                                let next = cur + 1;
+                                (max.max(next), next)
+                            }
+                        } else {
+                            (max, 0)
+                        }
+                    })
+                    .0;
+
+                if max_consecutive >= 3 {
+                    trim_at = Some(null_pos);
+                    break; // Trim at first garbage boundary
                 }
             }
         }
-
-        if let Some(trim_pos) = trim_at {
-            decoded.truncate(trim_pos);
-        }
-
-        // Check minimum length after trimming
-        if decoded.len() < min_length {
-            continue;
-        }
-
-        // Skip strings decoded from null-heavy regions. When raw bytes are
-        // mostly zero the XOR output is just the key text reflected back —
-        // not actual encrypted content.
-        let raw_null_count = data[pos..pos + decoded.len()]
-            .iter()
-            .filter(|&&b| b == 0)
-            .count();
-        if raw_null_count * 2 > decoded.len() {
-            continue;
-        }
-        out.push((pos, decoded.len()));
     }
-    out
+
+    if let Some(trim_pos) = trim_at {
+        decoded.truncate(trim_pos);
+    }
+
+    // Check minimum length after trimming
+    if decoded.len() < min_length {
+        return None;
+    }
+
+    // Skip strings decoded from null-heavy regions. When raw bytes are
+    // mostly zero the XOR output is just the key text reflected back —
+    // not actual encrypted content.
+    let raw_null_count = data[pos..pos + decoded.len()]
+        .iter()
+        .filter(|&&b| b == 0)
+        .count();
+    if raw_null_count * 2 > decoded.len() {
+        return None;
+    }
+    Some(decoded)
 }
 
 /// Extract strings using rolling/index-based XOR with known plaintext patterns.
@@ -277,18 +168,17 @@ pub(super) fn pattern_candidates(
 /// to derive candidate keys, then validates by checking if multiple patterns decode
 /// correctly with the same key.
 ///
-/// This is common in .NET malware like Redline Stealer which XORs configuration
-/// strings with short cycling keys.
+/// .NET stealers XOR their configuration strings with short cycling keys.
 pub(super) fn rolling(
     data: &[u8],
     min_length: usize,
-    excluded_ranges: &[(usize, usize)],
+    excluded_ranges: &[Range<usize>],
 ) -> Vec<ExtractedString> {
     let mut results = Vec::new();
     // Pre-seed covered_ranges with excluded_ranges (code sections). The
     // while-loop below already skips offsets inside any covered range, so
     // code segments are never inspected.
-    let mut covered_ranges: Vec<(usize, usize)> = excluded_ranges.to_vec();
+    let mut covered_ranges: Vec<Range<usize>> = excluded_ranges.to_vec();
 
     // Try key lengths from 1 to 4 bytes
     for key_len in 1..=4usize {
@@ -301,11 +191,8 @@ pub(super) fn rolling(
             let mut offset = 0;
             while offset < max_offset {
                 // Skip offsets inside already-extracted regions
-                if let Some(&(_, end)) = covered_ranges
-                    .iter()
-                    .find(|&&(start, end)| offset >= start && offset < end)
-                {
-                    offset = end;
+                if let Some(covered) = covered_ranges.iter().find(|r| r.contains(&offset)) {
+                    offset = covered.end;
                     continue;
                 }
 
@@ -372,7 +259,7 @@ pub(super) fn rolling(
                 let region_start = offset.saturating_sub(4096);
                 let region_end = (offset + 4096).min(data.len());
                 let region = &data[region_start..region_end];
-                covered_ranges.push((region_start, region_end));
+                covered_ranges.push(region_start..region_end);
 
                 // The key is aligned to `offset`, not to the region start.
                 let skew = key_len - (offset - region_start) % key_len;
@@ -455,8 +342,8 @@ pub(super) fn single_byte_anchors(data: &[u8], wide: bool) -> Vec<(usize, u8, bo
 
 #[cfg(test)]
 mod differential {
-    use super::super::extract_custom_xor_strings_pattern_based_simple;
     use super::super::repeating::{Alignment, scan_alignments};
+    use super::super::repeating_key_candidates;
     use super::super::rolling::{ROLLING_XOR_PATTERNS, extract_rolling_xor_with_known_plaintext};
     use rayon::prelude::*;
 
@@ -574,11 +461,11 @@ mod differential {
         out
     }
 
-    fn excluded(rng: &mut Rng, len: usize) -> Vec<(usize, usize)> {
+    fn excluded(rng: &mut Rng, len: usize) -> Vec<std::ops::Range<usize>> {
         (0..rng.below(3))
             .map(|_| {
                 let start = rng.below(len);
-                (start, start + rng.below(2000))
+                start..start + rng.below(2000)
             })
             .collect()
     }
@@ -598,7 +485,7 @@ mod differential {
                 let min_length = [4, 6, 10][rng.below(3)];
                 let filters = rng.below(2) == 0;
                 let excluded = excluded(&mut rng, data.len());
-                let skip = super::super::Excluded::new(&excluded);
+                let skip = super::super::Excluded::new(excluded.iter().cloned());
                 let fresh = || -> Vec<Alignment> {
                     (0..key.len().min(data.len())).map(Alignment::new).collect()
                 };
@@ -624,13 +511,9 @@ mod differential {
                 }
                 assert_eq!(resumed, candidates, "seed {seed}, resumed");
                 let want = super::pattern_scan(&data, &key, min_length, filters, &excluded);
-                let got = extract_custom_xor_strings_pattern_based_simple(
-                    &data, &key, min_length, filters, &skip, false,
-                );
+                let got = repeating_key_candidates(&data, &key, min_length, filters, &skip, false);
                 assert_eq!(got, want, "seed {seed}");
-                let first = extract_custom_xor_strings_pattern_based_simple(
-                    &data, &key, min_length, filters, &skip, true,
-                );
+                let first = repeating_key_candidates(&data, &key, min_length, filters, &skip, true);
                 assert_eq!(first, want[..want.len().min(50)], "seed {seed}, early");
                 want.len()
             })

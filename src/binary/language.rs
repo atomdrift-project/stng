@@ -1,8 +1,9 @@
 //! Go and Rust detection by section names and content, and the packed
 //! string sections a raw scan must skip.
 
-use super::pe_section_name;
+use super::{clamped_range, file_range_clamped, macho_sections, pe_section_name};
 use goblin::mach::MachO;
+use std::ops::Range;
 
 /// File-offset ranges in a Go ELF that hold packed string blobs the raw
 /// scanner must skip.
@@ -14,102 +15,101 @@ use goblin::mach::MachO;
 /// extract these strings with correct boundaries, so the raw scanner should
 /// stay out of these regions.
 #[must_use]
-pub(crate) fn elf_go_skip_ranges(
-    elf: &goblin::elf::Elf<'_>,
-    data_len: usize,
-) -> Vec<std::ops::Range<usize>> {
+pub(crate) fn elf_go_skip_ranges(elf: &goblin::elf::Elf<'_>, data_len: usize) -> Vec<Range<usize>> {
     elf.section_headers
         .iter()
-        .filter_map(|sh| {
-            let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
-            if !matches!(name, ".rodata" | ".gopclntab") {
-                return None;
-            }
-            let start = usize::try_from(sh.sh_offset).ok()?;
-            let size = usize::try_from(sh.sh_size).ok()?;
-            let end = start.checked_add(size)?.min(data_len);
-            if start >= end {
-                return None;
-            }
-            Some(start..end)
+        .filter(|sh| {
+            matches!(
+                elf.shdr_strtab.get_at(sh.sh_name),
+                Some(".rodata" | ".gopclntab")
+            )
         })
+        .filter_map(|sh| clamped_range(data_len, sh.sh_offset, sh.sh_size))
         .collect()
 }
 
 /// File-offset ranges in a Go Mach-O binary the raw scanner must skip.
 /// See [`elf_go_skip_ranges`] for the rationale.
 #[must_use]
-pub(crate) fn macho_go_skip_ranges(macho: &MachO<'_>) -> Vec<std::ops::Range<usize>> {
-    let mut ranges = Vec::new();
-    for seg in &macho.segments {
-        let Ok(sections) = seg.sections() else {
-            continue;
-        };
-        for (sec, _) in &sections {
-            let name = sec.name().unwrap_or("");
-            if !matches!(name, "__rodata" | "__gopclntab") {
-                continue;
-            }
-            let Ok(start) = usize::try_from(sec.offset) else {
-                continue;
-            };
-            let Ok(size) = usize::try_from(sec.size) else {
-                continue;
-            };
-            let Some(end) = start.checked_add(size) else {
-                continue;
-            };
-            if start < end {
-                ranges.push(start..end);
-            }
-        }
-    }
-    ranges
+pub(crate) fn macho_go_skip_ranges(macho: &MachO<'_>) -> Vec<Range<usize>> {
+    macho_sections(macho)
+        .filter(|(sec, _)| matches!(sec.name(), Ok("__rodata" | "__gopclntab")))
+        .filter_map(|(sec, _)| clamped_range(usize::MAX, u64::from(sec.offset), sec.size))
+        .collect()
 }
 
 /// File-offset ranges in a Go PE binary the raw scanner must skip.
 /// See [`elf_go_skip_ranges`] for the rationale.
+///
+/// Stripped Go PE builds fold gopclntab and the string blob into `.rdata`;
+/// both names are covered for robustness. `.text` is included so raw
+/// printable scans don't surface x86 instruction-byte fragments (`H9A8`,
+/// `KYKZ`) or mid-string slices of pclntab funcnames that the cmp-immediate
+/// dispatch code happens to embed. Stack-constructed strings in `.text` are
+/// still recovered by the stack-string extractor.
 #[must_use]
-pub(crate) fn pe_go_skip_ranges(
-    pe: &goblin::pe::PE<'_>,
+pub(crate) fn pe_go_skip_ranges(pe: &goblin::pe::PE<'_>, data_len: usize) -> Vec<Range<usize>> {
+    pe_section_ranges(pe, data_len, &[".rodata", ".rdata", ".gopclntab", ".text"]).collect()
+}
+
+/// File-offset ranges of `pe`'s sections named in `names`, cut at `data_len`.
+fn pe_section_ranges<'p>(
+    pe: &'p goblin::pe::PE<'_>,
     data_len: usize,
-) -> Vec<std::ops::Range<usize>> {
+    names: &'p [&str],
+) -> impl Iterator<Item = Range<usize>> + 'p {
+    pe.sections
+        .iter()
+        .filter(|sec| names.contains(&&*pe_section_name(&sec.name)))
+        .filter_map(move |sec| {
+            clamped_range(
+                data_len,
+                u64::from(sec.pointer_to_raw_data),
+                u64::from(sec.size_of_raw_data),
+            )
+        })
+}
+
+/// Whether an ELF binary has Go's `.gopclntab` or `.go.buildinfo` section.
+#[must_use]
+pub(crate) fn elf_has_go_sections(elf: &goblin::elf::Elf<'_>) -> bool {
+    elf.section_headers.iter().any(|sh| {
+        matches!(
+            elf.shdr_strtab.get_at(sh.sh_name),
+            Some(".gopclntab" | ".go.buildinfo")
+        )
+    })
+}
+
+/// Whether a PE carries Go's build information header, 16-byte aligned in a
+/// section, where Go's own `debug/buildinfo` looks for it. Section names are
+/// optional (a stripped build folds `.gopclntab` into `.rdata`); the header
+/// is not, and a pointer size of 4 or 8 must follow its magic.
+fn pe_has_go_buildinfo(pe: &goblin::pe::PE<'_>, data: &[u8]) -> bool {
+    const MAGIC: &[u8] = b"\xff Go buildinf:";
     pe.sections
         .iter()
         .filter_map(|sec| {
-            let name = pe_section_name(&sec.name);
-            // Stripped Go PE builds fold gopclntab and the string blob into
-            // .rdata; cover both names for robustness. `.text` is included so
-            // raw printable scans don't surface x86 instruction-byte fragments
-            // (`H9A8`, `KYKZ`) or mid-string slices of pclntab funcnames
-            // that the cmp-immediate dispatch code happens to embed.
-            // Stack-constructed strings in `.text` are still recovered by
-            // the stack-string extractor.
-            if !matches!(&*name, ".rodata" | ".rdata" | ".gopclntab" | ".text") {
-                return None;
-            }
-            let start = usize::try_from(sec.pointer_to_raw_data).ok()?;
-            let size = usize::try_from(sec.size_of_raw_data).ok()?;
-            let end = start.checked_add(size)?.min(data_len);
-            if start >= end {
-                return None;
-            }
-            Some(start..end)
+            file_range_clamped(
+                data,
+                u64::from(sec.pointer_to_raw_data),
+                u64::from(sec.size_of_raw_data),
+            )
         })
-        .collect()
+        .any(|bytes| {
+            // 16 bytes: the magic, the pointer size, then flags.
+            bytes
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .any(|header| header.starts_with(MAGIC) && matches!(header[14], 4 | 8))
+        })
 }
 
-/// Helper to check if a Mach-O binary has Go sections.
+/// Whether a Mach-O binary has Go's `__gopclntab` or `__go_buildinfo` section.
 #[must_use]
 pub(crate) fn macho_has_go_sections(macho: &MachO<'_>) -> bool {
-    macho.segments.iter().any(|seg| {
-        seg.sections().is_ok_and(|secs| {
-            secs.iter().any(|(sec, _)| {
-                let name = sec.name().unwrap_or("");
-                name == "__gopclntab" || name == "__go_buildinfo"
-            })
-        })
-    })
+    macho_sections(macho).any(|(sec, _)| matches!(sec.name(), Ok("__gopclntab" | "__go_buildinfo")))
 }
 
 /// Check if a binary is a Go binary by looking for Go-specific sections.
@@ -118,11 +118,8 @@ pub fn is_go_binary(data: &[u8]) -> bool {
     use goblin::Object;
     match Object::parse(data) {
         Ok(Object::Mach(goblin::mach::Mach::Binary(macho))) => macho_has_go_sections(&macho),
-        Ok(Object::Elf(elf)) => elf.section_headers.iter().any(|sh| {
-            let name = elf.shdr_strtab.get_at(sh.sh_name).unwrap_or("");
-            name == ".gopclntab" || name == ".go.buildinfo"
-        }),
-        Ok(Object::PE(_pe)) => false,
+        Ok(Object::Elf(elf)) => elf_has_go_sections(&elf),
+        Ok(Object::PE(pe)) => pe_has_go_buildinfo(&pe, data),
         _ => false,
     }
 }
@@ -202,12 +199,7 @@ pub(crate) fn elf_is_rust(elf: &goblin::elf::Elf<'_>, data: &[u8]) -> bool {
         }
     }
     rodata.is_some_and(|sh| {
-        let (Ok(start), Ok(size)) = (usize::try_from(sh.sh_offset), usize::try_from(sh.sh_size))
-        else {
-            return false;
-        };
-        data.get(start..start.saturating_add(size).min(data.len()))
-            .is_some_and(has_rust_content)
+        file_range_clamped(data, sh.sh_offset, sh.sh_size).is_some_and(has_rust_content)
     })
 }
 
@@ -220,27 +212,11 @@ pub(crate) fn elf_is_rust(elf: &goblin::elf::Elf<'_>, data: &[u8]) -> bool {
 /// (libstd path prefix). Both are present in any non-trivial Rust PE build.
 #[must_use]
 pub(crate) fn pe_is_rust(pe: &goblin::pe::PE<'_>, data: &[u8]) -> bool {
-    for section in &pe.sections {
-        let name = pe_section_name(&section.name);
-        if !matches!(&*name, ".rdata" | ".rodata") {
-            continue;
-        }
-        let Ok(start) = usize::try_from(section.pointer_to_raw_data) else {
-            continue;
-        };
-        let Ok(size) = usize::try_from(section.size_of_raw_data) else {
-            continue;
-        };
-        let end = start.saturating_add(size).min(data.len());
-        if start >= end {
-            continue;
-        }
-        if has_rust_content(&data[start..end]) {
-            return true;
-        }
-    }
-    false
+    pe_section_ranges(pe, data.len(), PE_RODATA).any(|r| has_rust_content(&data[r]))
 }
+
+/// The PE sections that hold read-only data.
+const PE_RODATA: &[&str] = &[".rdata", ".rodata"];
 
 /// File-offset ranges in a Rust PE binary the raw scanner must skip.
 ///
@@ -251,24 +227,6 @@ pub(crate) fn pe_is_rust(pe: &goblin::pe::PE<'_>, data: &[u8]) -> bool {
 /// string. The structure-based extractor recovers the correctly-sliced
 /// substrings.
 #[must_use]
-pub(crate) fn pe_rust_skip_ranges(
-    pe: &goblin::pe::PE<'_>,
-    data_len: usize,
-) -> Vec<std::ops::Range<usize>> {
-    pe.sections
-        .iter()
-        .filter_map(|sec| {
-            let name = pe_section_name(&sec.name);
-            if !matches!(&*name, ".rdata" | ".rodata") {
-                return None;
-            }
-            let start = usize::try_from(sec.pointer_to_raw_data).ok()?;
-            let size = usize::try_from(sec.size_of_raw_data).ok()?;
-            let end = start.checked_add(size)?.min(data_len);
-            if start >= end {
-                return None;
-            }
-            Some(start..end)
-        })
-        .collect()
+pub(crate) fn pe_rust_skip_ranges(pe: &goblin::pe::PE<'_>, data_len: usize) -> Vec<Range<usize>> {
+    pe_section_ranges(pe, data_len, PE_RODATA).collect()
 }

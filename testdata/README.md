@@ -185,6 +185,5 @@ XOR-obfuscated payloads and regions.
 | File | SHA-256 | Origin |
 |---|---|---|
 | `xor/brew_agent_xor_region.bin` | `a0f509a4d46040107a8a2355d3f7734d3f71efdea50d8e9384f996d09333aa69` | [brew_agent_xor_region.md](xor/brew_agent_xor_region.md) |
-| `xor/brew_agent_xor_sample` | `545dd5cba264bf242bc837330ca34247e202f7ac25f03eec63bf5842357519f1` | *not recorded* |
 | `xor/libffmpeg_3cx_x64_xor` | `87c5d0c93b80acf61d24e7aaf0faae231ab507ca45483ad3d441b5d1acebc43c` | *not recorded* |
 | `xor/overlay_crypter_loader_xor` | `a3c64998a58595b7a6c2d16db68a767a87c9f3c3eb89784870ce51667a09d15b` | [overlay_crypter_loader_xor.md](xor/overlay_crypter_loader_xor.md) |

@@ -1,4 +1,3 @@
-#![allow(clippy::cast_possible_truncation)]
 use super::{entry, extract};
 use crate::StringMethod;
 use goblin::{Object, mach::Mach};
@@ -157,14 +156,14 @@ fn unsupported_word_size_and_endianness_are_rejected() {
 }
 #[test]
 fn name_varints_check_exact_boundaries_and_truncation() {
-    assert_eq!(entry(&[3, b'a', b'b', b'c'], 0), Some((1, 3)));
-    assert_eq!(entry(&[0], 0), Some((1, 0)));
+    assert_eq!(entry(&[3, b'a', b'b', b'c'], 0), Some(1..4));
+    assert_eq!(entry(&[0], 0), Some(1..1));
     for bytes in [&[][..], &[0x80], &[0x80, 0x80], &[3, b'a', b'b']] {
         assert!(entry(bytes, 0).is_none());
     }
     let mut bytes = vec![0x80, 0x20];
     bytes.resize(4098, b'a');
-    assert_eq!(entry(&bytes, 0), Some((2, 4096)));
+    assert_eq!(entry(&bytes, 0), Some(2..4098));
     bytes[0] = 0x81;
     bytes.push(b'a');
     assert!(entry(&bytes, 0).is_none());

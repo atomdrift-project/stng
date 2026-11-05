@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-fn test_garbage_filter_enabled() {
+fn filter_never_grows_fat_macho_output() {
     let data = crate::common::bytes("testdata/macho/charge0x_installer_universal.macho");
     let opts_filtered = ExtractOptions::new(4).with_garbage_filter(true);
     let opts_unfiltered = ExtractOptions::new(4).with_garbage_filter(false);
@@ -15,12 +15,8 @@ fn test_garbage_filter_enabled() {
     assert!(unfiltered.len() >= filtered.len());
 }
 
-// The filter judges each string in its section context, while this checks
-// context-free `is_garbage`; they agree on /bin/ls but not in general
-// (e.g. x86 asm noise in a data section). Revisit with P8.5.
 #[test]
-#[cfg(unix)] // reads /bin/ls
-fn test_garbage_filter_removes_garbage() {
+fn filter_only_removes() {
     // The filter judges each string in its context (kind, section,
     // architecture), so its output is not the strings the context-free
     // `is_garbage` accepts. What holds everywhere: it only removes.
@@ -40,13 +36,13 @@ fn test_garbage_filter_removes_garbage() {
 }
 
 #[test]
-fn test_options_default_no_filter() {
+fn filter_off_by_default() {
     let opts = ExtractOptions::new(4);
     assert!(!opts.filter_garbage());
 }
 
 #[test]
-fn test_options_with_filter() {
+fn with_garbage_filter_turns_filter_on() {
     let opts = ExtractOptions::new(4).with_garbage_filter(true);
     assert!(opts.filter_garbage());
 }

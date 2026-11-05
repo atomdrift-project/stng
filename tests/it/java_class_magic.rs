@@ -93,3 +93,20 @@ fn fat_macho_with_many_slices_still_yields_strings() {
         "{strings:?}"
     );
 }
+
+#[test]
+fn parsed_object_routes_a_java_class_like_raw_bytes() {
+    // goblin reads a class as a fat Mach-O. Handing stng that object must
+    // not bypass the class walk the bytes entry point takes.
+    let data = minimal_java_class_with_utf8(b"java/lang/String;exact-boundary-marker");
+    let opts = ExtractOptions::new(4);
+    let bytes = extract_strings_with_options(&data, &opts);
+    let object = stng::goblin::Object::parse(&data).expect("goblin reads the class as fat Mach-O");
+    let parsed = stng::extract_strings_from_parsed(&object, &[], &data, &opts);
+    let values = |v: &[stng::ExtractedString]| {
+        v.iter()
+            .map(|s| (s.data_offset, s.value.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(values(&parsed), values(&bytes));
+}

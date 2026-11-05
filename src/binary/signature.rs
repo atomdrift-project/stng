@@ -9,7 +9,7 @@
 ///
 /// - Apple: the "Software Signing" leaf issued by Apple's platform CA. Every
 ///   Apple chain, Developer ID included, ends in "Apple Root CA", so that name
-///   proves nothing (3CX's trojanized libffmpeg carries it).
+///   proves nothing (Developer-ID-signed malware carries it).
 /// - Microsoft: the Windows Production PCA, which issues only Windows
 ///   components. Microsoft's timestamp countersignatures (rooted in "Microsoft
 ///   Root Certificate Authority") and WHQL-attested third-party drivers
@@ -36,15 +36,12 @@ pub(crate) fn is_platform_signed(data: &[u8]) -> bool {
 /// slice, for a universal binary). Headers are read with bounds checks, so a
 /// malformed one yields fewer blobs, never a panic.
 pub(super) fn signature_blobs(data: &[u8]) -> Vec<&[u8]> {
-    let span = |start: u64, len: u64| {
-        let start = usize::try_from(start).ok()?;
-        data.get(start..start.checked_add(usize::try_from(len).ok()?)?)
-    };
-    let bytes = |at: usize, n: usize| data.get(at..at.checked_add(n)?);
-    let u16_le = |at| Some(u16::from_le_bytes(bytes(at, 2)?.try_into().ok()?));
-    let u32_le = |at| Some(u32::from_le_bytes(bytes(at, 4)?.try_into().ok()?));
-    let u32_be = |at| Some(u32::from_be_bytes(bytes(at, 4)?.try_into().ok()?));
-    let u64_be = |at| Some(u64::from_be_bytes(bytes(at, 8)?.try_into().ok()?));
+    use crate::bytes;
+    let span = |start, len| super::file_range(data, start, len);
+    let u16_le = |at| bytes::u16_le(data, at);
+    let u32_le = |at| bytes::u32_le(data, at);
+    let u32_be = |at| bytes::u32_be(data, at);
+    let u64_be = |at| bytes::u64_be(data, at);
 
     // LC_CODE_SIGNATURE of the thin Mach-O at `base`.
     let macho = |base: usize| -> Option<&[u8]> {

@@ -2,7 +2,6 @@
 //! used. Reject extra statements, mutations, unequal bindings or invalid units.
 use regex::Regex;
 use std::sync::LazyLock;
-#[allow(clippy::expect_used)]
 static RECIPE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
  r#"(?ix-u)\A\s*(?:Dim\s+[\w,\s]+:\s*)?"#,
@@ -12,7 +11,7 @@ static RECIPE: LazyLock<Regex> = LazyLock::new(|| {
  r#"(\w+)\s*=\s*(\w+)\s*&\s*ChrW?\(\s*(\w+)\((\w+)\)\s*([+-])\s*(\w+)\((\w+)\)\s*\)\s*:\s*Next\s*:\s*"#,
  r#"(\w+)\s*=\s*((?:"[A-Za-z]+"\s*&\s*){0,8}"[A-Za-z]+")\s*:\s*"#,
  r#"Execute\s+(\w+)\s*&\s*"\((\w+)\)"\s*\z"#
-)).expect("bounded literal VBScript recipe")
+)).unwrap_or_else(crate::invalid_pattern)
 });
 fn numbers(raw: &str) -> Option<Vec<i64>> {
     let v = raw

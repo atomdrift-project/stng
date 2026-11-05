@@ -64,7 +64,7 @@ fn rodata() -> (Vec<u8>, Vec<usize>) {
 }
 
 #[test]
-fn test_short_nul_terminated_paths_under_printable_key() {
+fn decodes_packed_paths_under_printable_key() {
     let (rodata, offsets) = rodata();
     // The layout the sample has: `/tmp/.b` and `/proc/self/exe` one NUL apart.
     assert_eq!(offsets[3] - offsets[2], "/tmp/.b".len() + 1);

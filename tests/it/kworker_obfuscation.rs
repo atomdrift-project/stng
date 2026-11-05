@@ -1,7 +1,7 @@
 use stng::{ExtractOptions, StringKind};
 
 #[test]
-fn test_kworker_character_assembly_detection() {
+fn finds_kworker_indicators_and_stack_strings() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
 
     let data = std::fs::read(sample_path).expect("Failed to read kworker sample");
@@ -96,7 +96,7 @@ fn test_kworker_character_assembly_detection() {
 }
 
 #[test]
-fn test_kworker_missing_strings_utf16_url() {
+fn fixture_holds_utf16_url_bytes() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
 
     let data = std::fs::read(sample_path).expect("Failed to read kworker sample");
@@ -120,7 +120,7 @@ fn test_kworker_missing_strings_utf16_url() {
 }
 
 #[test]
-fn test_kworker_missing_persistence_strings() {
+fn assembles_strcat_built_strings() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
 
     let data = std::fs::read(sample_path).expect("Failed to read kworker sample");
@@ -146,7 +146,7 @@ fn test_kworker_missing_persistence_strings() {
 }
 
 #[test]
-fn test_kworker_utf16_url_content() {
+fn decodes_utf16_c2_url() {
     let sample_path = crate::common::path("testdata/kworker_samples/kworker_obfuscated_1");
 
     let data = std::fs::read(sample_path).expect("Failed to read kworker sample");

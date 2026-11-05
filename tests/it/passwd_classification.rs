@@ -3,7 +3,7 @@
 use std::fs;
 
 #[test]
-fn test_passwd_entries_not_misclassified() {
+fn keeps_passwd_lines_out_of_applescript_and_base85() {
     // Create a test file with passwd-style entries
     let content = r"_assetcache:*:235:235:Asset Cache Service:/var/empty:/usr/bin/false
 _mobileasset:*:253:253:MobileAsset User:/var/ma:/usr/bin/false
@@ -48,7 +48,7 @@ _nsurlsessiond:*:242:242:NSURLSession Daemon:/var/db/nsurlsessiond:/usr/bin/fals
 }
 
 #[test]
-fn test_real_applescript_still_detected() {
+fn labels_real_applescript() {
     // Create a test file with real AppleScript
     let content = r#"tell application "Finder"
 set myVar to 10

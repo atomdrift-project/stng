@@ -1,6 +1,6 @@
 //! Script language detection heuristics.
 //!
-//! Identifies Python, JavaScript, PHP, and PowerShell scripts from text content.
+//! Identifies Python, JavaScript, PHP, PowerShell and Lua scripts from text content.
 //! Only called after `is_text_file()` returns true.
 
 /// A scripting language stng deobfuscates.
@@ -177,14 +177,27 @@ fn is_powershell(text: &str) -> bool {
     moderate_count >= 2
 }
 
+/// How Python-like a whole file is. The classifier's
+/// [`is_python_code`](crate::classifier) asks the same of one short string,
+/// with its own keywords and threshold: a file and a string carry different
+/// evidence, so the two lists are kept apart on purpose.
 fn python_score(text: &str) -> u32 {
     let mut score = 0u32;
 
-    // Java/Kotlin/Android markers - if these are present, it's very likely NOT Python
-    if text.contains("package ")
+    // Java/Kotlin/Android declarations: if present, it is not Python. Python
+    // has no statement starting `package` or `private`, so one at the start of
+    // a line decides, while a comment saying "private key" does not.
+    let declares = |keyword: &str| {
+        text.lines().any(|line| {
+            line.trim_start()
+                .strip_prefix(keyword)
+                .is_some_and(|rest| rest.starts_with(' '))
+        })
+    };
+    if declares("package")
+        || declares("private")
         || text.contains("public class ")
         || text.contains("public enum ")
-        || text.contains("private ")
         || text.contains("android.os.")
         || text.contains("java.util.")
     {
@@ -319,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_python() {
+    fn detects_python_imports() {
         let src = "import os\nimport sys\ndef main():\n    print('hello')\n";
         assert_eq!(
             detect_script_language(src.as_bytes()),
@@ -328,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_python_obfuscated() {
+    fn detects_obfuscated_python() {
         let src = "# -*- coding: utf-8 -*-\naqg = __import__('base64')\nexec(compile(aqg.b64decode('abc'), '<>', 'exec'))\n";
         assert_eq!(
             detect_script_language(src.as_bytes()),
@@ -337,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_javascript() {
+    fn detects_javascript_require() {
         let src =
             "const http = require('http');\nfunction handler(req, res) {\n  res.end('ok');\n}\n";
         assert_eq!(
@@ -347,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_javascript_eval() {
+    fn detects_javascript_eval_atob() {
         let src = "var x = 1;\neval(atob('YWxlcnQoMSk='));\n";
         assert_eq!(
             detect_script_language(src.as_bytes()),
@@ -356,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_php() {
+    fn detects_php_open_tag() {
         let src = "<?php\neval(base64_decode('aW1wb3J0IG9z'));\n?>\n";
         assert_eq!(
             detect_script_language(src.as_bytes()),
@@ -365,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_powershell_encoded() {
+    fn detects_powershell_encoded_command() {
         let src = "powershell -EncodedCommand ZAByAGkAdABlAC0AaABvAHMAdAA=\n";
         assert_eq!(
             detect_script_language(src.as_bytes()),
@@ -374,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_powershell_iex() {
+    fn detects_powershell_convert_and_iex() {
         let src = "$data = [Convert]::FromBase64String('abc')\nInvoke-Expression $decoded\n";
         assert_eq!(
             detect_script_language(src.as_bytes()),
@@ -383,31 +396,31 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_plain_text() {
+    fn plain_text_is_not_script() {
         let src = "Hello, this is a plain text file with no code.\n";
         assert_eq!(detect_script_language(src.as_bytes()), None);
     }
 
     #[test]
-    fn test_detect_csv() {
+    fn csv_is_not_script() {
         let src = "name,age,city\nAlice,30,NYC\nBob,25,LA\n";
         assert_eq!(detect_script_language(src.as_bytes()), None);
     }
 
     #[test]
-    fn test_detect_json() {
+    fn json_is_not_script() {
         let src = r#"{"name": "test", "version": "1.0", "description": "a package"}"#;
         assert_eq!(detect_script_language(src.as_bytes()), None);
     }
 
     #[test]
-    fn test_python_shebang_only_matches_first_line() {
+    fn python_shebang_must_be_first_line() {
         let src = "#!/bin/sh\nprintf '%s\n' '#!/usr/bin/env python3'\n";
         assert_eq!(detect_script_language(src.as_bytes()), None);
     }
 
     #[test]
-    fn test_detect_python_via_python3_shebang() {
+    fn detects_python3_shebang() {
         let src = "#!/usr/bin/env python3\nprint('hello')\n";
         assert_eq!(
             detect_script_language(src.as_bytes()),
@@ -416,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_javascript_via_node_path_shebang() {
+    fn detects_node_shebang() {
         let src = "#!/usr/bin/node\nconsole.log('hello')\n";
         assert_eq!(
             detect_script_language(src.as_bytes()),
@@ -425,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_not_python_java_kotlin() {
+    fn java_is_not_python() {
         let src = "package com.example;\nimport java.util.List;\npublic class MyClass {\n    private List<String> items;\n}\n";
         assert_ne!(
             detect_script_language(src.as_bytes()),
@@ -473,5 +486,33 @@ mod lua_leading_table_boundary_tests {
             detect_script_language(b"local words merely discuss = { data"),
             Some(ScriptLanguage::Lua)
         );
+    }
+}
+
+#[cfg(test)]
+mod declaration_tests {
+    use super::{ScriptLanguage, detect_script_language};
+
+    #[test]
+    fn a_comment_mentioning_private_or_package_stays_python() {
+        let src = "#!/usr/bin/env python3\n# decrypt the private key, then install this package\nimport os\nimport sys\ndef main():\n    os.system(sys.argv[1])\n";
+        assert_eq!(
+            detect_script_language(src.as_bytes()),
+            Some(ScriptLanguage::Python)
+        );
+    }
+
+    #[test]
+    fn java_and_kotlin_declarations_are_not_python() {
+        for src in [
+            "package com.example;\nimport java.io.File;\nprivate static int x;\n",
+            "package com.example\nimport kotlin.io\nprivate val x = 1\n",
+        ] {
+            assert_ne!(
+                detect_script_language(src.as_bytes()),
+                Some(ScriptLanguage::Python),
+                "{src}"
+            );
+        }
     }
 }

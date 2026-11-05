@@ -11,13 +11,10 @@
 //!
 //! For inline literals, we also perform instruction pattern analysis.
 
-// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
-#![allow(clippy::cast_possible_truncation)]
-
 use super::classifier::classify_string;
 use super::extraction::pair_strings;
 use super::instr::{inline_strings, is_valid_utf8_string};
-use super::types::{Arch, BinaryInfo, ExtractedString, StringMethod};
+use super::types::{Arch, BinaryInfo, ExtractedString, StringMethod, dedup_by_value};
 use goblin::elf::Elf;
 use goblin::mach::MachO;
 use goblin::mach::cputype::{CPU_TYPE_ARM64, CPU_TYPE_X86_64};
@@ -28,23 +25,20 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 // Static regex patterns are infallible - the patterns are compile-time constants
-#[allow(clippy::expect_used)]
 static RE_URL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(https?|ftp|postgresql|mysql|redis|mongodb)://[a-zA-Z0-9._:/@\-?=&%]+")
-        .expect("static regex")
+        .unwrap_or_else(crate::invalid_pattern)
 });
-#[allow(clippy::expect_used)]
 static RE_PATH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/[a-zA-Z0-9_./\-]+").expect("static regex"));
-#[allow(clippy::expect_used)]
+    LazyLock::new(|| Regex::new(r"/[a-zA-Z0-9_./\-]+").unwrap_or_else(crate::invalid_pattern));
 static RE_ENV_VAR: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[A-Z][A-Z0-9_]{3,}").expect("static regex"));
-#[allow(clippy::expect_used)]
-static RE_SNAKE_CASE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+").expect("static regex"));
-#[allow(clippy::expect_used)]
-static RE_DOMAIN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[a-z][a-z0-9]*\.[a-z][a-z0-9.]+").expect("static regex"));
+    LazyLock::new(|| Regex::new(r"[A-Z][A-Z0-9_]{3,}").unwrap_or_else(crate::invalid_pattern));
+static RE_SNAKE_CASE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+").unwrap_or_else(crate::invalid_pattern)
+});
+static RE_DOMAIN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[a-z][a-z0-9]*\.[a-z][a-z0-9.]+").unwrap_or_else(crate::invalid_pattern)
+});
 
 /// Minimum length for structure-based extraction.
 ///
@@ -207,10 +201,9 @@ impl RustStringExtractor {
         // `macho_vaddr_to_file_offset` walks the slice's own load commands, and
         // `file_base` rebases a fat slice's result onto the whole file (0 thin).
         for s in &mut strings {
-            s.data_offset = file_base.saturating_add(crate::binary::macho_vaddr_to_file_offset(
-                macho,
-                s.data_offset,
-            ));
+            if let Some(offset) = crate::binary::macho_vaddr_to_file_offset(macho, s.data_offset) {
+                s.data_offset = file_base.saturating_add(offset);
+            }
         }
 
         strings
@@ -230,9 +223,8 @@ impl RustStringExtractor {
                 if sh.sh_type == goblin::elf::section_header::SHT_NOBITS || sh.sh_size == 0 {
                     return None;
                 }
-                let offset = sh.sh_offset as usize;
-                let end = offset.checked_add(sh.sh_size as usize)?;
-                Some((sh.sh_addr, offset, data.get(offset..end)?))
+                let bytes = crate::binary::file_range(data, sh.sh_offset, sh.sh_size)?;
+                Some((sh.sh_addr, usize::try_from(sh.sh_offset).ok()?, bytes))
             })
         };
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
@@ -246,7 +238,8 @@ impl RustStringExtractor {
         // in .data.rel.ro zero on disk; the loader fills it from a RELATIVE
         // relocation. The structure scan above reads the bytes, sees (0, len),
         // and recovers nothing, so read the pointers from the relocations.
-        if let Some((rodata_addr, rodata_data)) = crate::binary::elf_section(elf, data, ".rodata") {
+        let rodata = crate::binary::elf_section(elf, data, ".rodata");
+        if let Some((rodata_addr, rodata_data)) = rodata {
             strings.extend(relative_reloc_strings(
                 elf,
                 data,
@@ -256,11 +249,9 @@ impl RustStringExtractor {
             ));
         }
 
-        // Perform instruction pattern analysis for inline literals
-        let text_info = crate::binary::elf_section(elf, data, ".text");
-        let rodata_info = crate::binary::elf_section(elf, data, ".rodata");
-
-        if let (Some(text), Some(rodata)) = (text_info, rodata_info) {
+        // Literals built inline by instruction patterns.
+        if let (Some(text), Some(rodata)) = (crate::binary::elf_section(elf, data, ".text"), rodata)
+        {
             let arch = match elf.header.e_machine {
                 goblin::elf::header::EM_X86_64 => Arch::X86_64,
                 goblin::elf::header::EM_AARCH64 => Arch::Aarch64,
@@ -272,12 +263,12 @@ impl RustStringExtractor {
         // Both phases decoded pointers, so every offset so far is a virtual
         // address; resolve each to a file offset, as the Mach-O path does.
         for s in &mut strings {
-            s.data_offset = crate::binary::elf_vaddr_to_file_offset(elf, s.data_offset);
+            if let Some(offset) = crate::binary::elf_vaddr_to_file_offset(elf, s.data_offset) {
+                s.data_offset = offset;
+            }
         }
 
-        // Deduplicate by value: insert() is false on a repeat, dropping it.
-        let mut seen: HashSet<String> = HashSet::new();
-        strings.retain(|s| seen.insert(s.value.clone()));
+        dedup_by_value(&mut strings);
 
         strings
     }
@@ -311,7 +302,6 @@ impl RustStringExtractor {
         ) else {
             return Vec::new();
         };
-        let rdata_file_start = rdata.pointer_to_raw_data as usize;
         let rdata_va = image_base.wrapping_add(u64::from(rdata.virtual_address));
 
         // Scan candidate sections for `(ptr, len)` pairs whose pointer falls
@@ -337,20 +327,17 @@ impl RustStringExtractor {
         });
 
         let struct_min = self.min_length.min(STRUCTURE_MIN_LENGTH);
-        let structured = pair_strings(scan_sections, (rdata_va, rdata_bytes), &info, struct_min);
+        let mut structured =
+            pair_strings(scan_sections, (rdata_va, rdata_bytes), &info, struct_min);
+        dedup_by_value(&mut structured);
 
-        // Convert the VA stored in `data_offset` back to a file offset so the
-        // result lines up with the raw scanner's reporting convention.
-        let rdata_file_start = rdata_file_start as u64;
-        let mut seen: HashSet<String> = HashSet::new();
+        // `data_offset` holds a VA; report the file offset, as the raw
+        // scanner does.
+        let rdata_file_start = u64::from(rdata.pointer_to_raw_data);
+        for s in &mut structured {
+            s.data_offset = rdata_file_start.wrapping_add(s.data_offset.wrapping_sub(rdata_va));
+        }
         structured
-            .into_iter()
-            .filter(|s| seen.insert(s.value.clone()))
-            .map(|mut s| {
-                s.data_offset = rdata_file_start.wrapping_add(s.data_offset.wrapping_sub(rdata_va));
-                s
-            })
-            .collect()
     }
     /// Extract raw strings as fallback.
     fn extract_raw_strings(&self, data: &[u8]) -> Vec<ExtractedString> {
@@ -437,13 +424,9 @@ impl RustStringExtractor {
             })
             .collect();
 
-        // Flatten and deduplicate
-        let mut seen: HashSet<String> = HashSet::new();
-        all_strings
-            .into_iter()
-            .flatten()
-            .filter(|s| seen.insert(s.value.clone()))
-            .collect()
+        let mut strings = all_strings.into_iter().flatten().collect();
+        dedup_by_value(&mut strings);
+        strings
     }
 
     /// Extract recognizable patterns from a text segment.
@@ -458,15 +441,20 @@ impl RustStringExtractor {
         seen: &mut HashSet<String>,
     ) {
         // Pattern 1: URLs (highest priority, clear boundaries)
+        let mut urls = Vec::new();
         for cap in RE_URL.find_iter(segment) {
             let url = cap.as_str().trim_end_matches(['.', ',', ';']);
             let offset = segment_base + cap.start() as u64;
             self.add_if_valid(url, offset, strings, seen);
+            urls.push(cap.range());
         }
 
-        // Pattern 2: Unix file paths
+        // Pattern 2: Unix file paths, except a URL's own `//host/path`.
         for cap in RE_PATH.find_iter(segment) {
             let path = cap.as_str();
+            if urls.iter().any(|url| url.contains(&cap.start())) {
+                continue;
+            }
             if path.contains('/') && path.len() >= self.min_length {
                 let offset = segment_base + cap.start() as u64;
                 self.add_if_valid(path, offset, strings, seen);
@@ -620,10 +608,10 @@ fn relative_reloc_strings(
         if !(rodata_addr..rodata_end).contains(&target) {
             continue;
         }
-        let Ok(len_at) = usize::try_from(crate::binary::elf_vaddr_to_file_offset(
-            elf,
-            rel.r_offset.wrapping_add(8),
-        )) else {
+        let Some(len_at) =
+            crate::binary::elf_vaddr_to_file_offset(elf, rel.r_offset.wrapping_add(8))
+                .and_then(|at| usize::try_from(at).ok())
+        else {
             continue;
         };
         let Some(len) = data
@@ -636,8 +624,11 @@ fn relative_reloc_strings(
         if len < min_length as u64 || len > RELOC_STRING_MAX_LEN || !seen.insert((target, len)) {
             continue;
         }
-        let start = (target - rodata_addr) as usize;
-        let Some(bytes) = rodata.get(start..start + len as usize) else {
+        let start = usize::try_from(target - rodata_addr).unwrap_or(usize::MAX);
+        let Some(bytes) = start
+            .checked_add(usize::try_from(len).unwrap_or(usize::MAX))
+            .and_then(|end| rodata.get(start..end))
+        else {
             continue;
         };
         let Ok(s) = std::str::from_utf8(bytes) else {

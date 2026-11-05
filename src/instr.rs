@@ -4,9 +4,6 @@
 //! pointer+length structures. Instead, compilers pass string addresses and lengths
 //! through registers. We extract these by pattern matching instruction sequences.
 
-// This codebase targets 64-bit hosts only: usize = u64, so u64-to-usize casts are lossless.
-#![allow(clippy::cast_possible_truncation)]
-
 use super::types::{Arch, ExtractedString};
 use amd64::extract_inline_strings_amd64;
 use arm64::extract_inline_strings_arm64;
@@ -14,16 +11,6 @@ mod amd64;
 mod arm64;
 mod arm64_preserved;
 
-/// Extracts inline strings from ARM64 executable code.
-///
-/// Scans for BL (branch-with-link) instructions and looks backward for the
-/// `ADRP+ADD` that computes a rodata pointer plus the `MOVZ`/`ORR` immediate
-/// that loads its length.
-///
-/// As on AMD64, the pointer and length land in whatever register pair the ABI
-/// assigns for that call — `runtime.stringtoslicebyte` passes them in x1/x2, not
-/// the x0/x1 or x2/x3 a fixed list would expect — so this accepts any `ADRP+ADD`
-/// into rodata followed by a length load into a *different* register.
 /// The code being scanned, the read-only data its instructions address, and
 /// the shortest string worth reporting.
 #[derive(Clone, Copy)]

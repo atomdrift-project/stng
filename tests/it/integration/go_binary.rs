@@ -7,7 +7,7 @@ fn go_binary() -> Vec<u8> {
 }
 
 #[test]
-fn test_detect_go_binary() {
+fn detects_go() {
     let data = go_binary();
 
     let is_go = is_go_binary(&data);
@@ -15,7 +15,7 @@ fn test_detect_go_binary() {
 }
 
 #[test]
-fn test_detect_language_go() {
+fn detects_go_language() {
     let data = go_binary();
 
     let lang = detect_language(&data);
@@ -27,7 +27,7 @@ fn test_detect_language_go() {
 }
 
 #[test]
-fn test_extract_strings_go_binary() {
+fn finds_many_strings() {
     let data = go_binary();
 
     let strings = extract_strings(&data, 4);
@@ -42,7 +42,7 @@ fn test_extract_strings_go_binary() {
 }
 
 #[test]
-fn test_go_binary_has_go_strings() {
+fn finds_runtime_or_version_strings() {
     let data = go_binary();
 
     let strings = extract_strings(&data, 4);
@@ -59,19 +59,17 @@ fn test_go_binary_has_go_strings() {
 }
 
 #[test]
-fn test_go_binary_has_funcname_kinds() {
+fn finds_main_main_in_pclntab() {
     let data = go_binary();
 
     let strings = extract_strings(&data, 4);
 
-    // Go binaries should extract strings successfully
-    // Modern Go binaries may have different internal structures
-    // Just verify we extracted some reasonable strings
+    // Go function names come from the pclntab function-name table, where
+    // `main.main` sits NUL-terminated at file offset 0xfa8a8.
     assert!(
-        !strings.is_empty(),
-        "Go binary should have some extracted strings"
+        strings.iter().any(|s| s.value == "main.main"
+            && s.data_offset == 0xfa8a8
+            && s.method == StringMethod::PclntabSymbol),
+        "main.main not found in the pclntab"
     );
-
-    // If we do find FuncName strings, that's great, but not required
-    let _has_funcname = strings.iter().any(|s| s.kind == Some(StringKind::FuncName));
 }

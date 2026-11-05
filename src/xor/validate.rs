@@ -26,7 +26,7 @@ pub(crate) fn is_printable_char(b: u8) -> bool {
 ///
 /// A NUL is where a C string ends, but it is also how a plaintext byte equal
 /// to the key encodes (`k ^ k = 0`): "password" under key 0x77 (`w`) is stored
-/// as `pass\0ord`, and a 3CX C2 domain under 0x7a (`z`) as `a\0ure`. Only that
+/// as `pass\0ord`, and a domain under 0x7a (`z`) as `a\0ure`. Only that
 /// second reading keeps the text a word, so the NUL stays inside the string
 /// when it stands alone and its decoded byte, a word character or joiner,
 /// sits between two alphanumerics. Anything else ends the string: padding,
@@ -66,7 +66,7 @@ pub(crate) fn is_valid_xor_string(s: &str) -> bool {
     // otherwise fail the is_meaningful_string linguistic check.
     let has_win_api = WIN_API_AC.is_match(s);
 
-    let has_suspicious_url = s.contains("://") && !s.contains("apple.com");
+    let has_suspicious_url = s.contains("://") && !crate::ioc::only_metadata_urls(s);
 
     // Check for IP addresses (likely C2 infrastructure) - pattern: N.N.N.N
     let has_ip = memchr::memchr_iter(b'.', s.as_bytes()).count() == 3
@@ -203,7 +203,6 @@ pub(crate) fn is_valid_xor_string(s: &str) -> bool {
 }
 
 /// Automaton for shell command indicators (case-insensitive).
-#[allow(clippy::expect_used)]
 static SHELL_COMMAND_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::builder()
         .ascii_case_insensitive(true)
@@ -229,11 +228,10 @@ static SHELL_COMMAND_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
             "cmd.exe",
             "xattr",
         ])
-        .expect("static patterns")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Automaton for suspicious path indicators (case-insensitive).
-#[allow(clippy::expect_used)]
 static SUSPICIOUS_PATH_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::builder()
         .ascii_case_insensitive(true)
@@ -250,13 +248,12 @@ static SUSPICIOUS_PATH_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
             "ld.so.preload",
             "/proc/self/",
         ])
-        .expect("static patterns")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// Automaton for Windows API names resolved via GetProcAddress (dynamic loading).
 /// These indicate covert capability loading and commonly fail linguistic checks due to
 /// long consonant runs (e.g., "BCryptS..." = 7 consecutive consonants).
-#[allow(clippy::expect_used)]
 static WIN_API_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
     AhoCorasick::new([
         // Windows crypto API (AES-CBC decryption capability)
@@ -276,7 +273,7 @@ static WIN_API_AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
         "RegSetValue",
         "RegCreateKey",
     ])
-    .expect("static patterns")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 
 pub(crate) fn is_valid_ip(s: &str) -> bool {
@@ -302,8 +299,8 @@ pub(crate) fn is_valid_ip(s: &str) -> bool {
         return false;
     }
 
-    // Reject localhost and reserved
-    if s == "127.0.0.1" || s == "0.0.0.0" || s.starts_with("127.") {
+    // Reject loopback (0.0.0.0 fell to the x.0.0.0 rule above)
+    if s.starts_with("127.") {
         return false;
     }
 
@@ -481,7 +478,6 @@ pub(crate) fn is_partial_xor_decode(s: &str) -> bool {
         if !s.as_bytes()[0].eq_ignore_ascii_case(&pattern.as_bytes()[0]) {
             continue;
         }
-        // Check if string starts similarly to a known pattern
         let prefix_len = pattern.len().min(5).min(s.len());
         let pattern_chars: Vec<char> = pattern.chars().take(prefix_len).collect();
         let string_chars: Vec<char> = s.chars().take(prefix_len).collect();
@@ -495,7 +491,6 @@ pub(crate) fn is_partial_xor_decode(s: &str) -> bool {
 
         // If at least 60% of prefix matches but the full pattern doesn't match
         if matching_chars >= (prefix_len * 3 / 5) {
-            // Check if the full pattern matches
             if s.len() >= pattern.len() {
                 let pattern_lower = pattern.to_ascii_lowercase();
                 let s_lower = s.to_ascii_lowercase();
@@ -550,7 +545,6 @@ pub(crate) fn is_partial_xor_decode(s: &str) -> bool {
                     return true;
                 }
 
-                // Get the divergent part for additional checks
                 let divergent_part: String = s.chars().skip(divergence_start).collect();
 
                 // Check if the divergent part contains garbage characters

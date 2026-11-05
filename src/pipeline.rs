@@ -1,20 +1,23 @@
 //! The extraction pipeline for parsed binaries: one scan per format, then the
 //! passes every format shares.
 
-use crate::binary;
-use crate::binary::SectionInfo;
-use crate::extract_raw_strings;
-use crate::extract_stack_strings;
+use crate::binary::{self, SectionInfo};
 use crate::layouts::Layouts;
-use crate::scan_binary_ips;
-use crate::{ExtractOptions, ExtractedString};
-use crate::{StringKind, StringMethod, classifier, par, validation};
+use crate::raw::{extract_raw_strings, extract_wide_strings};
+use crate::sockaddr::scan_binary_ips;
+use crate::stack_strings::extract_stack_strings;
+use crate::{
+    ExtractOptions, ExtractedString, StringKind, StringMethod, classifier, is_text_file, par,
+    validation,
+};
 use decode::decode_spaced_strings;
 use goblin::Object;
+use pe::suppress_version_info_ips;
 use rayon::prelude::*;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use xor::apply_xor_scan;
+
 pub(crate) mod decode;
 mod elf;
 pub(crate) mod java;
@@ -22,8 +25,6 @@ pub(crate) mod macho;
 mod pe;
 pub(crate) mod text;
 pub(crate) mod xor;
-
-use pe::suppress_version_info_ips;
 
 /// Run independent passes, on rayon's pool when `split` (see [`crate::par`]);
 /// their results, in task order.
@@ -62,23 +63,49 @@ pub(crate) fn extract<'d>(
         Object::Mach(goblin::mach::Mach::Fat(fat)) => macho::scan_fat(fat, layouts, data, opts),
         Object::Elf(elf) => elf::scan(elf, layouts, data, opts),
         Object::PE(pe) => pe::scan(pe, layouts, data, opts),
-        _ => scan_other(data, opts),
+        _ => scan_unknown(data, opts),
     };
-    finish(object, data, opts, scan)
+    finish(Some(object), data, opts, scan)
 }
 
-/// Strings from an object goblin parsed but stng has no format pass for.
-fn scan_other(data: &[u8], opts: &ExtractOptions) -> Scan {
+/// Extract strings from input goblin does not parse as a binary: text,
+/// scripts, and binaries it cannot read.
+pub(crate) fn extract_unknown(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
+    finish(None, data, opts, scan_unknown(data, opts))
+}
+
+/// Strings from input with no format pass: a raw scan, and what an `MZ`
+/// header, a ColdFusion template, `sockaddr_in` structures and stack-built
+/// strings add.
+fn scan_unknown(data: &[u8], opts: &ExtractOptions) -> Scan {
     let min_length = opts.min_length;
     let mut strings = Vec::new();
-    // Unknown format: raw scan.
-    if !data.is_empty() {
-        strings.extend(extract_raw_strings(data, min_length, &[], &[]));
+    // An `MZ` file goblin could not parse is still likely Windows, whose
+    // strings are often UTF-16.
+    if data.starts_with(b"MZ") {
+        strings.extend(extract_wide_strings(data, min_length, &[], &[]));
     }
-    // Extract binary network data (IPs and ports in network byte order)
-    // For unknown formats, use 0 (not M68000) to process normally
+    strings.extend(extract_raw_strings(data, min_length, &[], &[]));
+    // Legacy ColdFusion templates are DES-encrypted CFML behind a fixed
+    // signature. The decrypted source is one string, so later passes see the
+    // template body.
+    if !opts.is_cancelled()
+        && let Some(source) = crate::cfml::decode(data)
+        && source.len() >= min_length
+    {
+        strings.push(ExtractedString {
+            value: String::from_utf8_lossy(&source).into_owned(),
+            data_offset: 0,
+            data_len: u32::try_from(data.len()).unwrap_or(u32::MAX),
+            method: StringMethod::CfmlDecode,
+            kind: None,
+            fragments: None,
+        });
+    }
+    // Machine 0: no format, so no architecture to exclude.
     strings.extend(scan_binary_ips(data, min_length, 0, None, None));
-    strings.extend(extract_stack_strings(data, min_length));
+    // No format, so no architecture: x86-64 is the likeliest code.
+    strings.extend(extract_stack_strings(data, min_length, 64));
     Scan {
         strings,
         sections: Vec::new(),
@@ -86,10 +113,11 @@ fn scan_other(data: &[u8], opts: &ExtractOptions) -> Scan {
     }
 }
 
-/// The passes every format shares, over what its scan found: XOR decoding,
-/// code-signature reclassification, the decoders, the garbage filter and offset deduplication.
+/// The passes every input shares, over what its scan found: XOR decoding,
+/// the decoders, script deobfuscation, the garbage filter and offset
+/// deduplication. `object` is `None` for input goblin did not parse.
 fn finish(
-    object: &Object<'_>,
+    object: Option<&Object<'_>>,
     data: &[u8],
     opts: &ExtractOptions,
     scan: Scan,
@@ -97,54 +125,101 @@ fn finish(
     let min_length = opts.min_length;
     let Scan {
         mut strings,
-        sections: section_info,
-        is_go: is_go_binary,
+        sections,
+        is_go,
     } = scan;
-    // XOR string detection. `section_info` was populated by the format branch
-    // above, so it doesn't need recomputing here.
-    let is_pe = matches!(object, Object::PE(_));
-    let excluded_ranges = binary::code_ranges_from_sections(&section_info);
+    let code_ranges = binary::code_ranges_from_sections(&sections);
+    let is_pe = object.map_or_else(|| data.starts_with(b"MZ"), |o| matches!(o, Object::PE(_)));
+    tracing::debug!(
+        strings = strings.len(),
+        sections = sections.len(),
+        is_go,
+        is_pe,
+        "format scan finished"
+    );
 
-    if !is_go_binary || opts.xor_explicit() {
-        apply_xor_scan(&mut strings, data, opts, is_pe, &excluded_ranges);
+    if !is_go || opts.xor_explicit() {
+        apply_xor_scan(&mut strings, data, opts, is_pe, &code_ranges);
     }
 
-    // Version numbers in PE version info look like IPs.
-    if let Object::PE(pe) = object {
-        suppress_version_info_ips(&mut strings, pe);
+    match object {
+        Some(object) => {
+            // Version numbers in PE version info look like IPs.
+            if let Object::PE(pe) = object {
+                suppress_version_info_ips(&mut strings, pe);
+            }
+            macho::classify_code_signature(&mut strings, object);
+        }
+        // A PE under a repeating XOR key is opaque to goblin, so it can only
+        // land here. Recovery reads a fixed 128-byte header, so it needs no
+        // size gate; text is skipped as `apply_xor_scan` skips it. Only the
+        // key is surfaced; the decoded image is binary, for callers of
+        // `recover_repeating_xor_pe`.
+        None => {
+            if opts.xor_scans()
+                && xor::scans_for_xor(data, opts)
+                && let Some(key) = crate::xor::recover_repeating_xor_pe(data)
+            {
+                strings.push(key.to_key_string());
+            }
+        }
     }
 
-    macho::classify_code_signature(&mut strings, object);
-
-    // Decode encoded strings (base64, hex, URL-encoding, unicode escapes).
-    // Check cancellation between passes so a user-interrupted scan can bail
-    // out without finishing every decoder on a multi-megabyte string set.
+    // Base64, hex, URL encoding and escapes. Cancellation is checked before
+    // the decoders, which are the slowest pass over a large string set.
     let t_dec = std::time::Instant::now();
+    let before_decoding = strings.len();
     if !opts.is_cancelled() {
         let decoded = decode::decode(&strings, decode::Rot13::No);
         strings.extend(decoded);
     }
-
-    // Decode spaced ASCII strings (common in PE .rsrc, .NET metadata)
+    // Spaced ASCII, common in PE .rsrc and .NET metadata.
     decode_spaced_strings(&mut strings, min_length);
-    tracing::debug!("TIME: Classification took {:?}", t_dec.elapsed());
+    tracing::debug!(
+        elapsed = ?t_dec.elapsed(),
+        decoded = strings.len().saturating_sub(before_decoding),
+        "decoding finished"
+    );
+
+    // Script deobfuscation normally runs only for text. A self-identifying
+    // VBScript.Encode marker is also enough: its encoded body can hold
+    // enough control and high bytes to make an ASP page look binary. The
+    // marker is looked for in the strings already found, so binaries without
+    // it pay for no extra scan of the file.
+    let deobfuscate = is_text_file(data) || strings.iter().any(|s| s.value.contains("#@~^"));
 
     if opts.filter_garbage {
-        // The garbage heuristic is the single most expensive post-extraction
-        // pass (it runs `is_garbage_with_context` over every candidate). Each
-        // verdict is independent, so evaluate them in parallel;
-        // `into_par_iter` + `filter` + `collect` keeps the order.
-        let code_ranges = binary::code_ranges_from_sections(&section_info);
+        let before_filter = strings.len();
+        // The most expensive post-extraction pass; verdicts are independent,
+        // and `into_par_iter` + `filter` + `collect` keeps the order.
         strings = std::mem::take(&mut strings)
             .into_par_iter()
             .with_min_len(crate::par::MIN_ITEMS_PER_JOB)
             .filter(|s| passes_garbage_filter(s, &code_ranges))
             .collect();
+        tracing::debug!(
+            kept = strings.len(),
+            dropped = before_filter - strings.len(),
+            "garbage filter finished"
+        );
     }
 
     strip_go_varint_prefixes(&mut strings);
 
-    deduplicate_by_offset(strings)
+    // Script results are exempt from the garbage filter and deduplicated
+    // apart from the rest, so they are added last.
+    if deobfuscate {
+        let before = strings.len();
+        text::append_script_deobfuscation(&mut strings, data, opts);
+        tracing::debug!(
+            added = strings.len() - before,
+            "script deobfuscation finished"
+        );
+    }
+
+    let strings = deduplicate_by_offset(strings);
+    tracing::debug!(strings = strings.len(), "strings after offset dedup");
+    strings
 }
 
 /// Append the `candidates` whose values `strings` does not already hold.
@@ -208,6 +283,13 @@ fn strip_go_varint_prefixes(strings: &mut [ExtractedString]) {
         if rest.len() != prefix as usize {
             continue;
         }
+        // A `/` that happens to equal the length (47) is far likelier the root
+        // of an absolute path (`/Users/…`, `/core/src/…`) than the length of a
+        // module path, whose first element is a domain (`github.com/…`).
+        let first = rest.split(|&b| b == b'/').next().unwrap_or_default();
+        if prefix == b'/' && !first.contains(&b'.') {
+            continue;
+        }
         // Tight predicate: rest must look like a Go package path or type name.
         // Starts with letter/underscore/* / [ / ( / .
         // Body: alnum + path/type punctuation only.
@@ -248,24 +330,27 @@ fn strip_go_varint_prefixes(strings: &mut [ExtractedString]) {
 /// `__LINKEDIT` as x86 is pure waste.  ELF already did this filtering
 /// inline; this helper generalises the pattern so PE and Mach-O get the
 /// same win.
+/// Stack strings in `exec_ranges` of `data`, decoded as `bits`-bit x86;
+/// none when the code is not x86 (`bits` is `None`).
 pub(crate) fn extract_stack_strings_from_ranges(
     data: &[u8],
     min_length: usize,
-    exec_ranges: &[(usize, usize)],
+    exec_ranges: &[Range<usize>],
+    bits: Option<u32>,
 ) -> Vec<ExtractedString> {
+    let Some(bits) = bits else {
+        return Vec::new();
+    };
     if exec_ranges.is_empty() {
         return Vec::new();
     }
     exec_ranges
         .par_iter()
         .with_min_len(par::job_len(exec_ranges.len(), data.len()))
-        .filter_map(|&(start, end)| {
-            let end = end.min(data.len());
-            if start >= end {
-                return None;
-            }
-            let section_data = data.get(start..end)?;
-            let mut results = extract_stack_strings(section_data, min_length);
+        .filter_map(|range| {
+            let start = range.start;
+            let section_data = data.get(start..range.end.min(data.len()))?;
+            let mut results = extract_stack_strings(section_data, min_length, bits);
             for r in &mut results {
                 r.rebase(start as u64);
             }
@@ -282,7 +367,7 @@ pub(crate) fn extract_stack_strings_from_ranges(
 /// filters (notably the x86 push/pop save-sequence detector) can scope
 /// themselves to the right inputs. Kind, section, and arch all come
 /// from the `ExtractedString` itself when known.
-pub(crate) fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, usize)]) -> bool {
+pub(crate) fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[Range<usize>]) -> bool {
     // A referenced pointer/length can describe a complete multiline literal
     // (scripts, XML, configuration). Preserve clean ASCII text layout without
     // relaxing the control-character check for unstructured machine-code noise.
@@ -359,8 +444,8 @@ pub(crate) fn passes_garbage_filter(s: &ExtractedString, code_ranges: &[(usize, 
         // The ranges are sorted and disjoint: find the last one starting at or
         // before the offset.
         let off = usize::try_from(s.data_offset).unwrap_or(usize::MAX);
-        let i = code_ranges.partition_point(|&(start, _)| start <= off);
-        Some(i > 0 && off < code_ranges[i - 1].1)
+        let i = code_ranges.partition_point(|r| r.start <= off);
+        Some(i > 0 && off < code_ranges[i - 1].end)
     };
     let ctx = crate::types::StringContext {
         kind: s.kind,
@@ -387,29 +472,24 @@ pub(crate) fn unclaimed_raw_strings(
     min_length: usize,
 ) -> Vec<ExtractedString> {
     let known: HashSet<&str> = claimed.iter().map(|s| s.value.as_str()).collect();
-    let mut spans: Vec<(u64, u64)> = claimed
-        .iter()
-        .map(|s| (s.data_offset, s.data_offset + s.value.len() as u64))
-        .collect();
-    spans.sort_unstable();
-    let longest = spans.iter().map(|&(a, b)| b - a).max().unwrap_or(0);
+    let span =
+        |s: &ExtractedString| s.data_offset..s.data_offset.saturating_add(s.value.len() as u64);
+    let mut spans: Vec<Range<u64>> = claimed.iter().map(span).collect();
+    spans.sort_unstable_by_key(|r| (r.start, r.end));
+    let longest = spans.iter().map(|r| r.end - r.start).max().unwrap_or(0);
 
     let mut out = Vec::with_capacity(raw.len());
     for s in raw {
         if known.contains(s.value.as_str()) {
             continue;
         }
-        let start = s.data_offset;
-        let end = start + s.value.len() as u64;
-        // Spans sorted by start: those overlapping [start, end) begin before
+        let Range { start, end } = span(&s);
+        // Spans sorted by start: those overlapping `start..end` begin before
         // `end` and no earlier than `start - longest`.
-        let lo = spans.partition_point(|&(a, _)| a < start.saturating_sub(longest));
-        let hi = spans.partition_point(|&(a, _)| a < end);
-        let overlapping: Vec<(u64, u64)> = spans[lo..hi]
-            .iter()
-            .filter(|&&(_, b)| b > start)
-            .copied()
-            .collect();
+        let lo = spans.partition_point(|r| r.start < start.saturating_sub(longest));
+        let hi = spans.partition_point(|r| r.start < end);
+        let overlapping: Vec<&Range<u64>> =
+            spans[lo..hi].iter().filter(|r| r.end > start).collect();
         if overlapping.is_empty() {
             out.push(s);
             continue;
@@ -417,16 +497,16 @@ pub(crate) fn unclaimed_raw_strings(
 
         let mut cursor = start;
         let mut pieces = Vec::new();
-        for (a, b) in overlapping {
-            if a > cursor {
-                pieces.push((cursor, a));
+        for claimed in overlapping {
+            if claimed.start > cursor {
+                pieces.push(cursor..claimed.start);
             }
-            cursor = cursor.max(b);
+            cursor = cursor.max(claimed.end);
         }
         if cursor < end {
-            pieces.push((cursor, end));
+            pieces.push(cursor..end);
         }
-        for (a, b) in pieces {
+        for Range { start: a, end: b } in pieces {
             let (Ok(lo), Ok(hi)) = (usize::try_from(a - start), usize::try_from(b - start)) else {
                 continue;
             };
@@ -481,16 +561,23 @@ pub(crate) fn deduplicate_by_offset(mut strings: Vec<ExtractedString>) -> Vec<Ex
 
     // Every offset is file-relative (Mach-O section/VA offsets are rebased at the
     // source), so a file offset names exactly one location: keying the dedup on
-    // the offset alone collapses true duplicates. The exception is strings
-    // decoded from a script blob, which all carry the blob's offset; they are
-    // kept apart, one per value.
-    let (mut derived, mut strings): (Vec<_>, Vec<_>) = strings
+    // the offset alone collapses true duplicates. Text decoded from another
+    // string (base64, hex, URL escapes) carries its source's offset, so it is
+    // kept beside that source, which an analyst greps for: the best decoding
+    // per offset survives. A script blob decodes to many strings, all at the
+    // blob, so those are kept one per value.
+    let (mut decoded, mut strings): (Vec<_>, Vec<_>) = strings
         .into_iter()
+        .partition(|s| s.method.decodes_a_string());
+    let (mut scripts, mut decoded): (Vec<_>, Vec<_>) = decoded
+        .drain(..)
         .partition(|s| s.method == StringMethod::ScriptDecode);
     strings.dedup_by(|a, b| a.data_offset == b.data_offset);
-    derived.sort_by(|a, b| (a.data_offset, &a.value).cmp(&(b.data_offset, &b.value)));
-    derived.dedup_by(|a, b| a.data_offset == b.data_offset && a.value == b.value);
-    strings.extend(derived);
+    decoded.dedup_by(|a, b| a.data_offset == b.data_offset);
+    scripts.sort_by(|a, b| (a.data_offset, &a.value).cmp(&(b.data_offset, &b.value)));
+    scripts.dedup_by(|a, b| a.data_offset == b.data_offset && a.value == b.value);
+    strings.extend(decoded);
+    strings.extend(scripts);
     strings.sort_by_key(|s| s.data_offset);
     strings
 }

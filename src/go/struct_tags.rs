@@ -50,11 +50,7 @@ pub(super) fn extract(macho: &MachO<'_>, min_length: usize) -> Vec<ExtractedStri
             .ok()
             .filter(|&n| n < data.len())
     };
-    let word = |at: usize| -> Option<u64> {
-        Some(u64::from_le_bytes(
-            data.get(at..at.checked_add(8)?)?.try_into().ok()?,
-        ))
-    };
+    let word = |at| crate::bytes::u64_le(data, at);
     let mut seen_types = HashSet::new();
     let mut seen_tags = HashSet::new();
     let mut remaining_fields = 65536usize;
@@ -112,29 +108,30 @@ pub(super) fn extract(macho: &MachO<'_>, min_length: usize) -> Vec<ExtractedStri
             if flags & NAME_HAS_TAG == 0 || flags & !15 != 0 {
                 continue;
             }
-            let Some((start, len)) = entry(data, name + 1) else {
+            let Some(field) = entry(data, name + 1) else {
                 continue;
             };
-            if len == 0 {
+            if field.is_empty() {
                 continue;
             }
-            let Some((tag, len)) = entry(data, start + len) else {
+            let Some(tag) = entry(data, field.end) else {
                 continue;
             };
-            if len < min_length || !seen_tags.insert(tag) {
+            let len = tag.len();
+            if len < min_length || !seen_tags.insert(tag.start) {
                 continue;
             }
             if len > remaining_bytes {
                 return out;
             }
-            let bytes = &data[tag..tag + len];
+            let bytes = &data[tag.clone()];
             let Ok(value) = std::str::from_utf8(bytes) else {
                 continue;
             };
             if value.chars().any(char::is_control) {
                 continue;
             }
-            let Some(data_offset) = base.checked_add(tag as u64) else {
+            let Some(data_offset) = base.checked_add(tag.start as u64) else {
                 continue;
             };
             let Ok(data_len) = u32::try_from(len) else {
@@ -153,15 +150,17 @@ pub(super) fn extract(macho: &MachO<'_>, min_length: usize) -> Vec<ExtractedStri
     out
 }
 
-/// A bounded Go Name varint and its bytes; reject truncated/oversized entries.
-fn entry(data: &[u8], mut pos: usize) -> Option<(usize, usize)> {
+/// The bytes of the Go Name entry whose varint length is at `pos`; `None`
+/// for a truncated or oversized entry.
+fn entry(data: &[u8], mut pos: usize) -> Option<std::ops::Range<usize>> {
     let mut len = 0usize;
     for shift in [0, 7] {
         let byte = *data.get(pos)?;
         pos += 1;
         len |= usize::from(byte & 127) << shift;
         if byte & 128 == 0 {
-            return (len <= 4096 && pos.checked_add(len)? <= data.len()).then_some((pos, len));
+            let end = pos.checked_add(len)?;
+            return (len <= 4096 && end <= data.len()).then_some(pos..end);
         }
     }
     None

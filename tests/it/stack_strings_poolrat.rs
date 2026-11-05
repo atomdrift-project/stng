@@ -1,7 +1,7 @@
 use stng::{ExtractOptions, StringKind};
 
 #[test]
-fn test_stack_strings_poolrat() {
+fn assembles_user_agent_and_c2_stack_strings() {
     let sample_path = crate::common::path("testdata/malware/poolrat");
 
     let data = std::fs::read(sample_path).expect("Failed to read malware sample");

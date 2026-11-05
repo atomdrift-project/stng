@@ -19,7 +19,7 @@ fn macho_arch_count(data: &[u8]) -> usize {
 
 #[test]
 #[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn test_codesig_base64_categorization() {
+fn tags_ls_cd_hashes_as_sha1_code_signature() {
     let bin_path = "/bin/ls";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
@@ -78,7 +78,7 @@ fn test_codesig_base64_categorization() {
 }
 
 #[test]
-fn test_entitlements_extraction_brew_agent() {
+fn extracts_one_entitlements_plist_per_slice() {
     let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     let data = fs::read(sample_path).expect("Failed to read brew_agent");
@@ -91,54 +91,56 @@ fn test_entitlements_extraction_brew_agent() {
         .filter(|s| s.kind == Some(StringKind::EntitlementsXml))
         .collect();
 
+    // A universal binary: each slice is signed with its own entitlements
+    // (`codesign -d --entitlements - --arch …` shows one per slice).
     assert_eq!(
         entitlements.len(),
-        1,
-        "brew_agent should have exactly 1 entitlements XML block, found {}",
+        2,
+        "brew_agent should have one entitlements XML block per slice, found {}",
         entitlements.len()
     );
 
-    let ent = entitlements[0];
+    for ent in entitlements {
+        // Verify it's valid XML
+        assert!(
+            ent.value.starts_with("<?xml"),
+            "Entitlements should start with XML declaration"
+        );
+        assert!(
+            ent.value.contains("<!DOCTYPE plist"),
+            "Entitlements should have plist DOCTYPE"
+        );
+        assert!(
+            ent.value.contains("<plist version=\"1.0\">"),
+            "Entitlements should have plist root element"
+        );
+        assert!(
+            ent.value.contains("<dict/>") || ent.value.contains("<dict>"),
+            "Entitlements should have dict element"
+        );
+        assert!(
+            ent.value.ends_with("</plist>"),
+            "Entitlements should end with closing plist tag"
+        );
 
-    // Verify it's valid XML
-    assert!(
-        ent.value.starts_with("<?xml"),
-        "Entitlements should start with XML declaration"
-    );
-    assert!(
-        ent.value.contains("<!DOCTYPE plist"),
-        "Entitlements should have plist DOCTYPE"
-    );
-    assert!(
-        ent.value.contains("<plist version=\"1.0\">"),
-        "Entitlements should have plist root element"
-    );
-    assert!(
-        ent.value.contains("<dict/>") || ent.value.contains("<dict>"),
-        "Entitlements should have dict element"
-    );
-    assert!(
-        ent.value.ends_with("</plist>"),
-        "Entitlements should end with closing plist tag"
-    );
+        // Verify it's multi-line
+        assert!(
+            ent.value.contains('\n'),
+            "Entitlements XML should be multi-line"
+        );
 
-    // Verify it's multi-line
-    assert!(
-        ent.value.contains('\n'),
-        "Entitlements XML should be multi-line"
-    );
-
-    // Verify StringMethod is CodeSignature (part of code signature blob)
-    assert_eq!(
-        ent.method,
-        StringMethod::CodeSignature,
-        "Entitlements should be extracted via CodeSignature method"
-    );
+        // Verify StringMethod is CodeSignature (part of code signature blob)
+        assert_eq!(
+            ent.method,
+            StringMethod::CodeSignature,
+            "Entitlements should be extracted via CodeSignature method"
+        );
+    }
 }
 
 #[test]
 #[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn test_entitlements_extraction_securityd() {
+fn extracts_securityd_entitlement_keys() {
     let bin_path = "/usr/libexec/securityd_system";
 
     let data = fs::read(bin_path).expect("Failed to read securityd_system");
@@ -153,9 +155,8 @@ fn test_entitlements_extraction_securityd() {
 
     assert_eq!(
         entitlements.len(),
-        1,
-        "securityd_system should have exactly 1 entitlements XML block, found {}",
-        entitlements.len()
+        slice_count(&data),
+        "securityd_system should have one entitlements XML block per slice"
     );
 
     let ent = entitlements[0];
@@ -212,7 +213,7 @@ fn test_entitlements_extraction_securityd() {
 
 #[test]
 #[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn test_linkedit_section_enrichment() {
+fn tags_linkedit_cd_hashes_code_signature() {
     let bin_path = "/bin/ls";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
@@ -245,7 +246,7 @@ fn test_linkedit_section_enrichment() {
 
 #[test]
 #[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn test_codesig_hash_format() {
+fn formats_cd_hashes_as_bare_base64() {
     let bin_path = "/bin/ls";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/ls");
@@ -302,7 +303,7 @@ fn test_codesig_hash_format() {
 
 #[test]
 #[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn test_entitlements_vs_codesign_count() {
+fn extracts_untruncated_securityd_entitlements() {
     let bin_path = "/usr/libexec/securityd_system";
 
     let data = fs::read(bin_path).expect("Failed to read securityd_system");
@@ -317,8 +318,8 @@ fn test_entitlements_vs_codesign_count() {
 
     assert_eq!(
         entitlements.len(),
-        1,
-        "Should have one entitlements XML block"
+        slice_count(&data),
+        "one entitlements XML block per slice"
     );
 
     let ent_xml = &entitlements[0].value;
@@ -342,7 +343,7 @@ fn test_entitlements_vs_codesign_count() {
 
 #[test]
 #[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn test_no_entitlements_in_clean_binaries() {
+fn finds_no_entitlements_in_ls() {
     // Some system binaries like /bin/ls don't have entitlements
     let bin_path = "/bin/ls";
 
@@ -365,7 +366,7 @@ fn test_no_entitlements_in_clean_binaries() {
 }
 
 #[test]
-fn test_entitlements_offset_accuracy() {
+fn points_entitlements_offset_at_xml_declaration() {
     let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     let data = fs::read(sample_path).expect("Failed to read brew_agent");
@@ -377,34 +378,31 @@ fn test_entitlements_offset_accuracy() {
         .filter(|s| s.kind == Some(StringKind::EntitlementsXml))
         .collect();
 
-    assert_eq!(
-        entitlements.len(),
-        1,
-        "Should have exactly one entitlements block"
-    );
+    assert_eq!(entitlements.len(), 2, "one entitlements block per slice");
 
-    let ent = entitlements[0];
+    for ent in entitlements {
+        // Verify the offset points to actual XML content
+        let offset = usize::try_from(ent.data_offset).unwrap();
+        assert!(
+            offset < data.len(),
+            "Offset 0x{:x} should be within file bounds ({})",
+            offset,
+            data.len()
+        );
 
-    // Verify the offset points to actual XML content
-    let offset = usize::try_from(ent.data_offset).unwrap();
-    assert!(
-        offset < data.len(),
-        "Offset 0x{:x} should be within file bounds ({})",
-        offset,
-        data.len()
-    );
-
-    // Verify the data at that offset starts with XML declaration
-    let xml_start = String::from_utf8_lossy(&data[offset..std::cmp::min(offset + 5, data.len())]);
-    assert!(
-        xml_start.starts_with("<?xml"),
-        "Data at offset 0x{offset:x} should start with '<?xml', got '{xml_start}'"
-    );
+        // Verify the data at that offset starts with XML declaration
+        let xml_start =
+            String::from_utf8_lossy(&data[offset..std::cmp::min(offset + 5, data.len())]);
+        assert!(
+            xml_start.starts_with("<?xml"),
+            "Data at offset 0x{offset:x} should start with '<?xml', got '{xml_start}'"
+        );
+    }
 }
 
 #[test]
 #[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn test_codesig_hashes_are_sha1() {
+fn decodes_cat_cd_hashes_to_sha_digests() {
     let bin_path = "/bin/cat";
 
     let data = fs::read(bin_path).expect("Failed to read /bin/cat");
@@ -418,9 +416,10 @@ fn test_codesig_hashes_are_sha1() {
         })
         .collect();
 
-    if codesig_hashes.is_empty() {
-        return;
-    }
+    assert!(
+        !codesig_hashes.is_empty(),
+        "/bin/cat's code directories carry hashes"
+    );
 
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -444,5 +443,43 @@ fn test_codesig_hashes_are_sha1() {
             hash.data_offset,
             decoded.len()
         );
+    }
+}
+
+#[test]
+fn fat_slice_entitlements_are_read_from_their_slice() {
+    // The second-architecture code signature: its load command's offset is
+    // relative to the slice, not the file.
+    let data = crate::common::bytes("testdata/malware/dynamichub/DynamicHub");
+    let strings = stng::extract_strings(&data, 4);
+    let xml = strings
+        .iter()
+        .find(|s| s.kind == Some(stng::StringKind::EntitlementsXml))
+        .expect("entitlements are found");
+    assert_eq!(xml.data_offset, 328_314);
+    assert!(xml.value.starts_with("<?xml") && xml.value.ends_with("</plist>"));
+    assert_eq!(&data[328_314..328_319], b"<?xml");
+}
+
+#[test]
+fn signature_plists_other_than_entitlements_are_not_entitlements() {
+    // A signed binary with no entitlements still embeds a CMS `cdhashes`
+    // plist in its signature; only the entitlements slot counts.
+    let data = crate::common::bytes("testdata/macho/charge0x_installer_universal.macho");
+    let strings = stng::extract_strings(&data, 4);
+    assert!(
+        strings
+            .iter()
+            .filter(|s| s.kind == Some(StringKind::EntitlementsXml))
+            .all(|s| !s.value.contains("<key>cdhashes</key>")),
+    );
+}
+
+/// Architectures in a Mach-O: a universal binary signs each one.
+#[cfg(target_os = "macos")]
+fn slice_count(data: &[u8]) -> usize {
+    match stng::goblin::Object::parse(data) {
+        Ok(stng::goblin::Object::Mach(stng::goblin::mach::Mach::Fat(fat))) => fat.narches,
+        _ => 1,
     }
 }

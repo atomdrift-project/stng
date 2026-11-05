@@ -32,7 +32,6 @@ pub(super) fn value_is_key_echo(value_lower: &str, key_lower: &str) -> bool {
 }
 
 /// Strings that, decoded under a candidate key, make it worth a full scan.
-#[allow(clippy::expect_used)] // static patterns
 pub(super) static KILLER_PATTERNS: LazyLock<aho_corasick::AhoCorasick> = LazyLock::new(|| {
     aho_corasick::AhoCorasick::builder()
         .ascii_case_insensitive(true)
@@ -49,7 +48,7 @@ pub(super) static KILLER_PATTERNS: LazyLock<aho_corasick::AhoCorasick> = LazyLoc
             "ethereum",
             "exodus",
         ])
-        .expect("killer patterns")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 
 /// How strongly the strings decoded under `key` look like a real payload:
@@ -163,7 +162,7 @@ pub(crate) fn auto_detect_xor_key(
     // Compute entropy once per candidate (shared by qualification check and scoring).
     let mut candidates_with_score: Vec<(u32, u64, &str)> = candidate_strings
         .iter()
-        .filter(|s| !s.value.contains('_') && !s.value.starts_with("cstr."))
+        .filter(|s| !s.value.starts_with("cstr."))
         .filter_map(|s| {
             let entropy = entropy(s.value.as_bytes());
             if is_good_xor_key_candidate(&s.value, entropy) {
@@ -261,7 +260,7 @@ pub(crate) fn auto_detect_xor_key(
     let (score, key, key_str, offset) = best.filter(|b| b.0 >= 375)?;
     // A `?` field, not interpolation: the key is the sample's bytes, and
     // Debug escapes the CR or newline that would forge a log line.
-    tracing::info!(key = ?key_str, score, "Auto-detected XOR key");
+    tracing::debug!(key = ?key_str, score, "Auto-detected XOR key");
     Some((key, key_str, offset))
 }
 

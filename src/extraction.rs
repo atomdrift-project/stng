@@ -255,7 +255,6 @@ fn find_string_structures_generic(
             (ptr, len)
         };
 
-        // Check if this looks like a valid string structure
         if ptr >= blob_addr
             && ptr < blob_addr.saturating_add(blob_size)
             && len > 0
@@ -357,7 +356,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_find_string_structures_64bit_le() {
+    fn finds_64bit_le_header_at_section_offset() {
         let info = BinaryInfo::from_elf(true, true);
 
         // Create section with one valid string structure
@@ -381,14 +380,14 @@ mod tests {
     }
 
     #[test]
-    fn test_find_string_structures_empty() {
+    fn finds_nothing_in_empty_section() {
         let info = BinaryInfo::from_elf(true, true);
         let structs = find_string_structures(&[], 0x2000, 0x1000, 0x100, &info);
         assert!(structs.is_empty());
     }
 
     #[test]
-    fn test_find_string_structures_too_short() {
+    fn finds_nothing_in_section_shorter_than_header() {
         let info = BinaryInfo::from_elf(true, true);
         let section_data = vec![0u8; 8]; // Only 8 bytes, need 16 for struct
         let structs = find_string_structures(&section_data, 0x2000, 0x1000, 0x100, &info);
@@ -396,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_string_structures_32bit() {
+    fn finds_32bit_le_header() {
         let info = BinaryInfo::from_elf(false, true);
 
         let mut section_data = vec![0u8; 16];
@@ -411,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_string_structures_big_endian() {
+    fn finds_64bit_be_header() {
         let info = BinaryInfo::from_elf(true, false);
 
         let mut section_data = vec![0u8; 32];
@@ -426,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_string_structures_32bit_be() {
+    fn finds_32bit_be_header() {
         let info = BinaryInfo::from_elf(false, false);
 
         let mut section_data = vec![0u8; 16];
@@ -439,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_from_structures_basic() {
+    fn reads_each_struct_as_structure_string() {
         let blob = b"HelloWorld";
         let structs = vec![
             StringStruct {
@@ -463,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_from_structures_invalid_utf8() {
+    fn skips_invalid_utf8() {
         let blob = &[0xFF, 0xFE, 0xFD, 0xFC, 0xFB];
         let structs = vec![StringStruct {
             struct_offset: 0,
@@ -478,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_from_structures_mostly_non_printable() {
+    fn skips_non_printable() {
         let blob = b"\x01\x02\x03\x04\x05";
         let structs = vec![StringStruct {
             struct_offset: 0,
@@ -493,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_from_structures_ptr_out_of_range() {
+    fn skips_pointer_outside_blob() {
         let blob = b"Hello";
         let structs = vec![StringStruct {
             struct_offset: 0,
@@ -507,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_from_structures_len_overflow() {
+    fn skips_length_past_blob_end() {
         let blob = b"Hello";
         let structs = vec![StringStruct {
             struct_offset: 0,
@@ -521,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_from_structures_with_section_name() {
+    fn keeps_single_in_range_string() {
         let blob = b"Hello";
         let structs = vec![StringStruct {
             struct_offset: 0,
@@ -535,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_from_structures_classification() {
+    fn applies_classifier_kind() {
         let blob = b"/usr/bin";
         let structs = vec![StringStruct {
             struct_offset: 0,
@@ -556,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn test_uncovered_pair_ranges_scans_each_position_once() {
+    fn pair_ranges_scan_each_position_once() {
         let info = BinaryInfo::from_elf(true, true);
         let data = vec![0u8; 256];
         let section =

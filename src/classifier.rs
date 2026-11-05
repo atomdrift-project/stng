@@ -15,14 +15,14 @@ use std::sync::LazyLock;
 
 /// Ransomware note markers. A string is a candidate only if it contains one of
 /// these; every classified string is checked, so they share one automaton.
-#[allow(clippy::expect_used)]
-static RANSOM_INDICATORS: LazyLock<AhoCorasick> =
-    LazyLock::new(|| AhoCorasick::new(["ENCRYPTED", "DECRYPT", "RANSOM"]).expect("valid markers"));
+static RANSOM_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new(["ENCRYPTED", "DECRYPT", "RANSOM"]).unwrap_or_else(crate::invalid_pattern)
+});
 
 /// LDAP/AD path markers — necessary-condition gate for the precise check below.
-#[allow(clippy::expect_used)]
-static LDAP_INDICATORS: LazyLock<AhoCorasick> =
-    LazyLock::new(|| AhoCorasick::new(["LDAP://", "CN=", "DC="]).expect("valid markers"));
+static LDAP_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new(["LDAP://", "CN=", "DC="]).unwrap_or_else(crate::invalid_pattern)
+});
 
 /// URL schemes, including database connection strings.
 const URL_SCHEMES: &[&str] = &[
@@ -184,7 +184,7 @@ const INDICATORS: &[Detector] = &[
     // A string with `@` and `.` that is not an email falls through to the
     // URL, path and command checks (`https://user@host/`, `git@host:org/repo`).
     classify_email,
-    |s| (s.len() >= 10 && s.contains(".onion")).then_some(StringKind::TorAddress),
+    tor_address,
     jwt,
     network::classify_api_key,
     sql_injection,
@@ -254,8 +254,7 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
         return Some(kind);
     }
     if URL_SCHEMES.iter().any(|p| s.starts_with(p)) {
-        // Apple's certificate authority URL is in every signed Mach-O.
-        return (!s.starts_with("https://www.apple.com/appleca")).then_some(StringKind::Url);
+        return url(s);
     }
     if let Some(kind) = detect(SYNTAX) {
         return Some(kind);
@@ -264,6 +263,29 @@ pub fn classify_string(s: &str) -> Option<StringKind> {
         return path(s);
     }
     detect(ENCODINGS).or_else(|| env_var(s))
+}
+
+/// `Url` for a string that starts with a URL scheme, except Apple's
+/// certificate authority URL, which is in every signed Mach-O.
+fn url(s: &str) -> Option<StringKind> {
+    (!s.starts_with("https://www.apple.com/appleca")).then_some(StringKind::Url)
+}
+
+/// A Tor onion service: a 16- (v2) or 56-character (v3) base32 label
+/// before `.onion`, as a whole word. "Visit abcdef.onion" names no service.
+fn tor_address(s: &str) -> Option<StringKind> {
+    let b = s.as_bytes();
+    let base32 = |c: u8| c.is_ascii_lowercase() || (b'2'..=b'7').contains(&c);
+    memchr::memmem::find_iter(b, b".onion")
+        .any(|at| {
+            let label = b[..at].iter().rev().take_while(|&&c| base32(c)).count();
+            let start = at - label;
+            let end = at + ".onion".len();
+            matches!(label, 16 | 56)
+                && (start == 0 || !b[start - 1].is_ascii_alphanumeric())
+                && b.get(end).is_none_or(|c| !c.is_ascii_alphanumeric())
+        })
+        .then_some(StringKind::TorAddress)
 }
 
 /// `CTF{...}`, `flag{...}`, `picoCTF{...}` and friends.
@@ -341,11 +363,10 @@ fn ransom_note(s: &str) -> Option<StringKind> {
 }
 
 fn mining_pool(s: &str) -> Option<StringKind> {
-    ((s.starts_with('s') || memchr::memchr2(b':', b'p', s.as_bytes()).is_some())
-        && (s.contains("stratum+tcp://")
-            || s.contains("stratum+ssl://")
-            || ((s.contains("pool.") || s.contains("nanopool") || s.contains("minergate"))
-                && (s.contains(".com") || s.contains(".org") || s.contains(':')))))
+    (s.contains("stratum+tcp://")
+        || s.contains("stratum+ssl://")
+        || ((s.contains("pool.") || s.contains("nanopool") || s.contains("minergate"))
+            && (s.contains(".com") || s.contains(".org") || s.contains(':'))))
     .then_some(StringKind::MiningPool)
 }
 
@@ -460,28 +481,20 @@ fn is_registry_path(s: &str) -> bool {
         return true;
     }
 
-    if s.starts_with("System\\CurrentControlSet\\")
+    s.starts_with("System\\CurrentControlSet\\")
         || s.starts_with("System\\Setup\\")
         || s.starts_with("SAM\\")
         || s.starts_with("SECURITY\\")
-    {
-        return true;
-    }
-
-    false
 }
 
 /// Classify a long string by its first 256 bytes: only the prefix-anchored
 /// kinds and code markers.
 fn classify_prefix(prefix: &str) -> Option<StringKind> {
     if URL_SCHEMES.iter().any(|p| prefix.starts_with(p)) {
-        return Some(StringKind::Url);
+        return url(prefix);
     }
-    if ["/", "./", "../"].iter().any(|p| prefix.starts_with(p)) {
-        return Some(path_kind(prefix));
-    }
-    if prefix.starts_with("C:\\") {
-        return Some(StringKind::Path);
+    if PATH_PREFIXES.iter().any(|p| prefix.starts_with(p)) {
+        return path(prefix);
     }
     if is_registry_path(prefix) {
         return Some(StringKind::Registry);
@@ -489,9 +502,7 @@ fn classify_prefix(prefix: &str) -> Option<StringKind> {
     if prefix.starts_with("<?php") {
         return Some(StringKind::PhpCode);
     }
-    if prefix.starts_with("#!") {
-        return Some(StringKind::ShellCmd);
-    }
+    // A shebang names the interpreter; the code detectors below judge it.
     if code::is_python_code(prefix) {
         return Some(StringKind::PythonCode);
     }
@@ -516,111 +527,44 @@ fn command_follows(s: &str, separator: char, commands: &[&str]) -> bool {
 /// `Some(Email)` for a plausible email address. Every `None` here only means
 /// "not an email"; the caller goes on to try other kinds.
 fn classify_email(s: &str) -> Option<StringKind> {
-    let (bytes, len) = (s.as_bytes(), s.len());
-    if len < 6 || memchr::memchr(b'@', bytes).is_none() || memchr::memchr(b'.', bytes).is_none() {
+    if s.len() < 6 || s.contains("..") {
         return None;
     }
-    let at_count = memchr::memchr_iter(b'@', s.as_bytes()).count();
-    if at_count == 1 {
-        // Must be mostly ASCII (>95%) - reject garbage with non-ASCII chars
-        let ascii_count = s.bytes().filter(u8::is_ascii).count();
-        if ascii_count * 100 / len < 95 {
-            return None; // Skip - has too much non-ASCII
-        }
-
-        // Reject consecutive dots (invalid email format)
-        if s.contains("..") {
-            return None; // Skip - has consecutive dots
-        }
-
-        // Split on @ to validate structure (exactly one @ guaranteed above)
-        if let Some((local, domain)) = s.split_once('@') {
-            // Local part must exist, not be empty, and start with alphanumeric
-            let starts_with_alnum = local.chars().next().is_some_and(char::is_alphanumeric);
-            if !starts_with_alnum {
-                return None; // Skip - starts with @ or non-alphanumeric
-            }
-
-            // Local part must have at least one alphanumeric character
-            if !local.chars().any(char::is_alphanumeric) {
-                return None; // Skip - local part has no alphanumeric
-            }
-
-            // Local part may only contain the RFC-5321 atext subset we care about.
-            // Reject slashes (common in Go module paths like "pkg/sub@v1.0.0/file.go")
-            // and other symbols that are not legal in email addresses.
-            if !local
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '%'))
-            {
-                return None; // Skip - local part contains non-email chars
-            }
-
-            // Domain must have a dot (not @domain or @.domain)
-            if !domain.contains('.') || domain.starts_with('.') {
-                return None; // Skip - invalid domain structure
-            }
-
-            // Domain may only contain hostname-legal characters (letters, digits,
-            // dots, hyphens). Reject slashes — `logr@v1.4.1/logr.go` is a Go
-            // module path, not an email.
-            if !domain
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
-            {
-                return None; // Skip - domain contains non-hostname chars
-            }
-
-            // Domain must have at least one letter (not just numbers/symbols like @0.x)
-            let domain_has_letter = domain.chars().any(|c| c.is_ascii_alphabetic());
-            if !domain_has_letter {
-                return None; // Skip - domain has no letters
-            }
-
-            // Reject domains whose first label is a bare version token like
-            // "v1" or "v2" — these come from Go module paths (`pkg@v1.4.1`).
-            if let Some(first_label) = domain.split('.').next() {
-                let is_version_token = first_label.len() >= 2
-                    && first_label.starts_with('v')
-                    && first_label[1..].chars().all(|c| c.is_ascii_digit());
-                if is_version_token {
-                    return None; // Skip - Go module version, not email domain
-                }
-            }
-
-            // Extract TLD (everything after last dot)
-            if let Some(last_dot_pos) = domain.rfind('.') {
-                let tld = &domain[last_dot_pos + 1..];
-                // TLD must be at least 2 chars and all alphabetic
-                if tld.len() < 2 || !tld.chars().all(|c| c.is_ascii_alphabetic()) {
-                    return None; // Skip - invalid TLD
-                }
-            }
-
-            // The main domain part (before TLD) must contain at least one letter
-            // and be at least 2 characters long. Reject cases like "0.x" or "E.MM"
-            if let Some(dot_pos) = domain.find('.') {
-                let main_domain = &domain[..dot_pos];
-                if main_domain.len() < 2 {
-                    return None; // Skip - main domain too short (e.g., E.MM)
-                }
-                let main_has_letter = main_domain.chars().any(|c| c.is_ascii_alphabetic());
-                if !main_has_letter {
-                    return None; // Skip - main domain has no letters (e.g., 0.x)
-                }
-            }
-
-            // Valid email chars check
-            let valid_chars = s
-                .chars()
-                .filter(|c| c.is_alphanumeric() || matches!(c, '@' | '.' | '-' | '_' | '+'))
-                .count();
-            if valid_chars * 100 / len >= 85 {
-                return Some(StringKind::Email);
-            }
-        }
+    let (local, domain) = s.split_once('@')?;
+    // Local part: RFC 5321 atext we care about, starting alphanumeric. Slashes
+    // are refused: `pkg/sub@v1.0.0/file.go` is a Go module path.
+    if !local.starts_with(|c: char| c.is_ascii_alphanumeric())
+        || !local
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'+' | b'%'))
+    {
+        return None;
     }
-    None
+    // Domain: hostname characters only, so `logr@v1.4.1/logr.go` is refused.
+    if !domain
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+    {
+        return None;
+    }
+    let (first, _) = domain.split_once('.')?;
+    let (_, tld) = domain.rsplit_once('.')?;
+    // The first label has a letter and two characters ("0.x" and "E.MM" are
+    // not domains) and is not a Go module version such as "v1".
+    let version = first.len() >= 2
+        && first.starts_with('v')
+        && first[1..].bytes().all(|b| b.is_ascii_digit());
+    if first.len() < 2
+        || !first.bytes().any(|b| b.is_ascii_alphabetic())
+        || version
+        || tld.len() < 2
+        || !tld.bytes().all(|b| b.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    // `%` is legal in the local part but rare in a real address.
+    let percent = local.bytes().filter(|&b| b == b'%').count();
+    ((s.len() - percent) * 100 / s.len() >= 85).then_some(StringKind::Email)
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use stng::{
-    ExtractOptions, Ioc, IocKind, KeyAlgorithm, KeyMetadata, StringMethod, extract_iocs,
+    ExtractOptions, Ioc, IocKind, KeyAlgorithm, StringMethod, extract_iocs,
     extract_strings_with_options,
 };
 
@@ -72,11 +72,11 @@ fn assert_exact(label: &str, path: &str, options: &ExtractOptions, expected_iocs
             "{label}: {actual:#?}"
         );
 
-        let expected_key = expected.xor_key_bytes.map(|bytes| KeyMetadata {
-            algorithms: vec![KeyAlgorithm::Xor],
-            bytes,
-        });
-        assert_eq!(actual.key, expected_key, "{label}: {actual:#?}");
+        let key = actual.key.as_ref().map(|k| (k.algorithms.clone(), k.bytes));
+        let expected_key = expected
+            .xor_key_bytes
+            .map(|bytes| (vec![KeyAlgorithm::Xor], bytes));
+        assert_eq!(key, expected_key, "{label}: {actual:#?}");
 
         for occurrence in &actual.occurrences {
             assert!(
@@ -135,12 +135,6 @@ fn existing_testdata_ioc_manifest_is_exact() {
         &brew_options(),
         &brew,
     );
-    assert_exact(
-        "Brew XOR sample",
-        crate::common::path("testdata/xor/brew_agent_xor_sample"),
-        &brew_options(),
-        &brew,
-    );
 
     assert_exact(
         "DynamicHub ARM64 stack XOR",
@@ -152,20 +146,20 @@ fn existing_testdata_ioc_manifest_is_exact() {
                 32,
                 StringMethod::XorStackPair,
             ),
+            // The same pad, extended to a 48-byte string.
             xor_key(
-                "base64url:jRl2XZTjfm6F7E9bGjrVdw",
-                16,
+                "base64url:_xl2XZTjfm6F7E9bGjrVd3NNMmm4yKtJuedx_I52nuSX9U4SDNPrQH3qKZ_yuWmk",
+                48,
                 StringMethod::XorStackPair,
             ),
-            xor_key(
-                "base64url:lHAaMfWPEk7RiT02c1S0G3NNMmm4yKtJuedx_I52nuQ",
-                32,
-                StringMethod::XorStackPair,
-            ),
-            xor_key(
-                "base64url:t3nY0KxbAcWddGFykmTfqetnAjQQ80TzUZzbIObxRo8",
-                32,
-                StringMethod::XorStackPair,
+            // From `defaults -currentHost write ~/Library/Preference…`, cut
+            // where its 48-byte pad ends.
+            expected(
+                IocKind::Path,
+                "/Library/Preference",
+                &[],
+                1,
+                &[StringMethod::XorStackPair],
             ),
         ],
     );

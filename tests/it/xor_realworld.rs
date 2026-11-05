@@ -2,9 +2,9 @@
 use stng::{ExtractOptions, StringMethod};
 
 #[test]
-fn test_xor_brew_agent_malware() {
+fn decodes_brew_agent_indicators() {
     // Test against real DPRK malware sample
-    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     // Skip if sample doesn't exist
 
@@ -70,9 +70,9 @@ fn test_xor_brew_agent_malware() {
 }
 
 #[test]
-fn test_xor_display_multiline() {
+fn decodes_multiline_strings() {
     // Verify that multi-line XOR strings are properly decoded
-    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -105,9 +105,9 @@ fn test_xor_display_multiline() {
 }
 
 #[test]
-fn test_xor_url_extraction() {
+fn decodes_c2_ip_url() {
     // Test that we correctly extract URLs, specifically http://46.30.191.141
-    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -145,9 +145,9 @@ fn test_xor_url_extraction() {
 }
 
 #[test]
-fn test_xor_shell_commands() {
+fn decodes_whole_shell_commands() {
     // Test that we extract shell commands correctly with natural endpoints
-    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -204,9 +204,9 @@ fn test_xor_shell_commands() {
 }
 
 #[test]
-fn test_xor_application_paths() {
+fn decodes_app_and_wallet_paths() {
     // Test that we extract application and wallet paths correctly
-    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -252,9 +252,9 @@ fn test_xor_application_paths() {
 }
 
 #[test]
-fn test_xor_file_extensions() {
+fn decodes_paths_with_file_extensions() {
     // Test that we correctly extract strings ending with file extensions
-    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -282,9 +282,9 @@ fn test_xor_file_extensions() {
 }
 
 #[test]
-fn test_xor_crypto_wallets() {
+fn decodes_crypto_wallet_paths() {
     // Test that we extract cryptocurrency wallet paths
-    let sample_path = crate::common::path("testdata/xor/brew_agent_xor_sample");
+    let sample_path = crate::common::path("testdata/malware/brew_agent");
 
     let data = std::fs::read(sample_path).unwrap();
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf";
@@ -331,7 +331,7 @@ fn test_xor_crypto_wallets() {
 }
 
 #[test]
-fn test_xor_brew_agent_malware_full_sample() {
+fn finds_indicators_with_garbage_filter() {
     // Test against full brew_agent binary with explicit key
     // Validates comprehensive extraction of critical malware indicators
     let sample_path = crate::common::path("testdata/malware/brew_agent");
@@ -389,7 +389,7 @@ fn test_xor_brew_agent_malware_full_sample() {
 }
 
 #[test]
-fn test_xor_brew_agent_extraction_comparison() {
+fn garbage_filter_keeps_critical_indicators() {
     // Verify extraction quality with and without garbage filtering
     let sample_path = crate::common::path("testdata/malware/brew_agent");
 
@@ -456,7 +456,7 @@ fn test_xor_brew_agent_extraction_comparison() {
 }
 
 #[test]
-fn test_xor_brew_agent_auto_detection() {
+fn autodetects_brew_agent_key() {
     let data = crate::common::bytes("testdata/malware/brew_agent");
 
     // No key given: the extractor must find it among the binary's own strings.
@@ -484,7 +484,7 @@ fn test_xor_brew_agent_auto_detection() {
 }
 
 #[test]
-fn test_c2_url_extraction_from_brew_agent() {
+fn finds_c2_url_with_default_options() {
     let data = crate::common::bytes("testdata/malware/brew_agent");
     let key = b"fYztZORL5VNS7nCUH1ktn5UoJ8VSgaf".to_vec();
     let min_length = 10;

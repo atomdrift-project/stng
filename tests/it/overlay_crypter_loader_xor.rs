@@ -19,7 +19,7 @@ const ENCODED: &[(u64, &str)] = &[
 ];
 
 #[test]
-fn test_overlay_crypter_loader_xor_paths() {
+fn decodes_loader_paths_with_unhinted_key() {
     let data = std::fs::read(crate::common::path(
         "testdata/xor/overlay_crypter_loader_xor",
     ))

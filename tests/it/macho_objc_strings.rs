@@ -1,4 +1,4 @@
-//! Native (no-radare2) Mach-O string fidelity.
+//! Mach-O string fidelity.
 //!
 //! `wallet_report_objc` is an Objective-C wallet-stealer specimen whose
 //! `find … -iname "*wallet*"` command is split across separate C-string
@@ -8,18 +8,14 @@
 //! Objective-C selectors must SURVIVE with an accurate location so an analyst
 //! can correlate them by section + offset.
 //!
-//! Regression guard for two native-extractor bugs that previously dropped data
-//! whenever radare2 was unavailable:
-//!   1. the `__objc_methname` selector section was never scanned, and
-//!   2. section-relative offsets collided in the offset-only dedup, dropping
-//!      e.g. `find` (`__cstring:0`) against `__mh_execute_header` (`:0`).
+//! Guards two invariants:
+//!   1. the `__objc_methname` selector section is scanned, and
+//!   2. offsets are file offsets, so offset dedup cannot drop e.g. `find`
+//!      (`__cstring:0`) against `__mh_execute_header` (`:0`).
 
 use stng::{ExtractOptions, extract_strings_with_options};
 
-/// Extract with the same options a downstream pipeline client uses: a plain
-/// raw-byte scan with garbage filtering off and **no radare2** (default
-/// `ExtractOptions` leaves `use_r2 == false`), so the test is hermetic and
-/// exercises the native parser only.
+/// Extract with default options: garbage filtering off.
 fn fixture_bytes() -> Vec<u8> {
     std::fs::read(crate::common::path("testdata/macho/wallet_report_objc")).expect("read fixture")
 }
@@ -30,7 +26,7 @@ fn native_strings() -> Vec<stng::ExtractedString> {
 }
 
 #[test]
-fn obfuscation_fragments_survive_without_r2() {
+fn obfuscation_fragments_survive() {
     let strings = native_strings();
     let has = |needle: &str| strings.iter().any(|s| s.value == needle);
 
@@ -50,13 +46,12 @@ fn obfuscation_fragments_survive_without_r2() {
 }
 
 #[test]
-fn objc_selectors_survive_without_r2() {
+fn objc_selectors_survive() {
     let strings = native_strings();
     let has = |needle: &str| strings.iter().any(|s| s.value == needle);
 
     // __objc_methname selectors describe the runtime behaviour (build an
-    // NSURLRequest, set the HTTP body, POST it). The native parser used to skip
-    // the whole section, so these only appeared under radare2.
+    // NSURLRequest, set the HTTP body, POST it).
     for selector in [
         "URLWithString:",
         "requestWithURL:",
@@ -71,7 +66,7 @@ fn objc_selectors_survive_without_r2() {
 }
 
 #[test]
-fn symbol_table_entries_are_typed_without_r2() {
+fn symbol_table_entries_are_typed() {
     let strings = native_strings();
     let kind_of = |needle: &str| {
         strings
@@ -126,7 +121,7 @@ fn from_object_matches_full_parse() {
 
     let via_bytes = extract_strings_with_options(&data, &opts);
     let object = stng::goblin::Object::parse(&data).expect("parse object");
-    let via_object = stng::extract_strings_from_object(&object, &data, &opts);
+    let via_object = stng::extract_strings_from_parsed(&object, &[], &data, &opts);
 
     let set = |v: &[stng::ExtractedString]| {
         v.iter()

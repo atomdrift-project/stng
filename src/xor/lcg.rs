@@ -12,6 +12,12 @@
 use crate::{ExtractedString, StringMethod, classify_string};
 use goblin::Object;
 use goblin::mach::MachO;
+use std::collections::BTreeSet;
+
+/// Bits per byte below which a blob is not ciphertext.
+const MIN_ENTROPY: f64 = 6.5;
+/// Bytes decoded to judge a candidate before decoding it all.
+const PREVIEW_SIZE: usize = 96;
 
 /// A linear-congruential keystream, as native cipher loaders use it: each
 /// byte is XORed with the state's low byte and `mask`, then
@@ -43,19 +49,41 @@ impl Lcg {
     }
 }
 
-/// Decode the LCG-XOR bytes at `range` in `data` into a string, if they
-/// decode to readable text.
-#[must_use]
+/// Why [`decode_lcg_xor`] decoded nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LcgError {
+    /// The range is empty, or the multiplier or modulus is zero.
+    BadParameters,
+    /// The range runs past the end of the data.
+    OutOfBounds,
+    /// The bytes decode, but not to readable text.
+    NotReadable,
+}
+
+impl std::fmt::Display for LcgError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BadParameters => "empty range, or a zero multiplier or modulus",
+            Self::OutOfBounds => "range runs past the end of the input",
+            Self::NotReadable => "parameters do not decode the range to readable text",
+        })
+    }
+}
+
+impl std::error::Error for LcgError {}
+
+/// Decode the LCG-XOR bytes at `range` in `data` into a string.
 pub fn decode_lcg_xor(
     data: &[u8],
     range: std::ops::Range<usize>,
     lcg: &Lcg,
-) -> Option<ExtractedString> {
+) -> Result<ExtractedString, LcgError> {
     if range.is_empty() || lcg.modulus == 0 || lcg.multiplier == 0 {
-        return None;
+        return Err(LcgError::BadParameters);
     }
     let offset = range.start;
-    let decoded = lcg.apply(data.get(range)?);
+    let decoded = lcg.apply(data.get(range).ok_or(LcgError::OutOfBounds)?);
 
     // Explicit decoding is useful only when it yields readable material. A
     // lossy conversion keeps ASCII scripts with a trailing NUL intact while
@@ -63,22 +91,19 @@ pub fn decode_lcg_xor(
     let value = String::from_utf8_lossy(&decoded)
         .trim_end_matches('\0')
         .to_owned();
-    if value.is_empty() {
-        return None;
-    }
     let readable = value
         .chars()
         .filter(|&c| crate::text::is_readable(c))
         .count();
-    if readable * 5 < value.chars().count() * 4 {
-        return None;
+    if value.is_empty() || readable * 5 < value.chars().count() * 4 {
+        return Err(LcgError::NotReadable);
     }
 
-    Some(ExtractedString {
+    Ok(ExtractedString {
         kind: classify_string(&value),
         value,
         data_offset: offset as u64,
-        data_len: u32::try_from(decoded.len()).ok()?,
+        data_len: u32::try_from(decoded.len()).unwrap_or(u32::MAX),
         method: StringMethod::XorDecode,
         ..Default::default()
     })
@@ -100,85 +125,69 @@ pub fn extract_macho_lcg_xor(
     slice_base: u64,
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    if let Some(s) = clock_lcg_xor(macho, data, slice_base, min_length) {
-        return vec![s];
-    }
+    clock_lcg_xor(macho, data, slice_base, min_length)
+        .or_else(|| const_lcg_xor(macho, data, slice_base, min_length))
+        .into_iter()
+        .collect()
+}
+
+/// The x86-64 `__const` loader shape of [`extract_macho_lcg_xor`].
+fn const_lcg_xor(
+    macho: &MachO<'_>,
+    data: &[u8],
+    slice_base: u64,
+    min_length: usize,
+) -> Option<ExtractedString> {
+    const MAX_SECTION_SIZE: u64 = 8 * 1024 * 1024;
     if macho.header.cputype != goblin::mach::constants::cputype::CPU_TYPE_X86_64 {
-        return Vec::new();
+        return None;
     }
-    const MAX_SECTION_SIZE: usize = 8 * 1024 * 1024;
-    const MIN_ENTROPY: f64 = 6.5;
-    const PREVIEW_SIZE: usize = 96;
 
     // The last section of each name, which is what a name-keyed lookup
     // returned: `__DATA_CONST,__const` over `__TEXT,__const` when both exist.
     let sections = crate::binary::collect_macho_section_info(macho);
     let last = |name: &str| sections.iter().rev().find(|s| s.name == name);
-    let Some(constant) = last("__const") else {
-        return Vec::new();
-    };
-    let Some(text) = last("__text") else {
-        return Vec::new();
-    };
-    let Ok(constant_start) = usize::try_from(slice_base.saturating_add(constant.file_offset))
-    else {
-        return Vec::new();
-    };
-    let Ok(constant_size) = usize::try_from(constant.size) else {
-        return Vec::new();
-    };
-    let Ok(text_start) = usize::try_from(slice_base.saturating_add(text.file_offset)) else {
-        return Vec::new();
-    };
-    let Ok(text_size) = usize::try_from(text.size) else {
-        return Vec::new();
-    };
-    if constant_size <= 4 || constant_size > MAX_SECTION_SIZE {
-        return Vec::new();
+    let constant = last("__const")?;
+    let text = last("__text")?;
+    if constant.size <= 4 || constant.size > MAX_SECTION_SIZE {
+        return None;
     }
-    let Some(constant_end) = constant_start.checked_add(constant_size) else {
-        return Vec::new();
-    };
-    let Some(text_end) = text_start.checked_add(text_size) else {
-        return Vec::new();
-    };
-    let Some(constant_bytes) = data.get(constant_start..constant_end) else {
-        return Vec::new();
-    };
-    let Some(code_bytes) = data.get(text_start..text_end) else {
-        return Vec::new();
-    };
+    let constant_start = slice_base.saturating_add(constant.file_offset);
+    let constant_bytes = crate::binary::file_range(data, constant_start, constant.size)?;
+    let code_bytes =
+        crate::binary::file_range(data, slice_base.saturating_add(text.file_offset), text.size)?;
 
-    let seed_word = u32::from_le_bytes(constant_bytes[..4].try_into().unwrap_or([0; 4]));
+    let seed_word = crate::bytes::u32_le(constant_bytes, 0)?;
     if !(0x1000..=0xffff).contains(&seed_word) || !code_contains_u32(code_bytes, seed_word) {
-        return Vec::new();
+        return None;
     }
     let encoded = &constant_bytes[4..];
     if crate::bytes::entropy(encoded) < MIN_ENTROPY {
-        return Vec::new();
+        return None;
     }
 
     // The recurrence constants are immediates in the decoder's code. Scanning
     // overlapping little-endian words is intentionally bounded to `__text`.
-    let mut multipliers = Vec::new();
-    let mut moduli = Vec::new();
-    for word in code_bytes.windows(4) {
-        let value = u32::from_le_bytes(word.try_into().unwrap_or([0; 4]));
+    // More than `MAX_CANDIDATES` distinct values of either kind is not a
+    // compact decoder, so the scan gives up as soon as one set overflows.
+    const MAX_CANDIDATES: usize = 64;
+    let mut multipliers = BTreeSet::new();
+    let mut moduli = BTreeSet::new();
+    for &word in code_bytes.array_windows::<4>() {
+        let value = u32::from_le_bytes(word);
         if value & 1 == 0 {
             continue;
         }
-        if (0x1_0000..=0x10_0000).contains(&value) {
-            multipliers.push(u64::from(value));
+        let set = if (0x1_0000..=0x10_0000).contains(&value) {
+            &mut multipliers
         } else if (0x1000..0x1_0000).contains(&value) {
-            moduli.push(u64::from(value));
+            &mut moduli
+        } else {
+            continue;
+        };
+        if set.insert(u64::from(value)) && set.len() > MAX_CANDIDATES {
+            return None;
         }
-    }
-    multipliers.sort_unstable();
-    multipliers.dedup();
-    moduli.sort_unstable();
-    moduli.dedup();
-    if multipliers.is_empty() || moduli.is_empty() || multipliers.len() > 64 || moduli.len() > 64 {
-        return Vec::new();
     }
 
     let preview_len = encoded.len().min(PREVIEW_SIZE);
@@ -204,24 +213,15 @@ pub fn extract_macho_lcg_xor(
                 if !looks_like_script_or_command(preview) {
                     continue;
                 }
-                let Some(offset) = slice_base
-                    .checked_add(constant.file_offset)
-                    .and_then(|offset| offset.checked_add(4))
-                    .and_then(|offset| usize::try_from(offset).ok())
-                else {
-                    return Vec::new();
-                };
-                let Some(end) = offset.checked_add(encoded.len()) else {
-                    return Vec::new();
-                };
+                let offset = usize::try_from(constant_start.checked_add(4)?).ok()?;
+                let end = offset.checked_add(encoded.len())?;
                 return decode_lcg_xor(data, offset..end, &Lcg { mask, ..lcg })
-                    .filter(|s| s.value.len() >= min_length)
-                    .into_iter()
-                    .collect();
+                    .ok()
+                    .filter(|s| s.value.len() >= min_length);
             }
         }
     }
-    Vec::new()
+    None
 }
 
 /// Recover the small native-loader variant that derives its LCG modulus from
@@ -270,16 +270,14 @@ fn clock_lcg_xor(
     {
         return None;
     }
-    let section = |offset: u64, size: u64| -> Option<&[u8]> {
-        let start = usize::try_from(slice_base.checked_add(offset)?).ok()?;
-        let end = start.checked_add(usize::try_from(size).ok()?)?;
-        data.get(start..end)
+    let section = |offset: u64, size: u64| {
+        crate::binary::file_range(data, slice_base.checked_add(offset)?, size)
     };
     let code = section(text_offset, text_size)?;
     let constant = section(const_offset, const_size)?;
     let cstrings = section(str_offset, str_size)?;
 
-    let seed = u32::from_le_bytes(constant[..4].try_into().unwrap_or([0; 4]));
+    let seed = crate::bytes::u32_le(constant, 0)?;
     if !(0x1_0000..=0x1_ffff).contains(&seed) {
         return None;
     }
@@ -295,8 +293,8 @@ fn clock_lcg_xor(
         return None;
     }
     let payload_len = if x86 {
-        code.windows(4).find_map(|word| {
-            let length = u32::from_le_bytes(word.try_into().unwrap_or([0; 4])) as usize;
+        code.array_windows::<4>().find_map(|&word| {
+            let length = u32::from_le_bytes(word) as usize;
             (min_bound..=max_len).contains(&length).then_some(length)
         })
     } else {
@@ -310,7 +308,7 @@ fn clock_lcg_xor(
         })
     }?;
     let encoded = constant.get(4..4 + payload_len)?;
-    if encoded.len() < min_length || crate::bytes::entropy(encoded) < 6.5 {
+    if encoded.len() < min_length || crate::bytes::entropy(encoded) < MIN_ENTROPY {
         return None;
     }
     let lcg = Lcg {
@@ -319,12 +317,13 @@ fn clock_lcg_xor(
         modulus,
         mask: 0,
     };
-    let preview = lcg.apply(&encoded[..encoded.len().min(96)]);
+    let preview = lcg.apply(&encoded[..encoded.len().min(PREVIEW_SIZE)]);
     if !looks_like_script_or_command(&preview) {
         return None;
     }
     let offset = usize::try_from(slice_base.checked_add(const_offset)?.checked_add(4)?).ok()?;
     decode_lcg_xor(data, offset..offset.checked_add(encoded.len())?, &lcg)
+        .ok()
         .filter(|s| s.value.len() >= min_length)
 }
 
@@ -506,18 +505,17 @@ pub fn decode_xor_fat_macho(encoded: &[u8], key: u8) -> Option<Vec<u8>> {
 }
 
 fn decode_fat_length(encoded: &[u8], key: u8) -> Option<usize> {
-    let mut header: [u8; 8] = encoded.get(..8)?.try_into().ok()?;
-    header.iter_mut().for_each(|b| *b ^= key);
-    let magic = u32::from_be_bytes(header[..4].try_into().ok()?);
+    let header = crate::bytes::array::<8>(encoded, 0)?.map(|b| b ^ key);
+    let magic = crate::bytes::u32_be(&header, 0)?;
     if !matches!(magic, 0xcafebabe | 0xbebafeca | 0xcafebabf | 0xbfbafeca) {
         return None;
     }
     let swapped = matches!(magic, 0xbebafeca | 0xbfbafeca);
     let is_64 = matches!(magic, 0xcafebabf | 0xbfbafeca);
     let arch_count = if swapped {
-        u32::from_le_bytes(header[4..8].try_into().ok()?)
+        crate::bytes::u32_le(&header, 4)?
     } else {
-        u32::from_be_bytes(header[4..8].try_into().ok()?)
+        crate::bytes::u32_be(&header, 4)?
     };
     if !(1..=32).contains(&arch_count) {
         return None;
@@ -533,16 +531,16 @@ fn decode_fat_length(encoded: &[u8], key: u8) -> Option<usize> {
     for index in 0..usize::try_from(arch_count).ok()? {
         let entry = 8 + index * entry_size;
         let (offset, size) = if is_64 {
-            let off = u64::from_be_bytes(decoded_table[entry + 8..entry + 16].try_into().ok()?);
-            let len = u64::from_be_bytes(decoded_table[entry + 16..entry + 24].try_into().ok()?);
+            let off = crate::bytes::u64_be(&decoded_table, entry + 8)?;
+            let len = crate::bytes::u64_be(&decoded_table, entry + 16)?;
             if swapped {
                 (off.swap_bytes(), len.swap_bytes())
             } else {
                 (off, len)
             }
         } else {
-            let off = u32::from_be_bytes(decoded_table[entry + 8..entry + 12].try_into().ok()?);
-            let len = u32::from_be_bytes(decoded_table[entry + 12..entry + 16].try_into().ok()?);
+            let off = crate::bytes::u32_be(&decoded_table, entry + 8)?;
+            let len = crate::bytes::u32_be(&decoded_table, entry + 12)?;
             if swapped {
                 (u64::from(off.swap_bytes()), u64::from(len.swap_bytes()))
             } else {
@@ -555,8 +553,7 @@ fn decode_fat_length(encoded: &[u8], key: u8) -> Option<usize> {
         // Every slice must be Mach-O, so check its magic here, before a
         // caller decodes the whole claimed extent to find out.
         let slice = usize::try_from(offset).ok()?;
-        let magic: [u8; 4] = encoded.get(slice..slice.checked_add(4)?)?.try_into().ok()?;
-        let magic = u32::from_le_bytes(magic.map(|b| b ^ key));
+        let magic = u32::from_le_bytes(crate::bytes::array::<4>(encoded, slice)?.map(|b| b ^ key));
         if !matches!(magic, 0xfeedface | 0xfeedfacf | 0xcefaedfe | 0xcffaedfe) {
             return None;
         }

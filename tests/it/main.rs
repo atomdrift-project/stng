@@ -8,14 +8,9 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-/// The `stng` command, with `HOME` and `XDG_CACHE_HOME` pointing into the
-/// target directory so a test run never touches the user's files.
+/// The `stng` command under test.
 fn stng() -> std::process::Command {
-    let home = common::scratch_dir().join("home");
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_stng"));
-    cmd.env("HOME", &home)
-        .env("XDG_CACHE_HOME", home.join(".cache"));
-    cmd
+    std::process::Command::new(env!("CARGO_BIN_EXE_stng"))
 }
 
 mod base64_zlib;

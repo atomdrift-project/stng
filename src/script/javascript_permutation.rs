@@ -2,7 +2,7 @@
 //! Only recognized pure codec bodies are evaluated, never JavaScript. Names,
 //! arithmetic seeds and permutation constants are recovered from source.
 use super::DeobfuscationResult;
-use super::decode_chain::{MAX_DECODED_SIZE, spend_expansion};
+use super::decode_chain::{MAX_DECODED_SIZE, expansion_spent, spend_expansion};
 use crate::script::detect::ScriptLanguage;
 use regex::Regex;
 use std::{cell::LazyCell, collections::HashMap, sync::LazyLock};
@@ -10,37 +10,32 @@ use std::{cell::LazyCell, collections::HashMap, sync::LazyLock};
 const SHUFFLE: &str = "b var t=2319581;var l=b.length;var d=[];for(var k=0;k<l;k++){d[k]=b.charAt(k)};for(var k=0;k<l;k++){var g=t*(k+143)+(t%34562);var j=t*(k+599)+(t%19024);var o=g%l;var h=j%l;var q=d[o];d[o]=d[h];d[h]=q;t=(g+j)%3591111;};return d.join('')";
 const TABLE: &str = "h,x var k=h.length;var c=[];for(var u=0;u<k;u++){c[u]=h.charAt(u)};for(var u=0;u<k;u++){var f=x*(u+106)+(x%49301);var n=x*(u+87)+(x%15685);var m=f%k;var a=n%k;var y=c[m];c[m]=c[a];c[a]=y;x=(f+n)%5618418};var d=String.fromCharCode(127);var s='';var v='%';var g='#1';var o='%';var q='#0';var j='#';return c.join(s).split(v).join(d).split(g).join(o).split(q).join(j).split(d)";
 const DICT: &str = r#"var h=18,w=30,l=11;var e="abcdefghijklmnopqrstuvwxyz";var j=[70,87,76,71,75,60,81,80,94,88,74,72,66,89,82,90,86,79,65,85];var n=[];for(var p=0;p<j.length;p++)n[j[p]]=p+1;var b=[];h+=15;w+=63;l+=85;for(var q=0;q<arguments.length;q++){var c=arguments[q].split(" ");for(var i=c.length-1;i>=0;i--){var s=null;var d=c[i];var r=null;var m=0;var x=d.length;var y;for(var f=0;f<x;f++){var z=d.charCodeAt(f);var o=n[z];if(o){s=(o-1)*w+d.charCodeAt(f+1)-h;y=f;f++;}else if(z==l){s=w*(j.length-h+d.charCodeAt(f+1))+d.charCodeAt(f+2)-h;y=f;f+=2;}else{continue;}if(r==null)r=[];if(y>m)r.push(d.substring(m,y));r.push(c[s+1]);m=f+1;}if(r!=null){if(m<x)r.push(d.substring(m));c[i]=r.join("");}}b.push(c[0]);}var k=b.join("");var u=[42,96,92,10,39,32].concat(j);var v=String.fromCharCode(46);for(var p=0;p<u.length;p++)k=k.split(v+e.charAt(p)).join(String.fromCharCode(u[p]));return k.split(v+"!").join(v);"#;
-#[allow(clippy::expect_used)]
 static TOKENS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"[A-Za-z_$][\w$]*|\d+|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s]"#)
-        .expect("codec tokens")
+        .unwrap_or_else(crate::invalid_pattern)
 });
-#[allow(clippy::expect_used)]
 static FUNCTIONS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"function\s*([A-Za-z_$][\w$]*)?\s*\(([^()]{0,100})\)\s*\{")
-        .expect("codec functions")
+        .unwrap_or_else(crate::invalid_pattern)
 });
-#[allow(clippy::expect_used)]
-static STRINGS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#""(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"#).expect("js strings"));
+static STRINGS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#""(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"#).unwrap_or_else(crate::invalid_pattern)
+});
 /// `name(arg)` where the argument is one string literal or identifier.
-#[allow(clippy::expect_used)]
 static CALLS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"([A-Za-z_$][\w$]*)\s*\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[A-Za-z_$][\w$]*)\s*\)"#,
     )
-    .expect("codec calls")
+    .unwrap_or_else(crate::invalid_pattern)
 });
 /// `name = "literal"`.
-#[allow(clippy::expect_used)]
 static ASSIGNMENTS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\b([A-Za-z_$][\w$]*)\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')"#)
-        .expect("string assignments")
+        .unwrap_or_else(crate::invalid_pattern)
 });
 /// The `, seed);` that closes a string-table codec call.
-#[allow(clippy::expect_used)]
 static TABLE_CALL_END: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*,\s*\d+\s*\)\s*;?").expect("table call end"));
+    LazyLock::new(|| Regex::new(r"^\s*,\s*\d+\s*\)\s*;?").unwrap_or_else(crate::invalid_pattern));
 static SHUFFLE_FINGERPRINT: LazyLock<Option<(String, Vec<u64>)>> =
     LazyLock::new(|| fingerprint(SHUFFLE));
 static TABLE_FINGERPRINT: LazyLock<Option<(String, Vec<u64>)>> =
@@ -415,6 +410,11 @@ pub(super) fn extract(source: &str) -> Vec<DeobfuscationResult> {
                 continue;
             }
             for blob in &decoded {
+                // Each pair costs a dictionary pass; stop paying once nothing
+                // it produces could be kept.
+                if expansion_spent() {
+                    return out;
+                }
                 let Some(payload) = dictionary(codec, blob) else {
                     continue;
                 };
@@ -503,7 +503,10 @@ mod tests {
     }
     #[test]
     fn identity_dictionary_preserves_permutation_recovered_constant_function() {
-        let source = include_str!("../../testdata/script/jso-inert-permutation.js");
+        let source = std::str::from_utf8(crate::test_fixture(
+            "testdata/script/jso-inert-permutation.js",
+        ))
+        .unwrap();
         let results = extract(source);
         assert_eq!(results.len(), 1);
         let recovered = &results[0];

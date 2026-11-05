@@ -91,12 +91,8 @@ jobs:
 
       # A tag can be pushed without ever passing through PR CI, so the release
       # path repeats the guard rather than trusting that someone ran it.
-      - name: Reject local path overrides
-        run: |
-          if grep -nE '^[[:space:]]*[^#].*path[[:space:]]*=[[:space:]]*"\.\.' Cargo.toml; then
-            echo "::error file=Cargo.toml::local path override committed - refusing to release"
-            exit 1
-          fi
+      - name: Reject local path overrides and unpinned git sources
+        run: scripts/check-overrides
 
       # A tag push always publishes; a dispatch only does so when asked. On a
       # tag push the `inputs` context is empty, so the first operand carries it.

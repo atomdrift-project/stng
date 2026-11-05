@@ -1,125 +1,124 @@
-symbols_provided	testdata/elf/hello_linux_amd64	7611	2756d9b214a0c7a2	Base64Decode=1 InstructionPattern=917 PclntabSymbol=2977 RawScan=3066 Structure=650
-symbols_provided	testdata/garble/garble_fresh_linux_amd64	10343	702862f6b97af89f	Base64Decode=3 InstructionPattern=968 PclntabSymbol=8728 RawScan=182 Structure=460 XorStackPair=2
-symbols_provided	testdata/garble/garble_fresh_split1	11274	393fc273794819eb	Base64Decode=3 InstructionPattern=902 PclntabSymbol=9461 RawScan=489 Structure=419
-symbols_provided	testdata/garble/garble_linux_amd64_1	10238	d6de80640ef3365e	Base64Decode=2 InstructionPattern=968 PclntabSymbol=8641 RawScan=163 Structure=464
-symbols_provided	testdata/garble/garble_linux_amd64_10	10448	a9a7f7504273245b	Base64Decode=3 InstructionPattern=970 PclntabSymbol=8783 RawScan=165 Structure=526 XorStackPair=1
-symbols_provided	testdata/garble/garble_linux_amd64_11	10313	f0ab7da379f85f31	Base64Decode=5 InstructionPattern=971 PclntabSymbol=8704 RawScan=179 Structure=453 XorStackPair=1
-symbols_provided	testdata/garble/garble_linux_amd64_12	10450	c3cbadba67746171	Base64Decode=6 InstructionPattern=967 PclntabSymbol=8773 RawScan=173 Structure=530 XorStackPair=1
-symbols_provided	testdata/garble/garble_linux_amd64_13	10456	7180a1f291965ab6	Base64Decode=7 InstructionPattern=966 PclntabSymbol=8770 RawScan=188 Structure=523 XorStackPair=2
+symbols_provided	testdata/elf/hello_linux_amd64	7611	04c1f98619030cb8	Base64Decode=1 InstructionPattern=917 PclntabSymbol=2977 RawScan=3066 Structure=650
+symbols_provided	testdata/garble/garble_fresh_linux_amd64	10343	5f2cd196b1ba9ab4	Base64Decode=1 InstructionPattern=968 PclntabSymbol=8730 RawScan=182 Structure=460 XorStackPair=2
+symbols_provided	testdata/garble/garble_fresh_split1	11275	a327c2fabeadd0e3	Base64Decode=2 InstructionPattern=902 PclntabSymbol=9463 RawScan=489 Structure=419
+symbols_provided	testdata/garble/garble_linux_amd64_1	10239	1eb52f1746f43690	Base64Decode=2 InstructionPattern=968 PclntabSymbol=8642 RawScan=163 Structure=464
+symbols_provided	testdata/garble/garble_linux_amd64_10	10448	04d57d438cffd5bc	Base64Decode=1 InstructionPattern=970 PclntabSymbol=8785 RawScan=165 Structure=526 XorStackPair=1
+symbols_provided	testdata/garble/garble_linux_amd64_11	10312	31618c3f5439f1dd	Base64Decode=1 InstructionPattern=971 PclntabSymbol=8707 RawScan=179 Structure=453 XorStackPair=1
+symbols_provided	testdata/garble/garble_linux_amd64_12	10450	49769edbe6285efe	Base64Decode=1 InstructionPattern=967 PclntabSymbol=8778 RawScan=173 Structure=530 XorStackPair=1
+symbols_provided	testdata/garble/garble_linux_amd64_13	10454	a1d2c1ac424b5b04	Base64Decode=1 InstructionPattern=966 PclntabSymbol=8774 RawScan=188 Structure=523 XorStackPair=2
 symbols_provided	testdata/garble/garble_linux_amd64_14	10407	82a52616fb7e8df5	Base64Decode=1 InstructionPattern=969 PclntabSymbol=8806 RawScan=176 Structure=454 XorStackPair=1
-symbols_provided	testdata/garble/garble_linux_amd64_15	10353	a8b8bb00c0f7265b	Base64Decode=4 InstructionPattern=968 PclntabSymbol=8683 RawScan=187 Structure=507 XorStackPair=4
-symbols_provided	testdata/garble/garble_linux_amd64_16	10268	3b9027bd79f9bc55	Base64Decode=7 InstructionPattern=966 PclntabSymbol=8631 RawScan=201 Structure=461 XorStackPair=2
-symbols_provided	testdata/garble/garble_linux_amd64_17	10281	9b4a306c40c5c218	Base64Decode=3 InstructionPattern=972 PclntabSymbol=8623 RawScan=184 Structure=498 XorStackPair=1
-symbols_provided	testdata/garble/garble_linux_amd64_18	10335	a7329d8f13da1b25	Base64Decode=4 InstructionPattern=973 PclntabSymbol=8712 RawScan=186 Structure=458 XorStackPair=2
-symbols_provided	testdata/garble/garble_linux_amd64_19	10428	0569ec89011a1e60	Base64Decode=4 InstructionPattern=970 PclntabSymbol=8759 RawScan=179 Structure=515 XorStackPair=1
-symbols_provided	testdata/garble/garble_linux_amd64_2	10339	4c3e738f69b1bc8d	Base64Decode=4 InstructionPattern=969 PclntabSymbol=8675 RawScan=169 Structure=522
-symbols_provided	testdata/garble/garble_linux_amd64_20	10320	3a7743d5c62b1cb0	Base64Decode=23 InstructionPattern=969 PclntabSymbol=8696 RawScan=171 Structure=460 XorStackPair=1
-symbols_provided	testdata/garble/garble_linux_amd64_3	10411	17e9b7ccb69163c8	Base64Decode=3 InstructionPattern=970 PclntabSymbol=8790 RawScan=179 Structure=467 XorStackPair=2
-symbols_provided	testdata/garble/garble_linux_amd64_4	10364	28e249446b306869	Base64Decode=4 InstructionPattern=973 PclntabSymbol=8687 RawScan=177 Structure=518 XorStackPair=5
-symbols_provided	testdata/garble/garble_linux_amd64_5	10440	5eb2a30166796e4c	Base64Decode=3 InstructionPattern=972 PclntabSymbol=8826 RawScan=184 Structure=453 XorStackPair=2
-symbols_provided	testdata/garble/garble_linux_amd64_6	10479	d2f7089135bc8ec0	Base64Decode=4 InstructionPattern=969 PclntabSymbol=8803 RawScan=179 Structure=519 XorStackPair=5
-symbols_provided	testdata/garble/garble_linux_amd64_7	10427	11efd8dbac5960ce	Base64Decode=2 InstructionPattern=972 PclntabSymbol=8753 RawScan=171 Structure=527 XorStackPair=2
-symbols_provided	testdata/garble/garble_linux_amd64_8	10390	d888139b0b9d78db	Base64Decode=2 InstructionPattern=969 PclntabSymbol=8787 RawScan=176 Structure=453 XorStackPair=3
-symbols_provided	testdata/garble/garble_linux_amd64_9	10463	813fcde6a2a4b080	Base64Decode=5 InstructionPattern=967 PclntabSymbol=8856 RawScan=177 Structure=455 XorStackPair=3
-symbols_provided	testdata/garble/garble_seed_1	11330	f0cd49a3023a3cbb	Base64Decode=4 InstructionPattern=902 PclntabSymbol=9434 RawScan=571 Structure=419
-symbols_provided	testdata/garble/garble_seed_10	11418	23f263649a2ed965	Base64Decode=2 InstructionPattern=902 PclntabSymbol=9542 RawScan=553 Structure=419
-symbols_provided	testdata/garble/garble_seed_2	11352	4d6ea86944fb7ec8	Base64Decode=649 InstructionPattern=902 PclntabSymbol=8808 RawScan=574 Structure=419
-symbols_provided	testdata/garble/garble_seed_3	11354	4815ad0ffd9b5acb	Base64Decode=7 InstructionPattern=902 PclntabSymbol=9486 RawScan=540 Structure=419
-symbols_provided	testdata/garble/garble_seed_4	11378	d0dac6830ea4c0ee	Base64Decode=7 InstructionPattern=902 PclntabSymbol=9488 RawScan=562 Structure=419
-symbols_provided	testdata/garble/garble_seed_5	11400	d962f1ee42ef833d	Base64Decode=4 InstructionPattern=902 PclntabSymbol=9518 RawScan=557 Structure=419
-symbols_provided	testdata/garble/garble_seed_6	11349	21b7abd675f4680c	Base64Decode=4 InstructionPattern=902 PclntabSymbol=9474 RawScan=550 Structure=419
-symbols_provided	testdata/garble/garble_seed_7	11487	1cf7f6777ecc8890	Base64Decode=3 InstructionPattern=902 PclntabSymbol=9579 RawScan=584 Structure=419
-symbols_provided	testdata/garble/garble_seed_8	11417	bad2bee21cce7b12	Base64Decode=6 InstructionPattern=902 PclntabSymbol=9545 RawScan=545 Structure=419
-symbols_provided	testdata/garble/garble_seed_9	11273	1acc07762350ff33	Base64Decode=3 InstructionPattern=902 PclntabSymbol=9388 RawScan=561 Structure=419
-symbols_provided	testdata/garble/garble_simple_only	10252	817b2eb84de2d8f7	Base64Decode=3 InstructionPattern=970 PclntabSymbol=8594 RawScan=174 Structure=509 XorStackPair=2
-symbols_provided	testdata/garble/garble_simple_test	11397	42e74b197b54f5da	Base64Decode=4 InstructionPattern=902 PclntabSymbol=9486 RawScan=586 Structure=419
+symbols_provided	testdata/garble/garble_linux_amd64_15	10354	961f791764c1eed1	Base64Decode=2 InstructionPattern=968 PclntabSymbol=8686 RawScan=187 Structure=507 XorStackPair=4
+symbols_provided	testdata/garble/garble_linux_amd64_16	10267	821f30b44bc73331	Base64Decode=1 InstructionPattern=966 PclntabSymbol=8636 RawScan=201 Structure=461 XorStackPair=2
+symbols_provided	testdata/garble/garble_linux_amd64_17	10281	bbcbd939c6841e82	Base64Decode=2 InstructionPattern=972 PclntabSymbol=8624 RawScan=184 Structure=498 XorStackPair=1
+symbols_provided	testdata/garble/garble_linux_amd64_18	10334	d830617c257dab7e	Base64Decode=1 InstructionPattern=973 PclntabSymbol=8714 RawScan=186 Structure=458 XorStackPair=2
+symbols_provided	testdata/garble/garble_linux_amd64_19	10428	993fc4cbad409b45	Base64Decode=1 InstructionPattern=970 PclntabSymbol=8762 RawScan=179 Structure=515 XorStackPair=1
+symbols_provided	testdata/garble/garble_linux_amd64_2	10339	ba1f1452102f9e71	Base64Decode=1 InstructionPattern=969 PclntabSymbol=8678 RawScan=169 Structure=522
+symbols_provided	testdata/garble/garble_linux_amd64_20	10300	bc49cd75e1e811b4	Base64Decode=1 InstructionPattern=969 PclntabSymbol=8698 RawScan=171 Structure=460 XorStackPair=1
+symbols_provided	testdata/garble/garble_linux_amd64_3	10411	6baf140fdccdd5e9	Base64Decode=1 InstructionPattern=970 PclntabSymbol=8792 RawScan=179 Structure=467 XorStackPair=2
+symbols_provided	testdata/garble/garble_linux_amd64_4	10364	43b57cb87c50ce7b	Base64Decode=1 InstructionPattern=973 PclntabSymbol=8690 RawScan=177 Structure=518 XorStackPair=5
+symbols_provided	testdata/garble/garble_linux_amd64_5	10440	ab68be981465b10d	Base64Decode=1 InstructionPattern=972 PclntabSymbol=8828 RawScan=184 Structure=453 XorStackPair=2
+symbols_provided	testdata/garble/garble_linux_amd64_6	10479	d9a10a879edfa96a	Base64Decode=1 InstructionPattern=969 PclntabSymbol=8806 RawScan=179 Structure=519 XorStackPair=5
+symbols_provided	testdata/garble/garble_linux_amd64_7	10427	3490bfa15bdbe54b	Base64Decode=1 InstructionPattern=972 PclntabSymbol=8754 RawScan=171 Structure=527 XorStackPair=2
+symbols_provided	testdata/garble/garble_linux_amd64_8	10391	c419c3b0c0bf40dd	Base64Decode=2 InstructionPattern=969 PclntabSymbol=8788 RawScan=176 Structure=453 XorStackPair=3
+symbols_provided	testdata/garble/garble_linux_amd64_9	10463	38512f105506b6e1	Base64Decode=1 InstructionPattern=967 PclntabSymbol=8860 RawScan=177 Structure=455 XorStackPair=3
+symbols_provided	testdata/garble/garble_seed_1	11330	406995746c3af841	Base64Decode=1 InstructionPattern=902 PclntabSymbol=9437 RawScan=571 Structure=419
+symbols_provided	testdata/garble/garble_seed_10	11418	eb7658ca0b31867d	Base64Decode=1 InstructionPattern=902 PclntabSymbol=9543 RawScan=553 Structure=419
+symbols_provided	testdata/garble/garble_seed_2	11352	3441efd713ccbd76	Base64Decode=1 InstructionPattern=902 PclntabSymbol=9456 RawScan=574 Structure=419
+symbols_provided	testdata/garble/garble_seed_3	11355	920777da00580f0d	Base64Decode=3 InstructionPattern=902 PclntabSymbol=9491 RawScan=540 Structure=419
+symbols_provided	testdata/garble/garble_seed_4	11378	4f1dc6f05f6d4dde	Base64Decode=2 InstructionPattern=902 PclntabSymbol=9493 RawScan=562 Structure=419
+symbols_provided	testdata/garble/garble_seed_5	11399	f3f236419fd57ca7	Base64Decode=1 InstructionPattern=902 PclntabSymbol=9520 RawScan=557 Structure=419
+symbols_provided	testdata/garble/garble_seed_6	11349	2ce1d9fb50155ab6	Base64Decode=1 InstructionPattern=902 PclntabSymbol=9477 RawScan=550 Structure=419
+symbols_provided	testdata/garble/garble_seed_7	11487	6d2d41c31afd4782	Base64Decode=1 InstructionPattern=902 PclntabSymbol=9581 RawScan=584 Structure=419
+symbols_provided	testdata/garble/garble_seed_8	11417	62cc13af4f3cbeb9	Base64Decode=1 InstructionPattern=902 PclntabSymbol=9550 RawScan=545 Structure=419
+symbols_provided	testdata/garble/garble_seed_9	11272	4bef2f47c7318b38	Base64Decode=1 InstructionPattern=902 PclntabSymbol=9389 RawScan=561 Structure=419
+symbols_provided	testdata/garble/garble_simple_only	10253	f38d008c6fe8ea95	Base64Decode=2 InstructionPattern=970 PclntabSymbol=8596 RawScan=174 Structure=509 XorStackPair=2
+symbols_provided	testdata/garble/garble_simple_test	11398	09d040d234fead33	Base64Decode=2 InstructionPattern=902 PclntabSymbol=9489 RawScan=586 Structure=419
 symbols_provided	testdata/go_pclntab/darwin_amd64	6421	166abdf48feb47ed	Heuristic=1 InstructionPattern=885 PclntabSymbol=3191 RawScan=1790 Structure=554
 symbols_provided	testdata/go_pclntab/darwin_arm64	6297	4ffa03f7dec25f15	Heuristic=1 InstructionPattern=823 PclntabSymbol=3163 RawScan=1745 Structure=565
 symbols_provided	testdata/go_pclntab/linux_amd64	6101	57012edd9115e86e	InstructionPattern=888 PclntabSymbol=3018 RawScan=1597 Structure=598
 symbols_provided	testdata/go_pclntab/linux_arm64	5981	fbb5bf8a8addfe99	InstructionPattern=833 PclntabSymbol=2986 RawScan=1554 Structure=608
-symbols_provided	testdata/go_pclntab/windows_amd64	6315	5e2e86d53fc2c0ad	Base64Decode=1 Heuristic=1 InstructionPattern=963 PclntabSymbol=4416 RawScan=74 StackString=17 Structure=839 WideString=4
-symbols_provided	testdata/go_pclntab/windows_arm64	6243	809c371a514198b2	Base64Decode=1 Heuristic=1 InstructionPattern=897 PclntabSymbol=4366 RawScan=74 Structure=900 WideString=4
+symbols_provided	testdata/go_pclntab/windows_amd64	6316	c912857d6fbb0b2f	Base64Decode=1 Heuristic=1 InstructionPattern=963 PclntabSymbol=4417 RawScan=74 StackString=17 Structure=839 WideString=4
+symbols_provided	testdata/go_pclntab/windows_arm64	6244	125885823ef00d39	Base64Decode=1 Heuristic=1 InstructionPattern=897 PclntabSymbol=4367 RawScan=74 Structure=900 WideString=4
 symbols_provided	testdata/kworker_samples/kworker_obfuscated_1	76	d79dd737cf88ae98	RawScan=69 StackString=6 WideString=1
-symbols_provided	testdata/macho/arm64_lcg_xor_universal.macho	88	6f41d054b5bc815d	RawScan=87 XorDecode=1
-symbols_provided	testdata/macho/charge0x_installer_universal.macho	87	be782abea0fd96f7	RawScan=85 XorDecode=2
+symbols_provided	testdata/macho/arm64_lcg_xor_universal.macho	88	ef229b0c90d4801a	RawScan=87 XorDecode=1
+symbols_provided	testdata/macho/charge0x_installer_universal.macho	87	02a45b52b013e382	RawScan=85 XorDecode=2
 symbols_provided	testdata/macho/fmix_xor_stealer_universal.macho	2782	e86110aa01548c4d	RawScan=1996 Structure=3 XorDecode=783
-symbols_provided	testdata/macho/go_reflection_tags_minirat.macho	13776	7ca7cb4e78c2da32	Base64Decode=7 Heuristic=3 InstructionPattern=2167 PclntabSymbol=9584 RawScan=744 SpacedAscii=1 Structure=1270
-symbols_provided	testdata/macho/go_reflection_tags_minirat_arm64.macho	13194	f1e19f6243298e64	Base64Decode=7 Heuristic=4 InstructionPattern=1861 PclntabSymbol=9557 RawScan=535 SpacedAscii=1 Structure=1229
+symbols_provided	testdata/macho/go_reflection_tags_minirat.macho	13774	5ec795120708e4d1	Base64Decode=5 Heuristic=3 InstructionPattern=2167 PclntabSymbol=9584 RawScan=744 SpacedAscii=1 Structure=1270
+symbols_provided	testdata/macho/go_reflection_tags_minirat_arm64.macho	13191	e11ca9a17aee54a8	Base64Decode=4 Heuristic=4 InstructionPattern=1861 PclntabSymbol=9557 RawScan=535 SpacedAscii=1 Structure=1229
 symbols_provided	testdata/macho/rust_arm64_framed_register_writes.bin	0	e3b0c44298fc1c14	
 symbols_provided	testdata/macho/rust_arm64_register_writes.bin	0	e3b0c44298fc1c14	
-symbols_provided	testdata/macho/rust_heap_xor_installer_universal.macho	16259	bff7e545758c00a3	Base64Decode=7 Heuristic=6744 HexDecode=1 InstructionPattern=480 RawScan=2977 Structure=5344 UnicodeEscapeDecode=1 UrlDecode=1 XorDecode=704
+symbols_provided	testdata/macho/rust_heap_xor_installer_universal.macho	16250	0c20cce1ecba19ee	Heuristic=6740 InstructionPattern=480 RawScan=2980 Structure=5345 UrlDecode=1 XorDecode=704
 symbols_provided	testdata/macho/swift_small_strings_webview.macho	641	aec31276b5a056a9	CodeSignature=1 Heuristic=9 InstructionPattern=1 RawScan=625 Structure=5
 symbols_provided	testdata/macho/wallet_report_objc	70	f3a178bb43ee55bc	RawScan=70
-symbols_provided	testdata/macho/xor_fat_dropper.macho	452	8c3fe287d58989fa	Heuristic=60 RawScan=197 StackString=2 XorDecode=193
-symbols_provided	testdata/malware/brew_agent	851	db7e59b20c3050fd	CodeSignature=1 RawScan=486 StackString=3 XorDecode=359 XorStackPair=2
-symbols_provided	testdata/malware/brickstorm_linux_amd64	12302	90aa4d54b8d11f8b	Base64Decode=6 InstructionPattern=2083 PclntabSymbol=8120 RawScan=491 Structure=1073 WideString=15 XorStackPair=514
-symbols_provided	testdata/malware/dynamichub/DynamicHub	709	ed5e04c613adc971	CodeSignature=12 RawScan=429 XorStackPair=268
+symbols_provided	testdata/macho/xor_fat_dropper.macho	452	9a92cf01b5f199bf	Heuristic=60 RawScan=197 StackString=2 XorDecode=193
+symbols_provided	testdata/malware/brew_agent	852	db8e7fe2e1708290	CodeSignature=2 RawScan=486 StackString=3 XorDecode=359 XorStackPair=2
+symbols_provided	testdata/malware/brickstorm_linux_amd64	12296	1c7a86e43d7f61c2	InstructionPattern=2083 PclntabSymbol=8120 RawScan=491 Structure=1073 WideString=15 XorStackPair=514
+symbols_provided	testdata/malware/dynamichub/DynamicHub	485	d4f7de1aaf9ea450	CodeSignature=2 RawScan=423 XorStackPair=60
 symbols_provided	testdata/malware/goodboy-stage-01.exe	367	dc1fd8b36a75df78	RawScan=151 StackString=2 Structure=128 WideString=86
 symbols_provided	testdata/malware/kimwolf_installer	7	f99611fe40ca5bb2	RawScan=7
-symbols_provided	testdata/malware/poolrat	13394	4c8e78af25072f51	Base64Decode=3 HexDecode=2 RawScan=13333 SpacedAscii=1 StackString=35 UrlDecode=13 WideString=1 XorStackPair=6
-symbols_provided	testdata/malware/sample-stealer	24406	5ea94ad501478467	Base64Decode=15 InstructionPattern=2159 PclntabSymbol=9654 RawScan=11182 SpacedAscii=1 Structure=1365 UrlDecode=10 WideString=20
+symbols_provided	testdata/malware/poolrat	13392	3d8856204fb974b3	Base64Decode=1 HexDecode=1 RawScan=13346 SpacedAscii=1 StackString=35 UrlDecode=1 WideString=1 XorStackPair=6
+symbols_provided	testdata/malware/sample-stealer	24403	2fbc8d835126a522	Base64Decode=2 InstructionPattern=2159 PclntabSymbol=9654 RawScan=11192 SpacedAscii=1 Structure=1365 UrlDecode=10 WideString=20
 symbols_provided	testdata/malware/sorry_ransomware.exe	753	651635bfa1076e64	RawScan=93 StackString=2 Structure=656 WideString=2
-symbols_provided	testdata/malware/themeforestrat	13487	4e1bf0e8e7e78239	Base64Decode=3 HexDecode=2 RawScan=13432 SpacedAscii=1 StackString=30 UrlDecode=13 WideString=1 XorStackPair=5
+symbols_provided	testdata/malware/themeforestrat	13485	e65e594355093460	Base64Decode=1 HexDecode=1 RawScan=13445 SpacedAscii=1 StackString=30 UrlDecode=1 WideString=1 XorStackPair=5
 symbols_provided	testdata/malware/threadracer.exe	723	1d53850eafa49196	RawScan=528 Structure=1 WideString=194
-symbols_provided	testdata/malware/vget_sample	1608	2015fed7eb89131b	Base64Decode=1 HexDecode=2 InstructionPattern=98 RawScan=892 SpacedAscii=1 StackString=9 Structure=588 UrlDecode=1 WideString=15 XorDecode=1
-symbols_provided	testdata/malware/wizardnet_downloader.dll	3292	b0d794bf52c7f518	RawScan=2292 Structure=1 UrlDecode=1 WideString=998
-symbols_provided	testdata/malware/zyravpn_tun2socks.exe	24237	f339cfc14b9c9f59	Base64Decode=7 InstructionPattern=3747 PclntabSymbol=18500 RawScan=182 StackString=45 Structure=1740 UrlDecode=1 WideString=15
+symbols_provided	testdata/malware/vget_sample	1609	3ef4308f91b0673e	HexDecode=2 InstructionPattern=98 RawScan=893 SpacedAscii=1 StackString=9 Structure=588 UrlDecode=1 WideString=16 XorDecode=1
+symbols_provided	testdata/malware/wizardnet_downloader.dll	3291	806cee964074ec19	RawScan=2292 Structure=1 WideString=998
+symbols_provided	testdata/malware/zyravpn_tun2socks.exe	24230	67a7beb3e27ad2a4	InstructionPattern=3747 PclntabSymbol=18501 RawScan=182 StackString=45 Structure=1740 WideString=15
 symbols_provided	testdata/nsis/4d49_Constraining.Opm	5	e6ec335a3c9d38c8	RawScan=1 StackString=2 XorDecode=2
 symbols_provided	testdata/nsis/57527_Hokerer118.hex	6	b5e6334818d95117	RawScan=1 XorDecode=5
-symbols_provided	testdata/pe/does-nothing-windows-amd64.exe	8002	f720cc4c7a343de4	Base64Decode=1 InstructionPattern=1084 PclntabSymbol=5723 RawScan=86 Structure=1101 WideString=7
+symbols_provided	testdata/pe/does-nothing-windows-amd64.exe	8003	2ff366af96f1708a	Base64Decode=1 InstructionPattern=1084 PclntabSymbol=5724 RawScan=86 Structure=1101 WideString=7
 symbols_provided	testdata/pe/dotnet_unsigned_x86.dll	30	28a00ec279285356	RawScan=18 WideString=12
-symbols_provided	testdata/pe/gobump_windows_amd64.exe	26051	909dad577ce5def8	Base64Decode=3 Heuristic=2 InstructionPattern=2162 PclntabSymbol=11778 RawScan=10464 Structure=1635 WideString=7
-symbols_provided	testdata/pe/hello_windows.exe	8934	36f53bcc8c5ca4b7	Base64Decode=1 InstructionPattern=932 PclntabSymbol=4189 RawScan=3002 Structure=806 WideString=4
-symbols_provided	testdata/pe/msvc_console_amd64.exe	80	ed045dd92c8dcf67	Base64Decode=1 RawScan=76 StackString=2 Structure=1
-symbols_provided	testdata/pe/rtc.dll	81	4579c2c089a123bb	RawScan=46 WideString=25 XorDecode=10
-symbols_provided	testdata/rust_elf/linux_amd64	342	a0a9590416100e5e	Base64Decode=1 InstructionPattern=35 RawScan=240 StackString=8 Structure=58
+symbols_provided	testdata/pe/gobump_windows_amd64.exe	26051	768b64a9d6be9d92	Base64Decode=2 Heuristic=2 InstructionPattern=2162 PclntabSymbol=11779 RawScan=10464 Structure=1635 WideString=7
+symbols_provided	testdata/pe/hello_windows.exe	8936	5f88704489d665f1	Base64Decode=1 InstructionPattern=932 PclntabSymbol=4190 RawScan=3003 Structure=806 WideString=4
+symbols_provided	testdata/pe/msvc_console_amd64.exe	80	f19b4697f89fbd02	RawScan=77 StackString=2 Structure=1
+symbols_provided	testdata/pe/rtc.dll	82	c2bb992d683b5ff2	RawScan=47 WideString=25 XorDecode=10
+symbols_provided	testdata/rust_elf/linux_amd64	341	99901f7b35f43b79	InstructionPattern=35 RawScan=240 StackString=8 Structure=58
 symbols_provided	testdata/script/batch-cp708-powershell-dropper-db9.bat	8	708d3f8415688963	RawScan=8
 symbols_provided	testdata/script/batch-cp708-powershell-dropper-e289.bat	8	59d8c2d2951826dc	RawScan=8
 symbols_provided	testdata/script/batch-remap-sample.unknown	43	e8dee2c416871699	RawScan=43
-symbols_provided	testdata/script/jso-inert-permutation.js	5	609e9a915c7439b8	RawScan=3 ScriptDecode=1 UnicodeEscapeDecode=1
-symbols_provided	testdata/script/jso-permutation.js	6	635e06dd4cd316c1	RawScan=3 ScriptDecode=2 UnicodeEscapeDecode=1
+symbols_provided	testdata/script/jso-inert-permutation.js	6	9fb7ffb934ffee4b	RawScan=4 ScriptDecode=1 UnicodeEscapeDecode=1
+symbols_provided	testdata/script/jso-permutation.js	7	e039fcf8d6bdf328	RawScan=4 ScriptDecode=2 UnicodeEscapeDecode=1
 symbols_provided	testdata/script/npm-charcode-rot-packer.js	5	5ee34a682d61df4a	RawScan=1 ScriptDecode=4
 symbols_provided	testdata/script/vbscript-encode.asp	3	1ddec79a3ff8ac57	RawScan=2 ScriptDecode=1
-symbols_provided	testdata/script/vbscript-encoded-malformed-asp.asp	1885	f71e2412a4f39bfe	RawScan=376 ScriptDecode=1509
+symbols_provided	testdata/script/vbscript-encoded-malformed-asp.asp	1885	e6586d3e4554bb27	RawScan=376 ScriptDecode=1509
 symbols_provided	testdata/xor/brew_agent_xor_region.bin	752	61968f83fd97ecec	RawScan=394 XorDecode=358
-symbols_provided	testdata/xor/brew_agent_xor_sample	851	db7e59b20c3050fd	CodeSignature=1 RawScan=486 StackString=3 XorDecode=359 XorStackPair=2
-symbols_provided	testdata/xor/libffmpeg_3cx_x64_xor	7114	45d3db05b2d71f31	Base64Decode=2 CodeSignature=27 Heuristic=655 InstructionPattern=30 RawScan=5585 Structure=618 UrlDecode=9 XorDecode=188
-symbols_provided	testdata/xor/overlay_crypter_loader_xor	502	775ded918b681d40	RawScan=496 XorDecode=6
-default	testdata/elf/hello_linux_amd64	16557	9b8dfd4764f485cb	Base64Decode=1 InstructionPattern=1199 PclntabSymbol=2979 RawScan=11723 SpacedAscii=1 Structure=650 WideString=4
-default	testdata/garble/garble_fresh_linux_amd64	18183	64fdfa4216cae0a1	Base64Decode=3 InstructionPattern=1249 PclntabSymbol=8797 RawScan=7628 SpacedAscii=1 Structure=460 WideString=7 XorStackPair=38
-default	testdata/garble/garble_fresh_split1	15143	5ca31245d7ed3b51	Base64Decode=3 InstructionPattern=1180 PclntabSymbol=9526 RawScan=4014 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_linux_amd64_1	17057	74b57ba421f89634	Base64Decode=2 InstructionPattern=1249 PclntabSymbol=8700 RawScan=6599 SpacedAscii=1 Structure=464 WideString=7 XorStackPair=35
-default	testdata/garble/garble_linux_amd64_10	17965	b0a36f9fba471835	Base64Decode=3 InstructionPattern=1252 PclntabSymbol=8829 RawScan=7312 SpacedAscii=1 Structure=526 WideString=7 XorStackPair=35
-default	testdata/garble/garble_linux_amd64_11	18132	355f89629a574052	Base64Decode=5 InstructionPattern=1253 PclntabSymbol=8751 RawScan=7647 SpacedAscii=1 Structure=453 WideString=7 XorStackPair=15
-default	testdata/garble/garble_linux_amd64_12	17850	17f8b9bdcd9719a1	Base64Decode=6 InstructionPattern=1249 PclntabSymbol=8829 RawScan=7197 SpacedAscii=1 Structure=530 WideString=7 XorStackPair=31
-default	testdata/garble/garble_linux_amd64_13	18517	ba8fc014e5edbfcd	Base64Decode=7 InstructionPattern=1248 PclntabSymbol=8827 RawScan=7862 SpacedAscii=1 Structure=523 WideString=7 XorStackPair=42
+symbols_provided	testdata/xor/libffmpeg_3cx_x64_xor	7110	4b0195413c208699	Base64ObfuscatedDecode=1 CodeSignature=27 Heuristic=655 InstructionPattern=30 RawScan=5591 Structure=618 XorDecode=188
+symbols_provided	testdata/xor/overlay_crypter_loader_xor	503	8fe922750f8f382d	RawScan=498 XorDecode=5
+default	testdata/elf/hello_linux_amd64	16557	45e60bb3e9f74e3d	Base64Decode=1 InstructionPattern=1199 PclntabSymbol=2979 RawScan=11723 SpacedAscii=1 Structure=650 WideString=4
+default	testdata/garble/garble_fresh_linux_amd64	18183	5e283399e628b3b4	Base64Decode=1 InstructionPattern=1249 PclntabSymbol=8799 RawScan=7628 SpacedAscii=1 Structure=460 WideString=7 XorStackPair=38
+default	testdata/garble/garble_fresh_split1	15144	d6c9a85f6fa54c7d	Base64Decode=2 InstructionPattern=1180 PclntabSymbol=9528 RawScan=4014 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_linux_amd64_1	17058	a827379c0d154fbe	Base64Decode=2 InstructionPattern=1249 PclntabSymbol=8701 RawScan=6599 SpacedAscii=1 Structure=464 WideString=7 XorStackPair=35
+default	testdata/garble/garble_linux_amd64_10	17965	6fe1df83933a767d	Base64Decode=1 InstructionPattern=1252 PclntabSymbol=8831 RawScan=7312 SpacedAscii=1 Structure=526 WideString=7 XorStackPair=35
+default	testdata/garble/garble_linux_amd64_11	18131	7f8cab0483a65d6f	Base64Decode=1 InstructionPattern=1253 PclntabSymbol=8754 RawScan=7647 SpacedAscii=1 Structure=453 WideString=7 XorStackPair=15
+default	testdata/garble/garble_linux_amd64_12	17850	f5b2ad5a7dd6fd6f	Base64Decode=1 InstructionPattern=1249 PclntabSymbol=8834 RawScan=7197 SpacedAscii=1 Structure=530 WideString=7 XorStackPair=31
+default	testdata/garble/garble_linux_amd64_13	18515	9116d74e19a7071c	Base64Decode=1 InstructionPattern=1248 PclntabSymbol=8831 RawScan=7862 SpacedAscii=1 Structure=523 WideString=7 XorStackPair=42
 default	testdata/garble/garble_linux_amd64_14	18150	364d0f3de50caa94	Base64Decode=1 InstructionPattern=1251 PclntabSymbol=8860 RawScan=7555 SpacedAscii=1 Structure=454 WideString=7 XorStackPair=21
-default	testdata/garble/garble_linux_amd64_15	17978	39297f21979249f5	Base64Decode=4 InstructionPattern=1249 PclntabSymbol=8741 RawScan=7441 SpacedAscii=1 Structure=507 WideString=7 XorStackPair=28
-default	testdata/garble/garble_linux_amd64_16	18017	d1fea2a498fca43b	Base64Decode=7 InstructionPattern=1248 PclntabSymbol=8684 RawScan=7571 SpacedAscii=1 Structure=461 WideString=7 XorStackPair=38
-default	testdata/garble/garble_linux_amd64_17	17389	dc984e51da837f07	Base64Decode=3 InstructionPattern=1254 PclntabSymbol=8674 RawScan=6912 SpacedAscii=1 Structure=498 WideString=7 XorStackPair=40
-default	testdata/garble/garble_linux_amd64_18	17945	f6b3313f9bb6b425	Base64Decode=4 InstructionPattern=1254 PclntabSymbol=8765 RawScan=7427 SpacedAscii=1 Structure=458 WideString=7 XorStackPair=29
-default	testdata/garble/garble_linux_amd64_19	18181	97c8ae9fd2f176ef	Base64Decode=4 InstructionPattern=1251 PclntabSymbol=8818 RawScan=7552 SpacedAscii=1 Structure=515 WideString=7 XorStackPair=33
-default	testdata/garble/garble_linux_amd64_2	17751	e30ef7050120e163	Base64Decode=4 InstructionPattern=1251 PclntabSymbol=8728 RawScan=7213 SpacedAscii=1 Structure=522 WideString=7 XorStackPair=25
-default	testdata/garble/garble_linux_amd64_20	17507	245979863c1456c0	Base64Decode=23 InstructionPattern=1251 PclntabSymbol=8754 RawScan=6984 SpacedAscii=1 Structure=460 WideString=7 XorStackPair=27
-default	testdata/garble/garble_linux_amd64_3	18037	bfddfeef7d524185	Base64Decode=3 InstructionPattern=1252 PclntabSymbol=8850 RawScan=7427 SpacedAscii=1 Structure=467 WideString=7 XorStackPair=30
-default	testdata/garble/garble_linux_amd64_4	17788	dbcd7e752a20ed27	Base64Decode=4 InstructionPattern=1255 PclntabSymbol=8732 RawScan=7221 SpacedAscii=1 Structure=518 WideString=7 XorStackPair=50
-default	testdata/garble/garble_linux_amd64_5	18290	e6dff870a7853c37	Base64Decode=3 InstructionPattern=1254 PclntabSymbol=8882 RawScan=7654 SpacedAscii=1 Structure=453 WideString=7 XorStackPair=36
-default	testdata/garble/garble_linux_amd64_6	18201	e54250b24adacde2	Base64Decode=4 InstructionPattern=1251 PclntabSymbol=8871 RawScan=7503 SpacedAscii=1 Structure=519 WideString=7 XorStackPair=45
-default	testdata/garble/garble_linux_amd64_7	18175	8c574efa940ccc9d	Base64Decode=2 InstructionPattern=1254 PclntabSymbol=8817 RawScan=7540 SpacedAscii=1 Structure=527 WideString=7 XorStackPair=27
-default	testdata/garble/garble_linux_amd64_8	18101	b7815efa96d65ead	Base64Decode=2 InstructionPattern=1251 PclntabSymbol=8841 RawScan=7518 SpacedAscii=1 Structure=453 WideString=7 XorStackPair=28
-default	testdata/garble/garble_linux_amd64_9	18112	a3018d46e129e1fd	Base64Decode=5 InstructionPattern=1249 PclntabSymbol=8882 RawScan=7479 SpacedAscii=1 Structure=455 WideString=7 XorStackPair=34
-default	testdata/garble/garble_seed_1	15265	c5225e959ecba1e5	Base64Decode=4 InstructionPattern=1180 PclntabSymbol=9498 RawScan=4163 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_seed_10	15453	0dfe8c4b07dc1129	Base64Decode=2 InstructionPattern=1180 PclntabSymbol=9613 RawScan=4238 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_seed_2	15389	9fd2d6025654bc7e	Base64Decode=649 InstructionPattern=1180 PclntabSymbol=8884 RawScan=4256 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_seed_3	15256	865141a14a003ac3	Base64Decode=7 InstructionPattern=1180 PclntabSymbol=9545 RawScan=4104 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_seed_4	15515	888704e650c369c7	Base64Decode=7 InstructionPattern=1180 PclntabSymbol=9554 RawScan=4354 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_seed_5	15492	cfe818d04d220ce8	Base64Decode=4 InstructionPattern=1180 PclntabSymbol=9590 RawScan=4298 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_seed_6	15332	79f1ed04c632d08a	Base64Decode=4 InstructionPattern=1180 PclntabSymbol=9544 RawScan=4184 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_seed_7	15685	89aa3362a0720cd6	Base64Decode=3 InstructionPattern=1180 PclntabSymbol=9648 RawScan=4434 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_seed_8	15386	88ca586133a6ee41	Base64Decode=6 InstructionPattern=1180 PclntabSymbol=9610 RawScan=4170 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_seed_9	15210	c1ed5f4812f9c45d	Base64Decode=3 InstructionPattern=1180 PclntabSymbol=9446 RawScan=4161 SpacedAscii=1 Structure=419
-default	testdata/garble/garble_simple_only	17147	d91256d02a799855	Base64Decode=3 InstructionPattern=1251 PclntabSymbol=8662 RawScan=6679 SpacedAscii=1 Structure=509 WideString=7 XorStackPair=35
-default	testdata/garble/garble_simple_test	15481	40f5e6fcc1e18530	Base64Decode=4 InstructionPattern=1180 PclntabSymbol=9557 RawScan=4320 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_linux_amd64_15	17979	c3b44430d7c33bf1	Base64Decode=2 InstructionPattern=1249 PclntabSymbol=8744 RawScan=7441 SpacedAscii=1 Structure=507 WideString=7 XorStackPair=28
+default	testdata/garble/garble_linux_amd64_16	18016	6bfe8dc3c256e15e	Base64Decode=1 InstructionPattern=1248 PclntabSymbol=8689 RawScan=7571 SpacedAscii=1 Structure=461 WideString=7 XorStackPair=38
+default	testdata/garble/garble_linux_amd64_17	17389	9fa42756010e738f	Base64Decode=2 InstructionPattern=1254 PclntabSymbol=8675 RawScan=6912 SpacedAscii=1 Structure=498 WideString=7 XorStackPair=40
+default	testdata/garble/garble_linux_amd64_18	17944	f5b5625ba8a0df6f	Base64Decode=1 InstructionPattern=1254 PclntabSymbol=8767 RawScan=7427 SpacedAscii=1 Structure=458 WideString=7 XorStackPair=29
+default	testdata/garble/garble_linux_amd64_19	18181	cc40f4e76f1706b0	Base64Decode=1 InstructionPattern=1251 PclntabSymbol=8821 RawScan=7552 SpacedAscii=1 Structure=515 WideString=7 XorStackPair=33
+default	testdata/garble/garble_linux_amd64_2	17751	f0ee59ede0ef78f0	Base64Decode=1 InstructionPattern=1251 PclntabSymbol=8731 RawScan=7213 SpacedAscii=1 Structure=522 WideString=7 XorStackPair=25
+default	testdata/garble/garble_linux_amd64_20	17487	74b9ec600a867943	Base64Decode=1 InstructionPattern=1251 PclntabSymbol=8756 RawScan=6984 SpacedAscii=1 Structure=460 WideString=7 XorStackPair=27
+default	testdata/garble/garble_linux_amd64_3	18037	ca51b422dac3dc6a	Base64Decode=1 InstructionPattern=1252 PclntabSymbol=8852 RawScan=7427 SpacedAscii=1 Structure=467 WideString=7 XorStackPair=30
+default	testdata/garble/garble_linux_amd64_4	17788	6de462ca46be2638	Base64Decode=1 InstructionPattern=1255 PclntabSymbol=8735 RawScan=7221 SpacedAscii=1 Structure=518 WideString=7 XorStackPair=50
+default	testdata/garble/garble_linux_amd64_5	18290	aabbcc54babb33b8	Base64Decode=1 InstructionPattern=1254 PclntabSymbol=8884 RawScan=7654 SpacedAscii=1 Structure=453 WideString=7 XorStackPair=36
+default	testdata/garble/garble_linux_amd64_6	18201	cf48ad9ed87913b0	Base64Decode=1 InstructionPattern=1251 PclntabSymbol=8874 RawScan=7503 SpacedAscii=1 Structure=519 WideString=7 XorStackPair=45
+default	testdata/garble/garble_linux_amd64_7	18175	4074560a95e66eb9	Base64Decode=1 InstructionPattern=1254 PclntabSymbol=8818 RawScan=7540 SpacedAscii=1 Structure=527 WideString=7 XorStackPair=27
+default	testdata/garble/garble_linux_amd64_8	18102	5ee7235ec67b230f	Base64Decode=2 InstructionPattern=1251 PclntabSymbol=8842 RawScan=7518 SpacedAscii=1 Structure=453 WideString=7 XorStackPair=28
+default	testdata/garble/garble_linux_amd64_9	18112	4e0535116ad2d3bc	Base64Decode=1 InstructionPattern=1249 PclntabSymbol=8886 RawScan=7479 SpacedAscii=1 Structure=455 WideString=7 XorStackPair=34
+default	testdata/garble/garble_seed_1	15265	6501b9088e90da4e	Base64Decode=1 InstructionPattern=1180 PclntabSymbol=9501 RawScan=4163 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_seed_10	15453	4197c46ba108f86c	Base64Decode=1 InstructionPattern=1180 PclntabSymbol=9614 RawScan=4238 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_seed_2	15389	c1fcc49cfe94cce2	Base64Decode=1 InstructionPattern=1180 PclntabSymbol=9532 RawScan=4256 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_seed_3	15257	11777e6b196c6670	Base64Decode=3 InstructionPattern=1180 PclntabSymbol=9550 RawScan=4104 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_seed_4	15515	6ca95ff0894c817c	Base64Decode=2 InstructionPattern=1180 PclntabSymbol=9559 RawScan=4354 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_seed_5	15491	85e63d7a7b6fec58	Base64Decode=1 InstructionPattern=1180 PclntabSymbol=9592 RawScan=4298 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_seed_6	15332	f8f1473e46e08c6e	Base64Decode=1 InstructionPattern=1180 PclntabSymbol=9547 RawScan=4184 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_seed_7	15685	ccb7258a36698cb0	Base64Decode=1 InstructionPattern=1180 PclntabSymbol=9650 RawScan=4434 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_seed_8	15386	5663c483a352c58b	Base64Decode=1 InstructionPattern=1180 PclntabSymbol=9615 RawScan=4170 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_seed_9	15209	c96f1bd0855be8cb	Base64Decode=1 InstructionPattern=1180 PclntabSymbol=9447 RawScan=4161 SpacedAscii=1 Structure=419
+default	testdata/garble/garble_simple_only	17148	7f6c82501a5f4ac7	Base64Decode=2 InstructionPattern=1251 PclntabSymbol=8664 RawScan=6679 SpacedAscii=1 Structure=509 WideString=7 XorStackPair=35
+default	testdata/garble/garble_simple_test	15482	325cbd69933a8b44	Base64Decode=2 InstructionPattern=1180 PclntabSymbol=9560 RawScan=4320 SpacedAscii=1 Structure=419
 default	testdata/go_pclntab/darwin_amd64	8767	a48d5229b8b7b562	Heuristic=1 InstructionPattern=1167 PclntabSymbol=3193 RawScan=3851 SpacedAscii=1 Structure=554
 default	testdata/go_pclntab/darwin_arm64	7920	f0290159985d9013	Heuristic=1 InstructionPattern=1099 PclntabSymbol=3164 RawScan=3090 SpacedAscii=1 Structure=565
 default	testdata/go_pclntab/linux_amd64	8342	3c4801c67a3b9813	InstructionPattern=1169 PclntabSymbol=3020 RawScan=3550 SpacedAscii=1 Structure=598 WideString=4
@@ -127,48 +126,47 @@ default	testdata/go_pclntab/linux_arm64	7377	e9849fdb4f01a532	InstructionPattern
 default	testdata/go_pclntab/windows_amd64	6898	0bf5928eca3045fd	Base64Decode=1 Heuristic=1 InstructionPattern=1232 PclntabSymbol=4591 RawScan=200 SpacedAscii=1 StackString=23 Structure=839 WideString=10
 default	testdata/go_pclntab/windows_arm64	6815	4ec720522a8b060c	Base64Decode=1 Heuristic=1 InstructionPattern=1167 PclntabSymbol=4540 RawScan=197 SpacedAscii=1 Structure=900 WideString=8
 default	testdata/kworker_samples/kworker_obfuscated_1	91	496303b7be99d04c	RawScan=81 StackString=7 Structure=2 WideString=1
-default	testdata/macho/arm64_lcg_xor_universal.macho	548	fa55ee7f87b11704	RawScan=547 XorDecode=1
-default	testdata/macho/charge0x_installer_universal.macho	542	692aa7c36e39f1d6	RawScan=540 XorDecode=2
-default	testdata/macho/fmix_xor_stealer_universal.macho	4128	9673752daccc6880	RawScan=3342 Structure=3 XorDecode=783
-default	testdata/macho/go_reflection_tags_minirat.macho	21136	442226ccf9186aa6	Base64Decode=7 Heuristic=3 InstructionPattern=2560 PclntabSymbol=9588 RawScan=7703 SpacedAscii=5 Structure=1270
-default	testdata/macho/go_reflection_tags_minirat_arm64.macho	17762	87063d4c97cdd39a	Base64Decode=7 Heuristic=4 InstructionPattern=2235 PclntabSymbol=9560 RawScan=4724 SpacedAscii=5 Structure=1227
+default	testdata/macho/arm64_lcg_xor_universal.macho	548	d3e0db980dbf69e0	RawScan=547 XorDecode=1
+default	testdata/macho/charge0x_installer_universal.macho	542	0261ca9dd952e022	RawScan=540 XorDecode=2
+default	testdata/macho/fmix_xor_stealer_universal.macho	4128	15d0f5daa54a3682	RawScan=3342 Structure=3 XorDecode=783
+default	testdata/macho/go_reflection_tags_minirat.macho	21134	2c7d64de85c7f8f8	Base64Decode=5 Heuristic=3 InstructionPattern=2560 PclntabSymbol=9588 RawScan=7703 SpacedAscii=5 Structure=1270
+default	testdata/macho/go_reflection_tags_minirat_arm64.macho	17759	6c2b3fc89afe80c1	Base64Decode=4 Heuristic=4 InstructionPattern=2235 PclntabSymbol=9560 RawScan=4724 SpacedAscii=5 Structure=1227
 default	testdata/macho/rust_arm64_framed_register_writes.bin	0	e3b0c44298fc1c14	
 default	testdata/macho/rust_arm64_register_writes.bin	114	4875b919bba46ccc	RawScan=114
-default	testdata/macho/rust_heap_xor_installer_universal.macho	29027	3b0618d27acaa0b3	Base64Decode=7 Heuristic=8466 HexDecode=1 InstructionPattern=540 RawScan=13948 SpacedAscii=1 Structure=5358 UnicodeEscapeDecode=1 UrlDecode=1 XorDecode=704
+default	testdata/macho/rust_heap_xor_installer_universal.macho	29264	7d7e1bf36faad1e5	Heuristic=8460 InstructionPattern=540 RawScan=13950 SpacedAscii=1 Structure=5608 UrlDecode=1 XorDecode=704
 default	testdata/macho/swift_small_strings_webview.macho	728	47a12d1c82bb0b73	CodeSignature=1 Heuristic=9 InstructionPattern=1 RawScan=712 Structure=5
 default	testdata/macho/wallet_report_objc	77	d2861e71997da54b	RawScan=77
-default	testdata/macho/xor_fat_dropper.macho	642	63d2e3ab59941456	Heuristic=92 RawScan=355 StackString=2 XorDecode=193
-default	testdata/malware/brew_agent	1912	9ef69ec419859dad	CodeSignature=1 RawScan=1888 StackString=8 XorStackPair=15
-default	testdata/malware/brickstorm_linux_amd64	18168	107e1369f9cccb47	Base64Decode=6 InstructionPattern=2497 PclntabSymbol=8123 RawScan=5765 SpacedAscii=3 Structure=1073 WideString=73 XorStackPair=628
-default	testdata/malware/dynamichub/DynamicHub	1017	55773f8014c50c8d	CodeSignature=12 RawScan=735 XorStackPair=270
+default	testdata/macho/xor_fat_dropper.macho	642	4d1dff930be18dcb	Heuristic=92 RawScan=355 StackString=2 XorDecode=193
+default	testdata/malware/brew_agent	1913	5750299814448db3	CodeSignature=2 RawScan=1888 StackString=8 XorStackPair=15
+default	testdata/malware/brickstorm_linux_amd64	18162	443f08c58d2c49f4	InstructionPattern=2497 PclntabSymbol=8123 RawScan=5765 SpacedAscii=3 Structure=1073 WideString=73 XorStackPair=628
+default	testdata/malware/dynamichub/DynamicHub	792	f5c22014cebc4400	CodeSignature=2 RawScan=729 XorStackPair=61
 default	testdata/malware/goodboy-stage-01.exe	1573	19080460b130cb39	RawScan=953 StackString=2 Structure=224 WideString=394
 default	testdata/malware/kimwolf_installer	7	f99611fe40ca5bb2	RawScan=7
-default	testdata/malware/poolrat	17996	262557e869a0841d	Base64Decode=3 HexDecode=2 RawScan=17886 SpacedAscii=1 StackString=59 Structure=11 UrlDecode=13 WideString=9 XorStackPair=12
-default	testdata/malware/sample-stealer	56084	287eb1e82535d173	Base64Decode=15 InstructionPattern=2559 PclntabSymbol=9657 RawScan=42393 SpacedAscii=5 Structure=1365 UrlDecode=10 WideString=80
+default	testdata/malware/poolrat	17997	6a1a3996f9f0276e	Base64Decode=1 HexDecode=1 RawScan=17902 SpacedAscii=1 StackString=59 Structure=11 UrlDecode=1 WideString=9 XorStackPair=12
+default	testdata/malware/sample-stealer	56082	2b8ad75ae268623d	Base64Decode=2 InstructionPattern=2559 PclntabSymbol=9657 RawScan=42403 SpacedAscii=5 Structure=1365 UrlDecode=10 WideString=81
 default	testdata/malware/sorry_ransomware.exe	2473	aa2c90babe7e2b1c	RawScan=1670 StackString=7 Structure=788 WideString=8
-default	testdata/malware/themeforestrat	18101	7001ed65e8904c89	Base64Decode=3 HexDecode=2 RawScan=18002 SpacedAscii=1 StackString=48 Structure=12 UrlDecode=13 WideString=9 XorStackPair=11
+default	testdata/malware/themeforestrat	18102	607365c70e30d3ed	Base64Decode=1 HexDecode=1 RawScan=18018 SpacedAscii=1 StackString=48 Structure=12 UrlDecode=1 WideString=9 XorStackPair=11
 default	testdata/malware/threadracer.exe	2396	f745a2c797785900	RawScan=1871 Structure=2 WideString=522 XorStackPair=1
-default	testdata/malware/vget_sample	7538	0a42b2dca6e4eab8	Base64Decode=1 HexDecode=2 InstructionPattern=119 RawScan=6752 SpacedAscii=3 StackString=15 Structure=588 UrlDecode=1 WideString=56 XorStackPair=1
-default	testdata/malware/wizardnet_downloader.dll	8010	ac005bd30ee46a44	RawScan=6560 Structure=10 UrlDecode=1 WideString=1439
-default	testdata/malware/zyravpn_tun2socks.exe	25873	24bf3e9af048fb10	Base64Decode=7 InstructionPattern=4230 PclntabSymbol=18904 RawScan=863 SpacedAscii=3 StackString=54 Structure=1739 WideString=73
+default	testdata/malware/vget_sample	7540	84beebe5601855f2	HexDecode=2 InstructionPattern=119 RawScan=6754 SpacedAscii=3 StackString=15 Structure=588 UrlDecode=1 WideString=57 XorStackPair=1
+default	testdata/malware/wizardnet_downloader.dll	8010	ed47e63b807f6134	RawScan=6560 Structure=10 WideString=1440
+default	testdata/malware/zyravpn_tun2socks.exe	25866	0c5d4d6c97a8108c	InstructionPattern=4230 PclntabSymbol=18904 RawScan=863 SpacedAscii=3 StackString=54 Structure=1739 WideString=73
 default	testdata/nsis/4d49_Constraining.Opm	5	e6ec335a3c9d38c8	RawScan=1 StackString=2 XorDecode=2
 default	testdata/nsis/57527_Hokerer118.hex	6	b5e6334818d95117	RawScan=1 XorDecode=5
 default	testdata/pe/does-nothing-windows-amd64.exe	8686	58430d3c3c834f11	Base64Decode=1 InstructionPattern=1379 PclntabSymbol=5924 RawScan=266 SpacedAscii=1 Structure=1101 WideString=14
 default	testdata/pe/dotnet_unsigned_x86.dll	40	f32eacd213a4b49b	RawScan=26 WideString=14
-default	testdata/pe/gobump_windows_amd64.exe	49594	eed4ba3ccc7722e6	Base64Decode=3 Heuristic=2 InstructionPattern=2658 PclntabSymbol=12067 RawScan=33202 SpacedAscii=2 Structure=1635 WideString=25
-default	testdata/pe/hello_windows.exe	16467	f97d115a973b9846	Base64Decode=1 InstructionPattern=1202 PclntabSymbol=4366 RawScan=10082 SpacedAscii=1 Structure=806 WideString=9
-default	testdata/pe/msvc_console_amd64.exe	141	a0bb0c6f1426b69a	Base64Decode=1 RawScan=137 StackString=2 Structure=1
+default	testdata/pe/gobump_windows_amd64.exe	49593	2df6379c95c58631	Base64Decode=2 Heuristic=2 InstructionPattern=2658 PclntabSymbol=12067 RawScan=33202 SpacedAscii=2 Structure=1635 WideString=25
+default	testdata/pe/hello_windows.exe	16467	a60ffbaea7f7c7e6	Base64Decode=1 InstructionPattern=1202 PclntabSymbol=4366 RawScan=10082 SpacedAscii=1 Structure=806 WideString=9
+default	testdata/pe/msvc_console_amd64.exe	141	2ba2e9c11cc41b3d	RawScan=138 StackString=2 Structure=1
 default	testdata/pe/rtc.dll	133	cac39f7c231f2345	RawScan=105 WideString=28
-default	testdata/rust_elf/linux_amd64	971	640d408c48e54456	Base64Decode=1 InstructionPattern=44 RawScan=854 SpacedAscii=1 StackString=8 Structure=58 WideString=5
+default	testdata/rust_elf/linux_amd64	970	7f2fff5ac5a5cede	InstructionPattern=44 RawScan=854 SpacedAscii=1 StackString=8 Structure=58 WideString=5
 default	testdata/script/batch-cp708-powershell-dropper-db9.bat	8	708d3f8415688963	RawScan=8
 default	testdata/script/batch-cp708-powershell-dropper-e289.bat	8	59d8c2d2951826dc	RawScan=8
 default	testdata/script/batch-remap-sample.unknown	43	e8dee2c416871699	RawScan=43
-default	testdata/script/jso-inert-permutation.js	6	c8ef0d5777dd70d2	RawScan=4 ScriptDecode=1 UnicodeEscapeDecode=1
-default	testdata/script/jso-permutation.js	7	71de3e2a3853f8b9	RawScan=4 ScriptDecode=2 UnicodeEscapeDecode=1
+default	testdata/script/jso-inert-permutation.js	7	dd2765c5ab0dfac7	RawScan=5 ScriptDecode=1 UnicodeEscapeDecode=1
+default	testdata/script/jso-permutation.js	8	afa4fb99465abddc	RawScan=5 ScriptDecode=2 UnicodeEscapeDecode=1
 default	testdata/script/npm-charcode-rot-packer.js	5	5ee34a682d61df4a	RawScan=1 ScriptDecode=4
 default	testdata/script/vbscript-encode.asp	5	d2ec547d4c2f055c	RawScan=4 ScriptDecode=1
-default	testdata/script/vbscript-encoded-malformed-asp.asp	3740	31d32d621bb303d3	RawScan=2229 ScriptDecode=1509 SpacedAscii=2
+default	testdata/script/vbscript-encoded-malformed-asp.asp	3740	b4b1bb280bced5b5	RawScan=2229 ScriptDecode=1509 SpacedAscii=2
 default	testdata/xor/brew_agent_xor_region.bin	1227	8dcc4240d75a4a41	RawScan=1227
-default	testdata/xor/brew_agent_xor_sample	1912	9ef69ec419859dad	CodeSignature=1 RawScan=1888 StackString=8 XorStackPair=15
-default	testdata/xor/libffmpeg_3cx_x64_xor	14628	7824c896f56d54aa	Base64Decode=2 CodeSignature=31 Heuristic=937 InstructionPattern=47 RawScan=12973 SpacedAscii=15 Structure=618 UrlDecode=5
+default	testdata/xor/libffmpeg_3cx_x64_xor	14628	77e181aaa4ad88ec	Base64ObfuscatedDecode=1 CodeSignature=31 Heuristic=937 InstructionPattern=47 RawScan=12979 SpacedAscii=15 Structure=618
 default	testdata/xor/overlay_crypter_loader_xor	2772	c91ce493bfd7fdd8	RawScan=2770 StackString=1 WideString=1

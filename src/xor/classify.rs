@@ -288,7 +288,6 @@ const SHELL_EXECUTABLE_PATHS: &[&str] = &[
     "powershell.exe",
 ];
 
-/// Trim obvious garbage from the end of XOR-decoded strings.
 /// Check if a string contains locale codes (language_COUNTRY or language-COUNTRY format).
 /// These are often used in malware for geofencing/targeting specific regions.
 ///
@@ -353,15 +352,6 @@ pub(crate) fn report_kinds(strings: &mut [ExtractedString]) {
     }
 }
 
-/// Judge a speculative XOR decode. The nested `Option` is three-state:
-/// `None` = reject; `Some(None)` = keep, no specific evidence; `Some(Some(k))`
-/// = keep on evidence `k`.
-///
-/// Evidence is usually the classifier's kind, but a known indicator the
-/// classifier has no kind for (a Windows API or DLL name, a locale list, a
-/// credential or browser word) counts as `SuspiciousPath` or `ShellCmd`. The
-/// scan's own trimming, overlap and English-shape checks key on evidence;
-/// [`report_kinds`] gives the strings it keeps their reported kinds.
 /// Whether `s` is XML markup: it starts and ends with a tag, and every `<`
 /// opens a tag whose name starts with a letter (after `/`, `?` or `!`).
 fn is_markup(s: &str) -> bool {
@@ -446,22 +436,34 @@ const EXFIL_TARGETS: &[&str] = &[
     "documents folder",
 ];
 
-/// Geofencing locales, stealer targets, DLL names and dynamically resolved
-/// APIs: worth keeping even inside noise. DLL names like `bcrypt.dll` have no
-/// vowels and would fail the linguistic checks.
-fn named_target(s: &str) -> Option<StringKind> {
-    (has_multiple_locales(s)
-        || names_targeted_location(s)
-        || s.ends_with(".dll")
-        || s.ends_with(".DLL")
-        || WIN_API_NAMES.iter().any(|api| s.contains(api)))
-    .then_some(StringKind::SuspiciousPath)
-}
-
 /// Shells, shell commands, credential words and exfiltration targets in the
 /// lowercased candidate, tolerating trailing garbage.
-fn keyword_kind(lower: &str) -> Option<StringKind> {
-    let has = |words: &[&str]| words.iter().any(|w| lower.contains(w));
+fn keyword_kind(s: &str) -> Option<StringKind> {
+    let lower = s.to_ascii_lowercase();
+    // A short word (`key`, `user`, `root`) turns up inside random letters by
+    // chance, so one of four letters or fewer counts only as a word of its
+    // own: bounded by non-letters or a camelCase change (`userContextId`).
+    let b = s.as_bytes();
+    let starts_word = |at: usize| {
+        at == 0
+            || !b[at - 1].is_ascii_alphabetic()
+            || (b[at - 1].is_ascii_lowercase() && b[at].is_ascii_uppercase())
+    };
+    let ends_word = |end: usize| {
+        end == b.len()
+            || !b[end].is_ascii_alphabetic()
+            || (b[end - 1].is_ascii_lowercase() && b[end].is_ascii_uppercase())
+    };
+    let has = |words: &[&str]| {
+        words.iter().any(|w| {
+            if w.len() > 4 {
+                return lower.contains(w);
+            }
+            lower
+                .match_indices(w)
+                .any(|(at, _)| starts_word(at) && ends_word(at + w.len()))
+        })
+    };
     if has(SHELL_EXECUTABLE_PATHS) {
         Some(StringKind::SuspiciousPath)
     } else if has(SHELL_COMMANDS) {
@@ -581,6 +583,14 @@ fn dominated_by_one_char(s: &str) -> bool {
     max_count * 2 > char_count
 }
 
+/// Judge a speculative XOR decode: [`Verdict::Reject`], or keep it with the
+/// evidence it carries.
+///
+/// Evidence is usually the classifier's kind, but a known indicator the
+/// classifier has no kind for (a Windows API or DLL name, a locale list, a
+/// credential or browser word) counts as `SuspiciousPath` or `ShellCmd`. The
+/// scan's own trimming, overlap and English-shape checks key on evidence;
+/// [`report_kinds`] gives the strings it keeps their reported kinds.
 pub(crate) fn classify_xor_string(s: &str) -> Verdict {
     // Several rules below need the classifier's verdict; compute it once, and
     // only on paths that ask.
@@ -588,9 +598,17 @@ pub(crate) fn classify_xor_string(s: &str) -> Verdict {
 
     // High-value indicators bypass strict filtering. They come before the
     // partial-decode check so that real paths like /proc/net/tcp, which can
-    // resemble a half-decoded %VAR%, are not rejected.
-    if let Some(kind) = named_target(s) {
-        return Verdict::Keep(Some(kind));
+    // resemble a half-decoded %VAR%, are not rejected. Geofencing locales,
+    // stealer targets, DLL names and dynamically resolved APIs are worth
+    // keeping even inside noise; DLL names like `bcrypt.dll` have no vowels
+    // and would fail the linguistic checks.
+    if has_multiple_locales(s)
+        || names_targeted_location(s)
+        || s.ends_with(".dll")
+        || s.ends_with(".DLL")
+        || WIN_API_NAMES.iter().any(|api| s.contains(api))
+    {
+        return Verdict::Keep(Some(StringKind::SuspiciousPath));
     }
 
     // EARLY REJECTION: Check for partial/failed XOR decodes before any classification.
@@ -601,7 +619,7 @@ pub(crate) fn classify_xor_string(s: &str) -> Verdict {
         return Verdict::Reject;
     }
 
-    if let Some(kind) = keyword_kind(&s.to_ascii_lowercase()) {
+    if let Some(kind) = keyword_kind(s) {
         return Verdict::Keep(Some(kind));
     }
 

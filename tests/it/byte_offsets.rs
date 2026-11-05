@@ -3,7 +3,7 @@
 use stng::{ExtractOptions, StringMethod};
 
 #[test]
-fn test_text_file_byte_offsets_not_line_numbers() {
+fn reports_byte_offsets_not_line_numbers() {
     // Create test content with known structure
     let content = b"AAAA\nBBBBBBBB\nCCCCCCCCCCCC\n";
     //              ^0   ^5       ^14
@@ -40,7 +40,7 @@ fn test_text_file_byte_offsets_not_line_numbers() {
 }
 
 #[test]
-fn test_decoded_string_inherits_correct_offset() {
+fn gives_decoded_base64_its_source_offset() {
     // Base64 on its own line
     let content = b"SGVsbG8gV29ybGQh\n"; // "Hello World!"
     //              ^0
@@ -64,7 +64,7 @@ fn test_decoded_string_inherits_correct_offset() {
 }
 
 #[test]
-fn test_multiple_lines_correct_offsets() {
+fn reports_offsets_around_decoded_line() {
     // Use a longer base64 string (MIN_BASE64_LENGTH is 16)
     // "line1\n" = 6 bytes, base64 = 40 bytes, "\n" = 1, "line3" starts at 47
     let content = b"line1\nVGhpcyBpcyBhIGxvbmdlciB0ZXN0IHN0cmluZw==\nline3\n";
@@ -100,7 +100,7 @@ fn test_multiple_lines_correct_offsets() {
 }
 
 #[test]
-fn test_empty_lines_dont_affect_offsets() {
+fn counts_empty_lines_in_offsets() {
     let content = b"AAAA\n\nBBBB\n";
     //              ^0   ^5 ^6
 

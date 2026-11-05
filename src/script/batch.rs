@@ -246,7 +246,7 @@ fn command_head(line: &str) -> &str {
     line.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '@' | ',' | ';' | '='))
 }
 
-/// Split on unquoted, unescaped `&` (also covers `&&`).
+/// Split on unquoted, unescaped `&` and `|` (also covering `&&` and `||`).
 fn split_statements(line: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut in_quote = false;
@@ -346,40 +346,31 @@ fn unescape_carets(line: &str) -> String {
 fn worth_simulating(text: &str) -> (bool, bool) {
     let lower = text.to_ascii_lowercase();
     let worth = lower.contains("set ") && text.matches('%').count() >= 4;
-    let has_remap_markers =
-        lower.contains("chcp 708") && lower.contains("@manezao@=") && lower.contains("@jasa@=");
+    let has_remap_markers = lower.contains("chcp 708");
     (worth, has_remap_markers)
 }
 
 /// Decode the byte substitution used by CP708 batch obfuscators. They pair a
 /// 94-byte table of high bytes with the printable ASCII set (excluding `"`),
-/// then spell command text as `%<high-byte>%` variable references. Keep this
-/// behind its distinctive table and codepage markers; ordinary batch files
-/// should pay only the marker scan, and no locale or shell is invoked.
+/// both as quoted `set` values, then spell command text as `%<high-byte>%`
+/// variable references. The tables are found by shape, whatever the
+/// variables are called; ordinary batch files pay only the codepage check,
+/// and no locale or shell is invoked.
 fn decode_codepage_remap(data: &[u8]) -> Option<Vec<u8>> {
-    const TABLE_LEN: usize = 94;
-    if !crate::bytes::contains_ignore_ascii_case(data, b"chcp 708")
-        || !crate::bytes::contains_ignore_ascii_case(data, b"@manezao@=")
-        || !crate::bytes::contains_ignore_ascii_case(data, b"@jasa@=")
-    {
+    if !crate::bytes::contains_ignore_ascii_case(data, b"chcp 708") {
         return None;
     }
-
-    let ascii = assignment_table(data, b"@manezao@=", TABLE_LEN)?;
-    let encoded = assignment_table(data, b"@jasa@=", TABLE_LEN)?;
-    let mut ascii_seen = [false; 128];
-    let mut encoded_seen = [false; 256];
-    for (&a, &e) in ascii.iter().zip(encoded) {
-        if !(0x20..=0x7e).contains(&a)
-            || e < 0x80
-            || ascii_seen[a as usize]
-            || encoded_seen[e as usize]
-        {
-            return None;
-        }
-        ascii_seen[a as usize] = true;
-        encoded_seen[e as usize] = true;
-    }
+    let tables = assignment_tables(data);
+    let distinct = |table: &[u8], allowed: fn(u8) -> bool| {
+        let mut seen = [false; 256];
+        table
+            .iter()
+            .all(|&b| allowed(b) && !std::mem::replace(&mut seen[usize::from(b)], true))
+    };
+    let ascii = *tables
+        .iter()
+        .find(|t| distinct(t, |b| (0x20..=0x7e).contains(&b)))?;
+    let encoded = *tables.iter().find(|t| distinct(t, |b| b >= 0x80))?;
     let mut table = [0u8; 256];
     for (&from, &to) in encoded.iter().zip(ascii) {
         table[from as usize] = to;
@@ -407,25 +398,17 @@ fn decode_codepage_remap(data: &[u8]) -> Option<Vec<u8>> {
     (substitutions >= 16).then_some(out)
 }
 
-fn assignment_table<'a>(data: &'a [u8], marker: &[u8], len: usize) -> Option<&'a [u8]> {
-    for line in data.split(|b| *b == b'\n') {
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
-        let Some(start) = line
-            .windows(marker.len())
-            .position(|window| window.eq_ignore_ascii_case(marker))
-        else {
-            continue;
-        };
-        let value = line.get(start + marker.len()..)?;
-        let table = value.get(..len)?;
-        // Both tables are quoted SET assignments; the following byte closes
-        // the value and prevents consuming adjacent command text as table data.
-        if value.get(len) == Some(&b'"') {
-            return Some(table);
-        }
-        return None;
-    }
-    None
+/// The value of every quoted `set "name=…"` assignment that is exactly as
+/// long as a remap table: the closing quote follows its last byte, so
+/// adjacent command text is not taken for table data.
+fn assignment_tables(data: &[u8]) -> Vec<&[u8]> {
+    const TABLE_LEN: usize = 94;
+    data.split(|&b| b == b'\n')
+        .filter_map(|line| {
+            let value = &line[memchr::memchr(b'=', line)? + 1..];
+            (value.get(TABLE_LEN) == Some(&b'"')).then(|| &value[..TABLE_LEN])
+        })
+        .collect()
 }
 
 /// Reorder only a label/SET carrier ending in one variable-only invocation.

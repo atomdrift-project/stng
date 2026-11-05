@@ -154,12 +154,11 @@ jobs:
           PROFILE: ${{ inputs.profile }}
         run: cargo build --locked --profile "$PROFILE" --target "$TARGET" --bin stng
 
-      # Unit and integration tests for stng and stng-process. Integration tests
-      # link as one binary (tests/it) plus hostile_input, which needs a process
-      # to itself.
+      # Unit and integration tests. Integration tests link as one binary
+      # (tests/it) plus hostile_input, which needs a process to itself.
       - name: Test
         if: matrix.test
-        run: cargo test --locked --workspace
+        run: cargo test --locked
 
       # --- macOS signing ------------------------------------------------------
       # Unsigned path: an ad-hoc signature, matching what `make release` does on
@@ -453,9 +452,10 @@ jobs:
           retention-days: 14
 
   # The VM jobs below build natively with each OS's packaged rust, which also
-  # tells us when that rust drifts below our MSRV. stng is pure Rust apart
-  # from jemalloc, which Cargo.toml disables on the BSDs and illumos, so rust
-  # is the only package any of them needs. target/ stays out of the synced
+  # tells us when that rust drifts below our MSRV. stng's only C is
+  # tree-sitter (built by the base system's compiler) and jemalloc, which
+  # Cargo.toml disables on the BSDs and illumos, so rust is the only package
+  # any of them needs. target/ stays out of the synced
   # workspace: the action rsyncs the workspace back to the host afterwards.
   # aarch64 lives in the dispatch-only freebsd-arm64 job below; see its comment
   # for why it is not part of the always-on matrix.
@@ -1043,7 +1043,7 @@ jobs:
         run: cargo build --locked --profile "$PROFILE" --target "$TARGET" --bin stng
 
       - name: Test
-        run: cargo test --locked --workspace
+        run: cargo test --locked
 
       - name: Inspect
         env:

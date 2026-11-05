@@ -24,7 +24,12 @@ fn stack_string_spans_are_file_offsets() {
     ];
     let mut data = vec![0u8; 4096];
     data.extend_from_slice(&code);
-    let found = extract_stack_strings_from_ranges(&data, 4, &[(4096, data.len())]);
+    let found = extract_stack_strings_from_ranges(
+        &data,
+        4,
+        std::slice::from_ref(&(4096..data.len())),
+        Some(64),
+    );
     let s = found
         .iter()
         .find(|s| s.value.starts_with("hello"))
@@ -109,4 +114,23 @@ fn unclaimed_raw_strings_drops_short_gaps_between_literals() {
         at("bravo", 7, StringMethod::Structure),
     ];
     assert!(unclaimed_raw_strings(raw, &claimed, 4).is_empty());
+}
+
+#[test]
+fn a_decoded_string_is_kept_beside_its_source() {
+    let source = "aHR0cDovL2V2aWwuZXhhbXBsZS5jb20vcGF5bG9hZC5zaA==";
+    let strings = crate::extract_strings_with_options(
+        format!("token={source}\n").as_bytes(),
+        &crate::ExtractOptions::new(4),
+    );
+    assert!(
+        strings.iter().any(|s| s.value.contains(source)),
+        "{strings:?}"
+    );
+    assert!(
+        strings
+            .iter()
+            .any(|s| s.value == "http://evil.example.com/payload.sh"),
+        "{strings:?}"
+    );
 }

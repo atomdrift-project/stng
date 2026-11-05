@@ -85,7 +85,7 @@ fn minimal_pe_with_overlay(overlay_data: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn test_extract_from_elf_basic() {
+fn finds_embedded_string_in_elf() {
     let data = minimal_elf_with_strings(&["hello_from_elf", "test_string_elf"]);
     let opts = ExtractOptions::new(4);
 
@@ -102,7 +102,7 @@ fn test_extract_from_elf_basic() {
 }
 
 #[test]
-fn test_extract_from_macho_basic() {
+fn finds_embedded_string_in_macho() {
     let data = minimal_macho_with_strings(&["hello_from_macho", "test_string_macho"]);
     let opts = ExtractOptions::new(4);
 
@@ -118,7 +118,7 @@ fn test_extract_from_macho_basic() {
 }
 
 #[test]
-fn test_extract_from_pe_basic() {
+fn finds_embedded_string_in_pe() {
     let mut data = vec![0u8; 1024];
     // DOS header
     data[0..2].copy_from_slice(&[0x4D, 0x5A]);
@@ -140,29 +140,33 @@ fn test_extract_from_pe_basic() {
 }
 
 #[test]
-fn test_extract_overlay_strings_basic() {
+fn finds_string_in_pe_overlay() {
     // Create PE with overlay containing strings
     let overlay = b"OVERLAY_SECRET_STRING\0more_overlay_data\0";
     let data = minimal_pe_with_overlay(overlay);
 
-    // Overlay extraction covers ELF only.
-    assert!(extract_overlay_strings(&data, 4).is_empty());
+    let values: Vec<_> = extract_overlay_strings(&data, 4)
+        .into_iter()
+        .map(|s| s.value)
+        .collect();
+    assert!(
+        values.iter().any(|v| v == "OVERLAY_SECRET_STRING"),
+        "{values:?}"
+    );
 }
 
 #[test]
-fn test_detect_elf_overlay_no_overlay() {
+fn elf_overlay_starts_after_header() {
     let data = minimal_elf_with_strings(&["test"]);
-    let overlay = detect_elf_overlay(&data);
-    // Minimal ELF without proper section headers will have data treated as overlay
-    // Just verify the detection doesn't crash and returns reasonable results
-    if let Some(o) = overlay {
-        assert!(o.start_offset >= 64); // Should start after ELF header
-        assert!(o.size < data.len() as u64); // Should be less than total file size
-    }
+    // With no program or section headers, the image is the 64-byte ELF
+    // header alone and everything after it is overlay.
+    let o = detect_elf_overlay(&data).expect("the bytes after the header are overlay");
+    assert_eq!(o.start_offset, 64);
+    assert_eq!(o.size, data.len() as u64 - 64);
 }
 
 #[test]
-fn test_overlay_string_offsets_are_absolute() {
+fn overlay_offsets_are_absolute() {
     // Create a minimal ELF that ends at a known offset
     let mut data = vec![0u8; 1024];
     // ELF magic
@@ -245,7 +249,7 @@ fn test_overlay_string_offsets_are_absolute() {
 }
 
 #[test]
-fn test_extract_from_elf_with_garbage_filter() {
+fn filter_drops_punctuation_in_elf() {
     let data = minimal_elf_with_strings(&["valid_string", "@@##$$"]);
     let opts = ExtractOptions::new(4).with_garbage_filter(true);
 
@@ -257,7 +261,7 @@ fn test_extract_from_elf_with_garbage_filter() {
 }
 
 #[test]
-fn test_extract_from_macho_with_garbage_filter() {
+fn filter_drops_punctuation_in_macho() {
     let data = minimal_macho_with_strings(&["valid_string", "@@##$$"]);
     let opts = ExtractOptions::new(4).with_garbage_filter(true);
 
@@ -268,7 +272,7 @@ fn test_extract_from_macho_with_garbage_filter() {
 }
 
 #[test]
-fn test_extract_from_pe_with_garbage_filter() {
+fn filter_keeps_identifier_in_pe() {
     let mut data = vec![0u8; 1024];
     data[0..2].copy_from_slice(&[0x4D, 0x5A]);
     data[0x3C..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);

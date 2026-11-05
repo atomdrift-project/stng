@@ -23,90 +23,60 @@ use std::collections::HashSet;
 /// Magic signature for .NET metadata root ("BSJB")
 const METADATA_SIGNATURE: &[u8] = b"BSJB";
 
-/// Extract strings from the .NET User String (#US) heap.
-///
-/// Returns extracted strings from the #US heap if this is a .NET assembly.
-/// Returns empty vector for native PE or if parsing fails.
+/// Extract strings from the .NET User String (#US) heap: none for a native
+/// PE, or one whose metadata does not parse.
 pub(crate) fn extract_us_heap_strings(
     pe: &PE<'_>,
     data: &[u8],
     min_length: usize,
 ) -> Vec<ExtractedString> {
-    let mut results = Vec::new();
-
-    // Get CLR runtime header from data directory 14
-    let clr_dir = match pe.header.optional_header {
-        Some(ref opt) => opt.data_directories.get_clr_runtime_header(),
-        None => return results,
-    };
-
-    let (clr_rva, clr_size) = match clr_dir {
-        Some(dir) => (dir.virtual_address, dir.size),
-        None => return results, // Not a .NET binary
-    };
-
-    if clr_size < 72 {
-        return results; // CLR header too small
-    }
-
-    // Convert RVA to file offset
-    let Some(clr_offset) = rva_to_offset(pe, clr_rva) else {
-        return results;
-    };
-
-    // CLR header: metadata RVA at offset 8, metadata size at 12.
-    // https://docs.microsoft.com/en-us/dotnet/standard/metadata-and-self-describing-components
-    let (Some(metadata_rva), Some(metadata_size)) = (
-        u32_le(data, clr_offset.saturating_add(8)),
-        u32_le(data, clr_offset.saturating_add(12)),
-    ) else {
-        return results;
-    };
-    let metadata_size = metadata_size as usize;
-    if metadata_size == 0 || metadata_size > 100 * 1024 * 1024 {
-        tracing::debug!(metadata_size, ".NET metadata size out of range");
-        return results;
-    }
-    let Some(metadata_offset) = rva_to_offset(pe, metadata_rva) else {
-        return results;
-    };
-    let Some(metadata) = metadata_offset
-        .checked_add(metadata_size)
-        .and_then(|end| data.get(metadata_offset..end))
-    else {
-        return results;
-    };
-
-    // Parse metadata root to find #US stream
-    if let Some((us_offset, us_size)) = find_us_stream(metadata) {
-        let us_data = &metadata[us_offset..us_offset + us_size];
-        let file_base_offset = (metadata_offset + us_offset) as u64;
-
-        results.extend(parse_us_heap(us_data, file_base_offset, min_length));
-    }
-
-    results
+    us_heap(pe, data)
+        .map(|(heap, offset)| parse_us_heap(heap, offset, min_length))
+        .unwrap_or_default()
 }
 
-/// Convert RVA to file offset using PE section mapping.
-fn rva_to_offset(pe: &PE<'_>, rva: u32) -> Option<usize> {
-    for section in &pe.sections {
-        let section_rva = section.virtual_address;
-        let section_size = section.virtual_size.max(section.size_of_raw_data);
-        let section_offset = section.pointer_to_raw_data as usize;
-
-        if rva >= section_rva && rva < section_rva.saturating_add(section_size) {
-            let offset_in_section = (rva - section_rva) as usize;
-            return section_offset.checked_add(offset_in_section);
-        }
+/// The #US heap of a .NET assembly, and its file offset.
+fn us_heap<'d>(pe: &PE<'_>, data: &'d [u8]) -> Option<(&'d [u8], u64)> {
+    let clr = *pe
+        .header
+        .optional_header?
+        .data_directories
+        .get_clr_runtime_header()?;
+    // A CLR header is 72 bytes.
+    if clr.size < 72 {
+        return None;
     }
-    None
+    let clr_offset = rva_to_offset(pe, clr.virtual_address)?;
+    // CLR header: metadata RVA at offset 8, metadata size at 12.
+    // https://docs.microsoft.com/en-us/dotnet/standard/metadata-and-self-describing-components
+    let metadata_rva = u32_le(data, clr_offset.saturating_add(8))?;
+    let metadata_size = usize::try_from(u32_le(data, clr_offset.saturating_add(12))?).ok()?;
+    if metadata_size == 0 || metadata_size > 100 * 1024 * 1024 {
+        tracing::debug!(metadata_size, ".NET metadata size out of range");
+        return None;
+    }
+    let metadata_offset = rva_to_offset(pe, metadata_rva)?;
+    let metadata = data.get(metadata_offset..metadata_offset.checked_add(metadata_size)?)?;
+    let us = find_us_stream(metadata)?;
+    let offset = u64::try_from(metadata_offset + us.start).ok()?;
+    Some((&metadata[us], offset))
+}
+
+/// The file offset of `rva`, through the section that maps it.
+fn rva_to_offset(pe: &PE<'_>, rva: u32) -> Option<usize> {
+    let section = pe.sections.iter().find(|s| {
+        rva.checked_sub(s.virtual_address)
+            .is_some_and(|delta| delta < s.virtual_size.max(s.size_of_raw_data))
+    })?;
+    usize::try_from(
+        u64::from(section.pointer_to_raw_data) + u64::from(rva - section.virtual_address),
+    )
+    .ok()
 }
 
 /// Find the #US (User Strings) stream in the metadata.
-/// Returns (offset, size) relative to metadata start.
-fn find_us_stream(metadata: &[u8]) -> Option<(usize, usize)> {
-    // Check for BSJB signature at offset 0
+/// Its byte range within `metadata`.
+fn find_us_stream(metadata: &[u8]) -> Option<std::ops::Range<usize>> {
     if metadata.len() < 16 || &metadata[0..4] != METADATA_SIGNATURE {
         return None;
     }
@@ -140,35 +110,20 @@ fn find_us_stream(metadata: &[u8]) -> Option<(usize, usize)> {
     let mut pos = streams_offset + 4;
 
     for _ in 0..stream_count {
-        // Stream header: offset (4), size (4), name (null-terminated, 4-byte aligned)
+        // Stream header: offset (4), size (4), then a NUL-terminated name
+        // padded to 4 bytes.
         let stream_offset = u32_le(metadata, pos)? as usize;
         let stream_size = u32_le(metadata, pos + 4)? as usize;
+        let name_start = pos + 8;
+        let name_end = name_start + memchr::memchr(0, metadata.get(name_start..)?)?;
+        pos = (name_end + 1 + 3) & !3;
 
-        pos += 8;
-
-        // Read stream name (null-terminated, 4-byte aligned)
-        let name_start = pos;
-        while pos < metadata.len() && metadata[pos] != 0 {
-            pos += 1;
-        }
-
-        if pos >= metadata.len() {
-            return None;
-        }
-
-        let name = std::str::from_utf8(&metadata[name_start..pos]).unwrap_or("");
-
-        // Skip null terminator and align to 4 bytes
-        pos += 1;
-        pos = (pos + 3) & !3;
-
-        // Check if this is the #US stream
-        if name == "#US"
-            && stream_offset
+        if &metadata[name_start..name_end] == b"#US"
+            && let Some(end) = stream_offset
                 .checked_add(stream_size)
-                .is_some_and(|end| end <= metadata.len())
+                .filter(|&end| end <= metadata.len())
         {
-            return Some((stream_offset, stream_size));
+            return Some(stream_offset..end);
         }
     }
 
@@ -217,12 +172,11 @@ fn parse_us_heap(heap: &[u8], file_base_offset: u64, min_length: usize) -> Vec<E
             if utf16_len >= 2 && utf16_len % 2 == 0 {
                 let utf16_data = &heap[string_start..string_start + utf16_len];
 
-                // Convert to u16 code units
                 let code_units: Vec<u16> = utf16_data
                     .as_chunks::<2>()
                     .0
                     .iter()
-                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                    .map(|&chunk| u16::from_le_bytes(chunk))
                     .collect();
 
                 // Decode to string
@@ -297,7 +251,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_read_compressed_uint_1byte() {
+    fn reads_1byte_compressed_uint() {
         // 1-byte values: 0x00-0x7F
         assert_eq!(read_compressed_uint(&[0x00]), Some((0, 1)));
         assert_eq!(read_compressed_uint(&[0x7F]), Some((0x7F, 1)));
@@ -305,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_compressed_uint_2byte() {
+    fn reads_2byte_compressed_uint() {
         // 2-byte values: 0x80-0x3FFF
         // Format: 10xxxxxx xxxxxxxx
         assert_eq!(read_compressed_uint(&[0x80, 0x80]), Some((0x80, 2)));
@@ -314,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_compressed_uint_4byte() {
+    fn reads_4byte_compressed_uint() {
         // 4-byte values
         // Format: 110xxxxx xxxxxxxx xxxxxxxx xxxxxxxx
         assert_eq!(
@@ -324,12 +278,12 @@ mod tests {
     }
 
     #[test]
-    fn test_read_compressed_uint_empty() {
+    fn rejects_empty_compressed_uint() {
         assert_eq!(read_compressed_uint(&[]), None);
     }
 
     #[test]
-    fn test_read_compressed_uint_truncated() {
+    fn rejects_truncated_compressed_uint() {
         // 2-byte marker but only 1 byte of data
         assert_eq!(read_compressed_uint(&[0x80]), None);
 
@@ -338,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_us_stream_invalid() {
+    fn finds_no_us_stream_without_metadata() {
         // Empty data
         assert_eq!(find_us_stream(&[]), None);
 
@@ -350,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_us_heap_empty() {
+    fn empty_us_heap_yields_nothing() {
         // Empty heap
         let results = parse_us_heap(&[], 0, 4);
         assert!(results.is_empty());
@@ -361,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_us_heap_simple_string() {
+    fn parses_utf16_us_heap_entry() {
         // Construct a simple #US heap entry
         // Format: [null byte] [length] [UTF-16LE data] [trailing byte]
 
@@ -381,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_us_heap_min_length() {
+    fn drops_us_strings_below_min_length() {
         // "Hi" is too short (min_length = 4)
         let mut heap = vec![0x00];
         heap.push(0x05); // Length = 5 (4 UTF-16 bytes + 1 trailing)

@@ -8,16 +8,21 @@ fn real_binary() -> Vec<u8> {
 }
 
 #[test]
-fn test_extract_strings_real_binary() {
+fn finds_powershell_exclusion_command() {
     let data = real_binary();
 
     let strings = extract_strings(&data, 4);
-    // Real binaries should have some strings
-    assert!(!strings.is_empty(), "Real binary should have strings");
+    // The program's payload: a Defender exclusion for the whole C: drive.
+    assert!(
+        strings.iter().any(|s| s.value
+            == r#"powershell -Command "Add-MpPreference -ExclusionPath 'C:\'""#
+            && s.data_offset == 0x1450),
+        "powershell command not found"
+    );
 }
 
 #[test]
-fn test_detect_language_real_binary() {
+fn detects_compiled_language() {
     let data = real_binary();
 
     let lang = detect_language(&data);
@@ -29,7 +34,7 @@ fn test_detect_language_real_binary() {
 }
 
 #[test]
-fn test_is_go_binary_real_binary() {
+fn is_not_go() {
     let data = real_binary();
 
     // System binaries are typically not Go
@@ -38,7 +43,7 @@ fn test_is_go_binary_real_binary() {
 }
 
 #[test]
-fn test_is_rust_binary_real_binary() {
+fn is_not_rust() {
     let data = real_binary();
 
     // System binaries are typically not Rust
@@ -47,16 +52,22 @@ fn test_is_rust_binary_real_binary() {
 }
 
 #[test]
-fn test_extract_with_options_real_binary() {
+fn finds_system_import() {
     let data = real_binary();
 
     let opts = ExtractOptions::new(4);
     let strings = extract_strings_with_options(&data, &opts);
-    assert!(!strings.is_empty());
+    // The CRT `system` the payload runs through, at its import-by-name entry.
+    assert!(
+        strings.iter().any(|s| s.value == "system"
+            && s.data_offset == 0x1d5a
+            && s.kind == Some(StringKind::Import)),
+        "system import not found"
+    );
 }
 
 #[test]
-fn test_extract_with_min_length_variations() {
+fn higher_min_length_finds_fewer() {
     let data = real_binary();
 
     let strings_4 = extract_strings(&data, 4);
@@ -69,14 +80,23 @@ fn test_extract_with_min_length_variations() {
 }
 
 #[test]
-fn test_extracted_strings_have_valid_values() {
+fn raw_scan_values_match_file_bytes() {
     let data = real_binary();
 
     let strings = extract_strings(&data, 4);
-    for s in &strings {
-        // Strings should be valid UTF-8 (they're already String type)
-        assert!(!s.value.is_empty());
-        // Note: Some strings (imports/symbols) may be shorter than min_length
-        // The min_length filter applies to extracted strings, not imports
+    let raw: Vec<_> = strings
+        .iter()
+        .filter(|s| s.method == StringMethod::RawScan)
+        .collect();
+    assert!(!raw.is_empty(), "no raw-scan strings");
+    // A raw-scan string is a byte-identical copy of the file at its offset.
+    for s in raw {
+        let start = usize::try_from(s.data_offset).unwrap();
+        assert_eq!(
+            data.get(start..start + s.value.len()),
+            Some(s.value.as_bytes()),
+            "{:?} at 0x{start:x}",
+            s.value
+        );
     }
 }

@@ -151,7 +151,7 @@ fn keystream(prev: u8, state: u32) -> u8 {
 /// Decrypts the record at `pos`, returning its plaintext and its length in
 /// bytes through the padding.
 fn record(bytes: &[u8], pos: usize) -> Option<(String, usize)> {
-    let seed = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?);
+    let seed = crate::bytes::u32_le(bytes, pos)?;
     let mut prev = seed.to_le_bytes()[0];
     let mut state = seed;
     let mut plain = Vec::new();

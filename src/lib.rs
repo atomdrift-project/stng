@@ -1,39 +1,90 @@
-// Allow unwrap/expect/panic in test code — panicking on failure is idiomatic in tests.
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+// Tests panic on failure and build their inputs with plain casts.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::cast_possible_truncation
+    )
+)]
 
-//! # stng - Language-aware string extraction
+//! # stng: strings(1) for malware analysis
 //!
-//! This library provides language-aware string extraction for Go and Rust binaries.
-//! Unlike traditional `strings(1)`, it understands how these languages store strings
-//! internally (pointer + length pairs, NOT null-terminated) and can properly extract
-//! individual strings from packed string data.
+//! stng extracts the strings in a binary or script and says what each one
+//! is (a URL, an IP, a shell command, a path, an API key, …) and how it was
+//! found. Beyond a byte scan it:
 //!
-//! ## Background
+//! - reads Go and Rust string data by its `{ptr, len}` structures, which a
+//!   byte scan merges into blobs because the strings have no terminators;
+//! - follows the instructions that load string addresses and lengths, and
+//!   rebuilds strings assembled on the stack;
+//! - decodes base64, hex, URL and Unicode escapes, base32/base85, and
+//!   obfuscated scripts (JavaScript, PowerShell, Python, PHP, VBScript,
+//!   batch, Lua);
+//! - recovers XOR-encoded strings: single-byte and repeating keys found in
+//!   the file, a key the caller gives, and several compiler- and
+//!   loader-specific encodings.
 //!
-//! Both Go and Rust use "fat pointer" representations for strings:
-//! - Go: `string` is `{ptr: *byte, len: int}` (16 bytes on 64-bit)
-//! - Rust: `&str` is `{ptr: *u8, len: usize}` (16 bytes on 64-bit)
-//! - Rust: `String` is `{ptr: *u8, len: usize, cap: usize}` (24 bytes on 64-bit)
-//!
-//! Because strings aren't null-terminated, they're often packed together
-//! in the binary without separators. Traditional string extraction tools
-//! concatenate them into garbage blobs.
-//!
-//! This module finds the pointer+length structures and uses them to
-//! extract strings with precise boundaries.
+//! Every string carries its file offset and the extent of the bytes it came
+//! from ([`ExtractedString::source_spans`]); [`extract_iocs`] turns a set of
+//! strings into canonical network, path and key indicators.
 //!
 //! ## Usage
 //!
 //! ```no_run
-//! use stng::extract_strings;
-//!
-//! let data = std::fs::read("my_binary").unwrap();
-//! let strings = extract_strings(&data, 4);
-//!
-//! for s in strings {
-//!     println!("{}: {}", s.data_offset, s.value);
+//! let data = std::fs::read("sample.bin").expect("read sample");
+//! let opts = stng::ExtractOptions::new(4)
+//!     .with_garbage_filter(true)
+//!     .with_xor(stng::XorMode::Auto);
+//! for s in stng::extract_strings_with_options(&data, &opts) {
+//!     println!("{:#x} {:?} {}", s.data_offset, s.kind, s.value);
 //! }
 //! ```
+//!
+//! [`ExtractOptions::new`] turns every optional pass off: no garbage filter
+//! and no XOR. The `stng` command turns both on. [`extract_strings`] is
+//! `extract_strings_with_options` with those defaults.
+//!
+//! ## Hostile input
+//!
+//! Inputs are assumed to be malicious. Offsets and sizes from headers are
+//! bounds-checked before use, every decoder and scanner has a work or size
+//! budget, and stng never executes, loads or writes what it scans. A pass
+//! that runs out of budget logs it at `debug` and returns what it has.
+//!
+//! ## Threads and cancellation
+//!
+//! stng runs its passes on rayon's global pool and never builds or
+//! configures one; bound it with [`rayon::ThreadPool::install`] around the
+//! call. [`ExtractOptions::with_cancellation`] is checked between passes;
+//! a cancelled call returns the strings found so far, so treat its result
+//! as partial.
+//!
+//! ## Depending on stng
+//!
+//! stng depends on a tree-sitter fork through `[patch.crates-io]`, and Cargo
+//! applies patches only from the top-level manifest. A crate that depends on
+//! stng must copy that `[patch.crates-io]` block from stng's `Cargo.toml`;
+//! without it, Lua deobfuscation parses hostile input with upstream
+//! tree-sitter, which lacks the fork's bounds.
+
+/// The `unwrap_or_else` arm for building a matcher from a pattern fixed in
+/// the source: failing is a bug in that pattern, never a property of the
+/// input, so it panics. Clippy's `invalid_regex` checks literal patterns at
+/// compile time, and every matcher is built by some test.
+#[expect(
+    clippy::panic,
+    reason = "only reached for a pattern written in this crate"
+)]
+pub(crate) fn invalid_pattern<T>(e: impl std::fmt::Display) -> T {
+    panic!("invalid static pattern: {e}")
+}
+
+// The README's examples compile as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 // Offsets and sizes from headers are u64, and the code converts them to usize
 // freely: on a 32-bit target that would truncate them silently.
@@ -71,7 +122,7 @@ mod x86;
 pub mod script;
 
 // String classifier
-pub mod classifier;
+mod classifier;
 
 // Extractors: Go and Rust structures, instruction patterns, XOR
 mod go;
@@ -84,58 +135,46 @@ pub(crate) mod decoders;
 mod fuzzy_base64;
 
 // Public API
-pub use binary::{is_go_binary, is_rust_binary};
 pub use classifier::classify_string;
-pub use decoders::decode_spaced_ascii;
-pub use detect::{Language, detect_language, is_text_file};
+pub use detect::{Language, detect_language};
 pub use ioc::{
     Ioc, IocKind, IocOccurrence, IpEvidence, KeyAlgorithm, KeyMetadata, MAX_IOC_OCCURRENCES,
     canonicalize_hostname, canonicalize_ioc_path, decode_key_material, encode_key_material,
     extract_iocs, is_external_ip,
 };
-pub use overlay::detect_elf_overlay;
-pub use types::{
-    Arch, ExtractedString, OverlayInfo, Severity, StringContext, StringFragment, StringKind,
-    StringMethod,
-};
-pub use xor::lcg::{Lcg, decode_lcg_xor, decode_xor_fat_macho, extract_macho_lcg_xor};
+pub use overlay::{detect_elf_overlay, detect_overlay};
+pub use types::{ExtractedString, OverlayInfo, Severity, StringFragment, StringKind, StringMethod};
+pub use xor::lcg::{Lcg, LcgError, decode_lcg_xor, decode_xor_fat_macho};
 
-pub use xor::{MAX_XOR_SCAN_SIZE, RepeatingXorKey, recover_repeating_xor_pe};
+pub use validation::is_garbage;
+pub use xor::{RepeatingXorKey, recover_repeating_xor_pe};
 
-// Internal — not part of the stable public API
-pub(crate) use go::{GoStringExtractor, pclntab_strings};
+/// Single-purpose detectors and passes that the integration tests exercise
+/// directly. Not part of the stable API: they may change in any release.
+#[doc(hidden)]
+pub use binary::{is_go_binary, is_rust_binary};
+#[doc(hidden)]
+pub use detect::is_text_file;
+#[doc(hidden)]
 pub use overlay::extract_overlay_strings;
-pub(crate) use rust::RustStringExtractor;
-pub(crate) use stack_strings::{extract_stack_strings, extract_stack_strings_with_context};
-pub use validation::{is_garbage, is_garbage_with_context};
+#[doc(hidden)]
+pub use xor::lcg::extract_macho_lcg_xor;
 
-/// The goblin stng parses with, so a caller can parse once and hand the
-/// object to [`extract_strings_from_object`]. Its version is part of stng's
-/// API: a goblin release that breaks its API is a stng major release.
+/// binform, whose layouts [`extract_strings_from_parsed`] accepts so a
+/// caller reads a binary's tables once. Its version is part of stng's API.
 pub use binform;
+/// goblin, whose parsed [`Object`] [`extract_strings_from_parsed`]
+/// accepts so a caller parses once. Its version is part of stng's API, and
+/// goblin is pre-1.0, so a goblin minor release that breaks its API is a
+/// stng major release.
 pub use goblin;
 use goblin::Object;
 pub use layouts::Layout;
 pub use options::{ExtractOptions, FormatHint, XorMode};
 pub use pipeline::decode::decode_encoded_strings;
 
-// Import internal modules for use in this file
-use binary::{
-    collect_elf_section_info, collect_elf_segments, collect_macho_section_info,
-    collect_macho_segments, collect_pe_section_info, elf_go_skip_ranges, macho_go_skip_ranges,
-    macho_has_go_sections, pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
-};
-use imports::{extract_layout_imports, extract_macho_imports};
-use pipeline::decode::{Rot13, decode, decode_spaced_strings};
 use pipeline::java::extract_java_class_strings;
-use pipeline::text::{
-    append_script_deobfuscation, extract_from_malformed_utf16_bom_file, extract_from_utf16_file,
-    should_deobfuscate_script,
-};
-use pipeline::xor::{apply_xor_scan, scans_for_xor};
-use pipeline::{deduplicate_by_offset, passes_garbage_filter};
-use raw::{extract_raw_strings, extract_wide_strings};
-use sockaddr::scan_binary_ips;
+use pipeline::text::{extract_from_malformed_utf16_bom_file, extract_from_utf16_file};
 
 /// Extract strings from binary data using multiple techniques.
 ///
@@ -192,172 +231,88 @@ pub fn extract_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
 /// ```
 #[must_use]
 pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
-    // Fast-fail on already-cancelled callers.
+    route(data, None, &[], opts)
+}
+
+/// The one router behind every entry point: `parsed` is the caller's goblin
+/// object, if any, which saves a parse but never changes the route.
+fn route<'d>(
+    data: &'d [u8],
+    parsed: Option<&Object<'_>>,
+    layouts: &[Layout<'_, 'd>],
+    opts: &ExtractOptions,
+) -> Vec<ExtractedString> {
     if opts.is_cancelled() {
         return Vec::new();
     }
 
-    // Check for UTF-16 BOM first, before trying to parse as a binary format
-    // This ensures text files with UTF-16 encoding are handled correctly
-    if data.len() >= 2 {
-        let has_utf16le_bom = data[0] == 0xFF && data[1] == 0xFE;
-        let has_utf16be_bom = data[0] == 0xFE && data[1] == 0xFF;
-
-        if has_utf16le_bom || has_utf16be_bom {
+    // A UTF-16 byte-order mark makes the file text, whatever goblin would
+    // make of the bytes after it.
+    if let Some(&[a, b]) = data.get(..2) {
+        let le = [a, b] == [0xFF, 0xFE];
+        if le || [a, b] == [0xFE, 0xFF] {
+            tracing::debug!(
+                little_endian = le,
+                "UTF-16 byte-order mark; scanning as text"
+            );
             if let Some(strings) = extract_from_malformed_utf16_bom_file(data, opts) {
                 return strings;
             }
-            return extract_from_utf16_file(data, opts, has_utf16le_bom);
+            return extract_from_utf16_file(data, opts, le);
         }
     }
 
-    // Route binary objects we actually understand through the goblin
-    // path; treat everything else (parse error *or* `Object::Unknown` —
-    // goblin's "this magic isn't a binary I recognise" catchall) as a
-    // raw / text input.
-    //
-    // Without this, ZIP-prefixed scripts, polyglots, and any
-    // text-with-trailing-binary file land on the goblin branch (which
-    // gates encoded-string decoding behind `is_text_file`) and the
-    // base64 / hex / url decoders never run on the script payload.
-    // Goblin's binary extractors have nothing useful to say about an
-    // `Object::Unknown` anyway, so the only thing the goblin branch
-    // contributes there is the gate that breaks decoding.
-    // A JVM class and a big-endian fat Mach-O share the same CAFEBABE magic.
-    // Goblin therefore accepts a class as `Mach::Fat`, interprets the JVM
-    // minor/major version words as an architecture count, warns once per
-    // bogus FatArch, and returns no useful strings.  A real fat Mach-O keeps
-    // its architecture count in bytes 4..8 (normally a small integer), while
-    // a class stores a plausible JVM major version in bytes 6..8 followed by
-    // a constant-pool count and tag. Walk that pool directly: it is both
-    // cheaper and more exact than treating Java as an unknown binary. The
-    // bound also keeps malformed CAFEBABE input out of goblin's
-    // fat-architecture loop.
+    // A JVM class and a big-endian fat Mach-O share the CAFEBABE magic, so
+    // goblin reads a class as `Mach::Fat` with its version words as an
+    // architecture count, and finds nothing. A fat Mach-O's count (bytes
+    // 4..8) is a small integer; a class's major version there is above 16.
+    // Walking the constant pool is cheaper and exact, and keeps malformed
+    // CAFEBABE input out of goblin's fat-architecture loop.
     if let Some(&[0xCA, 0xFE, 0xBA, 0xBE, a, b, c, d]) = data.get(..8)
         && u32::from_be_bytes([a, b, c, d]) > 16
     {
+        tracing::debug!("JVM class file");
         return extract_java_class_strings(data, opts);
     }
 
-    let parsed_binary = match Object::parse(data) {
-        Ok(obj) if !matches!(obj, Object::Unknown(_)) => Some(obj),
-        _ => None,
+    // `Object::Unknown` (no magic goblin recognises) and a parse error both
+    // mean the input is not a binary stng has a format pass for: text,
+    // scripts, ZIP-prefixed polyglots, damaged binaries.
+    let parsed_here;
+    let object = match parsed {
+        Some(object) => Some(object),
+        None => {
+            parsed_here = Object::parse(data);
+            if let Err(e) = &parsed_here {
+                tracing::debug!(error = %e, "not a binary goblin parses; scanning as raw input");
+            }
+            parsed_here.as_ref().ok()
+        }
     };
-
-    if let Some(object) = parsed_binary {
-        let t0 = std::time::Instant::now();
-        let mut strings = pipeline::extract(&object, &layouts::Layouts::new(&[]), data, opts);
-        tracing::debug!("TIME: Extraction took {:?}", t0.elapsed());
-
-        // For text files parsed by goblin (e.g. as Unknown), also run script deobfuscation
-        if should_deobfuscate_script(data, &strings) {
-            append_script_deobfuscation(&mut strings, data, opts);
+    match object {
+        Some(object) if !matches!(object, Object::Unknown(_)) => {
+            let format = match object {
+                Object::Elf(_) => "elf",
+                Object::PE(_) => "pe",
+                Object::Mach(goblin::mach::Mach::Binary(_)) => "macho",
+                Object::Mach(goblin::mach::Mach::Fat(_)) => "macho-fat",
+                _ => "other",
+            };
+            tracing::debug!(format, bytes = data.len(), "parsed binary");
+            let t0 = std::time::Instant::now();
+            let strings = pipeline::extract(object, &layouts::Layouts::new(layouts), data, opts);
+            tracing::debug!(elapsed = ?t0.elapsed(), "extraction finished");
+            strings
         }
-
-        deduplicate_by_offset(strings)
-    } else {
-        // Unknown format: the caller's strings, if any, plus a raw scan.
-        let mut strings = Vec::new();
-
-        // Check if this looks like a PE (MZ header) even if goblin failed to parse
-        let is_pe = data.len() >= 2 && data[0] == 0x4D && data[1] == 0x5A;
-
-        // Extract wide strings for PE-like files (common in Windows binaries)
-        if is_pe && !data.is_empty() {
-            strings.extend(extract_wide_strings(data, opts.min_length, &[], &[]));
-        }
-
-        // Raw scan for all unknown formats; caller strings complement it.
-        if !data.is_empty() {
-            strings.extend(extract_raw_strings(data, opts.min_length, &[], &[]));
-        }
-
-        // Legacy ColdFusion templates use a fixed signature followed by
-        // DES-encrypted CFML. Recover the source as one decoded string so
-        // language and behavior traits can inspect the actual template body.
-        if !opts.is_cancelled()
-            && let Some(source) = cfml::decode(data)
-            && source.len() >= opts.min_length
-        {
-            strings.push(ExtractedString {
-                value: String::from_utf8_lossy(&source).into_owned(),
-                data_offset: 0,
-                data_len: u32::try_from(data.len()).unwrap_or(u32::MAX),
-                method: StringMethod::CfmlDecode,
-                kind: None,
-                fragments: None,
-            });
-        }
-
-        // Extract binary network data (IPs and ports in network byte order)
-        // For unknown formats, use 0 (not M68000) to process normally
-        strings.extend(scan_binary_ips(data, opts.min_length, 0, None, None));
-        strings.extend(extract_stack_strings(data, opts.min_length));
-
-        // Trigger XOR scan even for unknown formats if requested
-        if opts.xor != XorMode::Off {
-            apply_xor_scan(&mut strings, data, opts, is_pe, &[]);
-        }
-
-        // A PE under a repeating XOR key is opaque to goblin, so this branch is
-        // the only place one can land. Recovery reads a fixed 128-byte header
-        // whatever the input size, so it needs no size gate; text is skipped
-        // as `apply_xor_scan` skips it. Only the key is surfaced; the decoded
-        // image is binary, for callers of `recover_repeating_xor_pe`.
-        if opts.xor_scans()
-            && scans_for_xor(data, opts)
-            && let Some(key) = xor::recover_repeating_xor_pe(data)
-        {
-            strings.push(key.to_key_string());
-        }
-
-        if !opts.is_cancelled() {
-            let decoded = decode(&strings, Rot13::No);
-            strings.extend(decoded);
-        }
-
-        // Decode spaced ASCII strings (common in PE .rsrc, .NET metadata)
-        decode_spaced_strings(&mut strings, opts.min_length);
-
-        // Script deobfuscation for text files that didn't parse as a known binary format
-        if should_deobfuscate_script(data, &strings) {
-            append_script_deobfuscation(&mut strings, data, opts);
-        }
-
-        // XOR already ran once above, before the decoder suite, so XOR
-        // plaintext still feeds base64/hex. A second full-file scan here
-        // is the same bytes (unknown format has no new section map).
-        if opts.filter_garbage {
-            strings.retain(|s| passes_garbage_filter(s, &[]));
-        }
-
-        deduplicate_by_offset(strings)
+        _ => pipeline::extract_unknown(data, opts),
     }
 }
 
-/// Extract strings from binary data using a caller-supplied parsed goblin object.
-///
-/// Callers that have already called `goblin::Object::parse` for their own
-/// analysis can pass the result here to avoid stng re-parsing.
-///
-/// The function routes through the same internal pipeline as
-/// `extract_strings_with_options`, honouring cancellation and format-hint
-/// options.  For text / unknown inputs callers should use
-/// `extract_strings_with_options` instead — this entry point assumes the
-/// caller has a valid `Object`.
-#[must_use]
-pub fn extract_strings_from_object(
-    object: &Object<'_>,
-    data: &[u8],
-    opts: &ExtractOptions,
-) -> Vec<ExtractedString> {
-    extract_strings_from_parsed(object, &[], data, opts)
-}
-
-/// [`extract_strings_from_object`], also given the binform layouts the
-/// caller already read from `data`, each with the file offset of the bytes it
-/// was read from: zero for a whole binary, a slice's offset for one
-/// architecture of a universal binary.
+/// [`extract_strings_with_options`] for a binary the caller already parsed:
+/// the goblin `object` for `data`, and any binform layouts already read
+/// from it, each with the file offset of the bytes it was read from (zero
+/// for a whole binary, a slice's offset for one architecture of a universal
+/// binary). The result is the same as from the bytes alone.
 ///
 /// stng reads a binary's import, export and symbol tables through binform,
 /// and only when it needs them: unless [`ExtractOptions`] says the caller
@@ -371,26 +326,7 @@ pub fn extract_strings_from_parsed<'d>(
     data: &'d [u8],
     opts: &ExtractOptions,
 ) -> Vec<ExtractedString> {
-    if opts.is_cancelled() {
-        return Vec::new();
-    }
-    // `Object::Unknown` means goblin saw no recognised binary magic —
-    // the caller passed in a non-binary (text, polyglot, unfamiliar
-    // container). The goblin branch has nothing to extract from such
-    // inputs, and skipping the raw / decoder pipeline here would mean
-    // base64-encoded payloads in the body never get decoded. Defer to
-    // the main entry point's unknown-format branch instead. The extra
-    // `Object::parse` call inside is one header read; the alternative
-    // (duplicating ~80 lines of decoder pipeline here) is the kind of
-    // drift that creates exactly the bug we're fixing.
-    if matches!(object, Object::Unknown(_)) {
-        return extract_strings_with_options(data, opts);
-    }
-    let mut strings = pipeline::extract(object, &layouts::Layouts::new(layouts), data, opts);
-    if should_deobfuscate_script(data, &strings) {
-        append_script_deobfuscation(&mut strings, data, opts);
-    }
-    deduplicate_by_offset(strings)
+    route(data, Some(object), layouts, opts)
 }
 
 /// Reads the sample at `path` (relative to the crate root) at run time.

@@ -2,7 +2,7 @@ use super::shape::*;
 use super::*;
 
 #[test]
-fn test_dotnet_garbage_strings() {
+fn filters_dotnet_native_image_garbage() {
     // These garbage strings from .NET native images should be filtered
     assert!(
         is_garbage("omor"),
@@ -35,7 +35,7 @@ fn test_dotnet_garbage_strings() {
 }
 
 #[test]
-fn test_repetitive_nonascii_patterns() {
+fn filters_repeated_letter_nonascii_runs() {
     // Repetitive single-char patterns with non-ASCII are misaligned binary data
     // These come from .NET native images and have one letter repeated many times
     assert!(
@@ -47,7 +47,7 @@ fn test_repetitive_nonascii_patterns() {
 }
 
 #[test]
-fn test_reloc_section_patterns() {
+fn filters_reloc_letter_patterns() {
     // PE .reloc section patterns - single letter repeated with non-ASCII/special chars
     // These patterns have a dominant lowercase letter with non-ASCII mixed in
     assert!(
@@ -68,7 +68,7 @@ fn test_reloc_section_patterns() {
 }
 
 #[test]
-fn test_short_digit_nonascii_garbage() {
+fn filters_digit_then_nonascii() {
     // Short strings starting with digit followed by non-ASCII
     // These are random bytes decoded as UTF-8
     assert!(is_garbage("7üĐō"), "7üĐō");
@@ -87,7 +87,7 @@ fn test_short_digit_nonascii_garbage() {
 // such fragments per file before this filter landed.
 
 #[test]
-fn test_is_garbage_x86_multi_pair_save_sequences() {
+fn filters_multi_pair_register_saves() {
     // Multi-pair (≥2 `A`+pushpop) fragments — the smoking gun.
     // Each is a real string extracted from a `.text` section.
     let cases = [
@@ -119,7 +119,7 @@ fn test_is_garbage_x86_multi_pair_save_sequences() {
 }
 
 #[test]
-fn test_is_garbage_x86_single_pair_with_digit() {
+fn filters_single_pair_with_digit() {
     // Length-4 fragments with one REX-pair + a digit — the
     // medium-confidence branch.  These leak from short
     // instruction-boundary alignments.
@@ -128,7 +128,7 @@ fn test_is_garbage_x86_single_pair_with_digit() {
 }
 
 #[test]
-fn test_x86_filter_does_not_match_magic_numbers() {
+fn asm_filter_ignores_magic_numbers() {
     // Comprehensive negative coverage at the filter level. These
     // are the magic numbers / format signatures that we MUST not
     // misclassify as asm fragments — none have ≥2 REX-pairs, and
@@ -156,7 +156,7 @@ fn test_x86_filter_does_not_match_magic_numbers() {
 }
 
 #[test]
-fn test_x86_filter_does_not_match_identifiers() {
+fn asm_filter_ignores_identifiers() {
     // English words / arch identifiers / protocol tokens that
     // happen to start with `A` followed by a push/pop letter or
     // contain a single REX-pair — must not be caught by the asm
@@ -186,7 +186,7 @@ fn test_x86_filter_does_not_match_identifiers() {
 }
 
 #[test]
-fn test_x86_filter_known_false_positives() {
+fn asm_filter_matches_known_false_positives() {
     // Documented false positives: rare English words / proper
     // nouns that happen to decode as multiple REX-pairs.  These
     // are accepted as the cost of a byte-level heuristic — see
@@ -210,7 +210,7 @@ fn test_x86_filter_known_false_positives() {
 }
 
 #[test]
-fn test_is_garbage_x86_filter_skips_lowercase_and_whitespace() {
+fn asm_filter_skips_lowercase_and_whitespace() {
     // The filter intentionally only fires on pure
     // uppercase+digit strings — lowercase or whitespace presence
     // means the bytes weren't a clean REX/push-opcode run.
@@ -239,7 +239,7 @@ fn test_is_garbage_x86_filter_skips_lowercase_and_whitespace() {
 }
 
 #[test]
-fn test_is_garbage_x86_filter_skips_short_and_long() {
+fn asm_filter_skips_outside_4_to_12_chars() {
     // Length boundaries: <4 too short to be confidently an asm
     // fragment (would catch real 2-3 char identifiers); >12 is
     // too long (real strings dominate that length range).
@@ -259,7 +259,7 @@ fn test_is_garbage_x86_filter_skips_short_and_long() {
 }
 
 #[test]
-fn test_x86_filter_unit_multi_pair() {
+fn asm_filter_matches_multi_pair() {
     // Direct unit test of the filter function (not via is_garbage),
     // so the rule's behavior is pinned even if upstream changes.
     for s in ["AVAUATSH", "AWAVAUATSH", "AVAUATUS", "AXAY", "AUATE1"] {
@@ -277,7 +277,7 @@ fn test_x86_filter_unit_multi_pair() {
 }
 
 #[test]
-fn test_x86_filter_unit_single_pair_digit() {
+fn asm_filter_matches_len4_single_pair_with_digit() {
     for s in ["AWE1", "7ARI"] {
         let stats = CharStats::from_str(s);
         assert!(
@@ -301,7 +301,7 @@ fn test_x86_filter_unit_single_pair_digit() {
 }
 
 #[test]
-fn test_x86_filter_unit_no_pairs_passes() {
+fn asm_filter_ignores_zero_pairs() {
     // Strings with zero REX-pairs are out of scope; other filters
     // handle their classification.
     for s in ["BSJB", "RIFF", "RSDS", "8BIM", "MSCF", "IHDR"] {
@@ -319,7 +319,7 @@ fn test_x86_filter_unit_no_pairs_passes() {
 }
 
 #[test]
-fn test_x86_filter_unit_idat_ends_with_pair_but_not_start() {
+fn asm_filter_ignores_one_trailing_pair() {
     // `IDAT` is a PNG chunk type that happens to end with `AT` (a
     // REX-pair).  The filter must not catch it — the rule requires
     // ≥2 pairs for high confidence; one trailing pair isn't enough.
@@ -333,7 +333,7 @@ fn test_x86_filter_unit_idat_ends_with_pair_but_not_start() {
 // ─── architecture scoping ────────────────────────────────────────
 
 #[test]
-fn test_x86_filter_skipped_for_non_x86_arch() {
+fn asm_filter_skips_non_x86_arch() {
     // ARM / Aarch64 / MIPS / PowerPC don't use REX prefix bytes —
     // a string that LOOKS like an asm fragment in those binaries
     // must not be filtered (it's almost certainly real text).
@@ -361,7 +361,7 @@ fn test_x86_filter_skipped_for_non_x86_arch() {
 }
 
 #[test]
-fn test_x86_filter_runs_for_x86_arch() {
+fn asm_filter_runs_for_x86_arch() {
     use crate::types::{Arch, StringContext};
 
     let s = "AVAUATSH";
@@ -382,7 +382,7 @@ fn test_x86_filter_runs_for_x86_arch() {
 // ─── section scoping ─────────────────────────────────────────────
 
 #[test]
-fn test_x86_filter_skipped_for_non_code_section() {
+fn asm_filter_skips_non_code_section() {
     // Asm fragments only leak from `.text`-like sections. A
     // string from `.rodata` / `.data` / `.symtab` that happens to
     // match the byte pattern is real text and must be preserved.
@@ -402,7 +402,7 @@ fn test_x86_filter_skipped_for_non_code_section() {
 }
 
 #[test]
-fn test_x86_filter_runs_for_code_section() {
+fn asm_filter_runs_in_code_section() {
     use crate::types::StringContext;
 
     let s = "AVAUATSH";
@@ -419,7 +419,7 @@ fn test_x86_filter_runs_for_code_section() {
 }
 
 #[test]
-fn test_x86_filter_runs_for_unknown_context() {
+fn asm_filter_runs_without_context() {
     // Empty context (no arch, no section, no kind) — the legacy
     // behavior — keeps the filter active. Callers that haven't
     // wired context yet still see the diff cleanup.
@@ -434,7 +434,7 @@ fn test_x86_filter_runs_for_unknown_context() {
 }
 
 #[test]
-fn test_x86_filter_skipped_when_arch_or_section_excludes() {
+fn asm_filter_skips_when_either_signal_excludes() {
     // Either signal alone is enough to skip — the rule needs
     // BOTH conditions (x86-or-unknown arch, code-or-unknown
     // section) to fire. Confirms the AND-of-OR semantics.

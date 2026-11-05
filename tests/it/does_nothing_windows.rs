@@ -12,11 +12,8 @@
 //!   `package@version` form matched the email regex.
 //! - jwt: `internal/runtime/maps.ctrlGroup.matchEmptyOrDeleted` — a Go symbol
 //!   with two dots and a slash matching the JWT three-segment heuristic.
-//!
-//! A hex false positive (`4444444444444444` → `DDDDDDDD`, a Go runtime memory-
-//! poison pattern) is surfaced by the CLI via radare2's string extraction; it
-//! doesn't currently reach the library-level classifier in a way this test can
-//! observe, so it's covered here via the CLI integration test.
+//! - hex: `4444444444444444` (decodes to `DDDDDDDD`), a Go runtime memory-poison
+//!   pattern, checked through the CLI's JSON.
 
 use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
@@ -28,7 +25,7 @@ fn load_sample() -> Vec<u8> {
 }
 
 #[test]
-fn test_no_xor_ip_false_positive() {
+fn finds_no_xor_ips() {
     let data = load_sample();
 
     let opts = ExtractOptions::new(4)
@@ -49,7 +46,7 @@ fn test_no_xor_ip_false_positive() {
 }
 
 #[test]
-fn test_no_incremental_xor_false_positives() {
+fn finds_no_xor_strings() {
     let data = load_sample();
 
     let opts = ExtractOptions::new(4)
@@ -72,7 +69,7 @@ fn test_no_incremental_xor_false_positives() {
 }
 
 #[test]
-fn test_no_email_false_positives_from_go_module_paths() {
+fn rejects_go_module_paths_as_emails() {
     let data = load_sample();
 
     let opts = ExtractOptions::new(4);
@@ -128,7 +125,7 @@ fn no_hex_false_positive_from_runtime_poison_pattern() {
     // pattern — and must not be classified as HexEncoded.
     let has_hex_poison = strings.iter().any(|s| {
         s.get("value").and_then(|v| v.as_str()) == Some("4444444444444444")
-            && s.get("kind").and_then(|v| v.as_str()) == Some("HexEncoded")
+            && s.get("kind").and_then(|v| v.as_str()) == Some("hex_encoded")
     });
 
     assert!(
@@ -138,7 +135,7 @@ fn no_hex_false_positive_from_runtime_poison_pattern() {
 }
 
 #[test]
-fn test_no_jwt_false_positive_from_go_symbol() {
+fn rejects_go_symbols_as_jwts() {
     let data = load_sample();
 
     let opts = ExtractOptions::new(4);

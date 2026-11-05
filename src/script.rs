@@ -6,7 +6,7 @@
 
 mod batch;
 pub(crate) mod decode_chain;
-pub mod detect;
+mod detect;
 mod javascript;
 mod javascript_permutation;
 mod lua;
@@ -17,19 +17,40 @@ mod vbs_paired_array;
 mod vbscript;
 
 pub use batch::expand_batch_variables;
-use detect::ScriptLanguage;
+pub use detect::{ScriptLanguage, detect_script_language};
 
 /// Result of successfully deobfuscating a script payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DeobfuscationResult {
     /// The decoded payload text
     pub decoded: String,
-    /// Byte offset in the source where the obfuscated blob was found
+    /// Byte offset in the source where the obfuscated blob was found. A
+    /// payload decoded from inside another payload is reported at the
+    /// outermost blob.
     pub offset: usize,
     /// Human-readable description of the decode chain, e.g. "python:base64+zlib+xor(0x86)"
     pub chain_description: String,
     /// Source language
     pub language: ScriptLanguage,
+}
+
+impl DeobfuscationResult {
+    /// `decoded`, recovered from the blob at `offset` by `chain_description`.
+    #[must_use]
+    pub fn new(
+        decoded: String,
+        offset: usize,
+        chain_description: String,
+        language: ScriptLanguage,
+    ) -> Self {
+        Self {
+            decoded,
+            offset,
+            chain_description,
+            language,
+        }
+    }
 }
 
 /// Attempt to deobfuscate a script file.
@@ -69,6 +90,10 @@ fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
         });
     }
     let mut current_text = text.to_string();
+    // Where in `data` the blob decoding to `current_text` sits, once it is a
+    // decoded payload. Offsets of nested results are offsets into that
+    // payload, not the file, so they are reported at the blob instead.
+    let mut origin = None;
 
     // VBScript.Encode blocks are self-identifying and can occur inside ASP or
     // HTML, so decode them before language detection. The output is inert text.
@@ -89,7 +114,7 @@ fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
             break;
         };
 
-        let results = match language {
+        let mut results = match language {
             ScriptLanguage::Python => python::extract_obfuscated_payloads(&current_text),
             ScriptLanguage::JavaScript => javascript::extract_obfuscated_payloads(&current_text),
             ScriptLanguage::Php => php::extract_obfuscated_payloads(&current_text),
@@ -102,20 +127,25 @@ fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
         if results.is_empty() {
             break;
         }
+        if let Some(origin) = origin {
+            for result in &mut results {
+                result.offset = origin;
+            }
+        }
 
         // Check if the largest decoded payload is itself obfuscated
         let largest = results
             .iter()
             .max_by_key(|r| r.decoded.len())
-            .map(|r| r.decoded.clone());
+            .map(|r| (r.decoded.clone(), r.offset));
 
         all_results.extend(results);
 
-        // Try to recurse into the largest decoded payload
-        if let Some(payload) = largest
+        if let Some((payload, offset)) = largest
             && payload.len() > 20
         {
             current_text = payload;
+            origin = Some(offset);
             continue;
         }
         break;
@@ -178,7 +208,7 @@ mod tests {
     use base64::Engine;
 
     #[test]
-    fn test_deobfuscate_python_b64() {
+    fn deobfuscates_python_exec_b64decode() {
         let src = br#"import base64
 exec(base64.b64decode("aW1wb3J0IG9z"))
 "#;
@@ -189,7 +219,7 @@ exec(base64.b64decode("aW1wb3J0IG9z"))
     }
 
     #[test]
-    fn test_deobfuscate_javascript_eval_atob() {
+    fn deobfuscates_javascript_eval_atob() {
         let src = br#"const x = 1;
 eval(atob("YWxlcnQoMSk="))
 "#;
@@ -199,7 +229,7 @@ eval(atob("YWxlcnQoMSk="))
     }
 
     #[test]
-    fn test_deobfuscate_php_eval_b64() {
+    fn deobfuscates_php_eval_base64() {
         let src = br#"<?php eval(base64_decode("ZWNobyAnaGVsbG8nOw==")); ?>"#;
         let results = deobfuscate_script(src);
         assert!(!results.is_empty());
@@ -207,7 +237,7 @@ eval(atob("YWxlcnQoMSk="))
     }
 
     #[test]
-    fn test_deobfuscate_powershell_enc() {
+    fn deobfuscates_powershell_encoded_command() {
         // "whoami" as UTF-16LE base64
         let payload = "whoami";
         let utf16: Vec<u8> = payload.encode_utf16().flat_map(u16::to_le_bytes).collect();
@@ -219,21 +249,21 @@ eval(atob("YWxlcnQoMSk="))
     }
 
     #[test]
-    fn test_deobfuscate_no_obfuscation() {
+    fn plain_script_yields_nothing() {
         let src = b"print('hello world')\n";
         let results = deobfuscate_script(src);
         assert!(results.is_empty());
     }
 
     #[test]
-    fn test_deobfuscate_binary_data() {
+    fn binary_data_yields_nothing() {
         let data = vec![0x7f, b'E', b'L', b'F', 0, 0, 0, 0];
         let results = deobfuscate_script(&data);
         assert!(results.is_empty());
     }
 
     #[test]
-    fn test_deobfuscate_vbscript_encode_sample() {
+    fn decodes_vbscript_encode_sample() {
         let src = crate::test_fixture("testdata/script/vbscript-encode.asp");
         let results = deobfuscate_script(src);
         let decoded = results
@@ -249,7 +279,7 @@ eval(atob("YWxlcnQoMSk="))
     }
 
     #[test]
-    fn test_deobfuscate_vbscript_encode_with_legacy_bytes_outside_block() {
+    fn decodes_vbscript_encode_despite_stray_legacy_byte() {
         let mut src = crate::test_fixture("testdata/script/vbscript-encode.asp").to_vec();
         src.push(0xff);
         let results = deobfuscate_script(&src);

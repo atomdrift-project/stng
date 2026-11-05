@@ -1,27 +1,16 @@
 //! PE binaries.
 
-use super::extract_stack_strings_from_ranges;
-use super::merge_imports;
-use super::{Scan, parallel};
-use crate::GoStringExtractor;
-use crate::RustStringExtractor;
-use crate::StringKind;
-use crate::StringMethod;
-use crate::binary;
-use crate::collect_pe_section_info;
-use crate::dotnet;
-use crate::extract_layout_imports;
-use crate::extract_overlay_strings;
-use crate::extract_raw_strings;
-use crate::extract_wide_strings;
+use super::{Scan, extract_stack_strings_from_ranges, merge_imports, parallel};
+use crate::binary::{
+    self, collect_pe_section_info, pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
+};
+use crate::go::{GoStringExtractor, pclntab_strings};
+use crate::imports::extract_layout_imports;
 use crate::layouts::Layouts;
-use crate::pclntab_strings;
-use crate::pe_go_skip_ranges;
-use crate::pe_is_rust;
-use crate::pe_rust_skip_ranges;
-use crate::scan_binary_ips;
-use crate::xor;
-use crate::{ExtractOptions, ExtractedString};
+use crate::raw::{extract_raw_strings, extract_wide_strings};
+use crate::rust::RustStringExtractor;
+use crate::sockaddr::scan_binary_ips;
+use crate::{ExtractOptions, ExtractedString, StringKind, StringMethod, dotnet, xor};
 use goblin::pe::PE;
 
 /// Strings from a PE binary.
@@ -64,19 +53,16 @@ pub(super) fn scan<'d>(
         Vec::new()
     };
     if has_go && go_strings.is_empty() {
-        tracing::warn!("PE has Go section names but no Go string structures; scanning as non-Go");
+        tracing::debug!("PE has Go section names but no Go string structures; scanning as non-Go");
     }
     if !go_strings.is_empty() {
         is_go_binary = true;
         strings.extend(go_strings);
-        tracing::debug!(
-            "TIME: Go PE structure extraction took {:?}",
-            t_struct.elapsed()
-        );
+        tracing::debug!(elapsed = ?t_struct.elapsed(), "Go PE structure extraction finished");
 
         let t_pcln = std::time::Instant::now();
         strings.extend(rdata_pclntab_strings(pe, data, min_length));
-        tracing::debug!("TIME: Go PE pclntab scan took {:?}", t_pcln.elapsed());
+        tracing::debug!(elapsed = ?t_pcln.elapsed(), "Go PE pclntab scan finished");
     }
 
     // Rust PE binaries pack `&'static str` data into `.rdata` the
@@ -88,10 +74,7 @@ pub(super) fn scan<'d>(
         let t_struct = std::time::Instant::now();
         let extractor = RustStringExtractor::new(min_length);
         strings.extend(extractor.extract_pe(pe, data));
-        tracing::debug!(
-            "TIME: Rust PE structure extraction took {:?}",
-            t_struct.elapsed()
-        );
+        tracing::debug!(elapsed = ?t_struct.elapsed(), "Rust PE structure extraction finished");
     }
 
     // Skip raw-scanning Go's or Rust's packed string sections to
@@ -127,16 +110,18 @@ pub(super) fn scan<'d>(
             // sections hold pclntab tables that only decode to UTF-16 noise.
             &|| extract_wide_strings(data, min_length, &segments, wide_skip),
             &|| {
-                scan_binary_ips(
-                    data,
-                    min_length,
-                    pe.header.coff_header.machine,
-                    None,
-                    Some(pe),
-                )
+                // No ELF machine: the M68000 skip is ELF's.
+                scan_binary_ips(data, min_length, 0, None, Some(pe))
             },
             &|| extract_raw_strings(data, min_length, &segments, &pe_skip),
-            &|| extract_stack_strings_from_ranges(data, min_length, &exec_ranges),
+            &|| {
+                extract_stack_strings_from_ranges(
+                    data,
+                    min_length,
+                    &exec_ranges,
+                    crate::x86::bits_pe(pe.header.coff_header.machine),
+                )
+            },
         ],
     );
 
@@ -158,8 +143,12 @@ pub(super) fn scan<'d>(
 
     strings.extend(pdb_path(pe, min_length));
 
-    // Extract overlay/appended data (common malware technique)
-    strings.extend(extract_overlay_strings(data, min_length));
+    // Data appended after the image: installers, droppers and crypters put
+    // payloads and configuration there.
+    if let Some(overlay) = crate::overlay::pe_overlay(pe, data) {
+        strings.retain(|s| s.data_offset < overlay.start_offset);
+        strings.extend(crate::overlay::overlay_strings(data, &overlay, min_length));
+    }
     Scan {
         strings,
         sections: section_info,

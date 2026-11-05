@@ -1,59 +1,21 @@
 use super::*;
 
 #[test]
-fn test_extract_with_zero_min_length() {
+fn zero_min_length_does_not_panic() {
     let data = minimal_elf_header();
     // Must not panic.
     let _ = extract_strings(&data, 0);
 }
 
 #[test]
-fn test_extract_with_large_min_length() {
+fn huge_min_length_finds_nothing() {
     let data = minimal_elf_header();
     let strings = extract_strings(&data, 1000);
     assert!(strings.is_empty());
 }
 
 #[test]
-fn test_string_kind_debug() {
-    let kinds = vec![
-        None,
-        Some(StringKind::FuncName),
-        Some(StringKind::FilePath),
-        Some(StringKind::EnvVar),
-        Some(StringKind::Error),
-        Some(StringKind::Url),
-        Some(StringKind::Path),
-        Some(StringKind::Section),
-        Some(StringKind::Ident),
-        Some(StringKind::Arg),
-        Some(StringKind::MapKey),
-        Some(StringKind::Import),
-        Some(StringKind::Export),
-    ];
-    for kind in kinds {
-        let s = format!("{kind:?}");
-        assert!(!s.is_empty());
-    }
-}
-
-#[test]
-fn test_string_method_debug() {
-    let methods = vec![
-        StringMethod::Structure,
-        StringMethod::InstructionPattern,
-        StringMethod::RawScan,
-        StringMethod::Heuristic,
-        StringMethod::WideString,
-    ];
-    for method in methods {
-        let s = format!("{method:?}");
-        assert!(!s.is_empty());
-    }
-}
-
-#[test]
-fn test_extract_options_builder_pattern() {
+fn builder_chains_all_setters() {
     let opts = ExtractOptions::new(5)
         .with_garbage_filter(true)
         .with_xor(stng::XorMode::Auto)
@@ -63,7 +25,7 @@ fn test_extract_options_builder_pattern() {
 }
 
 #[test]
-fn test_extracted_string_equality() {
+fn clone_keeps_value() {
     let s1 = ExtractedString::new("test".to_string(), 0x1000, StringMethod::Structure);
     let s2 = ExtractedString::new("test".to_string(), 0x1000, StringMethod::Structure);
     // Clone check
@@ -73,7 +35,7 @@ fn test_extracted_string_equality() {
 }
 
 #[test]
-fn test_is_garbage_edge_cases() {
+fn rejects_tabs_newlines_and_non_ascii() {
     // Null bytes
     assert!(is_garbage("ab\0cd"));
     // Tabs are treated as garbage
@@ -93,7 +55,7 @@ fn test_is_garbage_edge_cases() {
 }
 
 #[test]
-fn test_minimal_pe_header() {
+fn finds_nothing_in_bare_pe_header() {
     // Create minimal PE header
     let mut data = vec![0u8; 512];
     // DOS header magic

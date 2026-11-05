@@ -13,7 +13,7 @@ fn decoded(value: &str, method: StringMethod) -> Vec<String> {
 }
 
 #[test]
-fn test_base64_classification_short_strings() {
+fn classifies_16_char_base64() {
     // Test that 16-char base64 is now detected (was 20)
     let s = "SGVsbG8gV29ybGQ="; // "Hello World"
     assert_eq!(s.len(), 16);
@@ -22,7 +22,7 @@ fn test_base64_classification_short_strings() {
 }
 
 #[test]
-fn test_base64_classification_20_chars() {
+fn classifies_20_char_base64() {
     // Longer base64 should still work
     let s = "VGhpcyBpcyBhIHRlc3Q="; // "This is a test"
     assert_eq!(s.len(), 20);
@@ -31,7 +31,7 @@ fn test_base64_classification_20_chars() {
 }
 
 #[test]
-fn test_hex_classification_short_strings() {
+fn classifies_16_char_hex() {
     // Test that 16-char hex is now detected (was 40)
     let s = "48656c6c6f20576f"; // "Hello Wo"
     assert_eq!(s.len(), 16);
@@ -40,7 +40,7 @@ fn test_hex_classification_short_strings() {
 }
 
 #[test]
-fn test_hex_classification_longer() {
+fn classifies_24_char_hex() {
     // Longer hex should still work
     let s = "48656c6c6f20576f726c6421"; // "Hello World!"
     assert_eq!(s.len(), 24);
@@ -49,7 +49,7 @@ fn test_hex_classification_longer() {
 }
 
 #[test]
-fn test_url_encoding_classification_short() {
+fn classifies_two_percent_escapes_as_url_encoded() {
     // Test that 2 percent sequences are now enough (was 3)
     let s = "Hello%20World%21"; // "Hello World!"
     let kind = classify_string(s);
@@ -57,14 +57,14 @@ fn test_url_encoding_classification_short() {
 }
 
 #[test]
-fn test_url_encoding_classification_longer() {
+fn classifies_many_percent_escapes_as_url_encoded() {
     let s = "Hello%20World%21%20Test%20123"; // "Hello World! Test 123"
     let kind = classify_string(s);
     assert_eq!(kind, Some(StringKind::UrlEncoded));
 }
 
 #[test]
-fn test_base64_not_detected_too_short() {
+fn rejects_8_char_base64() {
     // Less than 16 chars should not be detected as base64
     let s = "SGVsbG8="; // Only 8 chars
     assert!(s.len() < 16);
@@ -73,7 +73,7 @@ fn test_base64_not_detected_too_short() {
 }
 
 #[test]
-fn test_hex_not_detected_too_short() {
+fn rejects_10_char_hex() {
     // Less than 16 chars should not be detected as hex
     let s = "48656c6c6f"; // Only 10 chars
     assert!(s.len() < 16);
@@ -82,7 +82,7 @@ fn test_hex_not_detected_too_short() {
 }
 
 #[test]
-fn test_url_encoding_not_detected_one_sequence() {
+fn rejects_one_percent_escape_as_url_encoded() {
     // Only 1 percent sequence should not be detected
     let s = "Hello%20World"; // Only one %XX
     let kind = classify_string(s);
@@ -90,70 +90,28 @@ fn test_url_encoding_not_detected_one_sequence() {
 }
 
 #[test]
-fn test_base64_decoding() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-
-    let encoded = "SGVsbG8gV29ybGQ=";
-    let decoded = BASE64.decode(encoded).unwrap();
-    let text = String::from_utf8(decoded).unwrap();
-    assert_eq!(text, "Hello World");
-}
-
-#[test]
-fn test_hex_decoding() {
+fn decodes_hex() {
     let encoded = "48656c6c6f20576f726c6421";
     assert_eq!(decoded(encoded, StringMethod::HexDecode), ["Hello World!"]);
 }
 
 #[test]
-fn test_url_decoding() {
+fn decodes_percent_escapes() {
     let encoded = "Hello%20World%21%3F";
     assert_eq!(decoded(encoded, StringMethod::UrlDecode), ["Hello World!?"]);
 }
 
 #[test]
-fn test_embedded_base64_regex_pattern() {
-    use regex::Regex;
-
-    // Test regex can find base64 in commands
-    let re = Regex::new(r"([A-Za-z0-9+/]{12,}={0,2})").unwrap();
-
-    let command = r#"eval "$(echo SGVsbG8gV29ybGQ= | base64 -d)""#;
-    let captures: Vec<_> = re
-        .captures_iter(command)
-        .filter_map(|cap| cap.get(1))
-        .map(|m| m.as_str())
-        .collect();
-
-    assert!(!captures.is_empty());
-    // The regex captures with padding included
-    assert!(captures.contains(&"SGVsbG8gV29ybGQ="));
-}
-
-#[test]
-fn test_embedded_base64_in_variable_assignment() {
-    use regex::Regex;
-
-    let re = Regex::new(r"([A-Za-z0-9+/]{12,}={0,2})").unwrap();
-
+fn decodes_base64_in_assignment() {
     let assignment = r#"token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9""#;
-    let captures: Vec<_> = re
-        .captures_iter(assignment)
-        .filter_map(|cap| cap.get(1))
-        .map(|m| m.as_str())
-        .collect();
-
-    assert!(!captures.is_empty());
-    assert!(
-        captures
-            .iter()
-            .any(|s| s.starts_with("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"))
+    assert_eq!(
+        decoded(assignment, StringMethod::Base64Decode),
+        [r#"{"alg":"HS256","typ":"JWT"}"#]
     );
 }
 
 #[test]
-fn test_jwt_token_classification() {
+fn classifies_jwt_over_base64() {
     // JWT should be classified as JWT, not just base64
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123";
     let kind = classify_string(jwt);
@@ -161,7 +119,7 @@ fn test_jwt_token_classification() {
 }
 
 #[test]
-fn test_command_injection_classification() {
+fn classifies_eval_base64_pipe_as_command_injection() {
     // Shell commands should be detected
     let cmd = r#"eval "$(echo SGVsbG8gV29ybGQ= | base64 -d)""#;
     let kind = classify_string(cmd);
@@ -169,25 +127,21 @@ fn test_command_injection_classification() {
 }
 
 #[test]
-fn test_invalid_base64_not_decoded() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-
-    // Invalid base64 should fail gracefully
-    let invalid = "ThisIsNotBase64!@#$%";
-    let result = BASE64.decode(invalid);
-    assert!(result.is_err());
+fn decodes_nothing_from_punctuated_text() {
+    let input = ExtractedString::new("ThisIsNotBase64!@#$%", 0, StringMethod::RawScan);
+    let out = stng::decode_encoded_strings(&[input]);
+    assert!(out.is_empty(), "{out:?}");
 }
 
 #[test]
-fn test_odd_length_hex_not_decoded() {
+fn rejects_odd_length_hex() {
     // Odd length hex should not be valid
     let odd_hex = "48656c6c6f20576f726c642"; // 23 chars (odd)
     assert!(decoded(odd_hex, StringMethod::HexDecode).is_empty());
 }
 
 #[test]
-fn test_malformed_url_encoding() {
+fn keeps_incomplete_percent_escape() {
     // A `%` without two hex digits after it stays as it is; the rest decodes.
     let malformed = "Hello%2World%20%21%3F";
     assert_eq!(
@@ -197,78 +151,25 @@ fn test_malformed_url_encoding() {
 }
 
 #[test]
-fn test_base64_with_whitespace() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-
-    // Base64 with whitespace should be trimmed and decoded
-    let encoded = "  SGVsbG8gV29ybGQ=  ";
-    let decoded = BASE64.decode(encoded.trim()).unwrap();
-    let text = String::from_utf8(decoded).unwrap();
-    assert_eq!(text, "Hello World");
-}
-
-#[test]
-fn test_multiple_base64_in_one_line() {
-    use regex::Regex;
-
-    let re = Regex::new(r"([A-Za-z0-9+/]{12,}={0,2})").unwrap();
-
-    // Use longer base64 strings that meet the 12-char minimum
+fn decodes_each_base64_on_a_line() {
     let line = "token1=SGVsbG8gV29ybGQ= token2=VGhpcyBpcyBhIHRlc3Q=";
-    let captures: Vec<_> = re
-        .captures_iter(line)
-        .filter_map(|cap| cap.get(1))
-        .map(|m| m.as_str())
-        .collect();
-
-    // The regex captures each base64 string separately
-    assert_eq!(captures.len(), 2);
-    assert!(captures.iter().any(|s| s.contains("SGVsbG8gV29ybGQ")));
-    assert!(captures.iter().any(|s| s.contains("VGhpcyBpcyBhIHRlc3Q")));
+    assert_eq!(
+        decoded(line, StringMethod::Base64Decode),
+        ["Hello World", "This is a test"]
+    );
 }
 
 #[test]
-fn test_base64_in_json() {
-    use regex::Regex;
-
-    let re = Regex::new(r"([A-Za-z0-9+/]{12,}={0,2})").unwrap();
-
-    // Use base64 strings that meet the 12-char minimum
+fn decodes_base64_in_json_values() {
     let json = r#"{"token":"SGVsbG8gV29ybGQ=","data":"VGhpcyBpcyBhIHRlc3Q="}"#;
-    let captures: Vec<_> = re
-        .captures_iter(json)
-        .filter_map(|cap| cap.get(1))
-        .map(|m| m.as_str())
-        .collect();
-
-    // Should capture both base64 strings
-    assert_eq!(captures.len(), 2);
-    assert!(captures.iter().any(|s| s.contains("SGVsbG8gV29ybGQ")));
-    assert!(captures.iter().any(|s| s.contains("VGhpcyBpcyBhIHRlc3Q")));
+    assert_eq!(
+        decoded(json, StringMethod::Base64Decode),
+        ["Hello World", "This is a test"]
+    );
 }
 
 #[test]
-fn test_base64_padding_variations() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-
-    // Test different padding scenarios
-    let test_cases = vec![
-        ("SGVsbG8=", "Hello"),               // One padding
-        ("SGVsbG8gV29ybGQ=", "Hello World"), // One padding
-        ("Zm9vYmFy", "foobar"),              // No padding
-    ];
-
-    for (encoded, expected) in test_cases {
-        let decoded = BASE64.decode(encoded).unwrap();
-        let text = String::from_utf8(decoded).unwrap();
-        assert_eq!(text, expected);
-    }
-}
-
-#[test]
-fn test_case_sensitivity() {
+fn decodes_hex_case_insensitively() {
     // Hex should be case-insensitive
     let lower = "48656c6c6f20576f726c6421";
     let upper = "48656C6C6F20576F726C6421";

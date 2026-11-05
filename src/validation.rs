@@ -6,7 +6,7 @@
 mod recognize;
 mod shape;
 
-use recognize::is_recognized_ioc;
+use recognize::is_recognized_structure;
 use shape::is_statistical_garbage;
 
 /// Character-class counts for a candidate, gathered in one pass.
@@ -21,7 +21,7 @@ struct CharStats {
     close_parens: usize,
     quotes: usize,
     special: usize,
-    hex_only: usize,
+    ascii_alnum: usize,
     ascii_count: usize,
     alternations: usize,
     first_char: char,
@@ -47,7 +47,7 @@ impl CharStats {
         let mut close_parens = 0usize;
         let mut quotes = 0usize;
         let mut special = 0usize;
-        let mut hex_only = 0usize;
+        let mut ascii_alnum = 0usize;
         let mut ascii_count = 0usize;
         let mut alternations = 0usize;
         let mut prev_is_digit: Option<bool> = None;
@@ -84,7 +84,7 @@ impl CharStats {
                 if !c.is_ascii_hexdigit() {
                     has_non_hex_letter = true;
                 }
-                hex_only += 1;
+                ascii_alnum += 1;
                 if prev_is_digit == Some(true) {
                     alternations += 1;
                 }
@@ -95,14 +95,14 @@ impl CharStats {
                 if !c.is_ascii_hexdigit() {
                     has_non_hex_letter = true;
                 }
-                hex_only += 1;
+                ascii_alnum += 1;
                 if prev_is_digit == Some(true) {
                     alternations += 1;
                 }
                 prev_is_digit = Some(false);
             } else if c.is_ascii_digit() {
                 digit += 1;
-                hex_only += 1;
+                ascii_alnum += 1;
                 if prev_is_digit == Some(false) {
                     alternations += 1;
                 }
@@ -144,7 +144,7 @@ impl CharStats {
             close_parens,
             quotes,
             special,
-            hex_only,
+            ascii_alnum,
             ascii_count,
             alternations,
             first_char,
@@ -166,11 +166,8 @@ impl CharStats {
     }
 }
 
-/// Determines if a string appears to be garbage/noise rather than meaningful content.
-///
-/// Fast path: Check if long strings with normal patterns are obviously valid.
-///
-/// This avoids expensive analysis for the common case.
+/// Fast path: whether a long string with ordinary letter patterns is plainly
+/// not garbage, sparing the full analysis in the common case.
 fn is_fast_path_valid_with_kind(
     s: &str,
     len: usize,
@@ -337,7 +334,7 @@ pub fn is_garbage(s: &str) -> bool {
 /// [`StringContext`](crate::types::StringContext) assumes nothing; it is what
 /// [`is_garbage`] passes.
 #[must_use]
-pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bool {
+pub(crate) fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bool {
     let trimmed = s.trim();
     let len = trimmed.len();
 
@@ -362,15 +359,11 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bo
 
     // A trailing label separator does not change what a string is. Field names
     // (`TracerPid:` in /proc/<pid>/status, `VmRSS:`), header names
-    // (`Content-Length:`) and struct labels are their identifier plus a colon,
-    // yet the colon alone was enough to flip the verdict: it adds a character
-    // class and a run, which no short-identifier pattern here tolerates
-    // (`is_pascal_case` allows one uppercase and no specials), and strings
-    // under 12 bytes never reach the fast path that accepts
-    // punctuation. `TracerPid` survived extraction from a real ELF while
-    // `TracerPid:` did not. Judge the stem instead; the guard keeps this to
-    // identifier-shaped labels so arbitrary junk ending in a colon still gets
-    // the full analysis on its own merits.
+    // (`Content-Length:`) and struct labels are an identifier plus a colon, and
+    // the colon's extra character class would otherwise fail every
+    // short-identifier pattern here. So the stem is judged instead; the guard
+    // keeps this to identifier-shaped labels, so other junk ending in a colon
+    // still gets the full analysis.
     if let Some(stem) = trimmed.strip_suffix(':')
         && stem.len() >= 3
         && !stem.ends_with(':')
@@ -394,7 +387,7 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bo
     // Classifier-produced kinds (URL, Path, Email, …) skip the 20+ IOC
     // pattern sweep — the classifier has already recognised the string as a
     // specific pattern.  Extractor-only labels (Overlay, Section, Import,
-    // StackString, …) still run through `is_recognized_ioc` and the
+    // StackString, …) still run through `is_recognized_structure` and the
     // statistical checks because those labels don't imply content
     // recognition — they indicate *provenance*.
     if ctx
@@ -405,7 +398,7 @@ pub fn is_garbage_with_context(s: &str, ctx: &crate::types::StringContext) -> bo
     }
 
     // Known IOC patterns (malware indicators, crypto, auth tokens, etc.)
-    if is_recognized_ioc(trimmed, len) {
+    if is_recognized_structure(trimmed, len) {
         return false;
     }
 

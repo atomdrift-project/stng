@@ -12,11 +12,13 @@ root=$(git rev-parse --show-toplevel)
 out="$root/target/golden-diff"
 tree="$out/base-src"
 
-git -C "$root" worktree prune
 rm -rf "$out"
-mkdir -p "$out"
-git -C "$root" worktree add --detach --quiet "$tree" "$rev"
-trap 'git -C "$root" worktree remove --force "$tree"' EXIT
+mkdir -p "$tree"
+# Check REV out through a private index: the repository's index, HEAD and
+# worktree list are never touched. (`git archive` would honour the
+# `export-ignore` that keeps testdata out of source tarballs.)
+GIT_INDEX_FILE="$out/index" git -C "$root" read-tree "$rev"
+GIT_INDEX_FILE="$out/index" git -C "$root" checkout-index --all --prefix="$tree/"
 
 # REV may predate the golden harness, so run today's harness against it, as a
 # test target of its own.

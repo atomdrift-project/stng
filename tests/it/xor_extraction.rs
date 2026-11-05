@@ -11,7 +11,7 @@ fn load_test_fixture() -> Vec<u8> {
 }
 
 #[test]
-fn test_xor_finds_both_volume_variants() {
+fn finds_both_muted_volume_commands() {
     // The malware has both "muted true" and "muted false" commands
     // These should both be extracted without overlap issues
     let data = load_test_fixture();
@@ -62,7 +62,7 @@ fn test_xor_finds_both_volume_variants() {
 }
 
 #[test]
-fn test_xor_no_garbage_suffixes() {
+fn ends_volume_commands_without_garbage() {
     // Null termination should prevent garbage suffixes like "truegtZh"
     let data = load_test_fixture();
 
@@ -92,7 +92,7 @@ fn test_xor_no_garbage_suffixes() {
 }
 
 #[test]
-fn test_xor_no_byte_range_overlaps() {
+fn keeps_xor_byte_ranges_disjoint() {
     // No two XOR strings should decode the same bytes differently
     let data = load_test_fixture();
 
@@ -132,7 +132,7 @@ fn test_xor_no_byte_range_overlaps() {
 }
 
 #[test]
-fn test_xor_finds_malware_indicators() {
+fn finds_wallet_telegram_and_osascript() {
     // Should find key malware IOCs from the DPRK sample
     let data = load_test_fixture();
 
@@ -166,7 +166,7 @@ fn test_xor_finds_malware_indicators() {
 }
 
 #[test]
-fn test_xor_classification() {
+fn classifies_volume_commands_as_shell_or_applescript() {
     // XOR strings should be properly classified
     let data = load_test_fixture();
 
@@ -195,7 +195,7 @@ fn test_xor_classification() {
 }
 
 #[test]
-fn test_xor_null_termination() {
+fn stops_volume_commands_at_nul() {
     // Test that we correctly handle null termination using real data
     // In the test fixture, strings should end at nulls
     let data = load_test_fixture();
@@ -229,7 +229,7 @@ fn test_xor_null_termination() {
 }
 
 #[test]
-fn test_xor_strings_starting_with_key_first_byte() {
+fn decodes_strings_starting_with_key_first_byte() {
     // Test that we can find strings starting with 'f' (key[0])
     // In the real data, check if we have any strings starting with 'f'
     let data = load_test_fixture();
@@ -248,21 +248,19 @@ fn test_xor_strings_starting_with_key_first_byte() {
     // The key starts with 'f', so strings starting with 'f' would have
     // null as first byte in source. Check that we can find such strings
     // (This verifies we allow j==0 to be null in the decode loop)
-    let starts_with_f: Vec<_> = xor_strings
+    let formhistory = xor_strings
         .iter()
-        .filter(|s| s.value.starts_with('f') || s.value.starts_with('F'))
-        .collect();
-
-    // We should find at least some strings starting with 'f'
-    // (The exact count doesn't matter, just that we CAN find them)
-    assert!(
-        !starts_with_f.is_empty(),
-        "Should be able to find strings starting with key[0] ('f')"
+        .find(|s| s.value.starts_with("formhistory.sqlite"))
+        .expect("Firefox's formhistory.sqlite should be decoded");
+    let at = usize::try_from(formhistory.data_offset).unwrap();
+    assert_eq!(
+        data[at], 0,
+        "{formhistory:?} should start at an encoded NUL ('f' ^ key[0])"
     );
 }
 
 #[test]
-fn test_xor_string_count_is_plausible() {
+fn finds_a_plausible_number_of_xor_strings() {
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
@@ -284,7 +282,7 @@ fn test_xor_string_count_is_plausible() {
 }
 
 #[test]
-fn test_xor_minimum_length_respected() {
+fn respects_xor_min_length() {
     // Should respect minimum length parameter for XOR extraction
     let data = load_test_fixture();
 
@@ -320,9 +318,8 @@ fn test_xor_minimum_length_respected() {
 }
 
 #[test]
-fn test_c2_url_extraction_from_fixture() {
+fn decodes_c2_url_with_garbage_filter() {
     // The C2 URL is at offset 0x11b0 and 0x29797 in the fixture
-    // It should be extracted as "http://46.30.191.141n;uJ" (24 bytes)
     let data = load_test_fixture();
 
     let opts = ExtractOptions::new(10)
@@ -335,19 +332,17 @@ fn test_c2_url_extraction_from_fixture() {
         .filter(|s| s.method == StringMethod::XorDecode)
         .collect();
 
-    // Look for the C2 URL or IP
-    let c2_strings: Vec<_> = xor_strings
-        .iter()
-        .filter(|s| s.value.contains("46.30.191.141"))
-        .collect();
-
-    assert!(
-        !c2_strings.is_empty(),
-        "C2 URL (http://46.30.191.141) should be extracted from XOR-encoded data"
-    );
+    for offset in [0x11b0, 0x29797] {
+        let c2 = xor_strings
+            .iter()
+            .find(|s| s.data_offset == offset)
+            .unwrap_or_else(|| panic!("nothing decoded at {offset:#x}"));
+        assert_eq!(c2.value, "http://46.30.191.141", "at {offset:#x}");
+        assert_eq!(c2.kind, Some(StringKind::Url), "at {offset:#x}");
+    }
 }
 #[test]
-fn test_direct_c2_extraction() {
+fn decodes_c2_url_with_default_options() {
     let data = std::fs::read(crate::common::path(
         "testdata/xor/brew_agent_xor_region.bin",
     ))
@@ -357,17 +352,24 @@ fn test_direct_c2_extraction() {
     let opts = ExtractOptions::new(10).with_xor(stng::XorMode::Key(key.to_vec()));
     let results = stng::extract_strings_with_options(&data, &opts);
 
-    // Look for C2
-    let c2 = results
+    // The C2 URL, at both of the fixture's copies (0x11b0 and 0x29797).
+    let c2: Vec<_> = results
         .iter()
         .filter(|s| s.value.contains("46.30.191.141"))
-        .collect::<Vec<_>>();
+        .map(|s| (s.data_offset, s.value.as_str(), s.method))
+        .collect();
 
-    assert!(!c2.is_empty(), "C2 URL should be extracted");
+    assert_eq!(
+        c2,
+        [
+            (0x11b0, "http://46.30.191.141", StringMethod::XorDecode),
+            (0x29797, "http://46.30.191.141", StringMethod::XorDecode),
+        ]
+    );
 }
 
 #[test]
-fn test_brew_agent_comprehensive_extraction() {
+fn finds_every_brew_agent_ioc_category() {
     // Comprehensive test for HomaBrew malware (brew_agent)
     // Ensures all critical IOCs are extracted without loss
     let data = load_test_fixture();
