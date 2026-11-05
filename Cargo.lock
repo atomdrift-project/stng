@@ -94,7 +94,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 [[package]]
 name = "binform"
 version = "0.9.0"
-source = "git+https://github.com/atomdrift-project/binform.git#4211c34c06adbed883caf73542cfa76f12130d8b"
+source = "git+https://github.com/atomdrift-project/binform.git#2e9ad27fbc2c39b046b91a56ff093f3f98506b35"
 dependencies = [
  "gimli",
  "iced-x86",
@@ -795,9 +795,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.246"
+version = "2.1.247"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27d58bd13c235442118460335daf360f0fefaa9035ec4ad957f851d738e7b7d6"
+checksum = "bcf03dc0cd8c65e109a7848e3b4adf06236a181d937af94bff66966e3876b1aa"
 dependencies = [
  "psl-types",
 ]
