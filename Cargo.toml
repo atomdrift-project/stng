@@ -45,10 +45,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Base64 decoding
-base64 = "0.22"
+base64 = "0.23"
 
 # DES is used only by the signature-gated legacy ColdFusion template decoder.
-des = "0.8"
+des = "0.9"
 
 # Hostname canonicalization and public-suffix validation. `psl` embeds a static
 # snapshot, so analysis never performs network I/O and remains reproducible.
@@ -227,7 +227,7 @@ manual_let_else = "warn"                 # match/if-let that diverges → let-el
 match_same_arms = "warn"                 # merge identical match arms
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 sha2 = "0.11"
 
 [[bench]]
