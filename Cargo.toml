@@ -45,7 +45,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Base64 decoding
-base64 = "0.22"
+base64 = "0.23"
 
 # SHA-256: Base58Check wallet checksums, and each input's digest in CLI
 # output. No `asm` feature: its assembly does not build with MSVC.
@@ -224,7 +224,7 @@ manual_let_else = "warn"                 # match/if-let that diverges → let-el
 match_same_arms = "warn"                 # merge identical match arms
 
 [dev-dependencies]
-criterion = "0.7"
+criterion = "0.8"
 
 [[bench]]
 name = "classify"
