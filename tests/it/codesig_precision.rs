@@ -47,16 +47,13 @@ fn gives_hash_kind_only_to_digest_base64() {
     let opts = ExtractOptions::new(10);
     let strings = extract_strings_with_options(&data, &opts);
 
-    // All CodeSignatureHash strings must be base64-encoded
+    // All CodeSignatureHash strings must be base64-encoded. Since macOS 27.2,
+    // /bin/ls's signature has no cdhashes plist, so there may be none;
+    // macho_codesig covers promotion with a fixture.
     let codesig_hashes: Vec<_> = strings
         .iter()
         .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
         .collect();
-
-    assert!(
-        !codesig_hashes.is_empty(),
-        "Should find code signature hashes in /bin/ls"
-    );
 
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64;
@@ -385,19 +382,15 @@ fn counts_ls_hashes_signature_strings_and_app_ids() {
         .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
         .count();
 
-    // Universal Mach-O binaries may expose one or more promoted CD hashes in __LINKEDIT
-    // depending on the macOS build and signature layout. The stable invariant is that at
-    // least one must be found, and it cannot exceed the architecture count.
+    // Whether a slice's signature carries a cdhashes plist depends on how Apple
+    // signed it (macOS 27.2's /bin/ls has none), so the stable invariant is
+    // that hashes cannot exceed the slice count.
     let arch_count = match goblin::Object::parse(&data) {
         Ok(goblin::Object::Mach(goblin::mach::Mach::Fat(fat))) => fat.narches,
         Ok(goblin::Object::Mach(goblin::mach::Mach::Binary(_))) => 1,
         _ => 0,
     };
 
-    assert!(
-        hash_count >= 1,
-        "/bin/ls should expose at least one promoted CD hash, found {hash_count}"
-    );
     assert!(
         arch_count == 0 || hash_count <= arch_count,
         "/bin/ls should not expose more CD hashes than architectures (hashes={hash_count}, arches={arch_count})"

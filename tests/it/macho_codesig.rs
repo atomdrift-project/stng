@@ -8,73 +8,43 @@
 use std::fs;
 use stng::{ExtractOptions, StringKind, StringMethod, extract_strings_with_options};
 
-#[cfg(target_os = "macos")]
-fn macho_arch_count(data: &[u8]) -> usize {
-    match goblin::Object::parse(data) {
-        Ok(goblin::Object::Mach(goblin::mach::Mach::Fat(fat))) => fat.narches,
-        Ok(goblin::Object::Mach(goblin::mach::Mach::Binary(_))) => 1,
-        _ => 0,
-    }
-}
-
+/// A Developer ID signature's CMS blob lists each code directory's hash as
+/// base64 in a `cdhashes` plist; that entry is the binary's CD hash.
+/// Apple-signed system binaries can't be used here: since macOS 27.2 their
+/// signatures omit the plist.
 #[test]
-#[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn tags_ls_cd_hashes_as_sha1_code_signature() {
-    let bin_path = "/bin/ls";
+fn promotes_cdhashes_entry_to_code_signature_hash() {
+    let data = crate::common::bytes("testdata/xor/libffmpeg_3cx_x64_xor");
+    let strings = extract_strings_with_options(&data, &ExtractOptions::new(10));
 
-    let data = fs::read(bin_path).expect("Failed to read /bin/ls");
-
-    let opts = ExtractOptions::new(10);
-    let strings = extract_strings_with_options(&data, &opts);
-
-    // Find all code signature hash strings
-    let codesig_hashes: Vec<_> = strings
+    let hashes: Vec<_> = strings
         .iter()
         .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
         .collect();
-
-    let arch_count = macho_arch_count(&data);
-
-    assert!(
-        !codesig_hashes.is_empty(),
-        "Expected at least 1 CD hash in /bin/ls, found {}",
-        codesig_hashes.len()
-    );
-    assert!(
-        arch_count == 0 || codesig_hashes.len() <= arch_count,
-        "Expected CD hash count to be <= architecture count (hashes={}, arches={})",
-        codesig_hashes.len(),
-        arch_count
+    assert_eq!(
+        hashes.len(),
+        1,
+        "one code directory, one CD hash: {hashes:?}"
     );
 
-    // All CD hashes should have CodeSignature method
-    for s in &codesig_hashes {
-        assert_eq!(
-            s.method,
-            StringMethod::CodeSignature,
-            "CD hash at offset 0x{:x} should have CodeSignature method, got {:?}",
-            s.data_offset,
-            s.method
-        );
-    }
+    let hash = hashes[0];
+    assert_eq!(hash.value, "8asa6BaxAYpgbnUZFGhMxJk89Mo=");
+    assert_eq!(hash.data_offset, 0x295c5e);
+    assert_eq!(hash.method, StringMethod::CodeSignature);
 
-    // Verify the hashes decode to valid SHA-1 hashes (20 bytes)
+    // `codesign -dvvv` reports CDHash=f1ab1ae816b1018a606e751914684cc4993cf4ca:
+    // the SHA-256 code directory digest, truncated to 20 bytes.
     use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-
-    for s in &codesig_hashes {
-        let decoded = BASE64
-            .decode(s.value.trim())
-            .unwrap_or_else(|_| panic!("Failed to decode CD hash at 0x{:x}", s.data_offset));
-
-        assert_eq!(
-            decoded.len(),
-            20,
-            "CD hash at 0x{:x} should be 20 bytes (SHA-1), got {}",
-            s.data_offset,
-            decoded.len()
-        );
-    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&hash.value)
+        .expect("CD hash is base64");
+    assert_eq!(
+        decoded,
+        [
+            0xf1, 0xab, 0x1a, 0xe8, 0x16, 0xb1, 0x01, 0x8a, 0x60, 0x6e, 0x75, 0x19, 0x14, 0x68,
+            0x4c, 0xc4, 0x99, 0x3c, 0xf4, 0xca,
+        ]
+    );
 }
 
 #[test]
@@ -213,96 +183,6 @@ fn extracts_securityd_entitlement_keys() {
 
 #[test]
 #[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn tags_linkedit_cd_hashes_code_signature() {
-    let bin_path = "/bin/ls";
-
-    let data = fs::read(bin_path).expect("Failed to read /bin/ls");
-
-    let opts = ExtractOptions::new(10);
-    let strings = extract_strings_with_options(&data, &opts);
-
-    // Find all CodeSignatureHash strings in __LINKEDIT section
-    let linkedit_hashes: Vec<_> = strings
-        .iter()
-        .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
-        .collect();
-
-    assert!(
-        !linkedit_hashes.is_empty(),
-        "Should find CodeSignatureHash strings in __LINKEDIT section"
-    );
-
-    // All CodeSignatureHash strings in __LINKEDIT should have CodeSignature method
-    for s in &linkedit_hashes {
-        assert_eq!(
-            s.method,
-            StringMethod::CodeSignature,
-            "CodeSignatureHash at 0x{:x} in __LINKEDIT should have CodeSignature method, got {:?}",
-            s.data_offset,
-            s.method
-        );
-    }
-}
-
-#[test]
-#[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn formats_cd_hashes_as_bare_base64() {
-    let bin_path = "/bin/ls";
-
-    let data = fs::read(bin_path).expect("Failed to read /bin/ls");
-
-    let opts = ExtractOptions::new(10);
-    let strings = extract_strings_with_options(&data, &opts);
-
-    // Only check CodeSignatureHash kind (not all CodeSignature method strings)
-    let codesig_hashes: Vec<_> = strings
-        .iter()
-        .filter(|s| s.kind == Some(StringKind::CodeSignatureHash))
-        .collect();
-
-    let arch_count = macho_arch_count(&data);
-
-    assert!(
-        !codesig_hashes.is_empty(),
-        "Should have at least 1 code signature hash"
-    );
-    assert!(
-        arch_count == 0 || codesig_hashes.len() <= arch_count,
-        "Should not have more code signature hashes than architectures (hashes={}, arches={})",
-        codesig_hashes.len(),
-        arch_count
-    );
-
-    for hash in &codesig_hashes {
-        // Verify base64 format (no whitespace)
-        assert!(
-            !hash.value.contains(' '),
-            "Code signature hash should not contain spaces"
-        );
-        assert!(
-            !hash.value.contains('\n'),
-            "Code signature hash should not contain newlines"
-        );
-
-        // Verify it's valid base64 (alphanumeric plus +, /, =)
-        // Note: The value might have hex preview appended in brackets
-        let base64_part = if hash.value.contains('[') {
-            hash.value.split('[').next().unwrap().trim()
-        } else {
-            hash.value.as_str()
-        };
-
-        assert!(
-            base64_part
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '='),
-            "Code signature hash should contain only valid base64 characters, got: {base64_part}"
-        );
-    }
-}
-
-#[test]
-#[cfg(target_os = "macos")] // reads an Apple-signed system binary
 fn extracts_untruncated_securityd_entitlements() {
     let bin_path = "/usr/libexec/securityd_system";
 
@@ -396,52 +276,6 @@ fn points_entitlements_offset_at_xml_declaration() {
         assert!(
             xml_start.starts_with("<?xml"),
             "Data at offset 0x{offset:x} should start with '<?xml', got '{xml_start}'"
-        );
-    }
-}
-
-#[test]
-#[cfg(target_os = "macos")] // reads an Apple-signed system binary
-fn decodes_cat_cd_hashes_to_sha_digests() {
-    let bin_path = "/bin/cat";
-
-    let data = fs::read(bin_path).expect("Failed to read /bin/cat");
-    let opts = ExtractOptions::new(10);
-    let strings = extract_strings_with_options(&data, &opts);
-
-    let codesig_hashes: Vec<_> = strings
-        .iter()
-        .filter(|s| {
-            s.method == StringMethod::CodeSignature && s.kind == Some(StringKind::CodeSignatureHash)
-        })
-        .collect();
-
-    assert!(
-        !codesig_hashes.is_empty(),
-        "/bin/cat's code directories carry hashes"
-    );
-
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-
-    for hash in &codesig_hashes {
-        // Extract just the base64 part (before any hex preview)
-        let base64_part = if hash.value.contains('[') {
-            hash.value.split('[').next().unwrap().trim()
-        } else {
-            hash.value.as_str()
-        };
-
-        let decoded = BASE64
-            .decode(base64_part)
-            .unwrap_or_else(|_| panic!("Failed to decode hash at 0x{:x}", hash.data_offset));
-
-        // CD hashes are SHA-1 (20 bytes) or SHA-256 (32 bytes)
-        assert!(
-            decoded.len() == 20 || decoded.len() == 32,
-            "Code directory hash at 0x{:x} should be 20 (SHA-1) or 32 (SHA-256) bytes, got {}",
-            hash.data_offset,
-            decoded.len()
         );
     }
 }
