@@ -585,9 +585,9 @@ dependencies = [
 
 [[package]]
 name = "inout"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b5cf4372d022092674a83b8febf5865f7a573cc0c5baec5e49c879b6a20978f"
+checksum = "3a580c13f0ffc335ef42dd3f6b1a41b726051c5e1656d9a3aa6fddb3c5dfbbf9"
 dependencies = [
  "hybrid-array",
 ]
@@ -1173,7 +1173,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter"
 version = "0.28.0"
-source = "git+https://github.com/tstromberg/tree-sitter#10d5d1372be200e04480a6b1d6780229c5b1ee79"
+source = "git+https://github.com/tstromberg/tree-sitter#66345cec8a10d0d7b516adc864d99bd7937a736c"
 dependencies = [
  "cc",
  "regex",
@@ -1184,7 +1184,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-language"
 version = "0.1.8"
-source = "git+https://github.com/tstromberg/tree-sitter#10d5d1372be200e04480a6b1d6780229c5b1ee79"
+source = "git+https://github.com/tstromberg/tree-sitter#66345cec8a10d0d7b516adc864d99bd7937a736c"
 
 [[package]]
 name = "tree-sitter-lua"
