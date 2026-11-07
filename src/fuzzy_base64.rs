@@ -10,6 +10,7 @@ use crate::types::{ExtractedString, StringMethod};
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::LazyLock;
 
 static CONCAT_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -65,8 +66,17 @@ pub(crate) fn extract_fuzzy_base64(strings: &[ExtractedString]) -> Vec<Extracted
                 local.push(create_decoded_string(s, decoded));
             }
 
-            if let Some(decoded) = try_fuzzy_extract(&s.value) {
-                local.push(create_decoded_string(s, decoded));
+            if let Some((decoded, span)) = try_fuzzy_extract(&s.value) {
+                let mut decoded = create_decoded_string(s, decoded);
+                // Cite the run that was decoded, not the whole string, when
+                // the string's text is its source bytes verbatim.
+                if s.fragments.is_none()
+                    && u32::try_from(s.value.len()) == Ok(s.contiguous_source_len())
+                {
+                    decoded.data_offset = s.data_offset + span.start as u64;
+                    decoded.data_len = u32::try_from(span.len()).unwrap_or(u32::MAX);
+                }
+                local.push(decoded);
             }
 
             // Try extracting from substrings if this looks like a variable assignment
@@ -178,57 +188,60 @@ fn extract_from_assignment(input: &str) -> Option<String> {
         .find_map(|value| try_deobfuscate_js_base64(value.as_str()))
 }
 
-/// Fuzzy extraction: find longest runs of mostly-base64 characters.
+/// Fuzzy extraction: decode the longest run of mostly-base64 characters,
+/// whitespace inside it dropped. Returns the decoded text and the byte range
+/// of `input` it was decoded from.
 ///
 /// This is useful when the base64 is corrupted or has interspersed garbage.
-fn try_fuzzy_extract(input: &str) -> Option<String> {
-    let mut best_segment = String::new();
-    let mut current_segment = String::new();
-
-    for ch in input.chars() {
+fn try_fuzzy_extract(input: &str) -> Option<(String, Range<usize>)> {
+    let mut best = 0..0;
+    let mut start = None;
+    // Whitespace continues a run; any other non-base64 character, or the
+    // end of `input`, closes it.
+    for (i, ch) in input.char_indices().chain([(input.len(), '\0')]) {
         if is_base64_char(ch) {
-            current_segment.push(ch);
-        } else if ch.is_whitespace() || ch == '+' || ch == '=' {
-            // Allow some noise
-            if !current_segment.is_empty() {
-                current_segment.push(ch);
-            }
-        } else {
-            // End of segment
-            if current_segment.len() > best_segment.len()
-                && is_base64_like(&current_segment, MIN_BASE64_PURITY)
-            {
-                best_segment = current_segment.clone();
-            }
-            current_segment.clear();
+            start.get_or_insert(i);
+        } else if !ch.is_whitespace()
+            && let Some(s) = start.take()
+            && i - s > best.len()
+            && is_base64_like(&input[s..i], MIN_BASE64_PURITY)
+        {
+            best = s..i;
         }
     }
-
-    // Check final segment
-    if current_segment.len() > best_segment.len()
-        && is_base64_like(&current_segment, MIN_BASE64_PURITY)
-    {
-        best_segment = current_segment;
-    }
-
-    if best_segment.len() < MIN_BASE64_SEGMENT {
+    if best.len() < MIN_BASE64_SEGMENT {
         return None;
     }
+    let segment = input[best.clone()].trim_end();
+    let span = best.start..best.start + segment.len();
 
+    let joined: String = segment.chars().filter(|c| is_base64_char(*c)).collect();
+    let decoded = decode_base64_fuzzy(&joined);
+    if decoded.as_deref().is_some_and(decoded_cleanly) {
+        return decoded.map(|text| (text, span));
+    }
     // Whitespace joins base64 wrapped across lines, but also pulls in the
-    // words around a single token, which misaligns it. Fall back to the
-    // longest token on its own.
-    let cleaned: String = best_segment
-        .chars()
-        .filter(|c| is_base64_char(*c))
-        .collect();
-    decode_base64_fuzzy(&cleaned).or_else(|| {
-        best_segment
-            .split_whitespace()
-            .filter(|token| token.len() >= MIN_BASE64_SEGMENT)
-            .max_by_key(|token| token.len())
-            .and_then(decode_base64_fuzzy)
-    })
+    // words around a single token: a misaligned join fails to decode, and an
+    // aligned one (`echo` + token) decodes to garbage ahead of the payload.
+    // The longest token on its own then reads cleanly.
+    let token = segment
+        .split_whitespace()
+        .filter(|token| token.len() >= MIN_BASE64_SEGMENT)
+        .max_by_key(|token| token.len())
+        .and_then(|token| {
+            let start = token.as_ptr().addr() - input.as_ptr().addr();
+            Some((decode_base64_fuzzy(token)?, start..start + token.len()))
+        });
+    match (decoded, token) {
+        (_, Some(token)) if decoded_cleanly(&token.0) => Some(token),
+        (Some(text), _) => Some((text, span)),
+        (None, token) => token,
+    }
+}
+
+/// Whether a lossy decode was valid UTF-8 throughout.
+fn decoded_cleanly(text: &str) -> bool {
+    !text.contains(char::REPLACEMENT_CHARACTER)
 }
 
 /// Check if a character is valid in base64
@@ -376,8 +389,19 @@ mod tests {
         // Must have >= MIN_BASE64_SEGMENT (32 chars) and decode to meaningful content (>= 10 chars, >= 60% printable)
         // "function powershell script code" in base64
         let input = "xxx ZnVuY3Rpb24gcG93ZXJzaGVsbCBzY3JpcHQgY29kZQ== yyy";
-        let decoded = try_fuzzy_extract(input).expect("embedded base64 should decode");
+        let (decoded, span) = try_fuzzy_extract(input).expect("embedded base64 should decode");
         assert!(decoded.contains("powershell script"), "{decoded:?}");
+        assert_eq!(&input[span], "ZnVuY3Rpb24gcG93ZXJzaGVsbCBzY3JpcHQgY29kZQ==");
+    }
+
+    #[test]
+    fn a_word_before_a_token_is_not_decoded_into_it() {
+        // `echo` is four base64 characters, so joining it to the token keeps
+        // the join aligned and decodes to garbage ahead of the URL.
+        let input = "u=$(echo aHR0cHM6Ly9ldmlsLnRlc3QveC5zaA== | base64 -d)";
+        let (decoded, span) = try_fuzzy_extract(input).expect("the token should decode");
+        assert_eq!(decoded, "https://evil.test/x.sh");
+        assert_eq!(&input[span], "aHR0cHM6Ly9ldmlsLnRlc3QveC5zaA==");
     }
 
     #[test]
