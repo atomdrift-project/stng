@@ -4,7 +4,7 @@ All notable changes to stng. Versions follow [semantic versioning](README.md#ver
 
 ## Unreleased
 
-### Features
+### 3.0.0-beta.2
 
 - Extract strings from data appended to PE files, as was already done for ELF.
 - Add `detect_overlay` for parsed ELF and PE files; the CLI now reports PE overlays.
