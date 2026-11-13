@@ -56,10 +56,10 @@ symbols_provided	testdata/malware/brickstorm_linux_amd64	12296	1c7a86e43d7f61c2	
 symbols_provided	testdata/malware/dynamichub/DynamicHub	485	d4f7de1aaf9ea450	CodeSignature=2 RawScan=423 XorStackPair=60
 symbols_provided	testdata/malware/goodboy-stage-01.exe	583	1acc4d18a0e4dde1	RawScan=367 StackString=2 Structure=128 WideString=86
 symbols_provided	testdata/malware/kimwolf_installer	7	f99611fe40ca5bb2	RawScan=7
-symbols_provided	testdata/malware/poolrat	13393	29800f019efd2ee3	Base64Decode=1 HexDecode=1 RawScan=13346 SpacedAscii=1 StackString=36 UrlDecode=1 WideString=1 XorStackPair=6
+symbols_provided	testdata/malware/poolrat	13394	f80cf552df41a193	Base64Decode=1 HexDecode=1 RawScan=13346 SpacedAscii=1 StackString=37 UrlDecode=1 WideString=1 XorStackPair=6
 symbols_provided	testdata/malware/sample-stealer	24403	2fbc8d835126a522	Base64Decode=2 InstructionPattern=2159 PclntabSymbol=9654 RawScan=11192 SpacedAscii=1 Structure=1365 UrlDecode=10 WideString=20
 symbols_provided	testdata/malware/sorry_ransomware.exe	1237	9c138327a0246cd2	RawScan=577 StackString=2 Structure=656 WideString=2
-symbols_provided	testdata/malware/themeforestrat	13486	b057b5a63c7562ab	Base64Decode=1 HexDecode=1 RawScan=13445 SpacedAscii=1 StackString=31 UrlDecode=1 WideString=1 XorStackPair=5
+symbols_provided	testdata/malware/themeforestrat	13487	496a50f1b59ab6d5	Base64Decode=1 HexDecode=1 RawScan=13445 SpacedAscii=1 StackString=32 UrlDecode=1 WideString=1 XorStackPair=5
 symbols_provided	testdata/malware/threadracer.exe	723	1d53850eafa49196	RawScan=528 Structure=1 WideString=194
 symbols_provided	testdata/malware/vget_sample	1609	e4ff732804b07cc7	HexDecode=2 InstructionPattern=98 RawScan=893 SpacedAscii=1 StackString=9 Structure=588 UrlDecode=1 WideString=16 XorDecode=1
 symbols_provided	testdata/malware/wizardnet_downloader.dll	3291	806cee964074ec19	RawScan=2292 Structure=1 WideString=998

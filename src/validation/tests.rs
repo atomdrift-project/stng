@@ -864,3 +864,16 @@ fn words_with_y_for_a_vowel_survive() {
     }
     assert!(crate::is_garbage("xkcdq"));
 }
+
+#[test]
+fn keeps_numeric_values_but_not_single_digit_filler() {
+    // A file name the Dofoil crypter probes for, and ordinary numeric ids.
+    assert!(!is_garbage("1444444444"));
+    assert!(!is_garbage("4155550123"));
+    assert!(!is_garbage("20240531"));
+    // One repeated digit is lookup-table filler.
+    assert!(is_garbage("22222222"));
+    assert!(is_garbage("6666666666"));
+    // Digits mixed with a stray letter remain compression noise.
+    assert!(is_garbage("537353W353"));
+}

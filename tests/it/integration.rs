@@ -274,6 +274,7 @@ mod filter;
 mod garbage_edge_cases;
 mod go_binary;
 mod ip_detection;
+mod numeric_strings;
 mod pe_pointer_stack_strings;
 mod real_binary;
 mod rust_binary;

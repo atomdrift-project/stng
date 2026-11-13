@@ -1,7 +1,7 @@
 use stng::{ExtractOptions, extract_strings_with_options};
 
 /// A parseable PE32+ (AMD64) with a single `.rdata` section holding `rdata`.
-fn pe_with_rdata(rdata: &[u8]) -> Vec<u8> {
+pub(super) fn pe_with_rdata(rdata: &[u8]) -> Vec<u8> {
     const RAW: u32 = 0x200;
     let raw = RAW as usize;
     assert!(

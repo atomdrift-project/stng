@@ -704,6 +704,16 @@ pub(super) fn is_short_word_garbage(s: &str, len: usize, stats: &CharStats) -> b
     false
 }
 
+/// A purely numeric string with at least two distinct digits: a value such as
+/// `1444444444` rather than a single repeated filler digit like `22222222`.
+fn is_numeric_value(s: &str) -> bool {
+    let mut digits = s.bytes();
+    let Some(first) = digits.next() else {
+        return false;
+    };
+    first.is_ascii_digit() && s.bytes().all(|b| b.is_ascii_digit()) && digits.any(|b| b != first)
+}
+
 /// Perform statistical analysis to determine if string is garbage.
 ///
 /// This is the fallback when fast paths and IOC recognition don't apply.
@@ -719,10 +729,14 @@ pub(super) fn is_statistical_garbage(
     }
 
     // Repeating digit patterns like "537353W353" - digits repeat in a pattern with few letters
-    // Exception: hex addresses like "0x12345678" are valid
+    // Exception: hex addresses like "0x12345678" are valid.
+    // Exception: a purely numeric string ("1444444444", a phone number, an
+    // account or build id) is a value someone wrote, not compression noise --
+    // the Dofoil crypter probes for a file named 1444444444. Only a run of one
+    // repeated digit ("22222222", from u16 lookup tables) is filler.
     if len >= 8 && stats.digit >= 6 && stats.alpha <= 2 {
         let is_hex_address = s.starts_with("0x") || s.starts_with("0X");
-        if !is_hex_address {
+        if !is_hex_address && !is_numeric_value(s) {
             return true;
         }
     }

@@ -9,7 +9,9 @@
 //!
 //! The fixtures are synthetic PEs assembled here; no sample bytes.
 
-use stng::{ExtractOptions, ExtractedString, StringKind, StringMethod, extract_strings_with_options};
+use stng::{
+    ExtractOptions, ExtractedString, StringKind, StringMethod, extract_strings_with_options,
+};
 
 /// File alignment, and the size of the headers and of `.data`.
 const RAW: u32 = 0x200;
@@ -86,7 +88,11 @@ fn pe(code: &[u8], amd64: bool) -> Vec<u8> {
     put(&mut pe, raw, code);
     // The global at the start of .data points at the buffer just past it.
     if amd64 {
-        put(&mut pe, data_at, &(BASE64 + u64::from(DATA_RVA) + 16).to_le_bytes());
+        put(
+            &mut pe,
+            data_at,
+            &(BASE64 + u64::from(DATA_RVA) + 16).to_le_bytes(),
+        );
     } else {
         put(&mut pe, data_at, &(BASE32 + DATA_RVA + 16).to_le_bytes());
     }
