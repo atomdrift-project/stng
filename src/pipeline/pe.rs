@@ -1,9 +1,7 @@
 //! PE binaries.
 
 use super::{Scan, extract_stack_strings_from_ranges, merge_imports, parallel};
-use crate::binary::{
-    self, collect_pe_section_info, pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
-};
+use crate::binary::{self, collect_pe_section_info, pe_go_skip_ranges, pe_is_rust};
 use crate::go::{GoStringExtractor, pclntab_strings};
 use crate::imports::extract_layout_imports;
 use crate::layouts::Layouts;
@@ -77,17 +75,17 @@ pub(super) fn scan<'d>(
         tracing::debug!(elapsed = ?t_struct.elapsed(), "Rust PE structure extraction finished");
     }
 
-    // Skip raw-scanning Go's or Rust's packed string sections to
-    // avoid emitting the entire blob as one merged garbage string.
+    // Skip raw-scanning Go's packed string sections to avoid emitting the
+    // entire blob as one merged garbage string. Rust's `.rdata` is scanned
+    // like an unknown PE's and trimmed to what the structure pass did not
+    // claim (below): that pass only reaches `(ptr, len)` pairs stored as
+    // data, so literals named straight from code (`lea` plus a length
+    // immediate) exist nowhere else.
     let pe_skip: Vec<std::ops::Range<usize>> = if is_go_binary {
         pe_go_skip_ranges(pe, data.len())
-    } else if is_rust {
-        pe_rust_skip_ranges(pe, data.len())
     } else {
         Vec::new()
     };
-
-    let wide_skip: &[std::ops::Range<usize>] = if is_rust { &[] } else { &pe_skip };
 
     // Only executable sections are disassembled for stack strings. Go PE
     // binaries need this too: dynamically resolved Win32 API names are
@@ -105,10 +103,9 @@ pub(super) fn scan<'d>(
         split,
         [
             &|| dotnet::extract_us_heap_strings(pe, data, min_length),
-            // UTF-16 literals are NUL-terminated, never packed like `&str`
-            // data, so the wide scan covers Rust's `.rdata` too. Go's skipped
-            // sections hold pclntab tables that only decode to UTF-16 noise.
-            &|| extract_wide_strings(data, min_length, &segments, wide_skip),
+            // Go's skipped sections hold pclntab tables that only decode to
+            // UTF-16 noise.
+            &|| extract_wide_strings(data, min_length, &segments, &pe_skip),
             &|| {
                 // No ELF machine: the M68000 skip is ELF's.
                 scan_binary_ips(data, min_length, 0, None, Some(pe))
@@ -128,7 +125,17 @@ pub(super) fn scan<'d>(
     strings.extend(us_strings);
     strings.extend(wide_strings);
     strings.extend(net_strings);
-    strings.extend(raw_strings);
+    if is_rust {
+        // Mirror the ELF path: rustc packs literals back to back, so keep
+        // only the raw pieces the structure pass left unclaimed.
+        strings.extend(super::unclaimed_raw_strings(
+            raw_strings,
+            &strings,
+            min_length,
+        ));
+    } else {
+        strings.extend(raw_strings);
+    }
     strings.extend(stack_strings);
     if opts.xor_scans() && !is_go_binary && !opts.is_cancelled() {
         strings.extend(xor::pe_decoder::extract(pe, data, min_length));

@@ -5,7 +5,7 @@ mod signature;
 
 pub(crate) use language::{
     elf_go_skip_ranges, elf_has_go_sections, elf_is_rust, macho_go_skip_ranges,
-    macho_has_go_sections, macho_is_rust, pe_go_skip_ranges, pe_is_rust, pe_rust_skip_ranges,
+    macho_has_go_sections, macho_is_rust, pe_go_skip_ranges, pe_is_rust,
 };
 pub use language::{is_go_binary, is_rust_binary};
 pub(crate) use signature::is_platform_signed;

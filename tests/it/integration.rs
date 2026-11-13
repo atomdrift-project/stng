@@ -276,6 +276,7 @@ mod go_binary;
 mod ip_detection;
 mod real_binary;
 mod rust_binary;
+mod rust_pe;
 mod severity;
 mod shell_detection;
 mod sockaddr_extraction;

@@ -217,16 +217,3 @@ pub(crate) fn pe_is_rust(pe: &goblin::pe::PE<'_>, data: &[u8]) -> bool {
 
 /// The PE sections that hold read-only data.
 const PE_RODATA: &[&str] = &[".rdata", ".rodata"];
-
-/// File-offset ranges in a Rust PE binary the raw scanner must skip.
-///
-/// Rust's PE backend packs `&'static str` slices into one back-to-back blob in
-/// `.rdata` (no NUL terminators), then references each substring through a
-/// separate `(ptr, len)` table. Without skipping, the raw scanner sees the
-/// entire blob as one long printable run and emits it as a single garbage
-/// string. The structure-based extractor recovers the correctly-sliced
-/// substrings.
-#[must_use]
-pub(crate) fn pe_rust_skip_ranges(pe: &goblin::pe::PE<'_>, data_len: usize) -> Vec<Range<usize>> {
-    pe_section_ranges(pe, data_len, PE_RODATA).collect()
-}

@@ -1,8 +1,7 @@
 //! PE import recovery.
 //!
-//! PE import names live behind RVA tables in the import directory, not as
-//! inline literals, so a raw byte scan never surfaces them; stng resolves them
-//! through goblin's parsed import directory. API names like `CreateProcessW`
+//! PE import names live behind RVA tables in the import directory; stng
+//! resolves them through goblin's parsed import directory and types them. API names like `CreateProcessW`
 //! must be present and typed, and the `caller_provides_symbols`
 //! hint must suppress the structured pass for a caller that parses imports
 //! itself.
@@ -38,15 +37,19 @@ fn pe_imports_recovered_and_typed() {
 #[test]
 fn caller_provides_symbols_suppresses_pe_imports() {
     // A caller that parses the import table itself does not want stng to redo
-    // it. The RVA-table names aren't inline literals, so suppressing the structured pass
-    // legitimately drops them from stng's output (the caller owns them).
+    // it: no string is typed as an import. The hint/name table's bytes still
+    // sit in `.rdata`, so the raw scan may report the same text untyped, as it
+    // does for any PE.
     let with = extract(false);
     let without = extract(true);
-    let has = |v: &[stng::ExtractedString], n: &str| v.iter().any(|s| s.value == n);
+    let import = |v: &[stng::ExtractedString], n: &str| {
+        v.iter()
+            .any(|s| s.value == n && s.kind == Some(StringKind::Import))
+    };
 
-    assert!(has(&with, "CreateProcessW"));
+    assert!(import(&with, "CreateProcessW"));
     assert!(
-        !has(&without, "CreateProcessW"),
+        !import(&without, "CreateProcessW"),
         "import directory pass should be skipped when caller owns symbols"
     );
 }

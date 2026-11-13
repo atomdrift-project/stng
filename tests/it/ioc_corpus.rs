@@ -345,6 +345,21 @@ fn existing_testdata_ioc_manifest_is_exact() {
         ],
     );
 
+    // A Rust PE's hardcoded IP URL, named only from code; it went unseen
+    // while Rust `.rdata` was excluded from the raw scan.
+    assert_exact(
+        "sorry ransomware",
+        crate::common::path("testdata/malware/sorry_ransomware.exe"),
+        &ExtractOptions::new(4),
+        &[expected(
+            IocKind::Ip,
+            "149.248.77.59",
+            &[],
+            1,
+            &[StringMethod::RawScan],
+        )],
+    );
+
     // These fixtures contain versions, code-signature hosts, compiler/runtime
     // metadata, common system paths, malformed URLs, or bare filenames, but no
     // high-confidence IOC under the conservative contract.
@@ -374,11 +389,6 @@ fn existing_testdata_ioc_manifest_is_exact() {
         (
             "sample stealer runtime paths",
             crate::common::path("testdata/malware/sample-stealer"),
-            ExtractOptions::new(4),
-        ),
-        (
-            "sorry ransomware",
-            crate::common::path("testdata/malware/sorry_ransomware.exe"),
             ExtractOptions::new(4),
         ),
         (
