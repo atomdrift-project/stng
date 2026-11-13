@@ -2,9 +2,21 @@
 
 All notable changes to stng. Versions follow [semantic versioning](README.md#versioning).
 
-## Unreleased
+## 3.0.0-beta.3 (2026-11-13)
 
-### 3.0.0-beta.2
+### Features
+
+- stack strings stored a character at a time through a reloaded pointer are recovered now, as dofoil builds them.
+- utf-16 stack strings written by immediate stores are now recovered too.
+
+### Fixes
+
+- rust PE .rdata was never raw-scanned, so literals named straight from code vanished, including the javs backdoor's c2 vocabulary.
+- numeric strings like `1444444444` were dropped as noise; only a single repeated digit is filler now.
+
+## 3.0.0-beta.2 (2026-11-09)
+
+### Features
 
 - Extract strings from data appended to PE files, as was already done for ELF.
 - Add `detect_overlay` for parsed ELF and PE files; the CLI now reports PE overlays.
