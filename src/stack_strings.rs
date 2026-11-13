@@ -5,11 +5,17 @@
 //! - Immediate stores to memory (`mov [mem], imm`).
 //! - Register stores to memory (`mov [mem], reg`).
 //! - Inlined `strcat` of short literals (see `extract_strcat_chains`).
+//! - Characters computed into registers and stored one at a time, narrow
+//!   or UTF-16, through a pointer reloaded from a global or frame slot
+//!   (see [`facts`]).
 //!
 //! Tracks register state and memory offsets to correctly reconstruct
 //! strings that are built out-of-order or with overlaps.
 
+mod facts;
+
 use crate::types::{ExtractedString, StringFragment, StringKind, StringMethod};
+use facts::{Base, Facts};
 use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -30,6 +36,40 @@ fn check_printable(bytes: &[u8], min_length: usize) -> Option<String> {
         return String::from_utf8(trimmed.to_vec()).ok();
     }
     None
+}
+
+/// The UTF-16LE text of `bytes` when every code unit is printable ASCII,
+/// ignoring trailing NUL units; `None` when that leaves nothing.
+fn wide_printable(bytes: &[u8]) -> Option<String> {
+    let (units, rest) = bytes.as_chunks::<2>();
+    if !rest.is_empty() {
+        return None;
+    }
+    // A unit with a high byte is not ASCII; 0xff fails the check below.
+    let mut text: Vec<u8> = units
+        .iter()
+        .map(|&[lo, hi]| if hi == 0 { lo } else { 0xff })
+        .collect();
+    while text.last() == Some(&0) {
+        text.pop();
+    }
+    if text.is_empty() || !text.iter().all(|&b| b.is_ascii_graphic() || b == b' ') {
+        return None;
+    }
+    String::from_utf8(text).ok()
+}
+
+/// The text a store of `bytes` lays down, and whether it is UTF-16: all
+/// printable bytes are narrow text, then printable UTF-16 code units, then
+/// narrow text ending in NULs.
+fn decode_store(bytes: &[u8]) -> Option<(String, bool)> {
+    if !bytes.is_empty() && bytes.iter().all(|&b| b.is_ascii_graphic() || b == b' ') {
+        return String::from_utf8(bytes.to_vec()).ok().map(|s| (s, false));
+    }
+    if let Some(s) = wide_printable(bytes) {
+        return Some((s, true));
+    }
+    check_printable(bytes, 1).map(|s| (s, false))
 }
 
 /// Score a decoded string for likelihood of being valid text.
@@ -94,10 +134,29 @@ struct StackStringExtractor<'a> {
     raw_regs: HashMap<Register, Vec<u8>>,
     // XMM register state: raw bytes (16 bytes each) for SSE operations.
     xmm_regs: HashMap<Register, [u8; 16]>,
-    // Captured stack writes: grouped by Base Register index -> Vec<StackWrite>
-    writes: BTreeMap<Register, Vec<StackWrite>>,
+    /// Constant registers, frame slots and pointer bases in this block.
+    facts: Facts,
+    /// Captured writes, grouped by the buffer they land in.
+    writes: BTreeMap<WriteKey, Vec<StackWrite>>,
     // Non-printable raw blobs written to the stack, grouped by base register.
     raw_blobs: BTreeMap<Register, Vec<RawBlob>>,
+}
+
+/// The buffer a write lands in, and whether it holds UTF-16 text. Narrow
+/// keys sort first, in register order, as they did before wide text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct WriteKey {
+    wide: bool,
+    base: Base,
+}
+
+impl WriteKey {
+    fn narrow(base: Register) -> Self {
+        Self {
+            wide: false,
+            base: Base::Reg(base),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +193,7 @@ impl<'a> StackStringExtractor<'a> {
             regs: HashMap::with_capacity(16),
             raw_regs: HashMap::with_capacity(16),
             xmm_regs: HashMap::with_capacity(16),
+            facts: Facts::default(),
             writes: BTreeMap::new(),
             raw_blobs: BTreeMap::new(),
         }
@@ -173,20 +233,26 @@ impl<'a> StackStringExtractor<'a> {
                 let base = instr.memory_base();
                 let disp = instr.memory_displacement64().cast_signed();
                 let imm_val = instr.immediate32().to_le_bytes();
+                let key = self.store_key(instr, false);
 
                 if let Some(s) = check_printable(&imm_val, 4) {
-                    self.add_write(base, disp, s, instr_off);
+                    self.add_write(key, disp, s, instr_off);
                 } else {
                     self.add_raw_blob(base, disp, imm_val.to_vec(), instr_off);
+                    self.add_wide_store(instr, instr.immediate(1), instr_off);
                 }
+            }
+            // mov [mem], imm16
+            (OpKind::Memory, OpKind::Immediate16) => {
+                self.add_decoded_store(instr, u64::from(instr.immediate16()), 2, instr_off);
             }
             // mov [mem], imm8
             (OpKind::Memory, OpKind::Immediate8) => {
-                let base = instr.memory_base();
                 let disp = instr.memory_displacement64().cast_signed();
                 let b = instr.immediate8();
                 if b.is_ascii_graphic() || b == b' ' {
-                    self.add_write(base, disp, (b as char).to_string(), instr_off);
+                    let key = self.store_key(instr, false);
+                    self.add_write(key, disp, (b as char).to_string(), instr_off);
                 }
             }
             // mov [mem], reg
@@ -196,7 +262,10 @@ impl<'a> StackStringExtractor<'a> {
                 let src_reg = instr.op1_register();
 
                 if let Some((s, _off)) = self.regs.get(&src_reg).cloned() {
-                    self.add_write(base, disp, s, instr_off);
+                    let key = self.store_key(instr, false);
+                    self.add_write(key, disp, s, instr_off);
+                } else if let Some(value) = self.facts.value(src_reg) {
+                    self.add_decoded_store(instr, value, src_reg.size(), instr_off);
                 }
                 if let Some(raw) = self.raw_regs.get(&src_reg).cloned() {
                     self.add_raw_blob(base, disp, raw, instr_off);
@@ -204,6 +273,39 @@ impl<'a> StackStringExtractor<'a> {
             }
             _ => {}
         }
+    }
+
+    /// The buffer `instr`'s memory operand writes into.
+    fn store_key(&self, instr: &Instruction, wide: bool) -> WriteKey {
+        WriteKey {
+            wide,
+            base: self.facts.base(instr),
+        }
+    }
+
+    /// A store of the low `size` bytes of the known `value`: recorded as
+    /// narrow or UTF-16 text when it decodes as either.
+    fn add_decoded_store(&mut self, instr: &Instruction, value: u64, size: usize, instr_off: u64) {
+        let bytes = value.to_le_bytes();
+        let Some((s, wide)) = bytes.get(..size).and_then(decode_store) else {
+            return;
+        };
+        let key = self.store_key(instr, wide);
+        let disp = instr.memory_displacement64().cast_signed();
+        self.add_write(key, disp, s, instr_off);
+    }
+
+    /// A store of `value` across the memory operand's width, recorded only
+    /// when it is UTF-16 text: `mov dword [ebp-8], 0x0065006b` is L"ke".
+    fn add_wide_store(&mut self, instr: &Instruction, value: u64, instr_off: u64) {
+        let size = instr.memory_size().size();
+        let bytes = value.to_le_bytes();
+        let Some(s) = bytes.get(..size).and_then(wide_printable) else {
+            return;
+        };
+        let key = self.store_key(instr, true);
+        let disp = instr.memory_displacement64().cast_signed();
+        self.add_write(key, disp, s, instr_off);
     }
 
     /// An SSE load into an XMM register, or a store of a tracked one.
@@ -281,7 +383,12 @@ impl<'a> StackStringExtractor<'a> {
                     if let Some(val) = imm_val
                         && let Some(s) = check_printable(&val, self.min_length.min(val.len()))
                     {
-                        self.add_write(Register::None, instr_off as i64, s, instr_off);
+                        self.add_write(
+                            WriteKey::narrow(Register::None),
+                            instr_off as i64,
+                            s,
+                            instr_off,
+                        );
                     }
                 }
                 // --- 4. Control Flow (Finalize/Clear) ---
@@ -309,12 +416,21 @@ impl<'a> StackStringExtractor<'a> {
                     self.regs.clear();
                     self.raw_regs.clear();
                     self.xmm_regs.clear();
+                    self.facts.clear();
+                    continue;
                 }
                 _ => {}
             }
+            self.facts.update(&instr, self.bits);
         }
 
         results.extend(self.finalize_writes());
+        tracing::trace!(
+            bits = self.bits,
+            code_len = self.data.len(),
+            strings = results.len(),
+            "stack strings recovered"
+        );
         results
     }
 
@@ -347,8 +463,8 @@ impl<'a> StackStringExtractor<'a> {
         None
     }
 
-    fn add_write(&mut self, base: Register, disp: i64, s: String, instr_off: u64) {
-        self.writes.entry(base).or_default().push(StackWrite {
+    fn add_write(&mut self, key: WriteKey, disp: i64, s: String, instr_off: u64) {
+        self.writes.entry(key).or_default().push(StackWrite {
             string: s,
             disp,
             instr_off,
@@ -365,56 +481,86 @@ impl<'a> StackStringExtractor<'a> {
 
     fn finalize_writes(&mut self) -> Vec<ExtractedString> {
         let mut results = Vec::new();
+        let mut wide_results = Vec::new();
         let writes_map = std::mem::take(&mut self.writes);
 
-        for (base, mut writes) in writes_map {
+        for (key, mut writes) in writes_map {
             writes.sort_by_key(|write| write.disp);
-            // Writes at most this far past the string so far extend it.
-            let allowed_gap = if base == Register::None { 16 } else { 4 };
+            // Bytes per character, and how far past the string so far a
+            // write may land and still extend it. UTF-16 text and text
+            // stored through a reloaded pointer must be exactly contiguous:
+            // integers stored to adjacent slots are not text, and a hole is
+            // a character patched elsewhere, not one to drop.
+            let (unit, allowed_gap): (i64, i64) = match key {
+                WriteKey { wide: true, .. } => (2, 0),
+                WriteKey {
+                    base: Base::Loaded { .. },
+                    ..
+                } => (1, 0),
+                WriteKey {
+                    base: Base::Reg(Register::None),
+                    ..
+                } => (1, 16),
+                WriteKey { .. } => (1, 4),
+            };
+            // Values are printable ASCII: `unit` bytes per character.
+            let byte_len = |w: &StackWrite| {
+                i64::try_from(w.string.len()).map_or(i64::MAX, |n| n.saturating_mul(unit))
+            };
             let start = |w: StackWrite| ExtractedString {
                 data_offset: w.instr_off,
                 method: StringMethod::StackString,
                 kind: Some(StringKind::StackString),
                 fragments: Some(Box::new(vec![StringFragment {
                     offset: w.instr_off,
-                    length: w.string.len(),
+                    length: usize::try_from(byte_len(&w)).unwrap_or(usize::MAX),
                 }])),
                 value: w.string,
                 ..Default::default()
             };
 
+            let out = if key.wide {
+                &mut wide_results
+            } else {
+                &mut results
+            };
             let mut iter = writes.into_iter();
             let Some(first) = iter.next() else { continue };
             // RIP-relative displacements are absolute addresses derived from
             // header fields, so this arithmetic saturates instead of wrapping.
-            let mut current_end_disp = first.disp.saturating_add(first.string.len() as i64);
+            let mut current_end_disp = first.disp.saturating_add(byte_len(&first));
             let mut current = start(first);
 
             for w in iter {
-                let end_disp = w.disp.saturating_add(w.string.len() as i64);
-                if w.disp.saturating_sub(current_end_disp) > allowed_gap {
-                    results.push(std::mem::replace(&mut current, start(w)));
+                let end_disp = w.disp.saturating_add(byte_len(&w));
+                // A write may overlap the end of the string so far; only the
+                // characters past it are new. Half a UTF-16 unit of overlap
+                // is a different buffer layout, not a continuation.
+                let overlap = current_end_disp.saturating_sub(w.disp).max(0);
+                if w.disp.saturating_sub(current_end_disp) > allowed_gap || overlap % unit != 0 {
+                    out.push(std::mem::replace(&mut current, start(w)));
                     current_end_disp = end_disp;
                     continue;
                 }
-                // A write may overlap the end of the string so far; only the
-                // bytes past it are new.
-                let overlap = usize::try_from(current_end_disp.saturating_sub(w.disp)).unwrap_or(0);
-                if let Some(new_part) = w.string.get(overlap..).filter(|p| !p.is_empty()) {
+                let skip = usize::try_from(overlap / unit).unwrap_or(usize::MAX);
+                if let Some(new_part) = w.string.get(skip..).filter(|p| !p.is_empty()) {
                     current.value.push_str(new_part);
                     if let Some(frags) = &mut current.fragments {
                         frags.push(StringFragment {
                             offset: w.instr_off,
-                            length: w.string.len(),
+                            length: usize::try_from(byte_len(&w)).unwrap_or(usize::MAX),
                         });
                     }
                     current_end_disp = end_disp;
                 }
             }
-            results.push(current);
+            out.push(current);
         }
 
+        // Fragment merging joins narrow pieces by instruction distance; a
+        // UTF-16 run is already whole, and must not absorb narrow text.
         results = self.merge_adjacent_fragments(results);
+        results.append(&mut wide_results);
         results.extend(self.finalize_garble_pairs());
         results.retain(|s| s.value.len() >= self.min_length);
         results
