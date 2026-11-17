@@ -89,11 +89,7 @@ pub(super) fn is_good_xor_key_candidate(s: &str, entropy: f64) -> bool {
         .filter(|w| w[0].wrapping_add(1) == w[1] && w[1].wrapping_add(1) == w[2])
         .count();
     // Reject if more than 20% sequential
-    if sequential_count * 5 > bytes.len() {
-        return false;
-    }
-
-    true
+    sequential_count * 5 <= bytes.len()
 }
 
 /// Score a candidate string as a potential XOR key.

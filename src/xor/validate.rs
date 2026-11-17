@@ -326,11 +326,7 @@ pub(crate) fn is_valid_ip(s: &str) -> bool {
     let is_private = octets[0] == 10
         || (octets[0] == 172 && (16..=31).contains(&octets[1]))
         || (octets[0] == 192 && octets[1] == 168);
-    if !is_private && octets[1] < 10 && octets[2] < 10 && octets[3] < 10 {
-        return false;
-    }
-
-    true
+    !(!is_private && octets[1] < 10 && octets[2] < 10 && octets[3] < 10)
 }
 
 pub(crate) fn is_valid_port(s: &str) -> bool {
@@ -629,9 +625,5 @@ pub(crate) fn looks_like_text(s: &str) -> bool {
 
     // Reasonable word lengths (average 2-15 chars)
     let avg_word_len = non_space / words.len().max(1);
-    if !(2..=15).contains(&avg_word_len) {
-        return false;
-    }
-
-    true
+    (2..=15).contains(&avg_word_len)
 }

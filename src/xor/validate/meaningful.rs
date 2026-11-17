@@ -386,9 +386,5 @@ pub(crate) fn is_meaningful_string(s: &str) -> bool {
 
     // Reject strings with too many backslashes (path separators are OK, but not excessive)
     let backslash_count = s.chars().filter(|&c| c == '\\').count();
-    if backslash_count > 3 && backslash_count * 4 > len {
-        return false;
-    }
-
-    true
+    !(backslash_count > 3 && backslash_count * 4 > len)
 }

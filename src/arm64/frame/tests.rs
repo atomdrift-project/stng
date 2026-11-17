@@ -174,9 +174,7 @@ fn original_conversion_and_append_frame_pairs() {
         for i in 0..count {
             s.step(word(prologue + i * 4)).unwrap();
         }
-        for r in 19..=24 {
-            s.registers[r] = Value::Unknown;
-        }
+        s.registers[19..=24].fill(Value::Unknown);
         // The append frame saves only X19..X22.
         if count == 3 {
             s.registers[23] = Value::Initial(23);

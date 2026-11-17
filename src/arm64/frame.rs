@@ -218,9 +218,9 @@ impl State {
         if writes & (1 << 31) != 0 {
             return None;
         }
-        for r in 0..31 {
+        for (r, value) in self.registers[..31].iter_mut().enumerate() {
             if writes & (1 << r) != 0 {
-                self.registers[r] = Value::Unknown;
+                *value = Value::Unknown;
             }
         }
         Some(())
