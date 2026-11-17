@@ -2,6 +2,10 @@
 
 All notable changes to stng. Versions follow [semantic versioning](README.md#versioning).
 
+## 3.0.0 (2026-11-17)
+
+No functional changes since 3.0.0-beta.3; dependencies refreshed. This is the first stable 3.0 release.
+
 ## 3.0.0-beta.3 (2026-11-13)
 
 ### Features
