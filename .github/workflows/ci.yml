@@ -138,9 +138,15 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked --version 0.12.0
 
+      # cargo-fuzz's `run` takes no --locked, so check the lockfile first: this
+      # fails if fuzz/Cargo.lock is out of date instead of silently updating it.
+      - name: Check fuzz lockfile
+        working-directory: fuzz
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       - name: Fuzz for ten minutes
         working-directory: fuzz
-        run: cargo fuzz run extract --locked -- -max_total_time=600 -rss_limit_mb=4096
+        run: cargo fuzz run extract -- -max_total_time=600 -rss_limit_mb=4096
 
       - name: Keep crashes
         if: failure()

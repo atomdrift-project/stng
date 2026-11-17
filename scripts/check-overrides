@@ -2,11 +2,11 @@
 # Fail if Cargo.toml has a dependency or [patch] entry that others cannot
 # reproduce:
 #   - a path that leaves the repo (absolute, ~, or through ..), which pins
-#     against a sibling working tree;
-#   - a [patch] git source without `rev = "<sha>"`, which follows a branch
-#     head. Ordinary git dependencies may omit it: a dependent must resolve
-#     a type-sharing dependency (binform) from the same source, and
-#     Cargo.lock records the commit for stng's own builds.
+#     against a sibling working tree.
+# Git sources may omit `rev`, including in [patch]: Cargo.lock records the
+# commit and CI builds with --locked, so stng's own builds stay reproducible,
+# and a dependent must resolve the fork (and type-sharing dependencies such as
+# binform) from the same source as its own patch block.
 # Paths inside the repo pass. Target paths under [lib]/[[bin]] are not
 # dependencies and are ignored. Entries are expected on one line.
 #
@@ -25,19 +25,6 @@ overrides=$(awk '
 		next
 	}
 	section ~ /(^|\.)(dev-|build-)?dependencies(\.|$)/ || section ~ /^patch/ {
-		if (section ~ /^patch/ && $0 ~ /(^|[{,[:space:]])git[[:space:]]*=/) {
-			# No regex intervals: older mawk lacks them.
-			rev = ""
-			if (match($0, /(^|[{,[:space:]])rev[[:space:]]*=[[:space:]]*"[0-9a-f]+"/)) {
-				rev = substr($0, RSTART, RLENGTH)
-				sub(/^[^"]*"/, "", rev)
-				sub(/"$/, "", rev)
-			}
-			if (length(rev) != 40) {
-				printf "  %d: %s (git source without a full-sha rev)\n", NR, $0
-			}
-			next
-		}
 		if (!match($0, /(^|[{,[:space:]])path[[:space:]]*=[[:space:]]*"[^"]*"/)) {
 			next
 		}
@@ -55,4 +42,4 @@ if [ -n "$overrides" ]; then
 	echo "$overrides" >&2
 	exit 1
 fi
-echo "✓ No local overrides or unpinned git sources"
+echo "✓ No local path overrides"

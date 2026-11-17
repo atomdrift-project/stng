@@ -91,7 +91,7 @@ jobs:
 
       # A tag can be pushed without ever passing through PR CI, so the release
       # path repeats the guard rather than trusting that someone ran it.
-      - name: Reject local path overrides and unpinned git sources
+      - name: Reject local path overrides
         run: scripts/check-overrides
 
       # A tag push always publishes; a dispatch only does so when asked. On a

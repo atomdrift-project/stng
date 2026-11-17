@@ -66,14 +66,14 @@ tree-sitter patch into your top-level `Cargo.toml`:
 stng = { git = "https://github.com/atomdrift-project/stng", tag = "v3.0.0-beta.1", default-features = false }
 
 [patch.crates-io]
-tree-sitter = { git = "https://github.com/tstromberg/tree-sitter", rev = "10d5d1372be200e04480a6b1d6780229c5b1ee79" }
-tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter", rev = "10d5d1372be200e04480a6b1d6780229c5b1ee79" }
+tree-sitter = { git = "https://github.com/tstromberg/tree-sitter" }
+tree-sitter-language = { git = "https://github.com/tstromberg/tree-sitter" }
 ```
 
 Cargo applies `[patch]` only from the top-level manifest. Without it you get
 upstream tree-sitter, whose parser lacks the bounds stng relies on for
-hostile Lua input. Copy the `rev` from stng's own `Cargo.toml` at the tag you
-pin.
+hostile Lua input. Copy the block from stng's own `Cargo.toml` at the tag you
+pin; your `Cargo.lock` records the fork commit.
 
 ```rust,no_run
 let bytes = std::fs::read("sample.bin").expect("read sample");
