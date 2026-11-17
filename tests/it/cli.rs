@@ -33,7 +33,14 @@ fn fails_on_missing_file() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("does not exist") || stderr.contains("No such file"));
+    // The OS error text differs by platform: "No such file or directory" on
+    // Unix, "The system cannot find the path specified" on Windows.
+    assert!(
+        stderr.contains("does not exist")
+            || stderr.contains("No such file")
+            || stderr.contains("cannot find"),
+        "stderr did not report a missing file: {stderr}"
+    );
 }
 
 #[test]
