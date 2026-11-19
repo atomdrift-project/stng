@@ -231,7 +231,17 @@ pub fn extract_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
 /// ```
 #[must_use]
 pub fn extract_strings_with_options(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
-    route(data, None, &[], opts)
+    route(data, None, &[], opts, None)
+}
+
+/// Extract string rows while sharing script recovery with another consumer
+/// of these exact input bytes. Transcoded views recover independently.
+#[must_use]
+pub fn extract_strings_with_script_analysis(
+    analysis: &script::ScriptAnalysis<'_>,
+    opts: &ExtractOptions,
+) -> Vec<ExtractedString> {
+    route(analysis.input(), None, &[], opts, Some(analysis))
 }
 
 /// The one router behind every entry point: `parsed` is the caller's goblin
@@ -241,6 +251,7 @@ fn route<'d>(
     parsed: Option<&Object<'_>>,
     layouts: &[Layout<'_, 'd>],
     opts: &ExtractOptions,
+    script_analysis: Option<&script::ScriptAnalysis<'_>>,
 ) -> Vec<ExtractedString> {
     if opts.is_cancelled() {
         return Vec::new();
@@ -304,7 +315,7 @@ fn route<'d>(
             tracing::debug!(elapsed = ?t0.elapsed(), "extraction finished");
             strings
         }
-        _ => pipeline::extract_unknown(data, opts),
+        _ => pipeline::extract_unknown(data, opts, script_analysis),
     }
 }
 
@@ -326,7 +337,7 @@ pub fn extract_strings_from_parsed<'d>(
     data: &'d [u8],
     opts: &ExtractOptions,
 ) -> Vec<ExtractedString> {
-    route(data, Some(object), layouts, opts)
+    route(data, Some(object), layouts, opts, None)
 }
 
 /// Reads the sample at `path` (relative to the crate root) at run time.

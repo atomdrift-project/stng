@@ -6,6 +6,8 @@ use std::rc::Rc;
 use tree_sitter::Node;
 
 mod pure;
+mod table;
+use table::Table;
 
 use super::prometheus::{Cipher, Discovery};
 use super::whole;
@@ -33,7 +35,7 @@ enum Value<'t> {
     Number(f64),
     Bytes(Vec<u8>),
     Bool(bool),
-    Table(Rc<BTreeMap<Key, Self>>),
+    Table(Rc<Table<'t>>),
     Function(Node<'t>, Rc<Env<'t>>),
     Native(String),
     Affine { symbol: String, mul: f64, add: f64 },
@@ -71,7 +73,8 @@ fn children(n: Node<'_>) -> Vec<Node<'_>> {
     n.named_children(&mut c).collect()
 }
 fn child<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
-    children(n).into_iter().find(|n| n.kind() == kind)
+    let mut cursor = n.walk();
+    n.named_children(&mut cursor).find(|n| n.kind() == kind)
 }
 fn text<'s>(n: Node<'_>, s: &'s str) -> &'s str {
     s.get(n.byte_range()).unwrap_or("")
@@ -103,11 +106,7 @@ fn truth(v: &Value<'_>) -> Option<bool> {
         _ => Some(true),
     }
 }
-fn replace_aliases<'t>(
-    env: &mut Env<'t>,
-    old: &Rc<BTreeMap<Key, Value<'t>>>,
-    new: &Rc<BTreeMap<Key, Value<'t>>>,
-) {
+fn replace_aliases<'t>(env: &mut Env<'t>, old: &Rc<Table<'t>>, new: &Rc<Table<'t>>) {
     for value in env.values_mut() {
         if matches!(value,Value::Table(t) if Rc::ptr_eq(t,old)) {
             *value = Value::Table(new.clone());
@@ -138,7 +137,7 @@ fn invalidate_native(env: &mut Env<'_>, library: &str) {
         }
     }
 }
-fn table_ids<'t>(root: &Rc<BTreeMap<Key, Value<'t>>>) -> BTreeSet<usize> {
+fn table_ids<'t>(root: &Rc<Table<'t>>) -> BTreeSet<usize> {
     let mut ids = BTreeSet::new();
     let mut pending = vec![root];
     while let Some(t) = pending.pop() {
@@ -158,7 +157,7 @@ fn table_ids<'t>(root: &Rc<BTreeMap<Key, Value<'t>>>) -> BTreeSet<usize> {
     }
     ids
 }
-fn invalidate_table<'t>(env: &mut Env<'t>, old: &Rc<BTreeMap<Key, Value<'t>>>) {
+fn invalidate_table<'t>(env: &mut Env<'t>, old: &Rc<Table<'t>>) {
     let targets = table_ids(old);
     invalidate_tables(env, &targets);
 }
@@ -381,11 +380,7 @@ impl<'s> Folder<'s> {
                 ) {
                     (Some("-"), Value::Number(n)) => Value::Number(-n),
                     (Some("#"), Value::Bytes(b)) => Value::Number(b.len() as f64),
-                    (Some("#"), Value::Table(t)) => Value::Number(
-                        (1..=t.len())
-                            .take_while(|i| t.contains_key(&Key::Number(*i as i64)))
-                            .count() as f64,
-                    ),
+                    (Some("#"), Value::Table(t)) => Value::Number(t.sequence_len() as f64),
                     (Some("not"), v) => truth(&v).map_or(Value::Unknown, |v| Value::Bool(!v)),
                     _ => Value::Unknown,
                 }
@@ -437,7 +432,7 @@ impl<'s> Folder<'s> {
         pure: bool,
         trace: &mut BlockTrace,
     ) -> Value<'t> {
-        let mut map = BTreeMap::new();
+        let mut map = Table::default();
         let mut ix = 1;
         for f in children(n) {
             let Some(value) = f.child_by_field_name("value") else {

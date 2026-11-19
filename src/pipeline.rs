@@ -65,13 +65,17 @@ pub(crate) fn extract<'d>(
         Object::PE(pe) => pe::scan(pe, layouts, data, opts),
         _ => scan_unknown(data, opts),
     };
-    finish(Some(object), data, opts, scan)
+    finish(Some(object), data, opts, scan, None)
 }
 
 /// Extract strings from input goblin does not parse as a binary: text,
 /// scripts, and binaries it cannot read.
-pub(crate) fn extract_unknown(data: &[u8], opts: &ExtractOptions) -> Vec<ExtractedString> {
-    finish(None, data, opts, scan_unknown(data, opts))
+pub(crate) fn extract_unknown(
+    data: &[u8],
+    opts: &ExtractOptions,
+    script_analysis: Option<&crate::script::ScriptAnalysis<'_>>,
+) -> Vec<ExtractedString> {
+    finish(None, data, opts, scan_unknown(data, opts), script_analysis)
 }
 
 /// Strings from input with no format pass: a raw scan, and what an `MZ`
@@ -121,6 +125,7 @@ fn finish(
     data: &[u8],
     opts: &ExtractOptions,
     scan: Scan,
+    script_analysis: Option<&crate::script::ScriptAnalysis<'_>>,
 ) -> Vec<ExtractedString> {
     let min_length = opts.min_length;
     let Scan {
@@ -210,7 +215,11 @@ fn finish(
     // apart from the rest, so they are added last.
     if deobfuscate {
         let before = strings.len();
-        text::append_script_deobfuscation(&mut strings, data, opts);
+        if let Some(analysis) = script_analysis {
+            text::append_recovered_script(&mut strings, analysis.results(), opts);
+        } else {
+            text::append_script_deobfuscation(&mut strings, data, opts);
+        }
         tracing::debug!(
             added = strings.len() - before,
             "script deobfuscation finished"

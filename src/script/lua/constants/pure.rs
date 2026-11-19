@@ -61,7 +61,8 @@ impl Folder<'_> {
     ) -> Option<Flow<'t>> {
         let mut local = env.clone();
         let mut hidden: BTreeSet<_> = bindings.iter().map(|(n, _)| n.clone()).collect();
-        for st in children(body) {
+        let statements = children(body);
+        for &st in &statements {
             if st.kind() == "variable_declaration" {
                 let vars = child(st, "assignment_statement")
                     .and_then(|a| child(a, "variable_list"))
@@ -74,23 +75,27 @@ impl Folder<'_> {
         for (name, value) in bindings {
             local.insert(name.clone(), value.clone());
         }
-        let flow = self.pure_block(body, &mut local, depth + 1)?;
+        let flow = self.pure_statements(&statements, &mut local, depth + 1)?;
         // Carry table mutations through aliases even when the loop iterator
         // shadows one alias. Branch snapshots retain their own old Rc values.
-        let before = env.clone();
-        for (name, old) in &before {
-            if hidden.contains(name) {
-                continue;
-            }
-            if let (Value::Table(old), Some(Value::Table(new))) = (old, local.get(name)) {
-                replace_aliases(env, old, new);
+        let mut changed = Vec::new();
+        for (name, old) in env.iter() {
+            if let Value::Table(old) = old
+                && !hidden.contains(name)
+                && let Some(Value::Table(new)) = local.get(name)
+                && !Rc::ptr_eq(old, new)
+            {
+                changed.push((Rc::clone(old), Rc::clone(new)));
             }
         }
-        for name in before.keys() {
+        for (old, new) in changed {
+            replace_aliases(env, &old, &new);
+        }
+        for (name, value) in env.iter_mut() {
             if !hidden.contains(name)
-                && let Some(v) = local.get(name)
+                && let Some(updated) = local.remove(name)
             {
-                env.insert(name.clone(), v.clone());
+                *value = updated;
             }
         }
         Some(flow)
@@ -322,8 +327,7 @@ impl Folder<'_> {
                         return None;
                     }
                     let mut updated = (**table).clone();
-                    let index =
-                        (1..=MAX_TABLE).find(|i| !updated.contains_key(&Key::Number(*i as i64)))?;
+                    let index = updated.sequence_len() + 1;
                     updated.insert(Key::Number(index as i64), value.clone());
                     replace_aliases(env, table, &Rc::new(updated));
                     Flow::Continue

@@ -66,6 +66,35 @@ pub fn deobfuscate_script(data: &[u8]) -> Vec<DeobfuscationResult> {
     decode_chain::with_expansion_budget(|| deobfuscate(data))
 }
 
+/// Recovery shared by multiple consumers of one immutable input.
+pub struct ScriptAnalysis<'a> {
+    data: &'a [u8],
+    results: std::sync::OnceLock<Vec<DeobfuscationResult>>,
+}
+
+impl<'a> ScriptAnalysis<'a> {
+    /// Associate recovery results with this input for its lifetime.
+    #[must_use]
+    pub const fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            results: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The original input. A transformed byte view must recover separately.
+    #[must_use]
+    pub const fn input(&self) -> &'a [u8] {
+        self.data
+    }
+
+    /// Recover decoded script fragments on first use and share them across callers.
+    #[must_use]
+    pub fn results(&self) -> &[DeobfuscationResult] {
+        self.results.get_or_init(|| deobfuscate_script(self.data))
+    }
+}
+
 fn deobfuscate(data: &[u8]) -> Vec<DeobfuscationResult> {
     let vbe_results: Vec<_> = vbscript::decode_blocks(data)
         .into_iter()
@@ -216,6 +245,11 @@ exec(base64.b64decode("aW1wb3J0IG9z"))
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].decoded, "import os");
         assert_eq!(results[0].language, ScriptLanguage::Python);
+        let analysis = ScriptAnalysis::new(src);
+        let opts = crate::ExtractOptions::new(4);
+        let strings = crate::extract_strings_with_script_analysis(&analysis, &opts);
+        assert_eq!(analysis.results(), results);
+        assert_eq!(strings, crate::extract_strings_with_options(src, &opts));
     }
 
     #[test]

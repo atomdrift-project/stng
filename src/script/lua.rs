@@ -53,8 +53,14 @@ pub(super) fn extract_obfuscated_payloads(source: &str) -> Vec<DeobfuscationResu
     let Some(cipher) = folded.discovery.cipher() else {
         return Vec::new();
     };
-    let Some(tree) = parse(&folded.source) else {
-        return Vec::new();
+    let tree = if folded.source == source {
+        tree
+    } else {
+        drop(tree);
+        let Some(tree) = parse(&folded.source) else {
+            return Vec::new();
+        };
+        tree
     };
     let recovered = constants::recover(&tree, &folded.source, Some(cipher));
     // Parameter extraction is corroborated by several decoded cache lookups,

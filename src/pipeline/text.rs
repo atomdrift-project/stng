@@ -142,8 +142,15 @@ pub(crate) fn append_script_deobfuscation(
     data: &[u8],
     opts: &ExtractOptions,
 ) {
-    let deob_results = script::deobfuscate_script(data);
-    for result in deob_results {
+    append_recovered_script(strings, &script::deobfuscate_script(data), opts);
+}
+
+pub(super) fn append_recovered_script(
+    strings: &mut Vec<ExtractedString>,
+    results: &[script::DeobfuscationResult],
+    opts: &ExtractOptions,
+) {
+    for result in results {
         let payload_bytes = result.decoded.as_bytes();
         let mut payload_strings = extract_raw_strings(payload_bytes, opts.min_length, &[], &[]);
 
