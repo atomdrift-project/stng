@@ -129,9 +129,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.11.2"
+version = "1.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33ef9e3e8154a45c7a95cff4c1299702106ad94062d7bb85fdc5d3a5afd91d45"
+checksum = "02f0e023adb368345ce0ca6cdfc0f24a06554468d0e8503e14a0841de79bfa69"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -182,9 +182,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.8"
+version = "4.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac230478587d0269d8d6998b82ae69ea51509d55df66d9e92edd1f986904cd4a"
+checksum = "844c5c0b65be192cb68d570cca1b21a6444431d24e39c084dc0336177015337c"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -204,9 +204,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.6.8"
+version = "4.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "895c9d8d2ac2dd8b8a29f3724a14e72aaaa6debcf8c38c82f97305c6a172767a"
+checksum = "b4c174f11f949b9ca8c60580925e282b9cbd5454750e506f08648b2038080cd7"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -775,9 +775,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.258"
+version = "2.1.259"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3dd856c90936a531c75647b54c4222b4745ceedf60d0a0f14853bb9458d69af9"
+checksum = "7b85209e5945ce6d43ae3ac56491c30ac506db07108346758667a82bb2478c53"
 dependencies = [
  "psl-types",
 ]
@@ -1172,7 +1172,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter"
 version = "0.28.0"
-source = "git+https://github.com/tstromberg/tree-sitter#932fc05167711cba9840516b19547328d024cbcb"
+source = "git+https://github.com/tstromberg/tree-sitter#c6a0d9ee7d699d570deec5d16a8ab1387a23ec7a"
 dependencies = [
  "cc",
  "regex",
@@ -1183,7 +1183,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-language"
 version = "0.1.8"
-source = "git+https://github.com/tstromberg/tree-sitter#932fc05167711cba9840516b19547328d024cbcb"
+source = "git+https://github.com/tstromberg/tree-sitter#c6a0d9ee7d699d570deec5d16a8ab1387a23ec7a"
 
 [[package]]
 name = "tree-sitter-lua"
