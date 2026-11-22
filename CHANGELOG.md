@@ -2,6 +2,15 @@
 
 All notable changes to stng. Versions follow [semantic versioning](README.md#versioning).
 
+## 3.0.1 (2026-11-22)
+
+### Optimizations
+
+- Add `ScriptAnalysis` so callers share one script deobfuscation pass across consumers of the same bytes.
+- Share Lua table pages across branch snapshots, so constant folding copies only the page a write touches.
+- Track Lua sequence length incrementally instead of rescanning the table on every # or table.insert.
+- Reuse the Lua parse tree when constant folding leaves the source unchanged.
+
 ## 3.0.0 (2026-11-17)
 
 No functional changes since 3.0.0-beta.3; dependencies refreshed. This is the first stable 3.0 release.
