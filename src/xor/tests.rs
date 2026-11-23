@@ -786,3 +786,50 @@ fn recognizes_known_path_prefixes() {
     assert!(!has_known_path_prefix("random/path")); // No leading ./
     assert!(!has_known_path_prefix("./")); // Empty after ./
 }
+
+/// A Mirai-style string table: every entry XOR'd with the key *including* its
+/// NUL terminator, raw NUL padding between entries, a pointer array before
+/// the first. Only `/proc/` matches an anchor; the C2 host two entries away
+/// is reached by walking the table, though its `.io` name would be refused by
+/// the free-standing hostname scan.
+fn mirai_table(encode_terminators: bool) -> Vec<u8> {
+    let key = 0x26;
+    let mut data: Vec<u8> = [0x58, 0xc8, 0xfa, 0xff, 0x64, 0xc8, 0xfa, 0xff].to_vec();
+    for entry in [
+        &b"devs.homelabnode.qzz.io"[..],
+        b"TSource Engine Query",
+        b"/cmdline",
+        b"/proc/",
+    ] {
+        data.extend(entry.iter().map(|b| b ^ key));
+        data.push(if encode_terminators { key } else { 0 });
+        data.extend([0, 0, 0]);
+    }
+    data.extend([0x91, 0x07, 0xe3, 0x5c]);
+    data
+}
+
+#[test]
+fn walks_an_xor_string_table_from_its_anchor() {
+    let data = mirai_table(true);
+    let values: Vec<String> = extract_xor_strings(&data, 4, false)
+        .into_iter()
+        .map(|s| s.value)
+        .collect();
+    assert!(
+        values.iter().any(|v| v == "devs.homelabnode.qzz.io"),
+        "{values:?}"
+    );
+}
+
+#[test]
+fn a_table_needs_encoded_terminators() {
+    // The same entries ending in raw NULs: plaintext under a wrong key looks
+    // like this too, so no walk goes past the anchor.
+    let data = mirai_table(false);
+    let values: Vec<String> = extract_xor_strings(&data, 4, false)
+        .into_iter()
+        .map(|s| s.value)
+        .collect();
+    assert!(!values.iter().any(|v| v.contains("homelab")), "{values:?}");
+}

@@ -39,8 +39,28 @@ pub(crate) fn extract_xor_strings(
         } else {
             expand_xor_string(data, pos, key, min_length)
         };
-        if let Some((decoded, start, end)) = expanded
-            && let Verdict::Keep(kind) = classify_xor_string(&decoded)
+        // The anchor proves the key even when its own entry is too generic to
+        // report (`/proc/`), so the table it sits in is walked either way. A
+        // second anchor in the same table walks it again; the walk is bounded
+        // and `seen` drops the repeats.
+        if !is_wide {
+            for (value, start, end, kind) in table_entries(data, pos, key, min_length) {
+                if seen.insert((start as u64, value.clone())) {
+                    results.push(ExtractedString {
+                        value,
+                        data_offset: start as u64,
+                        data_len: u32::try_from(end - start).unwrap_or(u32::MAX),
+                        method: StringMethod::XorDecode,
+                        kind,
+                        fragments: None,
+                    });
+                }
+            }
+        }
+        let Some((decoded, start, end)) = expanded else {
+            continue;
+        };
+        if let Verdict::Keep(kind) = classify_xor_string(&decoded)
             && (kind.is_some() || !reads_as_text(&data[start..end]))
         {
             let offset = start as u64;
@@ -63,6 +83,125 @@ pub(crate) fn extract_xor_strings(
     scan_dotted_patterns(data, min_length, &mut results, &mut seen);
 
     results
+}
+
+/// Entries one string table yields at most.
+const MAX_TABLE_ENTRIES: usize = 64;
+/// How far a table walk goes either way from its anchored entry, in bytes.
+const MAX_TABLE_SPAN: usize = 4096;
+/// Raw NULs allowed between two entries (alignment padding).
+const MAX_TABLE_PADDING: usize = 16;
+
+/// The entries of the string table around an anchored XOR string, decoded
+/// with the anchor's key, as `(value, start, end, kind)`.
+///
+/// Malware that hides its strings in a single-byte XOR table — Mirai and its
+/// descendants keep their C2 host, attack payloads and kill-list paths this
+/// way — encodes each terminator along with its string, so every entry ends in
+/// the key byte itself (an encoded NUL), often followed by raw NUL padding.
+/// Expansion from an anchor stops at that terminator: a table anchored by
+/// `/proc/` yielded nothing past `/proc/`, and the C2 host two entries away
+/// was never decoded. The anchor proves the key; this walks its table.
+///
+/// The encoded terminator is also what makes the walk safe. Plaintext decoded
+/// under a wrong key reads as plausible gibberish to every text heuristic, but
+/// it does not end each run in that exact key byte. So the anchored entry and
+/// every entry walked must end in it; entries are printable ASCII containing
+/// neither the key byte nor NUL; raw NULs are only padding; an entry bounded
+/// by any other byte is the table's edge. The walk stops at the first break
+/// in that shape, after [`MAX_TABLE_ENTRIES`], or [`MAX_TABLE_SPAN`] bytes out,
+/// and each entry passes the filters an anchored string does.
+fn table_entries(
+    data: &[u8],
+    anchor: usize,
+    key: u8,
+    min_length: usize,
+) -> Vec<(String, usize, usize, Option<StringKind>)> {
+    let entry_byte = |i: usize| {
+        let (raw, b) = (data[i], data[i] ^ key);
+        raw != 0 && raw != key && (b.is_ascii_graphic() || b == b' ' || b == b'\t')
+    };
+    let mut out = Vec::new();
+    let mut keep = |start: usize, end: usize| {
+        if end - start < min_length {
+            return;
+        }
+        let Ok(value) = String::from_utf8(data[start..end].iter().map(|b| b ^ key).collect())
+        else {
+            return;
+        };
+        if let Verdict::Keep(kind) = classify_xor_string(&value)
+            && (kind.is_some() || !reads_as_text(&data[start..end]))
+        {
+            out.push((value, start, end, kind));
+        }
+    };
+
+    // The anchored entry, which must end in an encoded NUL.
+    let mut anchor_start = anchor;
+    while anchor_start > 0
+        && anchor - anchor_start < MAX_EXPAND_DISTANCE
+        && entry_byte(anchor_start - 1)
+    {
+        anchor_start -= 1;
+    }
+    let mut anchor_end = anchor;
+    while anchor_end < data.len()
+        && anchor_end - anchor < MAX_EXPAND_DISTANCE
+        && entry_byte(anchor_end)
+    {
+        anchor_end += 1;
+    }
+    if anchor_end >= data.len() || data[anchor_end] != key {
+        return out;
+    }
+    let mut entries = 0;
+
+    // Forward: past the terminator and any padding, entry after entry.
+    let limit = (anchor_end + MAX_TABLE_SPAN).min(data.len());
+    let mut i = anchor_end + 1;
+    while entries < MAX_TABLE_ENTRIES {
+        let pad = i;
+        while i < limit && data[i] == 0 && i - pad < MAX_TABLE_PADDING {
+            i += 1;
+        }
+        let start = i;
+        while i < limit && entry_byte(i) {
+            i += 1;
+        }
+        if i == start || i >= limit || data[i] != key {
+            break;
+        }
+        keep(start, i);
+        entries += 1;
+        i += 1;
+    }
+
+    // Backward: over padding to the previous entry's terminator, then the
+    // entry itself. An entry cut off by the span limit could be the tail of a
+    // longer run, so it is dropped.
+    let floor = anchor_start.saturating_sub(MAX_TABLE_SPAN);
+    let mut i = anchor_start;
+    while entries < MAX_TABLE_ENTRIES {
+        let pad = i;
+        while i > floor && data[i - 1] == 0 && pad - i < MAX_TABLE_PADDING {
+            i -= 1;
+        }
+        if i <= floor || data[i - 1] != key {
+            break;
+        }
+        i -= 1;
+        let end = i;
+        while i > floor && entry_byte(i - 1) {
+            i -= 1;
+        }
+        if i == end || (i == floor && i > 0) {
+            break;
+        }
+        keep(i, end);
+        entries += 1;
+    }
+    out
 }
 
 /// Scan for XOR'd IP addresses and hostnames.
