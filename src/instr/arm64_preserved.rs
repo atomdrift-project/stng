@@ -87,7 +87,7 @@ impl<'a> Context<'a> {
         if self.code.len() > MAX_CODE
             || self.addr & 3 != 0
             || call < 8
-            || min > 1000
+            || min as u64 > super::MAX_INLINE_STRING_LEN
             || self.word(call)? & 0xfc000000 != 0x94000000
         {
             return None;
@@ -103,7 +103,7 @@ impl<'a> Context<'a> {
             return None;
         }
         let len = decode_arm_mov_immediate(length)?;
-        if len < min as u64 || len == 0 || len > 1000 {
+        if len < min as u64 || len == 0 || len > super::MAX_INLINE_STRING_LEN {
             return None;
         }
         if self.attempts >= MAX_CANDIDATES {

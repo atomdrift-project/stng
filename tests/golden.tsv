@@ -68,7 +68,7 @@ symbols_provided	testdata/nsis/4d49_Constraining.Opm	5	e6ec335a3c9d38c8	RawScan=
 symbols_provided	testdata/nsis/57527_Hokerer118.hex	6	b5e6334818d95117	RawScan=1 XorDecode=5
 symbols_provided	testdata/pe/does-nothing-windows-amd64.exe	8003	2ff366af96f1708a	Base64Decode=1 InstructionPattern=1084 PclntabSymbol=5724 RawScan=86 Structure=1101 WideString=7
 symbols_provided	testdata/pe/dotnet_unsigned_x86.dll	30	28a00ec279285356	RawScan=18 WideString=12
-symbols_provided	testdata/pe/gobump_windows_amd64.exe	26051	768b64a9d6be9d92	Base64Decode=2 Heuristic=2 InstructionPattern=2162 PclntabSymbol=11779 RawScan=10464 Structure=1635 WideString=7
+symbols_provided	testdata/pe/gobump_windows_amd64.exe	26056	08524e10b13bc41a	Base64Decode=2 Heuristic=2 InstructionPattern=2167 PclntabSymbol=11779 RawScan=10464 Structure=1635 WideString=7
 symbols_provided	testdata/pe/hello_windows.exe	8936	5f88704489d665f1	Base64Decode=1 InstructionPattern=932 PclntabSymbol=4190 RawScan=3003 Structure=806 WideString=4
 symbols_provided	testdata/pe/msvc_console_amd64.exe	80	f19b4697f89fbd02	RawScan=77 StackString=2 Structure=1
 symbols_provided	testdata/pe/rtc.dll	82	c2bb992d683b5ff2	RawScan=47 WideString=25 XorDecode=10
@@ -154,7 +154,7 @@ default	testdata/nsis/4d49_Constraining.Opm	5	e6ec335a3c9d38c8	RawScan=1 StackSt
 default	testdata/nsis/57527_Hokerer118.hex	6	b5e6334818d95117	RawScan=1 XorDecode=5
 default	testdata/pe/does-nothing-windows-amd64.exe	8686	58430d3c3c834f11	Base64Decode=1 InstructionPattern=1379 PclntabSymbol=5924 RawScan=266 SpacedAscii=1 Structure=1101 WideString=14
 default	testdata/pe/dotnet_unsigned_x86.dll	40	f32eacd213a4b49b	RawScan=26 WideString=14
-default	testdata/pe/gobump_windows_amd64.exe	49593	2df6379c95c58631	Base64Decode=2 Heuristic=2 InstructionPattern=2658 PclntabSymbol=12067 RawScan=33202 SpacedAscii=2 Structure=1635 WideString=25
+default	testdata/pe/gobump_windows_amd64.exe	49599	9b1f77d74590c439	Base64Decode=2 Heuristic=2 InstructionPattern=2664 PclntabSymbol=12067 RawScan=33202 SpacedAscii=2 Structure=1635 WideString=25
 default	testdata/pe/hello_windows.exe	16467	a60ffbaea7f7c7e6	Base64Decode=1 InstructionPattern=1202 PclntabSymbol=4366 RawScan=10082 SpacedAscii=1 Structure=806 WideString=9
 default	testdata/pe/msvc_console_amd64.exe	141	2ba2e9c11cc41b3d	RawScan=138 StackString=2 Structure=1
 default	testdata/pe/rtc.dll	133	cac39f7c231f2345	RawScan=105 WideString=28

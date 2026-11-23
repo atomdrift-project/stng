@@ -11,6 +11,40 @@ mod amd64;
 mod arm64;
 mod arm64_preserved;
 
+/// Longest inline literal recovered from a pointer/length instruction pair.
+///
+/// Go droppers keep whole Base64 or shell stages as one string constant, so a
+/// 1,000-byte ceiling hid every such payload. Past [`MAX_UNSHAPED_INLINE_LEN`]
+/// the slice must also look like one literal (see [`plausible_inline_literal`]).
+pub(crate) const MAX_INLINE_STRING_LEN: u64 = 64 * 1024;
+
+/// Longest inline literal accepted on printability alone. An immediate next
+/// to a LEA is not always a length (`MOV ECX, 0x7800` flags, sizes), and a
+/// wrong one spans many packed pool strings, which are printable too.
+const MAX_UNSHAPED_INLINE_LEN: usize = 1000;
+
+/// Whether `s` reads as a single literal rather than a run of packed pool
+/// strings. Short strings pass. Longer ones must be one encoded blob (Base64
+/// or hex alphabet only) or line-structured text such as a script, whose
+/// newlines recur far more often than in concatenated identifiers and
+/// messages.
+pub(crate) fn plausible_inline_literal(s: &str) -> bool {
+    if s.len() <= MAX_UNSHAPED_INLINE_LEN {
+        return true;
+    }
+    let encoded = s
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'-' | b'_'));
+    if encoded {
+        return true;
+    }
+    let text = s
+        .bytes()
+        .all(|b| (0x20..0x7f).contains(&b) || matches!(b, b'\n' | b'\r' | b'\t') || b >= 0x80);
+    let newlines = s.bytes().filter(|&b| b == b'\n').count();
+    text && newlines >= s.len() / 160
+}
+
 /// The code being scanned, the read-only data its instructions address, and
 /// the shortest string worth reporting.
 #[derive(Clone, Copy)]
@@ -71,13 +105,13 @@ fn decode_rodata_string(
     rodata_data: &[u8],
     rodata_addr: u64,
 ) -> Option<String> {
-    if len == 0 || len > 1000 {
+    if len == 0 || len > MAX_INLINE_STRING_LEN {
         return None;
     }
     let start = usize::try_from(addr.checked_sub(rodata_addr)?).ok()?;
     let bytes = rodata_data.get(start..start.checked_add(usize::try_from(len).ok()?)?)?;
     let s = std::str::from_utf8(bytes).ok()?;
-    is_valid_utf8_string(s).then(|| s.to_string())
+    (is_valid_utf8_string(s) && plausible_inline_literal(s)).then(|| s.to_string())
 }
 
 /// Check if a string looks like a map/dict key (short, no spaces, identifier-like).

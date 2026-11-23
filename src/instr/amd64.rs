@@ -390,13 +390,15 @@ pub(super) fn find_inline_length_string(
         ..
     } = *scan;
     let validate = |len: u64| -> Option<String> {
-        if len == 0 || len > 1000 || str_addr.checked_add(len)? > rodata_end {
+        if len == 0 || len > super::MAX_INLINE_STRING_LEN || str_addr.checked_add(len)? > rodata_end
+        {
             return None;
         }
         let start = usize::try_from(str_addr.checked_sub(rodata_addr)?).ok()?;
         let end = start.checked_add(usize::try_from(len).ok()?)?;
         let s = std::str::from_utf8(rodata_data.get(start..end)?).ok()?;
-        (is_valid_utf8_string(s) && s.len() >= min_length).then(|| s.to_string())
+        (is_valid_utf8_string(s) && s.len() >= min_length && super::plausible_inline_literal(s))
+            .then(|| s.to_string())
     };
 
     // Go emits the length `MOV` immediately after the pointer `LEA` (the LEA is

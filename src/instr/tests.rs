@@ -549,3 +549,66 @@ fn arm64_finds_adrp_x1_movz_x2_pair() {
         results.iter().map(|s| &s.value).collect::<Vec<_>>(),
     );
 }
+
+/// `LEA RAX, [rip+payload]; MOV EBX, len; CALL f` with `len` past the old
+/// 1,000-byte ceiling: a Go constant holding a whole Base64 stage.
+fn amd64_lea_mov_call(len: u32, rodata_len: usize) -> Vec<String> {
+    // Text at 0x1000, rodata at 0x2000. The LEA ends at text offset 7, so its
+    // displacement is 0x2000 - (0x1000 + 7).
+    let disp = (0x2000i64 - 0x1007) as i32;
+    let mut text = vec![0x48, 0x8D, 0x05];
+    text.extend_from_slice(&disp.to_le_bytes());
+    text.push(0xBB); // mov ebx, imm32
+    text.extend_from_slice(&len.to_le_bytes());
+    text.extend_from_slice(&[0xE8, 0, 0, 0, 0]); // call
+    text.extend_from_slice(&[0x90; 16]);
+    let rodata: Vec<u8> = b"IyEvYmluL3No"
+        .iter()
+        .copied()
+        .cycle()
+        .take(rodata_len)
+        .collect();
+    extract_inline_strings_amd64(&text, 0x1000, &rodata, 0x2000, 4)
+        .into_iter()
+        .map(|s| s.value)
+        .collect()
+}
+
+#[test]
+fn amd64_recovers_inline_literal_longer_than_1000_bytes() {
+    let found = amd64_lea_mov_call(6000, 8192);
+    assert!(
+        found
+            .iter()
+            .any(|s| s.len() == 6000 && s.starts_with("IyEvYmluL3No")),
+        "{:?}",
+        found.iter().map(String::len).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn amd64_inline_literal_past_cap_or_rodata_is_rejected() {
+    let over = u32::try_from(MAX_INLINE_STRING_LEN + 1).unwrap();
+    assert!(
+        amd64_lea_mov_call(over, 70_000)
+            .iter()
+            .all(|s| s.len() < 1000)
+    );
+    assert!(
+        amd64_lea_mov_call(9000, 8192)
+            .iter()
+            .all(|s| s.len() < 1000)
+    );
+}
+
+#[test]
+fn long_inline_literal_must_be_one_blob_or_lined_text() {
+    let base64 = "IyEvYmluL3No".repeat(200);
+    let script = "echo hello world\n".repeat(100);
+    // Packed Go pool: printable, but few newlines and mixed punctuation.
+    let pool = "ClassCHAOSConnectionContent-IdCreateFileDSA-SHA256 bad length: %s".repeat(30);
+    assert!(plausible_inline_literal("short pool-like text: %s"));
+    assert!(plausible_inline_literal(&base64));
+    assert!(plausible_inline_literal(&script));
+    assert!(!plausible_inline_literal(&pool));
+}
