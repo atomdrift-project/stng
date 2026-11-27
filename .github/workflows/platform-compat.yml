@@ -32,7 +32,7 @@ env:
 
 jobs:
   openindiana:
-    name: OpenIndiana 202604 / x86_64-unknown-illumos
+    name: OpenIndiana 202610 / x86_64-unknown-illumos
     if: ${{ inputs.platform == 'all' || inputs.platform == 'openindiana' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -52,7 +52,7 @@ jobs:
       - name: Smoke test on OpenIndiana
         uses: vmactions/openindiana-vm@b0669479e0325a25198dc7ed2a4b6089e98f91b3 # v1.2.0
         with:
-          release: "202604"
+          release: "202610"
           usesh: true
           # The minimal VM omits GCC's shared runtimes, while cross-rs's
           # illumos image links libgcc_s and libstdc++ dynamically. Install the
@@ -72,7 +72,7 @@ jobs:
             ./stng --help >/dev/null
 
   tribblix:
-    name: Tribblix 0m40 / x86_64-unknown-illumos
+    name: Tribblix 0m41.1 / x86_64-unknown-illumos
     if: ${{ inputs.platform == 'all' || inputs.platform == 'tribblix' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -92,7 +92,7 @@ jobs:
       - name: Smoke test on Tribblix
         uses: vmactions/tribblix-vm@3420c87b5986fc95c5cc53a6ab8926a7e7acf6be # v1.0.7
         with:
-          release: "0m40"
+          release: "0m41.1"
           usesh: true
           run: |
             set -eux
@@ -103,7 +103,7 @@ jobs:
             ./stng --help >/dev/null
 
   ghostbsd:
-    name: GhostBSD 26.1 / x86_64-unknown-freebsd
+    name: GhostBSD 26.2 / x86_64-unknown-freebsd
     if: ${{ inputs.platform == 'all' || inputs.platform == 'ghostbsd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -123,7 +123,7 @@ jobs:
       - name: Smoke test on GhostBSD
         uses: vmactions/ghostbsd-vm@d223228c76e4b31b3cd534b66d58e8bb7ca9d1a7 # v1.0.5
         with:
-          release: "26.1"
+          release: "26.2"
           usesh: true
           run: |
             set -eux
@@ -133,7 +133,7 @@ jobs:
             compat/stng --help >/dev/null
 
   openeuler:
-    name: openEuler 25.09 / x86_64-unknown-linux-gnu
+    name: openEuler 26.09 / x86_64-unknown-linux-gnu
     if: ${{ inputs.platform == 'all' || inputs.platform == 'openeuler' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -155,7 +155,7 @@ jobs:
       - name: Smoke test on openEuler
         uses: vmactions/openeuler-vm@87b5f241a9f6c408a66662a31b69b7c6a0334aec # v1.0.4
         with:
-          release: "25.09"
+          release: "26.09"
           usesh: true
           run: |
             set -eux

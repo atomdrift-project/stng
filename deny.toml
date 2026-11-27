@@ -29,10 +29,8 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# binform is not on crates.io (Cargo.lock pins its commit), and tree-sitter
-# is patched to a fork (Cargo.toml [patch.crates-io], pinned by `rev`). Any
-# other git source is refused.
-allow-git = [
-    "https://github.com/atomdrift-project/binform.git",
-    "https://github.com/tstromberg/tree-sitter",
-]
+# Git sources come only from the project's own accounts: binform is not on
+# crates.io, and [patch.crates-io] points crates at maintainer forks.
+# Cargo.lock pins each commit. Any other git source is refused.
+[sources.allow-org]
+github = ["atomdrift-project", "tstromberg"]

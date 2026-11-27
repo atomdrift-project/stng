@@ -2,6 +2,13 @@
 
 All notable changes to stng. Versions follow [semantic versioning](README.md#versioning).
 
+## 3.0.2 (2026-11-27)
+
+### Fixes
+
+- Walk single-byte XOR string tables past their anchor, so Mirai C2 hosts beside generic paths are no longer missed.
+- Stop dropping Go inline string literals over 1,000 bytes; Base64 and shell stages up to 64 KiB now surface.
+
 ## 3.0.1 (2026-11-22)
 
 ### Optimizations
